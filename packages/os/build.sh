@@ -29,6 +29,10 @@ maybe_sudo() {
     fi
 }
 
+SKIP_PI4="${SKIP_PI4-true}"
+SKIP_MENDER_ARTIFACTS="${SKIP_MENDER_ARTIFACTS-true}"
+SKIP_PI_MBR="${SKIP_PI_MBR-${SKIP_MENDER_ARTIFACTS}}"
+
 # Main entrypoint.
 function main() {
     release="${1:-}"
@@ -155,7 +159,7 @@ function build_rugix_artifacts() {
     fi
     if [ -z "${SKIP_PI:-}" ] && [ -z "${SKIP_PI_TRYBOOT:-}" ]; then
         build_rugix_system "umbrelos-pi-tryboot" "$release" "$dev"
-        maybe_sudo mv -f "build/umbrelos-pi-tryboot/system.img" "../build/umbrelos-pi5.img"
+        maybe_sudo mv -f "build/umbrelos-pi-tryboot/system.img" "../build/umbrelos-pi.img"
         maybe_sudo mv -f "build/umbrelos-pi-tryboot/system.rugixb" "../build/umbrelos-pi.rugixb"
     fi
     if [ -z "${SKIP_PI:-}" ] && [ -z "${SKIP_PI_MBR:-}" ]; then

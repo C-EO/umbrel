@@ -3,7 +3,7 @@
 
 ## Build Process
 
-The following diagram visualizes the build process and various build artifacts:
+The following diagram visualizes the build process and possible build artifacts:
 
 ```mermaid
 graph TD
@@ -29,7 +29,7 @@ graph TD
     mender-amd64 --> mender-amd64-rugixb([mender-amd64.rugixb])
     pi-mbr --> pi-mbr-mender([pi.mender])
     pi4 --> pi4-img([pi4.img])
-    pi-tryboot --> pi-tryboot-img([pi5.img])
+    pi-tryboot --> pi-tryboot-img([pi.img])
     pi-tryboot --> pi-tryboot-rugixb([pi.rugixb])
 ```
 
@@ -46,21 +46,21 @@ There are three main umbrelOS *variants*:
 
 ### Build Artifacts
 
-The build process produces the following artifacts.
+The build process can produce the following artifacts.
 
 #### Images
 
 Images for provisioning new umbrelOS devices.
 
 - `umbrelos-amd64.img`: Image for provisioning AMD64 devices and VMs.
-- `umbrelos-pi4.img`: Image for provisioning Raspberry Pi 4 devices (GPT-based).
-- `umbrelos-pi5.img`: Image for provisioning Raspberry Pi 5 devices (GPT-based).
+- `umbrelos-pi.img`: Image for provisioning Raspberry Pi devices (GPT-based).
+- `umbrelos-pi4.img`: Optional image for provisioning Raspberry Pi 4 devices (GPT-based).
 
 The image for Raspberry Pi 4 includes a firmware update to enable the `tryboot` mechanism used for A/B switching. Otherwise, the image is identical to the image for Raspberry Pi 5.
 
 #### Mender Update Artifacts
 
-Mender update artifacts for updating existing systems through Mender:
+Optional Mender update artifacts for updating existing systems through Mender:
 
 - `umbrelos-pi.mender`: Mender update artifact for Raspberry Pi.
 - `umbrelos-mender-amd64.mender`: Mender update artifact for AMD64 devices.

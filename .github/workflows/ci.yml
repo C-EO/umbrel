@@ -295,15 +295,12 @@ jobs:
         # Awkward hack to run in parallel but correctly handle errors
         run: |
           cd build
-          zip umbrelos-pi4.img.zip umbrelos-pi4.img &
+          zip umbrelos-pi.img.zip umbrelos-pi.img &
           pid1=$!
-          zip umbrelos-pi5.img.zip umbrelos-pi5.img &
-          pid2=$!
           sudo xz --keep --threads=0 umbrelos-amd64.img &
-          pid3=$!
+          pid2=$!
           wait $pid1 || exit 1
           wait $pid2 || exit 1
-          wait $pid3 || exit 1
       - name: Create USB installer
         run: npm run build:amd64:usb-installer
       - name: Create release directory
