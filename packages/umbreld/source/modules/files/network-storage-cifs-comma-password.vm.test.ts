@@ -6,6 +6,9 @@ import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 describe('Network storage', () => {
 	let umbreld: Awaited<ReturnType<typeof createTestVm>>
 
+	const sharePassword = 'correct,horse,battery,staple'
+	const vmDataDirectory = '/home/umbrel/umbrel'
+
 	beforeAll(async () => {
 		umbreld = await createTestVm({device: 'umbrel-home'})
 		await umbreld.vm.powerOn()
@@ -17,17 +20,23 @@ describe('Network storage', () => {
 
 	test('mounts a CIFS share with commas in the password', async () => {
 		const shareName = 'network-comma-password-test'
-		const sharePassword = 'correct,horse,battery,staple'
-		const systemPassword = 'moneyprintergobrrr'
 
 		await umbreld.client.files.createDirectory.mutate({path: `/Home/${shareName}`})
 		await umbreld.client.files.createDirectory.mutate({path: `/Home/${shareName}/source-marker`})
 
-		const passwordUpdate = await umbreld.vm.ssh(
-			`set -e; printf '%s\\n' '${systemPassword}' | sudo -S -p '' sh -c "printf '%s' '${sharePassword}' > ${umbreld.vm.dataDirectory}/secrets/share-password; printf '%s\\n%s\\n' '${sharePassword}' '${sharePassword}' | smbpasswd -s -a umbrel; echo samba-password-updated"`,
+		// There is no product API for choosing the Samba share password; set the
+		// real secret and smbpasswd entry in the VM to exercise comma parsing.
+		await pRetry(
+			() =>
+				umbreld.vm.sshAsRoot(`
+set -eu
+mkdir -p ${vmDataDirectory}/secrets
+printf '%s' '${sharePassword}' > ${vmDataDirectory}/secrets/share-password
+printf '%s\\n%s\\n' '${sharePassword}' '${sharePassword}' | smbpasswd -s -a umbrel
+`),
+			{retries: 20, factor: 1, minTimeout: 1000, maxTimeout: 1000},
 		)
-		expect(passwordUpdate).toContain('samba-password-updated')
-
+		await expect(umbreld.client.files.sharePassword.query()).resolves.toBe(sharePassword)
 		await umbreld.client.files.addShare.mutate({path: `/Home/${shareName}`})
 
 		const mountPath = await pRetry(

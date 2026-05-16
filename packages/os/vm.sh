@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE_DIR="${VM_STATE_DIR:-$SCRIPT_DIR/vm-state}"
 NVME_STATE_FILE="$STATE_DIR/nvme.json"
 HDD_STATE_FILE="$STATE_DIR/hdd.json"
+USB_STATE_FILE="$STATE_DIR/usb.json"
 
 # Defaults
 DEFAULT_DEVICE="umbrel-pro"
@@ -15,8 +16,10 @@ DEFAULT_SSH_PORT=2222
 DEFAULT_HTTP_PORT=8080
 DEFAULT_NVME_SIZE="64G"
 DEFAULT_HDD_SIZE="1T"
+DEFAULT_USB_STORAGE_SIZE="64G"
 MAX_NVME_SLOTS=8
 MAX_HDD_SLOTS=8
+MAX_USB_STORAGE_SLOTS=8
 
 # Get Umbrel Pro PCIe slot number for an NVMe slot.
 # Returns empty if no explicit mapping exists.
@@ -77,6 +80,10 @@ Commands:
     sata connect <slot>            Connect an existing SATA device to the VM
     sata disconnect <slot>         Disconnect a SATA device from the VM
 
+    usb list                       List all USB storage devices and their status
+    usb add <slot> [--size SIZE]   Add a USB storage device to slot (1-${MAX_USB_STORAGE_SLOTS})
+    usb destroy <slot>             Destroy USB storage device (deletes data)
+
 Boot Options:
     --device <type>                Device to emulate: umbrel-pro, umbrel-home, nas (default: ${DEFAULT_DEVICE})
     --boot-disk <type>             Boot disk transport: default, emmc, nvme, usb (default: default for device)
@@ -88,7 +95,7 @@ Boot Options:
     --http-port <port>             Local HTTP port forward (default: ${DEFAULT_HTTP_PORT})
 
 Disk Options:
-    --size <size>                  Disk size for nvme/sata add (default: ${DEFAULT_NVME_SIZE} nvme, ${DEFAULT_HDD_SIZE} sata)
+    --size <size>                  Disk size for nvme/sata/usb add (default: ${DEFAULT_NVME_SIZE} nvme, ${DEFAULT_HDD_SIZE} sata, ${DEFAULT_USB_STORAGE_SIZE} usb)
     --type <hdd|ssd>               For sata add only: set SATA device type (default: hdd)
 
 Environment Variables:
@@ -103,8 +110,10 @@ Examples:
     $0 boot --arch arm64                           # Boot arm64 image
     $0 nvme add 1 --size 128G
     $0 sata add 1 --size 4T --type hdd
+    $0 usb add 1 --size 128G
     $0 nvme list
     $0 sata list
+    $0 usb list
 
 EOF
 }
@@ -117,6 +126,9 @@ init_state() {
   fi
   if [[ ! -f "$HDD_STATE_FILE" ]]; then
     echo '{}' > "$HDD_STATE_FILE"
+  fi
+  if [[ ! -f "$USB_STATE_FILE" ]]; then
+    echo '{}' > "$USB_STATE_FILE"
   fi
 }
 
@@ -180,6 +192,11 @@ get_hdd_disk_path() {
   echo "$STATE_DIR/hdd-slot${slot}.qcow2"
 }
 
+get_usb_disk_path() {
+  local slot="$1"
+  echo "$STATE_DIR/usb-slot${slot}.qcow2"
+}
+
 # Generic disk list function
 # Arguments: <type> <state_file> <max_slots>
 disk_list() {
@@ -221,6 +238,7 @@ disk_list() {
 
 nvme_list() { disk_list "NVMe" "$NVME_STATE_FILE" "$MAX_NVME_SLOTS"; }
 sata_list() { disk_list "SATA" "$HDD_STATE_FILE" "$MAX_HDD_SLOTS"; }
+usb_list() { disk_list "USB Storage" "$USB_STATE_FILE" "$MAX_USB_STORAGE_SLOTS"; }
 
 sata_add() {
   local slot="$1"
@@ -494,6 +512,58 @@ hdd_disconnect() {
   echo "HDD in slot $slot disconnected (will be unavailable on next boot)"
 }
 
+# Add USB storage device
+usb_add() {
+  local slot="$1"
+  local size="$2"
+
+  validate_slot "$slot" "$MAX_USB_STORAGE_SLOTS"
+  init_state
+
+  local disk_path
+  disk_path=$(get_usb_disk_path "$slot")
+
+  if [[ -f "$disk_path" ]]; then
+    echo "Error: USB storage already exists in slot $slot" >&2
+    echo "Use 'usb destroy $slot' to remove it first" >&2
+    exit 1
+  fi
+
+  local serial="usb${slot}-$(date +%s)-${RANDOM}"
+
+  echo "Creating USB storage in slot $slot (${size})..."
+  qemu-img create -f qcow2 "$disk_path" "$size" >/dev/null
+  local tmp
+  tmp=$(mktemp)
+  jq --arg size "$size" --arg serial "$serial" \
+    ".\"$slot\" = {\"size\": \$size, \"serial\": \$serial, \"connected\": true, \"exists\": true}" \
+    "$USB_STATE_FILE" > "$tmp" && mv "$tmp" "$USB_STATE_FILE"
+  echo "Done. USB storage created in slot $slot (serial: $serial)"
+}
+
+# Destroy USB storage device
+usb_destroy() {
+  local slot="$1"
+
+  validate_slot "$slot" "$MAX_USB_STORAGE_SLOTS"
+  init_state
+
+  local disk_path
+  disk_path=$(get_usb_disk_path "$slot")
+
+  if [[ ! -f "$disk_path" ]]; then
+    echo "Error: No USB storage in slot $slot" >&2
+    exit 1
+  fi
+
+  echo "Destroying USB storage in slot $slot..."
+  rm -f "$disk_path"
+  local tmp
+  tmp=$(mktemp)
+  jq "del(.\"$slot\")" "$USB_STATE_FILE" > "$tmp" && mv "$tmp" "$USB_STATE_FILE"
+  echo "Done. USB storage in slot $slot destroyed"
+}
+
 # Build QEMU HDD arguments for connected devices (SATA via AHCI)
 build_hdd_args() {
   local hdd_args=""
@@ -530,6 +600,36 @@ build_hdd_args() {
   done
 
   echo "$hdd_args"
+}
+
+# Build QEMU USB storage arguments for existing devices
+build_usb_args() {
+  local usb_args=""
+  local has_usb_storage=false
+
+  for (( slot=1; slot<=MAX_USB_STORAGE_SLOTS; slot++ )); do
+    local exists
+    exists=$(jq -r ".\"$slot\".exists // empty" "$USB_STATE_FILE")
+
+    if [[ "$exists" == "true" ]]; then
+      local disk_path serial
+      disk_path=$(get_usb_disk_path "$slot")
+      serial=$(jq -r ".\"$slot\".serial // empty" "$USB_STATE_FILE")
+      if [[ -z "$serial" ]]; then
+        serial="usb${slot}"
+      fi
+
+      if [[ "$has_usb_storage" == "false" ]]; then
+        usb_args="$usb_args -device qemu-xhci,id=usb_storage_xhci"
+        has_usb_storage=true
+      fi
+
+      usb_args="$usb_args -drive file=${disk_path},format=qcow2,if=none,id=usb${slot},cache=none,discard=unmap,aio=threads"
+      usb_args="$usb_args -device usb-storage,bus=usb_storage_xhci.0,drive=usb${slot},serial=${serial}"
+    fi
+  done
+
+  echo "$usb_args"
 }
 
 # Build QEMU NVMe arguments for connected devices
@@ -724,9 +824,10 @@ boot_vm() {
   boot_disk_args=$(build_boot_disk_args "$overlay" "$boot_disk_transport")
 
   # Build disk arguments for data drives
-  local nvme_args hdd_args
+  local nvme_args hdd_args usb_args
   nvme_args=$(build_nvme_args "$device")
   hdd_args=$(build_hdd_args)
+  usb_args=$(build_usb_args)
 
   # Platform and architecture-specific settings
   local accel_args machine_args cpu_args
@@ -805,7 +906,8 @@ boot_vm() {
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22,hostfwd=tcp:127.0.0.1:${http_port}-:80 \
     -device virtio-net-pci,netdev=net0 \
     $nvme_args \
-    $hdd_args
+    $hdd_args \
+    $usb_args
 }
 
 # Reflash (delete overlay to simulate fresh OS install)
@@ -1012,6 +1114,58 @@ case "$command" in
       *)
         echo "Error: Unknown sata subcommand: $subcommand" >&2
         echo "Usage: $0 sata <list|add|destroy|connect|disconnect> [args]" >&2
+        exit 1
+        ;;
+    esac
+    exit 0
+    ;;
+
+  usb)
+    if [[ $# -lt 1 ]]; then
+      echo "Error: usb requires a subcommand" >&2
+      echo "Usage: $0 usb <list|add|destroy> [args]" >&2
+      exit 1
+    fi
+
+    subcommand="$1"
+    shift
+
+    case "$subcommand" in
+      list)
+        usb_list
+        ;;
+      add)
+        if [[ $# -lt 1 ]]; then
+          echo "Error: usb add requires a slot number" >&2
+          exit 1
+        fi
+        slot="$1"
+        shift
+        size="$DEFAULT_USB_STORAGE_SIZE"
+        while [[ $# -gt 0 ]]; do
+          case "$1" in
+            --size)
+              size="$2"
+              shift 2
+              ;;
+            *)
+              echo "Error: Unknown option: $1" >&2
+              exit 1
+              ;;
+          esac
+        done
+        usb_add "$slot" "$size"
+        ;;
+      destroy)
+        if [[ $# -lt 1 ]]; then
+          echo "Error: usb destroy requires a slot number" >&2
+          exit 1
+        fi
+        usb_destroy "$1"
+        ;;
+      *)
+        echo "Error: Unknown usb subcommand: $subcommand" >&2
+        echo "Usage: $0 usb <list|add|destroy> [args]" >&2
         exit 1
         ;;
     esac

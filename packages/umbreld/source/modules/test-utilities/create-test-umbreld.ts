@@ -1,4 +1,5 @@
 import path from 'node:path'
+import {Buffer} from 'node:buffer'
 import {fileURLToPath} from 'node:url'
 import {createTRPCProxyClient, httpBatchLink, createWSClient, wsLink, splitLink} from '@trpc/client'
 import got from 'got'
@@ -122,15 +123,21 @@ function createTestHelpers(port: number) {
 	// Subscribe to events over WebSocket and collect them
 	function subscribeToEvents<T>(event: (typeof events)[number]) {
 		const collected: T[] = []
+		let resolveStarted = () => {}
+		const started = new Promise<void>((resolve) => {
+			resolveStarted = resolve
+		})
 		const subscription = client.eventBus.listen.subscribe(
 			{event},
 			{
+				onStarted: () => resolveStarted(),
 				onData: (data) => collected.push(data as T),
 				onError: (error) => console.error(`Subscription error for ${event}:`, error),
 			},
 		)
 		return {
 			collected,
+			started,
 			unsubscribe: () => subscription.unsubscribe(),
 		}
 	}
@@ -342,6 +349,18 @@ export async function createTestVm({
 		await $({env})`${vmScript} sata destroy ${slot}`
 	}
 
+	async function addUsbStorage({slot, size}: {slot: number; size?: string}) {
+		if (size) {
+			await $({env})`${vmScript} usb add ${slot} --size ${size}`
+		} else {
+			await $({env})`${vmScript} usb add ${slot}`
+		}
+	}
+
+	async function removeUsbStorage({slot}: {slot: number}) {
+		await $({env})`${vmScript} usb destroy ${slot}`
+	}
+
 	async function disconnectNvme({slot}: {slot: number}) {
 		await $({env})`${vmScript} nvme disconnect ${slot}`
 	}
@@ -368,6 +387,78 @@ export async function createTestVm({
 		vmProcessPid = undefined
 	}
 
+	async function ssh(command: string) {
+		const attemptSsh = (password: string) =>
+			new Promise<string>((resolve, reject) => {
+				const conn = new SshClient()
+				conn.on('ready', () => {
+					conn.exec(command, (err, stream) => {
+						if (err) {
+							conn.end()
+							return reject(err)
+						}
+						let stdout = ''
+						stream.on('data', (data: Buffer) => (stdout += data.toString()))
+						stream.stderr.on('data', () => {})
+						stream.on('close', () => {
+							conn.end()
+							resolve(stdout)
+						})
+					})
+				})
+				conn.on('error', reject)
+				conn.connect({
+					host: 'localhost',
+					port: sshPort,
+					username: 'umbrel',
+					password,
+				})
+			})
+
+		// Try default 'umbrel' password first, fall back to user password if already synced
+		// Retry up to 10 times with 1 second wait between attempts
+		return pRetry(
+			async () => {
+				try {
+					return await attemptSsh('umbrel')
+				} catch (error) {
+					if ((error as {level?: string}).level === 'client-authentication') {
+						return await attemptSsh(userCredentials.password)
+					}
+					throw error
+				}
+			},
+			{retries: 10, minTimeout: 1000, maxTimeout: 1000},
+		)
+	}
+
+	async function sshAsRoot(command: string) {
+		const encodedCommand = Buffer.from(command).toString('base64')
+		const exitMarker = '__umbrel_vm_ssh_as_root_exit__'
+		const output = await ssh(`
+set -u
+encoded_command='${encodedCommand}'
+for password in '${userCredentials.password}' 'umbrel'; do
+	if printf '%s\\n' "$password" | sudo -S -p '' true >/dev/null 2>&1; then
+		set +e
+		printf '%s\\n' "$password" | sudo -S -p '' sh -c "printf '%s' '$encoded_command' | base64 -d | sh" 2>&1
+		status=$?
+		printf '\\n${exitMarker}%s\\n' "$status"
+		exit 0
+	fi
+done
+printf '\\n${exitMarker}255\\n'
+`)
+		const match = output.match(new RegExp(`\\n?${exitMarker}(\\d+)\\n?$`))
+		if (!match) throw new Error(`Root SSH command did not report an exit status:\n${output}`)
+
+		const stdout = output.slice(0, match.index).trimEnd()
+		const exitCode = Number(match[1])
+		if (exitCode !== 0) throw new Error(`Root SSH command failed with exit code ${exitCode}:\n${stdout}`)
+
+		return stdout
+	}
+
 	const vm = {
 		dataDirectory: '/data/umbrel',
 		stateDir,
@@ -388,51 +479,11 @@ export async function createTestVm({
 		addHdd,
 		addSataSsd,
 		removeHdd,
+		addUsbStorage,
+		removeUsbStorage,
 		reflash,
-		async ssh(command: string) {
-			const attemptSsh = (password: string) =>
-				new Promise<string>((resolve, reject) => {
-					const conn = new SshClient()
-					conn.on('ready', () => {
-						conn.exec(command, (err, stream) => {
-							if (err) {
-								conn.end()
-								return reject(err)
-							}
-							let stdout = ''
-							stream.on('data', (data: Buffer) => (stdout += data.toString()))
-							stream.stderr.on('data', () => {})
-							stream.on('close', () => {
-								conn.end()
-								resolve(stdout)
-							})
-						})
-					})
-					conn.on('error', reject)
-					conn.connect({
-						host: 'localhost',
-						port: sshPort,
-						username: 'umbrel',
-						password,
-					})
-				})
-
-			// Try default 'umbrel' password first, fall back to user password if already synced
-			// Retry up to 10 times with 1 second wait between attempts
-			return pRetry(
-				async () => {
-					try {
-						return await attemptSsh('umbrel')
-					} catch (error) {
-						if ((error as {level?: string}).level === 'client-authentication') {
-							return await attemptSsh(userCredentials.password)
-						}
-						throw error
-					}
-				},
-				{retries: 10, minTimeout: 1000, maxTimeout: 1000},
-			)
-		},
+		ssh,
+		sshAsRoot,
 	}
 
 	return {
