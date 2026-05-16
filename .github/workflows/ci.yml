@@ -46,7 +46,7 @@ jobs:
     name: Build umbrelOS amd64
     needs: detect-changes
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-standard-4-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v3
       - uses: docker/setup-buildx-action@v3
@@ -58,7 +58,7 @@ jobs:
     name: Build umbrelOS arm64
     needs: detect-changes
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-standard-4-arm-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     steps:
       - uses: actions/checkout@v3
       - uses: docker/setup-buildx-action@v3
@@ -70,7 +70,7 @@ jobs:
     name: Build umbrelOS Pi
     needs: detect-changes
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-standard-4-arm-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404-arm
     steps:
       - uses: actions/checkout@v3
       - uses: docker/setup-buildx-action@v3
@@ -85,7 +85,7 @@ jobs:
     name: Build umbrelOS amd64 VM image
     needs: [detect-changes, umbrelos-amd64-cache]
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-standard-4-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -130,7 +130,7 @@ jobs:
     name: VM test (${{ matrix.test.name }})
     needs: [detect-changes, umbrelos-amd64-vm-image-build, discover-vm-tests]
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-standard-4-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
@@ -179,7 +179,7 @@ jobs:
     name: Integration test (${{ matrix.test.name }})
     needs: [detect-changes, discover-integration-tests, umbrelos-amd64-cache]
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-standard-4-ubuntu-2404
+    runs-on: blacksmith-2vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
@@ -258,7 +258,7 @@ jobs:
     name: Create release on tag
     if: startsWith(github.ref, 'refs/tags/')
     needs: [umbrelos-amd64-cache, umbrelos-arm64-cache, umbrelos-pi-cache]
-    runs-on: ubicloud-standard-16-ubuntu-2404
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     defaults:
       run:
         working-directory: packages/os
