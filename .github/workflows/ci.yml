@@ -130,7 +130,7 @@ jobs:
     name: VM test (${{ matrix.test.name }})
     needs: [detect-changes, umbrelos-amd64-vm-image-build, discover-vm-tests]
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
