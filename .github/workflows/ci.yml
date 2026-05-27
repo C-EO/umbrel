@@ -15,16 +15,31 @@ jobs:
           fetch-depth: 0
       - id: check
         run: |
+          set -euo pipefail
+
           DEFAULT_BRANCH="${{ github.event.repository.default_branch }}"
 
           # On default branch, always run all tests
-          if [[ "${{ github.ref }}" == "refs/heads/${DEFAULT_BRANCH}" ]]; then
+          if [[ "${{ github.ref }}" == "refs/heads/${DEFAULT_BRANCH}" || "${{ github.ref }}" == refs/tags/* ]]; then
             echo "ui-only=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Get changed files compared to the previous push event
-          CHANGED_FILES=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} 2>/dev/null || git diff --name-only HEAD~1 HEAD)
+          # Get changed files for the entire PR/branch, not just the latest push.
+          # This workflow currently runs on push events, so compare non-default
+          # branches against their merge base with the default branch. If the
+          # workflow is later run on pull_request events, use the PR base/head.
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            git fetch origin "${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
+            DIFF_BASE=$(git merge-base "origin/${{ github.base_ref }}" HEAD)
+            DIFF_HEAD=HEAD
+          else
+            git fetch origin "${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+            DIFF_BASE=$(git merge-base "origin/${DEFAULT_BRANCH}" HEAD)
+            DIFF_HEAD=HEAD
+          fi
+
+          CHANGED_FILES=$(git diff --name-only "$DIFF_BASE" "$DIFF_HEAD")
 
           # Check if all changed files are in packages/ui/
           UI_ONLY="true"
