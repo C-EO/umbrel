@@ -178,9 +178,15 @@ function build_rugix_artifacts() {
         pushd rugix
     fi
     if [ -z "${SKIP_AMD64:-}" ] && [ -z "${SKIP_AMD64_RUGIX:-}" ]; then
-        build_rugix_system "umbrelos-amd64" "$release" "$dev"
+        if [ "${SKIP_AMD64_RUGIX_BUNDLE:-}" = "true" ]; then
+            ./run-bakery bake image --release-version "$release" "umbrelos-amd64"
+        else
+            build_rugix_system "umbrelos-amd64" "$release" "$dev"
+        fi
         maybe_sudo mv -f "build/umbrelos-amd64/system.img" "../build/umbrelos-amd64.img"
-        maybe_sudo mv -f "build/umbrelos-amd64/system.rugixb" "../build/umbrelos-amd64.rugixb"
+        if [ "${SKIP_AMD64_RUGIX_BUNDLE:-}" != "true" ]; then
+            maybe_sudo mv -f "build/umbrelos-amd64/system.rugixb" "../build/umbrelos-amd64.rugixb"
+        fi
     fi
     if [ -z "${SKIP_ARM64:-}" ]; then
         build_rugix_system "umbrelos-arm64" "$release" "$dev"

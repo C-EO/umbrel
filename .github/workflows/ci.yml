@@ -101,7 +101,7 @@ jobs:
         uses: crazy-max/ghaction-github-runtime@3cb05d89e1f492524af3d41a1c98c83bc3025124 # v3
       - name: Build OS image
         working-directory: packages/os
-        run: npm run build:amd64:rugix
+        run: SKIP_AMD64_RUGIX_BUNDLE=true npm run build:amd64:rugix
       # Hack to pass the image to the next job. We used to use upload-artifact but network performance
       # is terrible between GitHub <> Ubicloud. Just abuse the cache for now which is local and fast.
       - name: Cache OS image
