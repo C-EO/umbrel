@@ -100,7 +100,7 @@ jobs:
     name: Build umbrelOS amd64 VM image
     needs: [detect-changes, umbrelos-amd64-cache]
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
