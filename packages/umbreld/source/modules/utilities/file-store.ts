@@ -127,6 +127,14 @@ export default class FileStore<T extends Serializable> {
 		return this.#writeQueue.add(async () => this.#delete(property))
 	}
 
+	// Replace the entire store with the provided object.
+	async overwrite(store: T): Promise<boolean> {
+		if (typeof store !== 'object' || store === null || Array.isArray(store)) throw new TypeError('Invalid argument')
+
+		// Add this write job to the queue
+		return this.#writeQueue.add(async () => this.#write(store))
+	}
+
 	async getWriteLock(
 		job: (methods: {
 			get: FileStore<T>['get']
@@ -142,8 +150,6 @@ export default class FileStore<T extends Serializable> {
 
 		return this.#writeQueue.add(async () => job(nonLockedMethods))
 	}
-
-	// TODO: Method to overwrite entire store
 
 	// TODO: Method to register migration hook
 }

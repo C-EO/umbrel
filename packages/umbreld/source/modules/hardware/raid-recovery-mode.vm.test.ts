@@ -2,6 +2,7 @@ import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from
 import pWaitFor from 'p-wait-for'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
+import {triggerFactoryReset, triggerRebootingAction} from '../test-utilities/rebooting-action.js'
 
 describe('RAID mount failure detection', () => {
 	let umbreld: Awaited<ReturnType<typeof createTestVm>>
@@ -158,7 +159,7 @@ describe('RAID mount failure detection', () => {
 	})
 
 	test('can restart from recovery mode', async () => {
-		await umbreld.unauthenticatedClient.system.restart.mutate()
+		await triggerRebootingAction(umbreld.unauthenticatedClient.system.restart.mutate())
 		// Wait for VM to restart and come back up
 		await pWaitFor(
 			async () => {
@@ -173,7 +174,7 @@ describe('RAID mount failure detection', () => {
 
 	test('can factory reset from recovery mode', async () => {
 		// Factory reset triggers a reboot
-		await umbreld.unauthenticatedClient.system.factoryReset.mutate({})
+		await triggerFactoryReset(umbreld.unauthenticatedClient.system.factoryReset.mutate({}))
 
 		// Wait for VM to come back up after factory reset
 		await pWaitFor(

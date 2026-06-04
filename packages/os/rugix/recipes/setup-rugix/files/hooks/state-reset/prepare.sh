@@ -1,11 +1,13 @@
 #!/bin/bash
 
-# Rugix `state-reset/prepare` hook to reset the RAID and main disk data partition. By
-# default Rugix resets the state on the active data partition only. If the system is
-# running from the RAID, then this does only reset the state on the RAID but not the
-# RAID config on the config partition itself. This script checks whether a RAID has
-# been configured and reformats the main disk data partition, and removes a RAID
-# configuration from the config partition if one is detected.
+# Rugix `state-reset/prepare` hook to reset the config and main disk data partition.
+#
+# Rugix calls this before a normal state reset so RAID config does not survive on the
+# config partition. umbreld also calls this directly for factory resets while the
+# active data mount is a RAID dataset. In that case Rugix must not reset state,
+# because that would move/reset the RAID-backed install we need onboarding recovery
+# to find. Calling only this hook clears the boot/config state and wipes the boot
+# disk data partition while leaving the RAID pool untouched.
 
 set -euo pipefail
 

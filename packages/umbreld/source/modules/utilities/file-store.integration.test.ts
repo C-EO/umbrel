@@ -140,6 +140,32 @@ describe('store.delete()', () => {
 	})
 })
 
+describe('store.overwrite()', () => {
+	test('can replace the entire store', async () => {
+		const store = await createStore()
+
+		await store.set('one', 1)
+		await store.set('two', 2)
+		expect(await store.overwrite({three: 3})).toBe(true)
+
+		expect(await store.get()).toStrictEqual({
+			three: 3,
+		})
+	})
+
+	test('throws on missing or invalid arguments', async () => {
+		const store = await createStore()
+
+		// @ts-expect-error Testing invalid arguments
+		await expect(store.overwrite()).rejects.toThrow('Invalid argument')
+
+		// @ts-expect-error Testing invalid arguments
+		await expect(store.overwrite(null)).rejects.toThrow('Invalid argument')
+
+		await expect(store.overwrite([])).rejects.toThrow('Invalid argument')
+	})
+})
+
 describe('store.getWriteLock()', () => {
 	test('allows custom control over write lock', async () => {
 		const store = await createStore()

@@ -21,6 +21,16 @@ const raid = router({
 		ctx.umbreld.hardware.raid.checkRaidMountFailureDevices(),
 	),
 
+	// Check whether a previous Umbrel RAID install can be recovered during onboarding
+	hasRecoverableInstall: publicProcedureWhenNoUserExists.query(async ({ctx}) =>
+		ctx.umbreld.hardware.raid.hasRecoverableInstall(),
+	),
+
+	// Recover a previous Umbrel RAID install during onboarding
+	recoverExistingInstall: publicProcedureWhenNoUserExists.mutation(async ({ctx}) =>
+		ctx.umbreld.hardware.raid.recoverExistingInstall(),
+	),
+
 	// Get RAID pool status
 	getStatus: privateProcedure.query(async ({ctx}) => ctx.umbreld.hardware.raid.getStatus()),
 

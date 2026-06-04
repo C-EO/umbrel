@@ -4,14 +4,29 @@ import {$} from 'execa'
 import fse from 'fs-extra'
 
 import type Umbreld from '../../index.js'
+import {reboot} from './system.js'
 
 const BACKUP_PREFIX = 'umbrel-factory-reset'
+const RAID_FACTORY_RESET_PREPARE_HOOK = '/etc/rugix/hooks/state-reset/prepare/10-umbrel.sh'
 
 // Factory reset using Rugix Ctrl's state management. This triggers an immediate reboot.
 // We use the --backup flag which renames the old state directory instead of deleting
 // it during boot. This makes boot fast (mv is instant) and we clean up the old
 // state in the background after umbreld starts.
-export async function performReset() {
+export async function performReset(umbreld: Umbreld) {
+	const isRunningFromRaidData = await umbreld.hardware.raid.isRunningFromRaidData().catch(() => false)
+
+	if (isRunningFromRaidData) {
+		// Rugix resets the active data mount. When that mount is the RAID dataset,
+		// using Rugix would move/reset the previous install and hide the saved boot
+		// config needed for onboarding recovery. For RAID-backed data we only reset
+		// the boot/internal state: clear the config partition, wipe the boot disk
+		// data partition, leave the RAID pool untouched, then reboot to onboarding.
+		await $`${RAID_FACTORY_RESET_PREPARE_HOOK}`
+		await reboot()
+		return
+	}
+
 	const timestamp = Math.floor(Date.now() / 1000)
 	await $`rugix-ctrl state reset --backup --backup-name ${BACKUP_PREFIX}-${timestamp}`
 }

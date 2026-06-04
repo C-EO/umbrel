@@ -1,9 +1,11 @@
 import crypto from 'node:crypto'
 import os from 'node:os'
+import path from 'node:path'
 import {setTimeout} from 'node:timers/promises'
 
 import fse from 'fs-extra'
 import {$} from 'execa'
+import yaml from 'js-yaml'
 import pRetry from 'p-retry'
 import prettyBytes from 'pretty-bytes'
 
@@ -34,6 +36,13 @@ export function getRoundedDeviceSize(sizeInBytes: number): number {
 
 export type RaidType = 'storage' | 'failsafe'
 export type Topology = 'stripe' | 'raidz' | 'mirror'
+
+const defaultEncryptionPassword = 'umbrelumbrel'
+const configPartition = '/run/rugix/mounts/config'
+const configFile = `${configPartition}/umbrel.yaml`
+const bootConfigFileName = 'umbrel-boot-config.yaml'
+const existingInstallBootConfigPath = `state/default/persist/data/umbrel-os/home/umbrel/umbrel/${bootConfigFileName}`
+const rugixDataMount = '/run/rugix/mounts/data'
 
 export type ExpansionStatus = {
 	state: 'expanding' | 'finished' | 'canceled'
@@ -168,6 +177,47 @@ type ConfigStore = {
 	}
 }
 
+type ParsedImportablePool = {
+	poolName: string
+	state?: string
+}
+
+function parseImportableUmbrelPools(output: string): string[] {
+	const poolNames: string[] = []
+	let current: ParsedImportablePool | undefined
+
+	const finishCurrentPool = () => {
+		if (!current) return
+		if (!/^umbrelos-[0-9a-f]+$/.test(current.poolName)) return
+		if (current.state !== 'ONLINE') return
+
+		poolNames.push(current.poolName)
+	}
+
+	for (const line of output.split('\n')) {
+		const trimmed = line.trim()
+		if (!trimmed) continue
+
+		const [first, second] = trimmed.split(/\s+/)
+
+		if (first === 'pool:') {
+			finishCurrentPool()
+			current = {poolName: second}
+			continue
+		}
+
+		if (!current) continue
+
+		if (first === 'state:') {
+			current.state = second
+			continue
+		}
+	}
+
+	finishCurrentPool()
+	return poolNames
+}
+
 export default class Raid {
 	#umbreld: Umbreld
 	logger: Umbreld['logger']
@@ -192,32 +242,51 @@ export default class Raid {
 		this.logger = umbreld.logger.createChildLogger(`hardware:${name.toLowerCase()}`)
 
 		// Create a file store for the config file with hooks to handle read-only partition
-		const configPartition = '/run/rugix/mounts/config'
-		const configFile = `${configPartition}/umbrel.yaml`
 		this.configStore = new FileStore<ConfigStore>({
 			filePath: configFile,
 			onBeforeWrite: () => $`mount -o remount,rw ${configPartition}`,
-			// This occasionally fails with "mount point is busy" errors. I have no idea why because all writes are
-			// queued so there should be no open file handles and remount should flush writes. Retrying with a delay
-			// makes this extremely unlikely to ever fail but blocks the write queue. It's acceptable since config
-			// writes are rare. On the tiny chance that 5 retries fail we just log the error and move on without failing
-			// to avoid blocking the write queue. This means the config partition would be left in rw state which isn't ideal
-			// but it's very unlikely to happen and less bad than killing the current operation which is probably quite
-			// critical if it's touching the RAID config file like a ZFS dataset migration. The next boot or config udpate
-			// should successfully remount the partition read-only.
-			onAfterWrite: () =>
-				pRetry(() => $`mount -o remount,ro ${configPartition}`, {
+			onAfterWrite: async () => {
+				// Keep a copy on the RAID-backed data dir so recovery after a boot disk reflash can restore it.
+				await fse.copy(configFile, path.join(this.#umbreld.dataDirectory, bootConfigFileName)).catch((error) => {
+					this.logger.error('Failed to copy boot config to data directory', error)
+				})
+
+				// This occasionally fails with "mount point is busy" errors. I have no idea why because all writes are
+				// queued so there should be no open file handles and remount should flush writes. Retrying with a delay
+				// makes this extremely unlikely to ever fail but blocks the write queue. It's acceptable since config
+				// writes are rare. On the tiny chance that 5 retries fail we just log the error and move on without failing
+				// to avoid blocking the write queue. This means the config partition would be left in rw state which isn't ideal
+				// but it's very unlikely to happen and less bad than killing the current operation which is probably quite
+				// critical if it's touching the RAID config file like a ZFS dataset migration. The next boot or config udpate
+				// should successfully remount the partition read-only.
+				await pRetry(() => $`mount -o remount,ro ${configPartition}`, {
 					retries: 5,
 					factor: 1.1,
 					minTimeout: 100,
 				}).catch((error) => {
 					this.logger.error('Failed to remount config partition read-only', error)
-				}),
+				})
+			},
 		})
 	}
 
 	async hasConfigStore() {
 		return await fse.pathExists(this.configStore.filePath)
+	}
+
+	// Check whether the live Rugix data mount is the configured RAID dataset.
+	async isRunningFromRaidData(): Promise<boolean> {
+		const poolName = await this.configStore.get('raid.poolName')
+		if (!poolName) return false
+
+		const status = await this.getPoolStatus(poolName)
+		if (!status.exists) return false
+
+		const {stdout} = await $`findmnt --json --mountpoint ${rugixDataMount} --output SOURCE,FSTYPE`
+		const mountInfo = JSON.parse(stdout) as {filesystems?: Array<{source?: string; fstype?: string}>}
+		const mount = mountInfo.filesystems?.[0]
+
+		return mount?.fstype === 'zfs' && mount.source === `${poolName}/data`
 	}
 
 	// Generate a unique pool name with random suffix to avoid collisions
@@ -725,6 +794,95 @@ export default class Raid {
 		})
 	}
 
+	async hasRecoverableInstall(): Promise<boolean> {
+		if (await this.#umbreld.user.exists()) return false
+		return (await this.#getRecoverableInstall()) !== undefined
+	}
+
+	async recoverExistingInstall(): Promise<boolean> {
+		if (await this.#umbreld.user.exists()) return false
+
+		try {
+			const install = await this.#getRecoverableInstall()
+			if (!install) return false
+
+			const restored = await this.#restoreBootConfigFromRecoverableInstall(install)
+			if (!restored) return false
+
+			setSystemStatus('restarting')
+			setTimeout(1000).then(() => reboot())
+
+			return true
+		} catch (error) {
+			this.logger.error('Failed to recover existing RAID install', error)
+			return false
+		}
+	}
+
+	async #getRecoverableInstall(): Promise<string | undefined> {
+		const poolNames = await this.#getImportableUmbrelPools()
+		if (poolNames.length !== 1) return undefined
+		return poolNames[0]
+	}
+
+	async #getImportableUmbrelPools(): Promise<string[]> {
+		let importOutput = ''
+		try {
+			const {stdout} = await $`zpool import -d /dev/disk/by-umbrel-id`
+			importOutput = stdout
+		} catch (error) {
+			importOutput = (error as {stdout?: string}).stdout ?? ''
+		}
+
+		const poolNames = new Set<string>()
+		for (const poolName of parseImportableUmbrelPools(importOutput)) {
+			poolNames.add(poolName)
+		}
+
+		return [...poolNames]
+	}
+
+	// Mount a recoverable RAID install read-only and restore its saved boot config file.
+	async #restoreBootConfigFromRecoverableInstall(poolName: string): Promise<boolean> {
+		const dataset = `${poolName}/data`
+		const mountPoint = await fse.mkdtemp(path.join(os.tmpdir(), 'umbrel-raid-recovery-'))
+		let imported = false
+		let mounted = false
+
+		try {
+			try {
+				await $`zpool import -N -d /dev/disk/by-umbrel-id -o readonly=on -o cachefile=none ${poolName}`
+			} catch {
+				await $`zpool import -f -N -d /dev/disk/by-umbrel-id -o readonly=on -o cachefile=none ${poolName}`
+			}
+			imported = true
+
+			const {stdout: keyStatus} = await $`zfs get -H -o value keystatus ${dataset}`
+			if (keyStatus.trim() === 'unavailable') {
+				await $({input: defaultEncryptionPassword})`zfs load-key ${dataset}`
+			}
+
+			await $`mount -t zfs -o ro ${dataset} ${mountPoint}`
+			mounted = true
+
+			const bootConfigPath = path.join(mountPoint, existingInstallBootConfigPath)
+			if (!(await fse.pathExists(bootConfigPath))) return false
+
+			const config = yaml.load(await fse.readFile(bootConfigPath, 'utf8'))
+			if (typeof config !== 'object' || config === null || Array.isArray(config)) return false
+
+			await this.configStore.overwrite(config as ConfigStore)
+
+			return true
+		} finally {
+			if (mounted)
+				await $`umount ${mountPoint}`.catch((error) => this.logger.error('Failed to unmount recovery pool', error))
+			if (imported)
+				await $`zpool export ${poolName}`.catch((error) => this.logger.error('Failed to export recovery pool', error))
+			await fse.remove(mountPoint).catch((error) => this.logger.error('Failed to remove recovery mount point', error))
+		}
+	}
+
 	// Create GPT partition table and partitions on a device
 	async #partitionDevice(device: string): Promise<{statePartition: string; dataPartition: string}> {
 		const isDiskById = device.startsWith('/dev/disk/by-umbrel-id/')
@@ -893,8 +1051,6 @@ export default class Raid {
 		// by simply updating the password to something secure without requiring an entire backup and restore
 		// of all data into a new encrypted dataset.
 		// Must be minimum 8 characters so we use umbrelumbrel.
-		const defaultEncryptionPassword = 'umbrelumbrel'
-
 		// Dataset options (-o):
 		//   encryption=aes-256-gcm: Enable encryption with AES-256-GCM
 		//   keyformat=passphrase: Use a passphrase for the encryption key

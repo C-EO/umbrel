@@ -208,8 +208,8 @@ export default router({
 			try {
 				// Wait for UI to poll status (polls every 10s) and see we're resetting
 				await setTimeout(11000)
-				// Triggers an immediate reboot via rugix-ctrl
-				await performReset()
+				// Triggers an immediate reboot via Rugix or the RAID-safe reset path
+				await performReset(ctx.umbreld)
 			} catch (error) {
 				systemStatus = 'running'
 				throw error
