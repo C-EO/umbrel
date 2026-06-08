@@ -8,6 +8,10 @@ max_framebuffers=2
 # We want to run the processor in its 64-bit mode.
 arm_64bit=1
 
+# Required for SquashFS system partitions.
+# Load the initramfs matching the selected kernel.
+auto_initramfs=1
+
 # Enable NVMe interface
 # This is not needed if booting with NVMe so potentially
 # we only want to support that and don't need this.
