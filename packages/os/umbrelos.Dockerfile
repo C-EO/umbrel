@@ -102,6 +102,88 @@ COPY packages/os/overlay-pi /
 
 
 #########################################################################
+# watchman build stage (amd64 and arm64)
+#########################################################################
+
+# Nasty hack to work around a Parcel watcher bug:
+# https://github.com/getumbrel/umbrel/issues/2158
+#
+# We install Watchman through Homebrew because it gives us prebuilt bottles
+# for both arm64 and amd64. Building Watchman from source takes ages, and
+# upstream only provides prebuilt binaries for amd64.
+#
+# This can be removed if Parcel fixes the watcher bug or if we move away from
+# Parcel's watcher.
+FROM debian:${DEBIAN_VERSION}-${DEBIAN_IMAGE_SNAPSHOT_DATE} AS watchman-build
+
+ARG APT_SNAPSHOT_DATE
+ARG WATCHMAN_VERSION=2026.05.11.00
+ARG WATCHMAN_HOMEBREW_CORE_COMMIT=a33d7e6eed67d79d55b3d45050c6f45646116393
+
+COPY packages/os/build-steps /build-steps
+
+RUN /build-steps/initialize.sh "${APT_SNAPSHOT_DATE}"
+
+RUN apt-get install --yes ca-certificates curl git file patchelf procps
+
+RUN useradd --create-home --shell /bin/bash linuxbrew && \
+    mkdir -p /home/linuxbrew/.linuxbrew && \
+    chown -R linuxbrew:linuxbrew /home/linuxbrew
+
+USER linuxbrew
+
+ENV HOME=/home/linuxbrew
+ENV HOMEBREW_PREFIX=/home/linuxbrew/.linuxbrew
+ENV HOMEBREW_CELLAR=/home/linuxbrew/.linuxbrew/Cellar
+ENV HOMEBREW_REPOSITORY=/home/linuxbrew/.linuxbrew/Homebrew
+ENV PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}
+ENV HOMEBREW_NO_ANALYTICS=1
+ENV HOMEBREW_NO_AUTO_UPDATE=1
+ENV HOMEBREW_NO_ENV_HINTS=1
+ENV HOMEBREW_NO_INSTALL_CLEANUP=1
+ENV HOMEBREW_NO_INSTALL_FROM_API=1
+
+RUN git clone --depth=1 https://github.com/Homebrew/brew "${HOMEBREW_REPOSITORY}" && \
+    mkdir -p \
+        "${HOMEBREW_PREFIX}/bin" \
+        "${HOMEBREW_PREFIX}/etc" \
+        "${HOMEBREW_PREFIX}/include" \
+        "${HOMEBREW_PREFIX}/lib" \
+        "${HOMEBREW_PREFIX}/opt" \
+        "${HOMEBREW_PREFIX}/sbin" \
+        "${HOMEBREW_PREFIX}/share" \
+        "${HOMEBREW_PREFIX}/var/homebrew" && \
+    ln -s ../Homebrew/bin/brew "${HOMEBREW_PREFIX}/bin/brew"
+
+RUN mkdir -p "${HOMEBREW_REPOSITORY}/Library/Taps/homebrew/homebrew-core" && \
+    git -C "${HOMEBREW_REPOSITORY}/Library/Taps/homebrew/homebrew-core" init && \
+    git -C "${HOMEBREW_REPOSITORY}/Library/Taps/homebrew/homebrew-core" remote add origin https://github.com/Homebrew/homebrew-core.git && \
+    git -C "${HOMEBREW_REPOSITORY}/Library/Taps/homebrew/homebrew-core" fetch --depth=1 origin "${WATCHMAN_HOMEBREW_CORE_COMMIT}" && \
+    git -C "${HOMEBREW_REPOSITORY}/Library/Taps/homebrew/homebrew-core" checkout --detach FETCH_HEAD
+
+RUN brew install --formula --force-bottle watchman && \
+    test "$(watchman -v)" = "${WATCHMAN_VERSION}" && \
+    brew cleanup --prune=all
+
+USER root
+
+RUN cp -a /home/linuxbrew/.linuxbrew /opt/linuxbrew && \
+    grep -Z -a -r -l "/home/linuxbrew/.linuxbrew" /opt/linuxbrew | xargs -0 -r sh -c ' \
+        for file do \
+            if patchelf --print-interpreter "$file" >/dev/null 2>&1; then \
+                patchelf --set-interpreter /opt/linuxbrew/lib/ld.so "$file"; \
+            fi; \
+            rpath="$(patchelf --print-rpath "$file" 2>/dev/null || true)"; \
+            if printf "%s" "$rpath" | grep -q "/home/linuxbrew/.linuxbrew"; then \
+                patchelf --set-rpath "$(printf "%s" "$rpath" | sed "s#/home/linuxbrew/.linuxbrew#/opt/linuxbrew#g")" "$file"; \
+            fi; \
+        done \
+    ' sh && \
+    mv /home/linuxbrew /home/linuxbrew.build-only && \
+    /opt/linuxbrew/bin/watchman -v
+
+
+#########################################################################
 # umbrelos build stage
 #########################################################################
 
@@ -185,6 +267,15 @@ RUN KOPIA_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "arm64" || echo "x64") &&
 
 # kopia also requires fuse3 for mounting snapshots
 RUN apt-get install --yes fuse3 bindfs
+
+# Install Watchman from pinned Homebrew bottles.
+COPY --from=watchman-build --chown=root:root /opt/linuxbrew/ /opt/linuxbrew/
+ENV PATH=/opt/linuxbrew/bin:/opt/linuxbrew/sbin:${PATH}
+RUN ln -sf /opt/linuxbrew/bin/watchman /usr/local/bin/watchman && \
+    ln -sf /opt/linuxbrew/bin/watchman /usr/bin/watchman && \
+    mkdir -p /usr/local/var/run/watchman && \
+    chmod 2777 /usr/local/var/run/watchman && \
+    watchman -v
 
 # Add Umbrel user
 RUN adduser --gecos "" --disabled-password umbrel
