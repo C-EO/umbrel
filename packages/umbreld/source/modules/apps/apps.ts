@@ -157,7 +157,7 @@ export default class Apps {
 						error,
 					)
 				},
-				retries: 2, // This will do exponential backoff for 1s, 2s
+				retries: 7, // This will do exponential backoff for 1s, 2s, 4s, 8s, 16s, 32s, 64s (~2 minutes total)
 			})
 		} catch (error) {
 			// Log the error but continue to try to bring apps up to make it a less bad failure
@@ -355,9 +355,23 @@ export default class Apps {
 		return uninstalled
 	}
 
+	async startApp(appId: string) {
+		const app = this.getApp(appId)
+
+		// We quickly try to start the app env before starting the app. In most normal cases
+		// this just quickly returns and does nothing since the app env is already running.
+		// However in the case where the app env is down this ensures we start it again.
+		await appEnvironment(this.#umbreld, 'up')
+		return app.start()
+	}
+
 	async restart(appId: string) {
 		const app = this.getApp(appId)
 
+		// We quickly try to start the app env before restarting the app. In most normal cases
+		// this just quickly returns and does nothing since the app env is already running.
+		// However in the case where the app env is down this ensures we start it again.
+		await appEnvironment(this.#umbreld, 'up')
 		return app.restart()
 	}
 

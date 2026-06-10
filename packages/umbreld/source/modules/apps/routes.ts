@@ -149,7 +149,7 @@ export const apps = router({
 				appId: z.string(),
 			}),
 		)
-		.mutation(async ({ctx, input}) => ctx.apps.getApp(input.appId).start()),
+		.mutation(async ({ctx, input}) => ctx.apps.startApp(input.appId)),
 
 	// Stop an app
 	stop: privateProcedure
