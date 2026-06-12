@@ -338,9 +338,12 @@ compose() {
     compose_files+=( "--file" "${app_proxy_compose_file}" )
   fi
 
-  # If remote Tor access is enabled
-  # Then include a compose file for Tor
-  if [[ "${REMOTE_TOR_ACCESS}" == "true" ]]; then
+  # If remote Tor access is enabled and the app has an app_proxy service
+  # then include a compose file for Tor. The hidden service always points
+  # at the app_proxy container so apps without one (e.g. host network apps
+  # like Tailscale) must not get a tor_server sidecar, it would crash loop
+  # trying to resolve a hostname that never exists.
+  if [[ "${REMOTE_TOR_ACCESS}" == "true" ]] && [[ "${has_app_proxy_service}" == "true" ]]; then
     compose_files+=( "--file" "${tor_compose_file}" )
   fi
 
