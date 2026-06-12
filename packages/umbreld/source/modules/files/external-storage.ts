@@ -196,6 +196,18 @@ export default class ExternalStorage {
 						const externalBaseSystemPath = this.#umbreld.files.getBaseDirectory('/External')
 						const sanitisedLabel = partition.label.replace(/[^a-zA-Z0-9 '\_\-]/g, '')
 						let systemMountpoint = nodePath.join(externalBaseSystemPath, sanitisedLabel)
+
+						// Clean up a left over mount point dir if it's empty and not mounted.
+						// We can't guarantee mount point cleanup on shutdown (e.g. power loss
+						// or getting killed mid-unmount) and a stale dir would otherwise mount
+						// this partition with a "(2)" suffix, breaking apps with hardcoded
+						// paths to the drive.
+						const isStaleLeftOverMountPoint =
+							(await fse.pathExists(systemMountpoint)) &&
+							(await fse.readdir(systemMountpoint)).length === 0 &&
+							(await $({reject: false})`mountpoint ${systemMountpoint}`).exitCode !== 0
+						if (isStaleLeftOverMountPoint) await fse.remove(systemMountpoint)
+
 						systemMountpoint = await this.#umbreld.files.getUniqueName(systemMountpoint)
 
 						// Mount partition
