@@ -84,6 +84,9 @@ rm -f ${markerPaths}
 rm -rf /etc/systemd/system/umbrel-custom-pre-start.service.d
 systemctl daemon-reload
 test -x '${hookPath}'
+# Flush the hook to disk so it survives the upcoming reboot even if the
+# power cycle ends up being a hard stop instead of a clean shutdown.
+sync
 echo '${setupMarker}'
 `,
 	)

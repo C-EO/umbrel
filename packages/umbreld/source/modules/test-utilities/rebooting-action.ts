@@ -13,8 +13,14 @@ export async function triggerRebootingAction(action: Promise<unknown>, expectedC
 		const actionStarted =
 			message.includes('Command was killed with SIGTERM') &&
 			expectedCommands.some((command) => message.includes(command))
+		// The reboot can also tear down the connection before the structured
+		// SIGTERM error above reaches the client, in which case the request
+		// surfaces as a plain network error. Callers wait for the reboot to
+		// complete afterwards, which still catches the case where the action
+		// never actually started.
+		const connectionClosedByReboot = message.includes('fetch failed')
 
-		if (!actionStarted) throw error
+		if (!actionStarted && !connectionClosedByReboot) throw error
 	}
 }
 

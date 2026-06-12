@@ -53,6 +53,16 @@ date -s '+${hours} hours' >/dev/null
 			async () => {
 				const backups = await umbreld.client.backups.listBackups.query({repositoryId})
 				expect(backups.length).toBeGreaterThanOrEqual(1)
+
+				// The snapshot can become visible before the scheduled backup has
+				// saved lastBackup and cleared progress. Wait for the interval job
+				// to fully settle before another test advances the VM clock.
+				const repositories = await umbreld.client.backups.getRepositories.query()
+				const repository = repositories.find((repository) => repository.id === repositoryId)
+				expect(repository?.lastBackup).toBeTypeOf('number')
+
+				const progress = await umbreld.client.backups.backupProgress.query()
+				expect(progress.some((progress) => progress.repositoryId === repositoryId)).toBe(false)
 			},
 			{retries: 60, factor: 1, minTimeout: 1000, maxTimeout: 1000},
 		)

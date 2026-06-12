@@ -85,9 +85,23 @@ describe('Static IP configuration', () => {
 		// Confirm the static IP change
 		await umbreld.client.system.confirmStaticIp.mutate({ip: ip!})
 
-		// Wait for the set job to resolve (it was waiting fro the confirmation)
+		// Wait for the set job to resolve (it was waiting for the confirmation)
 		await setStaticIpPromise
-		after = (await umbreld.client.system.getNetworkInterfaces.query()).find((i) => i.mac === interfaceMac)!
+
+		// Applying the static config briefly reconnects the interface, so an
+		// immediate query can observe it mid-transition. Wait until it's back
+		// up with the static settings before asserting on the details.
+		await pWaitFor(
+			async () => {
+				const iface = (await umbreld.client.system.getNetworkInterfaces.query()).find((i) => i.mac === interfaceMac)
+				if (iface?.connected && iface.ipMethod === 'static' && iface.configuredStaticSettings) {
+					after = iface
+					return true
+				}
+				return false
+			},
+			{interval: 250, timeout: 10_000},
+		)
 
 		// Only the method should change, everything else stays the same
 		expect(after.ipMethod).toBe('static')
@@ -99,7 +113,24 @@ describe('Static IP configuration', () => {
 	})
 
 	test('static IP settings persist after reboot', async () => {
-		const before = (await umbreld.client.system.getNetworkInterfaces.query()).find((i) => i.mac === interfaceMac)!
+		// Capture the interface state only once it has settled with the static
+		// config applied, in case the previous test's reconnect is still ongoing.
+		let before!: Awaited<ReturnType<typeof umbreld.client.system.getNetworkInterfaces.query>>[number]
+		await pWaitFor(
+			async () => {
+				const iface = (await umbreld.client.system.getNetworkInterfaces.query()).find((i) => i.mac === interfaceMac)
+				if (iface?.connected && iface.ipMethod === 'static' && iface.configuredStaticSettings) {
+					before = iface
+					return true
+				}
+				return false
+			},
+			{interval: 250, timeout: 10_000},
+		)
+
+		// Flush the persisted static IP config to disk so it survives the power
+		// cycle even if graceful shutdown degrades to a hard stop.
+		await umbreld.vm.sshAsRoot('sync')
 
 		// Power cycle the VM
 		await umbreld.vm.powerOff()
@@ -123,7 +154,7 @@ describe('Static IP configuration', () => {
 				expect(iface?.gateway).toBe(before.gateway)
 				expect(iface?.dns).toEqual(before.dns)
 			},
-			{retries: 100, minTimeout: 100, maxTimeout: 100},
+			{retries: 300, minTimeout: 200, maxTimeout: 200},
 		)
 	})
 

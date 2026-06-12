@@ -10,6 +10,24 @@ describe('RAID mount failure detection', () => {
 	let secondDeviceId: string
 	let failed = false
 
+	// After triggering a restart the old instance keeps answering until it
+	// actually goes down, so a "wait for the API to come back" check can be
+	// satisfied by the pre-restart instance. Wait for the API to disappear
+	// first so the subsequent up-wait is guaranteed to see the new boot.
+	async function waitForApiToGoDown() {
+		await pWaitFor(
+			async () => {
+				try {
+					await umbreld.unauthenticatedClient.system.status.query()
+					return false
+				} catch {
+					return true
+				}
+			},
+			{interval: 100, timeout: 60_000},
+		)
+	}
+
 	beforeAll(async () => {
 		umbreld = await createTestVm()
 	})
@@ -147,7 +165,7 @@ describe('RAID mount failure detection', () => {
 	})
 
 	test('can shutdown from recovery mode', async () => {
-		await umbreld.unauthenticatedClient.system.shutdown.mutate()
+		await triggerRebootingAction(umbreld.unauthenticatedClient.system.shutdown.mutate(), ['poweroff'])
 		await umbreld.vm.waitForShutdown()
 	})
 
@@ -160,6 +178,7 @@ describe('RAID mount failure detection', () => {
 
 	test('can restart from recovery mode', async () => {
 		await triggerRebootingAction(umbreld.unauthenticatedClient.system.restart.mutate())
+		await waitForApiToGoDown()
 		// Wait for VM to restart and come back up
 		await pWaitFor(
 			async () => {
@@ -185,11 +204,33 @@ describe('RAID mount failure detection', () => {
 			{interval: 1000, timeout: 600_000},
 		)
 
-		// Verify user no longer exists after factory reset
-		const userExists = await umbreld.unauthenticatedClient.user.exists.query()
-		expect(userExists).toBe(false)
-		// Verify mount failure is false (no RAID config to fail)
-		const failure = await umbreld.unauthenticatedClient.hardware.raid.checkRaidMountFailure.query()
-		expect(failure).toBe(false)
+		// Verify user no longer exists after factory reset. The API can come
+		// back up before umbreld has finished resetting state, so poll until
+		// the reset has settled and then assert the final state.
+		await pWaitFor(
+			async () => {
+				try {
+					return !(await umbreld.unauthenticatedClient.user.exists.query())
+				} catch {
+					return false
+				}
+			},
+			{interval: 1000, timeout: 600_000},
+		)
+		expect(await umbreld.unauthenticatedClient.user.exists.query()).toBe(false)
+
+		// Verify mount failure is false (no RAID config to fail), again polling
+		// until the freshly reset state is reflected
+		await pWaitFor(
+			async () => {
+				try {
+					return !(await umbreld.unauthenticatedClient.hardware.raid.checkRaidMountFailure.query())
+				} catch {
+					return false
+				}
+			},
+			{interval: 1000, timeout: 120_000},
+		)
+		expect(await umbreld.unauthenticatedClient.hardware.raid.checkRaidMountFailure.query()).toBe(false)
 	})
 })

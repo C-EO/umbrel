@@ -120,7 +120,10 @@ function createTestHelpers(port: number) {
 		)
 	}
 
-	// Subscribe to events over WebSocket and collect them
+	// Subscribe to events over WebSocket and collect them.
+	// `started` resolves once the server acknowledges the subscription. Await it
+	// before triggering the action under test, otherwise events emitted while
+	// the subscription is still being established are silently missed.
 	function subscribeToEvents<T>(event: (typeof events)[number]) {
 		const collected: T[] = []
 		let resolveStarted = () => {}
@@ -297,7 +300,15 @@ export async function createTestVm({
 
 		// Try graceful shutdown via tRPC (triggers clean umbreld shutdown)
 		try {
-			await client.system.shutdown.mutate().catch(() => unauthenticatedClient.system.shutdown.mutate())
+			// The shutdown calls can reject even though the shutdown was triggered,
+			// because the connection drops while the system is going down. Ignore
+			// call errors and judge success by the VM process actually exiting.
+			try {
+				await client.system.shutdown.mutate()
+			} catch {
+				await unauthenticatedClient.system.shutdown.mutate().catch(() => {})
+			}
+
 			// Wait up to 30 seconds for graceful shutdown
 			await pWaitFor(() => !isRunning(), {interval: 100, timeout: 30_000})
 			vmProcessPid = undefined

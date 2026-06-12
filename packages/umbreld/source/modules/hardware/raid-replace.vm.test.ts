@@ -108,6 +108,7 @@ describe('RAID device replacement - storage mode', () => {
 	test('replaces second device with third device in storage mode', async () => {
 		// Subscribe to replace events before starting
 		replaceSubscription = umbreld.subscribeToEvents<ReplaceStatus>('raid:replace-progress')
+		await replaceSubscription.started
 
 		await umbreld.client.hardware.raid.replaceDevice.mutate({
 			oldDevice: secondDeviceId,
@@ -315,6 +316,7 @@ describe('RAID device replacement - failsafe mode', () => {
 	test('replaces old device with new device in failsafe mode', async () => {
 		// Subscribe to replace events before starting
 		replaceSubscription = umbreld.subscribeToEvents<ReplaceStatus>('raid:replace-progress')
+		await replaceSubscription.started
 
 		await umbreld.client.hardware.raid.replaceDevice.mutate({
 			oldDevice: secondDeviceId,

@@ -49,10 +49,21 @@ describe.sequential('Network storage lifecycle', () => {
 	async function expectMountedShareToContain(name: string) {
 		await pRetry(
 			async () => {
+				await expect(umbreld.client.files.listNetworkShares.query()).resolves.toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							mountPath,
+							isMounted: true,
+						}),
+					]),
+				)
+
 				const listing = await umbreld.client.files.list.query({path: mountPath})
 				expect(listing.files.map((file) => file.name)).toContain(name)
 			},
-			{retries: 20, factor: 1, minTimeout: 1000, maxTimeout: 1000},
+			// The remount watcher retries every 60 seconds. Allow one missed
+			// startup mount attempt when Samba is still coming up after reboot.
+			{retries: 90, factor: 1, minTimeout: 1000, maxTimeout: 1000},
 		)
 	}
 
@@ -124,8 +135,10 @@ describe.sequential('Network storage lifecycle', () => {
 
 		await umbreld.vm.sshAsRoot('systemctl start smbd')
 
+		// As above: the remount watcher only retries every 60 seconds, so allow a
+		// full missed cycle before the share becomes writable again.
 		await pRetry(() => umbreld.client.files.createDirectory.mutate({path: `${mountPath}/after-outage`}), {
-			retries: 20,
+			retries: 90,
 			factor: 1,
 			minTimeout: 1000,
 			maxTimeout: 1000,

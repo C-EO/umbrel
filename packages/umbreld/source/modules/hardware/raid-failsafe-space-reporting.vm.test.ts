@@ -409,6 +409,7 @@ describe('RAID failsafe space reporting consistency', () => {
 
 		test('adds third SSD to RAID array', async () => {
 			const expansionSubscription = umbreld.subscribeToEvents<ExpansionStatus>('raid:expansion-progress')
+			await expansionSubscription.started
 			await umbreld.client.hardware.raid.addDevice.mutate({deviceId: thirdDeviceId})
 
 			// Wait for expansion to complete
@@ -472,6 +473,7 @@ describe('RAID failsafe space reporting consistency', () => {
 
 		test('adds fourth SSD to RAID array', async () => {
 			const expansionSubscription = umbreld.subscribeToEvents<ExpansionStatus>('raid:expansion-progress')
+			await expansionSubscription.started
 			await umbreld.client.hardware.raid.addDevice.mutate({deviceId: fourthDeviceId})
 
 			// Wait for expansion to complete

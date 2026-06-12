@@ -5,6 +5,10 @@ import pWaitFor from 'p-wait-for'
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
 describe('RAID storage to failsafe transition with 90% full array', () => {
+	// Small devices keep the ~90% fill and the transition's snapshot send down
+	// to a couple of GB of I/O so the test doesn't saturate CI runners.
+	const raidDeviceSize = '2G'
+
 	let umbreld: Awaited<ReturnType<typeof createTestVm>>
 	let firstDeviceId: string
 	let secondDeviceId: string
@@ -26,8 +30,8 @@ describe('RAID storage to failsafe transition with 90% full array', () => {
 		if (failed) skip()
 	})
 
-	test('adds one 5GB NVMe device and boots VM', async () => {
-		await umbreld.vm.addNvme({slot: 1, size: '5G'})
+	test('adds one 2GB NVMe device and boots VM', async () => {
+		await umbreld.vm.addNvme({slot: 1, size: raidDeviceSize})
 		await umbreld.vm.powerOn()
 	})
 
@@ -63,32 +67,111 @@ describe('RAID storage to failsafe transition with 90% full array', () => {
 	})
 
 	test('fills array to over 90% capacity', async () => {
-		// Get current usage
-		const status = await umbreld.client.hardware.raid.getStatus.query()
-		const usedSpace = status.usedSpace ?? 0
-		const usableSpace = status.usableSpace ?? 1
+		const getUsage = async () => {
+			const status = await umbreld.client.hardware.raid.getStatus.query()
+			const usedSpace = status.usedSpace ?? 0
+			const usableSpace = status.usableSpace ?? 1
+			return {
+				usedSpace,
+				usableSpace,
+				percent: (usedSpace / usableSpace) * 100,
+			}
+		}
 
-		// Calculate how much to write to reach 91% (a bit over 90% to ensure we exceed threshold)
-		const targetUsage = 0.91
-		const bytesToWrite = Math.ceil(targetUsage * usableSpace - usedSpace)
-		const mbToWrite = Math.ceil(bytesToWrite / (1024 * 1024))
+		const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-		console.log(`Current usage: ${((usedSpace / usableSpace) * 100).toFixed(1)}%`)
-		console.log(`Writing ${mbToWrite}MB to reach ~91% capacity...`)
+		const sshFillCommand = async (command: string) => {
+			for (let attempt = 1; ; attempt++) {
+				try {
+					await umbreld.vm.ssh(command)
+					return
+				} catch (error) {
+					if (!String(error).includes('Connection lost before handshake') || attempt >= 6) throw error
+					console.log(`SSH handshake failed before writing fill data; retrying (${attempt}/6)...`)
+					await wait(1000)
+				}
+			}
+		}
 
-		// Write the data in one go
-		await umbreld.vm.ssh(`dd if=/dev/urandom of=~/fill-data.bin bs=1M count=${mbToWrite}`)
+		const writeFillData = async (mbToWrite: number, mode: 'replace' | 'append') => {
+			const redirect = mode === 'replace' ? '>' : '>>'
+			await sshFillCommand(`
+set -eu
+bash -o pipefail -c 'dd if=/dev/zero bs=1M count=${mbToWrite} status=none | openssl enc -aes-256-ctr -K 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f -iv 000102030405060708090a0b0c0d0e0f ${redirect} ~/fill-data.bin'
+sync
+`)
+		}
 
-		// Verify we're over 90%
-		const finalStatus = await umbreld.client.hardware.raid.getStatus.query()
-		const finalUsage = ((finalStatus.usedSpace ?? 0) / (finalStatus.usableSpace ?? 1)) * 100
-		expect(finalUsage).toBeGreaterThan(90)
-		console.log(`Final usage before transition: ${finalUsage.toFixed(1)}%`)
+		const initialUsage = await getUsage()
+		const initialUsedSpace = initialUsage.usedSpace
+		const usableSpace = initialUsage.usableSpace
+		const mb = 1024 * 1024
+
+		// Start below the boundary, then append in coarse chunks. Tiny ZFS pools
+		// update reported usage in uneven steps under CI load, so fine-grained
+		// calibration can burn the whole test timeout without crossing 90%.
+		//
+		// The upper bound matters too: ZFS reserves slop space (a sizeable share
+		// of a tiny pool), so overshooting much past 95% makes the transition's
+		// snapshot/send fail with ENOSPC — a different failure mode than the
+		// "transition a >90% full array" scenario this test exists to exercise.
+		const minimumUsage = 90
+		const maximumUsage = 95
+		const appendTargetUsage = 0.91
+		const replacementTargets = [0.88, 0.84, 0.8, 0.76, 0.72]
+
+		console.log(`Current usage: ${initialUsage.percent.toFixed(1)}%`)
+
+		// Write deterministic non-compressible data. This keeps the pool genuinely
+		// full while avoiding slow /dev/urandom generation on loaded CI runners.
+		let finalUsage = initialUsage
+		let reachedSafeTarget = false
+		for (const targetUsage of replacementTargets) {
+			const bytesToWrite = Math.ceil(targetUsage * usableSpace - initialUsedSpace)
+			const mbToWrite = Math.max(1, Math.ceil(bytesToWrite / mb))
+			console.log(`Writing ${mbToWrite}MB to reach ~${targetUsage * 100}% capacity...`)
+			await writeFillData(mbToWrite, 'replace')
+			finalUsage = await getUsage()
+			if (finalUsage.percent >= maximumUsage) {
+				console.log(
+					`Usage ${finalUsage.percent.toFixed(1)}% is above the snapshot-safe limit; retrying with a lower fill target...`,
+				)
+				continue
+			}
+
+			for (let i = 0; i < 12 && finalUsage.percent <= minimumUsage; i++) {
+				const bytesToTarget = Math.ceil(appendTargetUsage * finalUsage.usableSpace - finalUsage.usedSpace)
+				const remainingPercent = appendTargetUsage * 100 - finalUsage.percent
+				const maxAppendChunkMb = remainingPercent > 4 ? 48 : remainingPercent > 2 ? 24 : 12
+				const mbToAppend = Math.max(1, Math.min(maxAppendChunkMb, Math.ceil(bytesToTarget / mb)))
+
+				console.log(`Usage ${finalUsage.percent.toFixed(1)}% is below target; appending ${mbToAppend}MB...`)
+				await writeFillData(mbToAppend, 'append')
+				finalUsage = await getUsage()
+
+				if (finalUsage.percent >= maximumUsage) {
+					console.log(
+						`Usage ${finalUsage.percent.toFixed(1)}% exceeded the snapshot-safe limit; restarting from a lower fill target...`,
+					)
+					break
+				}
+			}
+
+			if (finalUsage.percent > minimumUsage && finalUsage.percent < maximumUsage) {
+				reachedSafeTarget = true
+				break
+			}
+		}
+
+		expect(reachedSafeTarget).toBe(true)
+		expect(finalUsage.percent).toBeGreaterThan(minimumUsage)
+		expect(finalUsage.percent).toBeLessThan(maximumUsage)
+		console.log(`Final usage before transition: ${finalUsage.percent.toFixed(1)}%`)
 	})
 
-	test('shuts down and adds second 5GB NVMe device', async () => {
+	test('shuts down and adds second 2GB NVMe device', async () => {
 		await umbreld.vm.powerOff()
-		await umbreld.vm.addNvme({slot: 2, size: '5G'})
+		await umbreld.vm.addNvme({slot: 2, size: raidDeviceSize})
 		await umbreld.vm.powerOn()
 	})
 

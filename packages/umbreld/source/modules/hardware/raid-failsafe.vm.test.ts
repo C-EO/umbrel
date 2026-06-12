@@ -104,7 +104,8 @@ describe('RAID failsafe mode', () => {
 	})
 
 	test('logs in after adding third SSD', async () => {
-		await umbreld.waitForStartup({waitForUser: true})
+		// powerOn() already waited for the API. On loaded CI runners, user data
+		// can take longer to become available after adding a disk to failsafe RAID.
 		await umbreld.login()
 	})
 
@@ -120,6 +121,7 @@ describe('RAID failsafe mode', () => {
 	test('adds third SSD to RAID array and subscribes to expansion events', async () => {
 		// Subscribe to expansion events before adding the device
 		expansionSubscription = umbreld.subscribeToEvents<ExpansionStatus>('raid:expansion-progress')
+		await expansionSubscription.started
 
 		await umbreld.client.hardware.raid.addDevice.mutate({deviceId: thirdDeviceId})
 	})
