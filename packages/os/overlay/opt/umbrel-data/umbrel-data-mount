@@ -147,6 +147,29 @@ if [ -n "$POOL_NAME" ] && [ ${#DEVICES[@]} -gt 0 ]; then
     echo ">>> Mounting RAID array to '$MOUNT_POINT'"
     mkdir -p "$MOUNT_POINT"
     mount -t zfs "${POOL_NAME}/data" "$MOUNT_POINT"
+
+    # Verify the array is actually writable before handing back to rugix.
+    #
+    # A pool can import and mount "successfully" while being read-only, e.g. when
+    # ZFS has suspended/forced the pool read-only after disk errors. The mount
+    # then succeeds here, so rugix sets up the root overlay and the system boots,
+    # but umbreld can't write to its data directory and crash-loops forever with
+    # no UI ever coming online.
+    #
+    # Treat an unwritable array as a mount failure: unmount and exit non-zero.
+    # rugix then records the data mount error (.rugix/data-mount-error.log), falls
+    # back to an in-memory overlay so the system still boots, and umbreld detects
+    # the failure (checkRaidMountFailure) and boots into RAID recovery mode. This
+    # gives the user an actionable error instead of a silent crash-loop.
+    echo ">>> Verifying the array is writable"
+    write_test_file="${MOUNT_POINT}/.umbrel-write-test"
+    if ! (echo "umbrel-write-test" >"$write_test_file") 2>/dev/null; then
+        echo ">>> ERROR: array mounted read-only / not writable, bailing so rugix can fail over to recovery mode"
+        umount "$MOUNT_POINT" 2>/dev/null || umount -l "$MOUNT_POINT" 2>/dev/null || true
+        exit 1
+    fi
+    rm -f "$write_test_file" 2>/dev/null || true
+    echo ">>> Array is writable"
 else
     echo ">>> No RAID config found, falling back to default data partition"
 
