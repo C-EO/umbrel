@@ -1,2 +1,8 @@
+# If setting up the configured root overlay fails (e.g. the overlay mount point
+# can't be created on the data partition), fall back to an in-memory overlay so
+# the device still boots in a degraded state instead of bricking before systemd.
+# The web UI can then come up and surface the problem to the user.
+overlay-fallback = "in-memory"
+
 [[persist]]
 directory = "/data"
