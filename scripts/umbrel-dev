@@ -52,7 +52,16 @@ EOF
 }
 
 build_os_image() {
-  docker buildx build --cache-from type=gha,scope=umbrelos-amd64 --cache-to type=gha,mode=max,scope=umbrelos-amd64 --load --file packages/os/umbrelos.Dockerfile --tag "${INSTANCE_ID}" .
+  # CI runs many integration test jobs in parallel that each build this image.
+  # The dedicated cache job has already exported identical layers, and mass
+  # concurrent re-exports regularly fail the build with cache backend errors
+  # (429/504/not_found), so allow CI to skip the redundant export.
+  cache_to="--cache-to type=gha,mode=max,scope=umbrelos-amd64"
+  if [[ "${UMBREL_DEV_SKIP_CACHE_EXPORT:-false}" = "true" ]]
+  then
+    cache_to=""
+  fi
+  docker buildx build --cache-from type=gha,scope=umbrelos-amd64 ${cache_to} --load --file packages/os/umbrelos.Dockerfile --tag "${INSTANCE_ID}" .
 }
 
 create_instance() {

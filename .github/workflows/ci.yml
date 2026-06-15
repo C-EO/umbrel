@@ -116,7 +116,12 @@ jobs:
         uses: crazy-max/ghaction-github-runtime@3cb05d89e1f492524af3d41a1c98c83bc3025124 # v3
       - name: Build OS image
         working-directory: packages/os
-        run: SKIP_AMD64_RUGIX_BUNDLE=true npm run build:amd64:rugix
+        # SKIP_CACHE_EXPORT: the umbrelos-amd64-cache job (a dependency of this
+        # job) has already exported these layers to the gha cache, so skip the
+        # redundant re-export. It can intermittently fail the build with cache
+        # backend errors, which would block every VM test that depends on this
+        # image; the --cache-from import keeps the build fast regardless.
+        run: SKIP_AMD64_RUGIX_BUNDLE=true SKIP_CACHE_EXPORT=true npm run build:amd64:rugix
       # Hack to pass the image to the next job. We used to use upload-artifact but network performance
       # is terrible between GitHub <> Ubicloud. Just abuse the cache for now which is local and fast.
       - name: Cache OS image
@@ -211,6 +216,12 @@ jobs:
       - name: Expose GitHub Actions runtime for Docker cache
         uses: crazy-max/ghaction-github-runtime@3cb05d89e1f492524af3d41a1c98c83bc3025124 # v3
       - run: npm run dev rebuild
+        env:
+          # The umbrelos-amd64-cache job has already exported these layers to the
+          # gha cache. Re-exporting them from every integration job in parallel
+          # overwhelms the cache backend and intermittently fails the build with
+          # 429/504/not_found errors, which surfaced as flaky integration tests.
+          UMBREL_DEV_SKIP_CACHE_EXPORT: 'true'
       - run: npm run dev start
       - run: npm run --prefix packages/umbreld test:umbrel-dev:prepare
       - run: npm run --prefix packages/umbreld test:umbrel-dev ${{ matrix.test.path }}

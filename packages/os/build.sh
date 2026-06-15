@@ -113,11 +113,20 @@ function build_root_fs() {
     mkdir -p build
 
     echo "Building Umbrel OS Docker image for ${arch}..."
+    # The dedicated umbrelos-${arch} cache job already exports these layers to the
+    # gha cache. In CI contexts that only need the image (not to refresh the
+    # cache), set SKIP_CACHE_EXPORT=true to skip the redundant re-export — mass
+    # or transient re-exports otherwise intermittently fail the build with cache
+    # backend errors (429/504/not_found). The --cache-from import is unaffected.
+    cache_to="--cache-to type=gha,mode=max,scope=umbrelos-${arch}"
+    if [ "${SKIP_CACHE_EXPORT:-false}" = "true" ]; then
+        cache_to=""
+    fi
     # Note that we run the build context in ../../ so the build process has access to the
     # entire repo to copy in umbreld stuff.
     docker_buildx \
         --cache-from type=gha,scope=umbrelos-${arch} \
-        --cache-to type=gha,mode=max,scope=umbrelos-${arch} \
+        ${cache_to} \
         --platform "linux/${platform_arch}" \
         --build-arg BASE_VARIANT="${base_variant}" \
         --file umbrelos.Dockerfile \
