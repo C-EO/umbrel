@@ -82,10 +82,16 @@ export default class Watcher {
 	async #watch(virtualPath: string) {
 		try {
 			const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath)
-			const subscription = await watcher.subscribe(systemPath, (error, events) => {
-				if (error) return this.logger.error(`Failed to watch directory '${virtualPath}'`, error)
-				for (const event of events) this.#umbreld.eventBus.emit('files:watcher:change', event)
-			})
+			// Use the Watchman backend explicitly (always installed in umbrelOS). It avoids bugs in
+			// @parcel/watcher's inotify backend — https://github.com/getumbrel/umbrel/issues/2158
+			const subscription = await watcher.subscribe(
+				systemPath,
+				(error, events) => {
+					if (error) return this.logger.error(`Failed to watch directory '${virtualPath}'`, error)
+					for (const event of events) this.#umbreld.eventBus.emit('files:watcher:change', event)
+				},
+				{backend: 'watchman'},
+			)
 			this.subscriptions.set(virtualPath, subscription)
 			this.logger.log(`Started watching directory '${virtualPath}'`)
 		} catch (error) {
@@ -164,5 +170,14 @@ export default class Watcher {
 	async stop() {
 		if (this.#healthCheckInterval) clearInterval(this.#healthCheckInterval)
 		await this.#teardownListeners()
+
+		// @parcel/watcher spawns the Watchman daemon but never stops it (it's designed to persist), so
+		// it lingers in the umbrel.service cgroup and makes `systemctl stop umbrel` hang until
+		// TimeoutStopSec (15min). Shut it down explicitly. Bounded to 1s and errors are only logged so
+		// it can never block our own shutdown.
+		this.logger.log('Shutting down watchman server')
+		await $({timeout: 1000})`watchman shutdown-server`.catch((error) =>
+			this.logger.error('Failed to shut down watchman server', error),
+		)
 	}
 }
