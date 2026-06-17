@@ -19,12 +19,15 @@ cat << 'EOF'
 EOF
 echo
 
+# The umbrelOS image lives on the boot medium which is mounted at /iso.
+image="/iso/umbrelos-amd64.img.xz"
+
 # If device is an Umbrel Home auto flash and shutdown non-interactively since we don't have video output.
 if dmidecode -t system | grep --silent 'Umbrel Home'
 then
     echo "Umbrel Home detected."
     echo "Automatically flashing internal storage..."
-    xz --decompress --stdout /umbrelos-amd64.img.xz | dd of=/dev/nvme0n1 bs=4M status=progress
+    xz --decompress --stdout "${image}" | dd of=/dev/nvme0n1 bs=4M status=progress
     echo "umbrelOS has been installed, shutting down."
     poweroff
     exit 1
@@ -35,7 +38,7 @@ if dmidecode -t system | grep --silent 'Umbrel Pro'
 then
     echo "Umbrel Pro detected."
     echo "Automatically flashing internal storage..."
-    xz --decompress --stdout /umbrelos-amd64.img.xz | dd of=/dev/mmcblk0 bs=4M status=progress
+    xz --decompress --stdout "${image}" | dd of=/dev/mmcblk0 bs=4M status=progress
     echo "umbrelOS has been installed, shutting down."
     poweroff
     exit 1
@@ -44,7 +47,8 @@ fi
 # For all other devices, run the interactive installer.
 echo "Installing umbrelOS will wipe your entire storage device."
 echo
-readarray -t devices < <(lsblk --nodeps --output NAME,VENDOR,MODEL,SIZE | sed '1d')
+# Exclude loop devices (major 7), the live system's squashfs is loop mounted.
+readarray -t devices < <(lsblk --nodeps --exclude 7 --output NAME,VENDOR,MODEL,SIZE | sed '1d')
 PS3="Select a storage device by number to install umbrelOS on: "
 select device in "${devices[@]}"
 do
@@ -52,7 +56,7 @@ do
     then
         echo "installing umbrelOS on: $device"
         device_path="/dev/$(echo $device | awk '{print $1}')"
-        xz --decompress --stdout /umbrelos-amd64.img.xz | dd of=$device_path bs=4M status=progress
+        xz --decompress --stdout "${image}" | dd of=$device_path bs=4M status=progress
         sync
         echo
         echo "umbrelOS has been installed!"

@@ -308,14 +308,20 @@ jobs:
         with:
           node-version: 18
       - name: Build OS images
-        # Awkward hack to run in parallel but correctly handle errors
+        # Awkward hack to run in parallel but correctly handle errors.
+        # The USB installer base ISO doesn't depend on the OS images and builds
+        # in ~90s, so we build it concurrently (hidden under the much longer OS
+        # builds) and inject the OS image into it at the end.
         run: |
           npm run build:amd64 "${{ env.VERSION }}" &
           pid1=$!
           npm run build:pi "${{ env.VERSION }}" &
           pid2=$!
+          npm run build:amd64:usb-installer:base &
+          pid3=$!
           wait $pid1 || exit 1
           wait $pid2 || exit 1
+          wait $pid3 || exit 1
       # TODO: Use .img.xz for all release assets once https://github.com/balena-io/etcher/issues/4064 is fixed
       - name: Compress release assets
         # Awkward hack to run in parallel but correctly handle errors
@@ -327,8 +333,8 @@ jobs:
           pid2=$!
           wait $pid1 || exit 1
           wait $pid2 || exit 1
-      - name: Create USB installer
-        run: npm run build:amd64:usb-installer
+      - name: Create USB installer (inject umbrelOS image into base ISO)
+        run: npm run build:amd64:usb-installer:inject
       - name: Create release directory
         run: |
           mkdir -p release
@@ -337,7 +343,7 @@ jobs:
           mv build/*.img.zip release/
           mv build/*.img.xz release/
           mv build/*.img release/
-          mv usb-installer/build/*.iso release/
+          mv build/umbrelos-amd64-usb-installer.iso release/
       - name: Create SHASUM
         run: cd release && shasum -a 256 * | tee SHA256SUMS
       - name: OpenTimestamps

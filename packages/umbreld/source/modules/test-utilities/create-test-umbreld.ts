@@ -220,7 +220,7 @@ export async function createTestVm({
 	startupTimeout = 300_000,
 }: {
 	device?: 'umbrel-pro' | 'umbrel-home' | 'nas'
-	bootDisk?: 'default' | 'emmc' | 'nvme' | 'usb'
+	bootDisk?: 'default' | 'emmc' | 'nvme' | 'usb' | 'none'
 	startupTimeout?: number
 } = {}) {
 	const vmScript = path.resolve(currentDirectory, '../../../../os/vm.sh')
@@ -248,40 +248,81 @@ export async function createTestVm({
 
 	let vmProcessPid: number | undefined
 
-	async function powerOn() {
+	// Boots the VM and waits for umbreld to respond. With `cdrom` an ISO is
+	// attached as the primary boot device (e.g. the USB installer). With
+	// `bootNvmeSlot` the VM boots from the NVMe device in that slot (e.g. after
+	// the USB installer flashed it). With `waitForShutdown` it instead waits
+	// for the VM to power itself off, for boots that are expected to complete
+	// and shut down on their own (e.g. the USB installer auto-flashing a
+	// device).
+	async function powerOn({
+		cdrom,
+		bootNvmeSlot,
+		waitForShutdown = false,
+	}: {cdrom?: string; bootNvmeSlot?: number; waitForShutdown?: boolean} = {}) {
 		let vmOutput = ''
 		let vmExited = false
+		let vmExitCode: number | null = null
 
 		const deviceArgs = device ? ['--device', device] : []
 		const bootDiskArgs = bootDisk ? ['--boot-disk', bootDisk] : []
+		const cdromArgs = cdrom ? ['--cdrom', cdrom] : []
+		const bootNvmeSlotArgs = bootNvmeSlot ? ['--boot-nvme-slot', String(bootNvmeSlot)] : []
 		const vmProcess = $({
 			env,
 			detached: true,
-		})`${vmScript} boot ${deviceArgs} ${bootDiskArgs} --ssh-port ${sshPort} --http-port ${httpPort}`
+		})`${vmScript} boot ${deviceArgs} ${bootDiskArgs} ${cdromArgs} ${bootNvmeSlotArgs} --ssh-port ${sshPort} --http-port ${httpPort}`
 		vmProcessPid = vmProcess.pid
 
 		// Capture output and track if process exits
 		vmProcess.stdout?.on('data', (data: Buffer) => (vmOutput += data.toString()))
 		vmProcess.stderr?.on('data', (data: Buffer) => (vmOutput += data.toString()))
-		vmProcess.on('exit', () => (vmExited = true))
+		vmProcess.on('exit', (code) => {
+			vmExited = true
+			vmExitCode = code
+		})
 
 		// Unref so the process doesn't block Node from exiting
 		vmProcess.unref()
 
-		await pWaitFor(
-			async () => {
-				// Check if VM process died
-				if (vmExited) {
-					throw new Error(`VM process exited unexpectedly:\n${vmOutput}`)
+		// Include the VM console output in timeout errors so boot failures are
+		// debuggable from CI logs
+		const withVmOutputOnTimeout = async (waitForCondition: Promise<void>) => {
+			try {
+				await waitForCondition
+			} catch (error) {
+				if (error instanceof Error && error.name === 'TimeoutError') {
+					throw new Error(`${error.message}, VM output:\n${vmOutput}`)
 				}
-				try {
-					await unauthenticatedClient.user.exists.query()
-					return true
-				} catch {
-					return false
-				}
-			},
-			{interval: 2000, timeout: startupTimeout},
+				throw error
+			}
+		}
+
+		if (waitForShutdown) {
+			await withVmOutputOnTimeout(pWaitFor(() => vmExited, {interval: 1000, timeout: startupTimeout}))
+			vmProcessPid = undefined
+			if (vmExitCode !== 0) {
+				throw new Error(`VM process exited with code ${vmExitCode}:\n${vmOutput}`)
+			}
+			return
+		}
+
+		await withVmOutputOnTimeout(
+			pWaitFor(
+				async () => {
+					// Check if VM process died
+					if (vmExited) {
+						throw new Error(`VM process exited unexpectedly:\n${vmOutput}`)
+					}
+					try {
+						await unauthenticatedClient.user.exists.query()
+						return true
+					} catch {
+						return false
+					}
+				},
+				{interval: 2000, timeout: startupTimeout},
+			),
 		)
 	}
 
@@ -317,17 +358,26 @@ export async function createTestVm({
 			// Graceful shutdown failed, fall through to force kill
 		}
 
-		// Force kill if still running
-		try {
-			process.kill(-vmProcessPid!, 'SIGTERM')
-			console.log('VM did not shut down cleanly, sending SIGTERM to process')
-		} catch {
-			// Already dead
+		// Force kill if still running. QEMU runs as root on Linux (vm.sh boots
+		// it with sudo) so an unprivileged process.kill() can't terminate it,
+		// fall back to sudo kill.
+		console.log('VM did not shut down cleanly, force killing process')
+		for (const signal of ['TERM', 'KILL'] as const) {
+			try {
+				process.kill(-vmProcessPid!, `SIG${signal}`)
+			} catch {
+				await $`sudo kill -${signal} -- ${-vmProcessPid!}`.catch(() => {})
+			}
+			try {
+				// Wait up to 10 seconds for the kill to take effect
+				await pWaitFor(() => !isRunning(), {interval: 100, timeout: 10_000})
+				vmProcessPid = undefined
+				return
+			} catch {
+				// Process still running, escalate to the next signal
+			}
 		}
-
-		// Wait up to 10 seconds for force kill to take effect
-		await pWaitFor(() => !isRunning(), {interval: 100, timeout: 10_000})
-		vmProcessPid = undefined
+		throw new Error('Failed to kill VM process')
 	}
 
 	async function addNvme({slot, size}: {slot: number; size?: string}) {

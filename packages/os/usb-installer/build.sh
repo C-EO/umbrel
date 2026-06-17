@@ -1,40 +1,65 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-rootfs_dir="/tmp/rootfs"
-iso_image="/tmp/umbrelos-amd64-usb-installer.iso"
+# Pin the Nix Docker image.
+NIX_IMAGE="nixos/nix@sha256:bf1d938835ab96312f098fa6c2e9cab367728e0aad0646ee3e02a787c80d8fb8" # 2.34.7
 
-echo "Creating directories for ISO image..."
-mkdir -p "${rootfs_dir}/boot/grub"
+# Allow running from anywhere
+cd "$(dirname $(readlink -f "${BASH_SOURCE[0]}"))"
 
-echo "Extracting rootfs..."
-tar -xf /data/build/rootfs.tar --directory "${rootfs_dir}"
-
-echo "Creating grub.cfg..."
-cat > "${rootfs_dir}/boot/grub/grub.cfg" <<EOF
-set default=0
-set timeout=5
-
-set gfxmode=auto
-insmod all_video
-insmod gfxterm
-terminal_output gfxterm
-
-menuentry "umbrelOS installer" {
-    linux /vmlinuz root=LABEL=UMBRELINSTALLER ro quiet loglevel=0 nomodeset vga=normal fbcon=font:VGA8x16
-    initrd /initrd.img
+# Run a command inside the pinned Nix container. The repo's packages/os
+# directory is mounted at /data and the Nix store is kept in a named volume
+# so consecutive runs (e.g. base build then image injection) are fast.
+nix_container() {
+    docker run --rm --platform linux/amd64 \
+        --volume umbrelos-usb-installer-nix:/nix \
+        --volume "$(readlink -f ..)":/data \
+        --workdir /data/usb-installer \
+        "${NIX_IMAGE}" \
+        bash -c "$1"
 }
 
-menuentry "umbrelOS installer (alt graphics)" {
-    linux /vmlinuz root=LABEL=UMBRELINSTALLER ro quiet loglevel=0
-    initrd /initrd.img
+# filter-syscalls is disabled so builds also work under QEMU/Rosetta emulation
+# (e.g. building the amd64 ISO on an Apple Silicon machine).
+nix="nix --extra-experimental-features 'nix-command flakes' --option filter-syscalls false --print-build-logs"
+
+# Build the installer ISO without an umbrelOS image. This is the slow part of
+# the build and doesn't depend on the umbrelOS image, so CI can run it
+# concurrently with the umbrelOS image build.
+build_base() {
+    echo "Building base USB installer ISO..."
+    mkdir -p ../build
+    nix_container "
+        ${nix} build path:.#iso -o /tmp/result &&
+        cp -fL /tmp/result/iso/umbrelos-amd64-usb-installer.iso /data/build/umbrelos-amd64-usb-installer-base.iso
+    "
 }
-EOF
 
-echo "Creating ISO image..."
-grub-mkrescue -o "${iso_image}" -volid "UMBRELINSTALLER" "${rootfs_dir}" -- -hfsplus off
+# Graft build/umbrelos-amd64.img.xz into the base ISO to produce the final
+# installer ISO. This is fast so the umbrelOS image can be dropped in as the
+# last step of the build.
+inject_image() {
+    echo "Injecting umbrelOS image into USB installer ISO..."
+    rm -f ../build/umbrelos-amd64-usb-installer.iso
+    nix_container "
+        ${nix} build path:.#inject-umbrelos-image -o /tmp/inject &&
+        /tmp/inject/bin/inject-umbrelos-image \
+            /data/build/umbrelos-amd64-usb-installer-base.iso \
+            /data/build/umbrelos-amd64.img.xz \
+            /data/build/umbrelos-amd64-usb-installer.iso
+    "
+}
 
-echo "Copying to ./build/..."
-mv "${iso_image}" /data/build/
+command="${1:-all}"
+case "${command}" in
+    base) build_base ;;
+    inject) inject_image ;;
+    all) build_base && inject_image ;;
+    *) echo "Usage: $0 [base|inject|all]" && exit 1 ;;
+esac
 
-echo "Done!"
+# Test CD-ROM boot (used by VMs)
+# qemu-system-x86_64 -net nic -net user -machine accel=tcg -m 2048 -bios ~/Downloads/OVMF.bin -cdrom ../build/umbrelos-amd64-usb-installer.iso
+
+# Test USB boot (used by physical machines)
+# qemu-system-x86_64 -net nic -net user -machine accel=tcg -m 2048 -bios ~/Downloads/OVMF.bin -drive if=none,id=stick,format=raw,file=../build/umbrelos-amd64-usb-installer.iso -device nec-usb-xhci,id=xhci -device usb-storage,bus=xhci.0,drive=stick

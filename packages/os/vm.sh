@@ -86,7 +86,9 @@ Commands:
 
 Boot Options:
     --device <type>                Device to emulate: umbrel-pro, umbrel-home, nas (default: ${DEFAULT_DEVICE})
-    --boot-disk <type>             Boot disk transport: default, emmc, nvme, usb (default: default for device)
+    --boot-disk <type>             Boot disk transport: default, emmc, nvme, usb, none (default: default for device)
+    --cdrom <path>                 Attach an ISO as a bootable CD-ROM (amd64 only), e.g. the USB installer
+    --boot-nvme-slot <slot>        Boot from the NVMe device in this slot, e.g. after the USB installer flashed it
     --arch <amd64|arm64>           CPU architecture (default: auto-detect from image name)
     --memory <MiB>                 RAM in MiB (default: ${DEFAULT_MEMORY})
     --cores <count>                CPU cores (default: ${DEFAULT_CORES})
@@ -633,9 +635,10 @@ build_usb_args() {
 }
 
 # Build QEMU NVMe arguments for connected devices
-# Arguments: <device>
+# Arguments: <device> [boot-slot]
 build_nvme_args() {
   local device="$1"
+  local boot_slot="${2:-}"
   local nvme_args=""
 
   for (( slot=1; slot<=MAX_NVME_SLOTS; slot++ )); do
@@ -659,9 +662,16 @@ build_nvme_args() {
         pci_slot=$(( 20 + slot ))
       fi
 
+      # Boot from this NVMe if requested (e.g. after the USB installer
+      # flashed an OS onto it)
+      local bootindex_arg=""
+      if [[ -n "$boot_slot" && "$slot" == "$boot_slot" ]]; then
+        bootindex_arg=",bootindex=0"
+      fi
+
       nvme_args="$nvme_args -device pcie-root-port,id=rp${slot},slot=${pci_slot},chassis=${slot}"
       nvme_args="$nvme_args -drive file=${disk_path},format=qcow2,if=none,id=nvme${slot},cache=none,discard=unmap,aio=threads"
-      nvme_args="$nvme_args -device nvme,drive=nvme${slot},serial=${serial},bus=rp${slot}"
+      nvme_args="$nvme_args -device nvme,drive=nvme${slot},serial=${serial},bus=rp${slot}${bootindex_arg}"
     fi
   done
 
@@ -676,6 +686,10 @@ build_boot_disk_args() {
   local drive_args="file=${overlay},if=none,id=boot,format=qcow2,cache=none,discard=unmap,aio=threads"
 
   case "$boot_disk_transport" in
+    none)
+      # No boot disk, e.g. an unflashed device booting the USB installer.
+      echo ""
+      ;;
     emmc)
       # eMMC is emulated with virtio-blk for VM tests.
       echo "-drive ${drive_args} -device virtio-blk-pci,drive=boot,bootindex=0"
@@ -760,11 +774,18 @@ boot_vm() {
   local ssh_port="$7"
   local http_port="$8"
   local boot_disk_transport="$9"
+  local cdrom_iso="${10}"
+  local boot_nvme_slot="${11}"
+
+  if [[ -n "$cdrom_iso" && -n "$boot_nvme_slot" ]]; then
+    echo "Error: --cdrom and --boot-nvme-slot are mutually exclusive (both claim first boot priority)" >&2
+    exit 1
+  fi
 
   init_state
   detect_uefi_firmware "$arch"
 
-  if [[ ! -f "$image" ]]; then
+  if [[ "$boot_disk_transport" != "none" && ! -f "$image" ]]; then
     echo "Error: Image not found: $image" >&2
     exit 1
   fi
@@ -787,7 +808,9 @@ boot_vm() {
 
   # Setup overlay disk
   local overlay="$STATE_DIR/overlay-${arch}.qcow2"
-  if [[ ! -f "$overlay" ]]; then
+  if [[ "$boot_disk_transport" == "none" ]]; then
+    : # No boot disk, no overlay needed
+  elif [[ ! -f "$overlay" ]]; then
     echo "Creating overlay image..."
     local image_abs
     image_abs="$(cd "$(dirname "$image")" && pwd)/$(basename "$image")"
@@ -823,9 +846,26 @@ boot_vm() {
   local boot_disk_args
   boot_disk_args=$(build_boot_disk_args "$overlay" "$boot_disk_transport")
 
+  # Attach a bootable CD-ROM if requested (e.g. the USB installer ISO). The
+  # ide-cd device plugs into the q35 machine's built-in SATA controller which
+  # only exists on amd64.
+  local cdrom_args=""
+  if [[ -n "$cdrom_iso" ]]; then
+    if [[ "$arch" != "amd64" ]]; then
+      echo "Error: --cdrom is only supported on amd64" >&2
+      exit 1
+    fi
+    if [[ ! -f "$cdrom_iso" ]]; then
+      echo "Error: CD-ROM image not found: $cdrom_iso" >&2
+      exit 1
+    fi
+    cdrom_args="-drive file=${cdrom_iso},media=cdrom,if=none,id=cdrom0,format=raw,readonly=on"
+    cdrom_args="$cdrom_args -device ide-cd,drive=cdrom0,bootindex=0"
+  fi
+
   # Build disk arguments for data drives
   local nvme_args hdd_args usb_args
-  nvme_args=$(build_nvme_args "$device")
+  nvme_args=$(build_nvme_args "$device" "$boot_nvme_slot")
   hdd_args=$(build_hdd_args)
   usb_args=$(build_usb_args)
 
@@ -903,6 +943,7 @@ boot_vm() {
     -drive if=pflash,format=raw,readonly=on,file="$UEFI_CODE" \
     -drive if=pflash,format=raw,file="$uefi_vars" \
     $boot_disk_args \
+    $cdrom_args \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22,hostfwd=tcp:127.0.0.1:${http_port}-:80 \
     -device virtio-net-pci,netdev=net0 \
     $nvme_args \
@@ -1177,6 +1218,8 @@ case "$command" in
     arch=""
     device="$DEFAULT_DEVICE"
     boot_disk_transport="default"
+    cdrom_iso=""
+    boot_nvme_slot=""
     memory="$DEFAULT_MEMORY"
     cores="$DEFAULT_CORES"
     disk_size="$DEFAULT_DISK_SIZE"
@@ -1201,10 +1244,19 @@ case "$command" in
           ;;
         --boot-disk)
           boot_disk_transport="$2"
-          if [[ "$boot_disk_transport" != "default" && "$boot_disk_transport" != "emmc" && "$boot_disk_transport" != "nvme" && "$boot_disk_transport" != "usb" ]]; then
-            echo "Error: --boot-disk must be 'default', 'emmc', 'nvme', or 'usb'" >&2
+          if [[ "$boot_disk_transport" != "default" && "$boot_disk_transport" != "emmc" && "$boot_disk_transport" != "nvme" && "$boot_disk_transport" != "usb" && "$boot_disk_transport" != "none" ]]; then
+            echo "Error: --boot-disk must be 'default', 'emmc', 'nvme', 'usb', or 'none'" >&2
             exit 1
           fi
+          shift 2
+          ;;
+        --cdrom)
+          cdrom_iso="$2"
+          shift 2
+          ;;
+        --boot-nvme-slot)
+          boot_nvme_slot="$2"
+          validate_slot "$boot_nvme_slot"
           shift 2
           ;;
         --arch)
@@ -1259,7 +1311,7 @@ case "$command" in
       fi
     fi
 
-    boot_vm "$image" "$arch" "$device" "$memory" "$cores" "$disk_size" "$ssh_port" "$http_port" "$boot_disk_transport"
+    boot_vm "$image" "$arch" "$device" "$memory" "$cores" "$disk_size" "$ssh_port" "$http_port" "$boot_disk_transport" "$cdrom_iso" "$boot_nvme_slot"
     ;;
 
   *)
