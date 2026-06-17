@@ -199,7 +199,7 @@ jobs:
     name: Integration test (${{ matrix.test.name }})
     needs: [detect-changes, discover-integration-tests, umbrelos-amd64-cache]
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-standard-2-ubuntu-2404
+    runs-on: ubicloud-standard-4-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
