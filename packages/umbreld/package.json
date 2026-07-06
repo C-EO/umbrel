@@ -22,7 +22,7 @@
 		"dev:production-mode": "FORCE_COLOR=1 npm run start -- --data-directory /home/umbrel/umbrel",
 		"todo": "git grep --line-number TODO -- ':!package.json'",
 		"test:vm": "npm run test -- vm.test",
-		"test:umbrel-dev:prepare": "cd ../../; npm run dev exec:noninteractive -- bash -c 'systemctl stop umbrel; npm --prefix /umbrel-dev/packages/umbreld install'",
+		"test:umbrel-dev:prepare": "cd ../../; npm run dev exec:noninteractive -- bash -c 'systemctl stop umbrel; npm --prefix /umbrel-dev/packages/umbreld install --no-save'",
 		"test:umbrel-dev": "cd ../../; npm run dev exec:noninteractive -- npm --prefix /umbrel-dev/packages/umbreld test"
 	},
 	"devDependencies": {

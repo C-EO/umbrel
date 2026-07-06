@@ -13,7 +13,29 @@ INSTANCE_ID_PREFIX="umbrel-dev"
 INSTANCE_ID="${INSTANCE_ID_PREFIX}${UMBREL_DEV_INSTANCE:+-$UMBREL_DEV_INSTANCE}"
 INSTANCE_OPTIONS="${UMBREL_DEV_OPTIONS:-}"
 
-PRODUCTION_MODE_FLAG_FILE="/umbrel-dev/.production-mode"
+# The container needs a few writable paths inside the read-only /umbrel-dev source mount:
+# installed dependencies, generated assets and production ui builds. Each of these is bind
+# mounted from persistent writable state in the /data volume at boot (see container-init).
+WRITABLE_STATE_DIR="/data/umbrel-dev-writable"
+WRITABLE_DIRS=(
+  "packages/umbreld/node_modules"
+  "packages/umbreld/ui"
+  "packages/umbreld/data"
+  "packages/ui/node_modules"
+  "packages/ui/dist"
+  "packages/ui/public/generated-tabler-icons"
+)
+
+PRODUCTION_MODE_FLAG_FILE="${WRITABLE_STATE_DIR}/.production-mode"
+
+# The writable directories must exist in the host checkout to be usable as mount points
+# inside the read-only source mount. (fresh clones don't have them)
+ensure_mount_points() {
+  for directory in "${WRITABLE_DIRS[@]}"
+  do
+    mkdir -p "${PWD}/${directory}"
+  done
+}
 
 show_help() {
   cat << EOF
@@ -65,6 +87,8 @@ build_os_image() {
 }
 
 create_instance() {
+  ensure_mount_points
+
   # --network host is used when running Docker within WSL, effectively undoing one
   # level of encapsulation, with umbrelOS accessible at `wsl.exe hostname -i`.
   if grep --quiet "WSL" /proc/sys/kernel/osrelease 2> /dev/null
@@ -77,9 +101,9 @@ create_instance() {
   # We mount a named volume namespaced to the instance id at /data to immitate
   # the data partition of a physical install.
   #
-  # We mount the monorepo inside the container at /umbrel-dev as readonly. We
-  # setup a writeable fs overlay later to allow the container to install dependencies
-  # without modifying the hosts source code dir.
+  # We mount the monorepo inside the container at /umbrel-dev as readonly. Writable
+  # directories for dependencies and build output are bind mounted over it from the
+  # /data volume at boot so the container never modifies the hosts source code dir.
   #
   # --label "dev.orbstack.http-port=80" stops OrbStack from trying to guess which port
   # we're trying to expose which causes some weirdness since it often gets it wrong.
@@ -105,6 +129,8 @@ create_instance() {
 }
 
 start_instance() {
+  ensure_mount_points
+
   docker start "${INSTANCE_ID}"
 }
 
@@ -303,6 +329,7 @@ fi
 if [[ "${command}" = "production-mode" ]]
 then
     echo "Enabling production mode..."
+    exec_in_instance mkdir -p "${WRITABLE_STATE_DIR}"
     exec_in_instance touch "${PRODUCTION_MODE_FLAG_FILE}"
     restart_instance
 
@@ -330,32 +357,44 @@ fi
 # It is not intended to be run on the host machine!
 if [[ "${command}" = "container-init" ]]
 then
-    # Check if this is the first boot
-    first_boot=false
-    if [[ ! -d "/data/umbrel-dev-overlay" ]]
-    then
-        first_boot=true
-    fi
+    # The host source code is mounted read-only at /umbrel-dev so the container can never
+    # modify it. The paths the container does need to write are bind mounted over it from
+    # persistent writable state in the /data volume. This also shadows any node_modules
+    # inherited from the host so we always get fresh Linux deps instead of macos ones.
+    #
+    # We previously solved this with an fs overlay across the whole source tree, but
+    # overlayfs doesn't support the lower layer changing underneath it. Tools that save
+    # files via rename (git checkout, Claude Code, some editors) replace the file's inode
+    # which made those paths permanently return ESTALE through the overlay, killing live
+    # reload until the instance was rebooted.
+    echo "Setting up writable directories..."
 
-    # Setup fs overlay so we can write to the source code dir without modifying it on the host
-    echo "Setting up fs overlay..."
-    mkdir -p /data/umbrel-dev-overlay/upperdir
-    mkdir -p /data/umbrel-dev-overlay/workdir
-    mount -t overlay overlay -o lowerdir=/umbrel-dev,upperdir=/data/umbrel-dev-overlay/upperdir,workdir=/data/umbrel-dev-overlay/workdir /umbrel-dev || true
+    # Unmount fs overlays left over from previous boots of older umbrel-dev versions
+    while [[ "$(findmnt --noheadings --output FSTYPE --mountpoint /umbrel-dev)" = "overlay" ]]
+    do
+        umount /umbrel-dev || break
+    done
 
-    # If this is the first boot we should nuke node_modules if they exist so we get fresh Linux deps instead
-    # of trying to reuse deps installed from the host. (causes issues with macos native deps)
-    if [[ "${first_boot}" = true ]]
+    # Migrate the production mode flag from the legacy overlay state and clean it up
+    if [[ -f "/data/umbrel-dev-overlay/upperdir/.production-mode" ]]
     then
-        echo "Nuking node_modules inherited from host..."
-        rm -rf /umbrel-dev/packages/ui/node_modules || true
-        rm -rf /umbrel-dev/packages/umbreld/node_modules || true
+        mkdir -p "${WRITABLE_STATE_DIR}"
+        touch "${PRODUCTION_MODE_FLAG_FILE}"
     fi
+    rm -rf /data/umbrel-dev-overlay
+
+    for directory in "${WRITABLE_DIRS[@]}"
+    do
+        mkdir -p "${WRITABLE_STATE_DIR}/${directory}"
+        mountpoint --quiet "/umbrel-dev/${directory}" || mount --bind "${WRITABLE_STATE_DIR}/${directory}" "/umbrel-dev/${directory}"
+    done
 
     # Install dependencies
+    # --no-save because the source tree is read-only, the container must never modify
+    # package.json or package-lock.json.
     echo "Installing dependencies..."
-    npm --prefix /umbrel-dev/packages/umbreld install
-    npm --prefix /umbrel-dev/packages/ui install
+    npm --prefix /umbrel-dev/packages/umbreld install --no-save
+    npm --prefix /umbrel-dev/packages/ui install --no-save
 
     # Check if we're in production mode
     if [[ ! -f "${PRODUCTION_MODE_FLAG_FILE}" ]]
@@ -369,8 +408,9 @@ then
         # Build static production ui bundle and serve from umbreld
         echo "Building production ui..."
         npm --prefix /umbrel-dev/packages/ui run build
-        rm -rf "/umbrel-dev/packages/umbreld/ui" || true
-        mv "/umbrel-dev/packages/ui/dist" "/umbrel-dev/packages/umbreld/ui"
+        # Copy contents instead of moving the directory because both paths are mount points
+        rm -rf /umbrel-dev/packages/umbreld/ui/*
+        cp --archive /umbrel-dev/packages/ui/dist/. /umbrel-dev/packages/umbreld/ui/
         echo "Starting umbreld in production mode..."
         npm --prefix /umbrel-dev/packages/umbreld run dev:production-mode
     fi
