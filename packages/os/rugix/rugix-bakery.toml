@@ -56,7 +56,16 @@ partitions = [
     { root = "config", type = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B", size = "256M", filesystem = { type = "fat32" } },
     { root = "boot", type = "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7", size = "128M", filesystem = { type = "fat32" } },
     { type = "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7", size = "128M" },
-    { root = "system", filesystem = { type = "squashfs" } },
+    # zstd level 19 with 1M blocks compresses notably smaller than the
+    # gzip/128k defaults and decompresses faster at runtime.
+    { root = "system", filesystem = { type = "squashfs", additional-options = [
+        "-comp",
+        "zstd",
+        "-b",
+        "1M",
+        "-Xcompression-level",
+        "19",
+    ] } },
 ]
 
 # Image for Raspberry Pi 4 and 5 without the firmware update.
@@ -71,7 +80,16 @@ partitions = [
     { root = "config", type = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B", size = "256M", filesystem = { type = "fat32" } },
     { root = "boot", type = "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7", size = "128M", filesystem = { type = "fat32" } },
     { type = "EBD0A0A2-B9E5-4433-87C0-68B6B72699C7", size = "128M" },
-    { root = "system", filesystem = { type = "squashfs" } },
+    # zstd level 19 with 1M blocks compresses notably smaller than the
+    # gzip/128k defaults and decompresses faster at runtime.
+    { root = "system", filesystem = { type = "squashfs", additional-options = [
+        "-comp",
+        "zstd",
+        "-b",
+        "1M",
+        "-Xcompression-level",
+        "19",
+    ] } },
 ]
 
 # Legacy MBR-based image to build Mender update artifacts.
