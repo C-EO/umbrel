@@ -33,8 +33,45 @@ PRODUCTION_MODE_FLAG_FILE="${WRITABLE_STATE_DIR}/.production-mode"
 ensure_mount_points() {
   for directory in "${WRITABLE_DIRS[@]}"
   do
+    # Some tooling symlinks these paths to another checkout, e.g. coding agents sharing
+    # node_modules between git worktrees. A symlink can't back a bind mount inside the
+    # container because its target isn't inside the source mount, so replace it with a
+    # real directory. The container shadows these paths with its own writable state
+    # anyway so nothing of the host's is used.
+    if [[ -L "${PWD}/${directory}" ]]
+    then
+      echo "Replacing symlink '${directory}' with a real directory (required as a container mount point)..."
+      rm "${PWD}/${directory}"
+    fi
     mkdir -p "${PWD}/${directory}"
   done
+}
+
+# Install a package's dependencies inside the container if the last completed install
+# doesn't match its lockfile. npm can't self-heal a partially written node_modules, an
+# interrupted install leaves packages fully extracted but never re-runs their native
+# build scripts, so installs are all-or-nothing: wipe and reinstall whenever the
+# previous install didn't complete or is stale, and stamp the result only on success.
+install_dependencies() {
+  local package_directory="${1}"
+  local node_modules="${package_directory}/node_modules"
+  local stamp_file="${node_modules}/.umbrel-dev-install-stamp"
+  local stamp
+  stamp="$(node --version) $(sha256sum "${package_directory}/package-lock.json" | awk '{print $1}')"
+
+  # Skip the install entirely when the last one completed against the same lockfile
+  if [[ -f "${stamp_file}" ]] && [[ "$(cat "${stamp_file}")" = "${stamp}" ]]
+  then
+    return 0
+  fi
+
+  # Clear any stale or partially installed state
+  find "${node_modules}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+
+  # --no-save because the source tree is read-only, the container must never modify
+  # package.json or package-lock.json.
+  npm --prefix "${package_directory}" install --no-save
+  echo "${stamp}" > "${stamp_file}"
 }
 
 show_help() {
@@ -369,32 +406,48 @@ then
     # reload until the instance was rebooted.
     echo "Setting up writable directories..."
 
-    # Unmount fs overlays left over from previous boots of older umbrel-dev versions
+    # Unmount fs overlays left over from previous boots of older umbrel-dev versions.
+    # Fall back to a lazy unmount if the mount is busy, it's unused once we bind our
+    # writable directories over the source mount below.
     while [[ "$(findmnt --noheadings --output FSTYPE --mountpoint /umbrel-dev)" = "overlay" ]]
     do
-        umount /umbrel-dev || break
+        umount /umbrel-dev || umount --lazy /umbrel-dev || break
     done
 
-    # Migrate the production mode flag from the legacy overlay state and clean it up
-    if [[ -f "/data/umbrel-dev-overlay/upperdir/.production-mode" ]]
+    # Migrate the production mode flag from the legacy overlay state and clean it up.
+    # Only touch the legacy state once no overlay is mounted from it, otherwise we'd
+    # delete the backing directories of a live mount. If an unmount failed above we
+    # leave it for a future boot.
+    if [[ "$(findmnt --noheadings --output FSTYPE --mountpoint /umbrel-dev)" != "overlay" ]]
     then
-        mkdir -p "${WRITABLE_STATE_DIR}"
-        touch "${PRODUCTION_MODE_FLAG_FILE}"
+        if [[ -f "/data/umbrel-dev-overlay/upperdir/.production-mode" ]]
+        then
+            mkdir -p "${WRITABLE_STATE_DIR}"
+            touch "${PRODUCTION_MODE_FLAG_FILE}"
+        fi
+        rm -rf /data/umbrel-dev-overlay
     fi
-    rm -rf /data/umbrel-dev-overlay
 
     for directory in "${WRITABLE_DIRS[@]}"
     do
+        # The mount point must be a real directory inside the read-only source mount.
+        # A symlink (e.g. node_modules linked to another checkout on the host) either
+        # dangles inside the container or resolves to the wrong place, and we can't
+        # fix it from in here since the source mount is read-only.
+        if [[ -L "/umbrel-dev/${directory}" ]] || [[ ! -d "/umbrel-dev/${directory}" ]]
+        then
+            echo "Error: '${directory}' must be a real directory in the host checkout to be mountable inside the container."
+            echo "Run 'npm run dev' on the host to fix this automatically, this instance will then recover on its own."
+            exit 1
+        fi
         mkdir -p "${WRITABLE_STATE_DIR}/${directory}"
         mountpoint --quiet "/umbrel-dev/${directory}" || mount --bind "${WRITABLE_STATE_DIR}/${directory}" "/umbrel-dev/${directory}"
     done
 
     # Install dependencies
-    # --no-save because the source tree is read-only, the container must never modify
-    # package.json or package-lock.json.
     echo "Installing dependencies..."
-    npm --prefix /umbrel-dev/packages/umbreld install --no-save
-    npm --prefix /umbrel-dev/packages/ui install --no-save
+    install_dependencies /umbrel-dev/packages/umbreld
+    install_dependencies /umbrel-dev/packages/ui
 
     # Check if we're in production mode
     if [[ ! -f "${PRODUCTION_MODE_FLAG_FILE}" ]]
