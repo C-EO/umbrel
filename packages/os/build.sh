@@ -3,7 +3,7 @@
 set -euo pipefail
 
 # Pin the Rugix Docker image.
-export RUGIX_BAKERY_IMAGE="ghcr.io/rugix/rugix-bakery@sha256:8562abd2577695bd5f3b0b8c943f6d1b48dd0c79be5f6c91bfb0a2635f64bdd0" # v0.9.1
+export RUGIX_BAKERY_IMAGE="ghcr.io/rugix/rugix-bakery@sha256:41fbea6785fccec14e43d22501b50af8cb4812f3560fc5d5abf41e2607350ef7" # v0.9.3
 # export RUGIX_VERSION="branch-main"
 # export RUGIX_DEV=true
 
