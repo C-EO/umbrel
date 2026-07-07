@@ -33,6 +33,19 @@ function createTestHelpers(port: number) {
 		jwt = newJwt
 	}
 
+	// Node's fetch doesn't retry when a kept-alive connection is closed by the
+	// server between requests (e.g. umbreld's HTTP keep-alive timeout racing
+	// the query after a startup poll), which intermittently fails tests with
+	// 'SocketError: other side closed'. Retry once — the dead socket is
+	// discarded and the retry opens a fresh connection.
+	const fetchWithRetry = (async (input: any, init?: any) => {
+		try {
+			return await fetch(input, init)
+		} catch {
+			return fetch(input, init)
+		}
+	}) as typeof fetch
+
 	// Create WebSocket client for subscriptions
 	const wsClient = createWSClient({
 		url: () => `ws://localhost:${port}/trpc?token=${jwt}`,
@@ -46,6 +59,7 @@ function createTestHelpers(port: number) {
 				true: wsLink({client: wsClient}),
 				false: httpBatchLink({
 					url: `http://localhost:${port}/trpc`,
+					fetch: fetchWithRetry,
 					headers: async () => ({
 						Authorization: `Bearer ${jwt}`,
 					}),
@@ -58,6 +72,7 @@ function createTestHelpers(port: number) {
 		links: [
 			httpBatchLink({
 				url: `http://localhost:${port}/trpc`,
+				fetch: fetchWithRetry,
 			}),
 		],
 	})
@@ -475,11 +490,18 @@ export async function createTestVm({
 					port: sshPort,
 					username: 'umbrel',
 					password,
+					// A TCG-emulated guest under peak load (e.g. a Pi VM right after
+					// first boot with docker, umbreld and SquashFS decompression all
+					// competing for the emulated cores) can take minutes to complete
+					// the SSH key exchange — ssh2's default 20s readyTimeout flakes
+					// there, so give each attempt a much bigger budget.
+					readyTimeout: 60_000,
 				})
 			})
 
-		// Try default 'umbrel' password first, fall back to user password if already synced
-		// Retry up to 10 times with 1 second wait between attempts
+		// Try default 'umbrel' password first, fall back to user password if already synced.
+		// 9 attempts x (60s handshake budget + 2s wait) stays just inside the
+		// 10 minute test timeout.
 		return pRetry(
 			async () => {
 				try {
@@ -491,7 +513,7 @@ export async function createTestVm({
 					throw error
 				}
 			},
-			{retries: 10, minTimeout: 1000, maxTimeout: 1000},
+			{retries: 8, minTimeout: 2000, maxTimeout: 2000},
 		)
 	}
 
