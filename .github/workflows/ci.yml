@@ -9,6 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       ui-only: ${{ steps.check.outputs.ui-only }}
+      run-pi-tests: ${{ steps.pi.outputs.run-pi-tests }}
     steps:
       - uses: actions/checkout@v3
         with:
@@ -54,6 +55,36 @@ jobs:
           echo "$CHANGED_FILES"
           echo "UI only: $UI_ONLY"
           echo "ui-only=$UI_ONLY" >> $GITHUB_OUTPUT
+      # The Pi VM tests boot the production Pi image in an emulated Raspberry
+      # Pi 4. Emulation is TCG-only (no hardware acceleration exists for the
+      # raspi4b machine) so they're the slowest jobs in CI and only run on
+      # master/staging/tags, or on branches whose open PR has the "pi-tests"
+      # label.
+      #
+      # IMPORTANT: make sure to add the "pi-tests" label to PRs that should be
+      # tested against Pi-specific logic — anything touching packages/os
+      # boot/storage behaviour, the pi handling in vm.sh, device detection, or
+      # the *.pi.vm.test.ts suites — so it's exercised on the emulated Pi
+      # before merge instead of breaking on staging. This workflow only runs on
+      # push events, so after labelling an already-pushed PR use "Re-run all
+      # jobs" (the label is read live from the API, not the event payload).
+      - id: pi
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.ref }}" == "refs/heads/master" || "${{ github.ref }}" == "refs/heads/staging" || "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "run-pi-tests=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          labels=$(gh pr list --repo "${{ github.repository }}" --head "${{ github.ref_name }}" --state open --json labels --jq '.[].labels[].name' || true)
+          if grep --quiet --line-regexp 'pi-tests' <<< "$labels"; then
+            echo "run-pi-tests=true" >> $GITHUB_OUTPUT
+          else
+            echo "run-pi-tests=false" >> $GITHUB_OUTPUT
+          fi
 
   # These jobs simply serve as architecture native cache steps to load up the Docker cache for umbrelOS.
   # We must cache to unique scopes per architecture otherwise only one of the architectures gets cached.
@@ -130,6 +161,38 @@ jobs:
           path: packages/os/build/umbrelos-amd64.img
           key: umbrelos-amd64-image-${{ github.run_id }}
 
+  umbrelos-pi-vm-image-build:
+    name: Build umbrelOS Pi VM image
+    needs: [detect-changes, umbrelos-pi-cache]
+    if: needs.detect-changes.outputs.ui-only != 'true' && needs.detect-changes.outputs.run-pi-tests == 'true'
+    runs-on: ubicloud-standard-4-ubuntu-2404
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Setup node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Expose GitHub Actions runtime for Docker cache
+        uses: crazy-max/ghaction-github-runtime@3cb05d89e1f492524af3d41a1c98c83bc3025124 # v3
+      - name: Build OS image
+        working-directory: packages/os
+        # SKIP_CACHE_EXPORT: the umbrelos-pi-cache job (a dependency of this job)
+        # has already exported these layers to the gha cache, so skip the
+        # redundant re-export. It can intermittently fail the build with cache
+        # backend errors, which would block the Pi VM test that depends on this
+        # image; the --cache-from import keeps the build fast regardless.
+        run: SKIP_CACHE_EXPORT=true npm run build:pi5
+      - name: Cache OS image
+        uses: actions/cache/save@v4
+        with:
+          path: packages/os/build/umbrelos-pi.img
+          key: umbrelos-pi-image-${{ github.run_id }}
+
   # Discover all MV test files so we can run the result as a build matrix
   discover-vm-tests:
     name: Discover VM tests
@@ -142,7 +205,23 @@ jobs:
       - uses: actions/checkout@v3
       - id: find
         run: |
-          tests=$(find packages/umbreld/source -name "*.vm.test.ts" | sed 's|packages/umbreld/||' | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({path: ., name: (. | split("/") | last | sub("\\.vm\\.test\\.ts$"; ""))})')
+          tests=$(find packages/umbreld/source -name "*.vm.test.ts" ! -name "*.pi.vm.test.ts" | sed 's|packages/umbreld/||' | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({path: ., name: (. | split("/") | last | sub("\\.vm\\.test\\.ts$"; ""))})')
+          echo "tests=$tests" >> $GITHUB_OUTPUT
+
+  # Pi VM tests run from the Pi image in an emulated Raspberry Pi 4 so they get
+  # their own matrix instead of the generic amd64 image one.
+  discover-pi-vm-tests:
+    name: Discover Pi VM tests
+    needs: detect-changes
+    if: needs.detect-changes.outputs.ui-only != 'true' && needs.detect-changes.outputs.run-pi-tests == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      tests: ${{ steps.find.outputs.tests }}
+    steps:
+      - uses: actions/checkout@v3
+      - id: find
+        run: |
+          tests=$(find packages/umbreld/source -name "*.pi.vm.test.ts" | sed 's|packages/umbreld/||' | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({path: ., name: (. | split("/") | last | sub("\\.pi\\.vm\\.test\\.ts$"; ""))})')
           echo "tests=$tests" >> $GITHUB_OUTPUT
 
   # Run each VM test in a different runner
@@ -176,6 +255,67 @@ jobs:
         working-directory: packages/umbreld
         run: npm clean-install
       - name: Run VM test
+        working-directory: packages/umbreld
+        run: npm run test -- ${{ matrix.test.path }}
+
+  umbrelos-pi-vm:
+    name: Pi VM test (${{ matrix.test.name }})
+    needs: [umbrelos-pi-vm-image-build, discover-pi-vm-tests]
+    runs-on: ubicloud-standard-4-ubuntu-2404
+    env:
+      # nixpkgs revision QEMU is built from (nixos-26.05 as of 2026-07). Bump
+      # deliberately to change the emulator version — the cache key below
+      # picks up the new revision automatically.
+      NIXPKGS_REV: bd0ff2d3eac24699c3664d5966b9ef36f388e2ca
+    strategy:
+      fail-fast: false
+      matrix:
+        test: ${{ fromJSON(needs.discover-pi-vm-tests.outputs.tests) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          submodules: recursive
+      - name: Setup node
+        uses: actions/setup-node@v3
+        with:
+          node-version: 22
+      - name: Restore OS image from cache
+        uses: actions/cache/restore@v4
+        with:
+          path: packages/os/build/umbrelos-pi.img
+          key: umbrelos-pi-image-${{ github.run_id }}
+          fail-on-cache-miss: true
+      - name: Prepare Nix store for caching
+        run: sudo mkdir -p /nix && sudo chown "$(id -un)" /nix
+      - name: Cache QEMU from nixpkgs
+        id: nix-qemu-cache
+        uses: actions/cache@v4
+        with:
+          path: /nix
+          key: nix-qemu-${{ runner.os }}-${{ env.NIXPKGS_REV }}
+      - name: Install QEMU
+        # QEMU's raspi4b machine needs QEMU >= 9.0 but Ubuntu 24.04 only
+        # packages 8.2, so QEMU comes from nixpkgs pinned to the exact
+        # revision above — the emulator and its whole dependency closure are
+        # deterministic, unlike a rolling package manager. The store is cached
+        # so Nix itself only runs on a cache miss; /nix/qemu is a stable
+        # symlink into the store so PATH works on both hit and miss (the
+        # closure is self-contained, no Nix needed at runtime).
+        run: |
+          sudo apt-get update && sudo apt-get install -y fdisk mtools device-tree-compiler
+          if [[ "${{ steps.nix-qemu-cache.outputs.cache-hit }}" != "true" ]]; then
+            curl --proto '=https' --tlsv1.2 -sSf -L https://nixos.org/nix/install | sh -s -- --no-daemon
+            . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+            nix build --extra-experimental-features 'nix-command flakes' \
+              "github:NixOS/nixpkgs/${NIXPKGS_REV}#qemu" --out-link /nix/qemu
+          fi
+          echo "/nix/qemu/bin" >> "$GITHUB_PATH"
+          /nix/qemu/bin/qemu-system-aarch64 --version
+      - name: Install umbreld dependencies
+        working-directory: packages/umbreld
+        run: npm clean-install
+      - name: Run Pi VM test
         working-directory: packages/umbreld
         run: npm run test -- ${{ matrix.test.path }}
 

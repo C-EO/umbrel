@@ -219,8 +219,8 @@ export async function createTestVm({
 	bootDisk,
 	startupTimeout = 300_000,
 }: {
-	device?: 'umbrel-pro' | 'umbrel-home' | 'nas'
-	bootDisk?: 'default' | 'emmc' | 'nvme' | 'usb' | 'none'
+	device?: 'umbrel-pro' | 'umbrel-home' | 'nas' | 'pi'
+	bootDisk?: 'default' | 'emmc' | 'nvme' | 'usb' | 'sdcard' | 'none'
 	startupTimeout?: number
 } = {}) {
 	const vmScript = path.resolve(currentDirectory, '../../../../os/vm.sh')

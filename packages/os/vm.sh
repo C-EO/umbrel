@@ -12,6 +12,11 @@ DEFAULT_DEVICE="umbrel-pro"
 DEFAULT_MEMORY=2048
 DEFAULT_CORES=4
 DEFAULT_DISK_SIZE="64G"
+# QEMU SD cards require a power-of-2 size, and 16G is the smallest that fits
+# the Pi image: rugix's first-boot bootstrap clones the ~5GiB system partition
+# for the A/B slot, so the card needs ~10.6GiB before the data partition.
+# (8G was tried and the bootstrap can't complete — the VM never reaches SSH.)
+DEFAULT_PI_DISK_SIZE="16G"
 DEFAULT_SSH_PORT=2222
 DEFAULT_HTTP_PORT=8080
 DEFAULT_NVME_SIZE="64G"
@@ -55,6 +60,31 @@ get_default_image() {
   echo "$SCRIPT_DIR/build/umbrelos-${arch}.img"
 }
 
+get_default_pi_image() {
+  echo "$SCRIPT_DIR/build/umbrelos-pi.img"
+}
+
+find_command() {
+  local name="$1"
+  shift
+
+  if command -v "$name" >/dev/null 2>&1; then
+    command -v "$name"
+    return
+  fi
+
+  local candidate
+  for candidate in "$@"; do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return
+    fi
+  done
+
+  echo "Error: '$name' not found in PATH" >&2
+  exit 1
+}
+
 show_help() {
   cat << EOF
 vm.sh - Manage an umbrelOS QEMU virtual machine
@@ -85,14 +115,15 @@ Commands:
     usb destroy <slot>             Destroy USB storage device (deletes data)
 
 Boot Options:
-    --device <type>                Device to emulate: umbrel-pro, umbrel-home, nas (default: ${DEFAULT_DEVICE})
-    --boot-disk <type>             Boot disk transport: default, emmc, nvme, usb, none (default: default for device)
+    --device <type>                Device to emulate: umbrel-pro, umbrel-home, nas, pi (default: ${DEFAULT_DEVICE})
+    --boot-disk <type>             Boot disk transport: default, emmc, nvme, usb, sdcard, none (default: default for device)
     --cdrom <path>                 Attach an ISO as a bootable CD-ROM (amd64 only), e.g. the USB installer
     --boot-nvme-slot <slot>        Boot from the NVMe device in this slot, e.g. after the USB installer flashed it
     --arch <amd64|arm64>           CPU architecture (default: auto-detect from image name)
     --memory <MiB>                 RAM in MiB (default: ${DEFAULT_MEMORY})
     --cores <count>                CPU cores (default: ${DEFAULT_CORES})
-    --disk-size <size>             Boot disk size (default: ${DEFAULT_DISK_SIZE})
+    --disk-size <size>             Boot disk size (default: ${DEFAULT_DISK_SIZE}, ${DEFAULT_PI_DISK_SIZE} for pi;
+                                   sdcard boot disks require a power-of-2 size)
     --ssh-port <port>              Local SSH port forward (default: ${DEFAULT_SSH_PORT})
     --http-port <port>             Local HTTP port forward (default: ${DEFAULT_HTTP_PORT})
 
@@ -108,6 +139,7 @@ Examples:
     $0 boot --device umbrel-home                   # Boot as Umbrel Home (NVMe boot, no eMMC)
     $0 boot --device nas                           # Boot as generic NAS (8 SSD + 8 HDD slots)
     $0 boot --device nas --boot-disk usb           # Boot generic NAS from USB storage
+    $0 boot --device pi                            # Boot Pi image in an emulated Raspberry Pi 4
     $0 boot umbrelos-amd64.img --memory 4096       # Boot specific image
     $0 boot --arch arm64                           # Boot arm64 image
     $0 nvme add 1 --size 128G
@@ -531,7 +563,9 @@ usb_add() {
     exit 1
   fi
 
-  local serial="usb${slot}-$(date +%s)-${RANDOM}"
+  # QEMU rejects usb-storage serials longer than 20 characters (the serial
+  # doubles as the device id), so keep this short: usbN-<epoch><4 digits>.
+  local serial="usb${slot}-$(date +%s)$((RANDOM % 10000))"
 
   echo "Creating USB storage in slot $slot (${size})..."
   qemu-img create -f qcow2 "$disk_path" "$size" >/dev/null
@@ -605,7 +639,9 @@ build_hdd_args() {
 }
 
 # Build QEMU USB storage arguments for existing devices
+# Arguments: <device>
 build_usb_args() {
+  local device="$1"
   local usb_args=""
   local has_usb_storage=false
 
@@ -614,20 +650,25 @@ build_usb_args() {
     exists=$(jq -r ".\"$slot\".exists // empty" "$USB_STATE_FILE")
 
     if [[ "$exists" == "true" ]]; then
-      local disk_path serial
+      local disk_path serial bus_arg=""
       disk_path=$(get_usb_disk_path "$slot")
       serial=$(jq -r ".\"$slot\".serial // empty" "$USB_STATE_FILE")
       if [[ -z "$serial" ]]; then
         serial="usb${slot}"
       fi
 
-      if [[ "$has_usb_storage" == "false" ]]; then
+      # The Pi has no PCI bus for an xHCI controller, USB devices attach to the
+      # Pi's own dwc2 USB controller instead.
+      if [[ "$device" != "pi" && "$has_usb_storage" == "false" ]]; then
         usb_args="$usb_args -device qemu-xhci,id=usb_storage_xhci"
         has_usb_storage=true
       fi
+      if [[ "$device" != "pi" ]]; then
+        bus_arg=",bus=usb_storage_xhci.0"
+      fi
 
       usb_args="$usb_args -drive file=${disk_path},format=qcow2,if=none,id=usb${slot},cache=none,discard=unmap,aio=threads"
-      usb_args="$usb_args -device usb-storage,bus=usb_storage_xhci.0,drive=usb${slot},serial=${serial}"
+      usb_args="$usb_args -device usb-storage${bus_arg},drive=usb${slot},serial=${serial}"
     fi
   done
 
@@ -700,6 +741,10 @@ build_boot_disk_args() {
     usb)
       echo "-device qemu-xhci,id=boot_xhci -drive ${drive_args} -device usb-storage,bus=boot_xhci.0,drive=boot,serial=umbrel-boot-usb,bootindex=0"
       ;;
+    sdcard)
+      # Attaches to the SD bus of machines that have one (e.g. raspi4b).
+      echo "-drive file=${overlay},if=sd,format=qcow2"
+      ;;
     *)
       echo "Error: Unknown boot disk transport: $boot_disk_transport" >&2
       exit 1
@@ -763,6 +808,73 @@ detect_uefi_firmware() {
   fi
 }
 
+# Extract the Raspberry Pi 4 kernel, initramfs, device tree and kernel cmdline
+# from the boot partition of the Pi image. QEMU doesn't emulate the Pi's GPU
+# boot firmware so we direct-boot these with -kernel/-initrd/-dtb instead,
+# the same files the firmware would load on real hardware.
+#
+# Note this always reads the pristine image, not the VM's disk overlay, so
+# changes the booted OS makes to its boot partition (e.g. the UAS quirk
+# writer editing cmdline.txt, or an OS update switching slots) are NOT
+# picked up by a VM reboot the way they would be on real hardware.
+extract_pi_boot_files() {
+  local image="$1"
+  local boot_dir="$2"
+
+  local mcopy sfdisk fdtput
+  mcopy=$(find_command mcopy /opt/homebrew/bin/mcopy /usr/local/bin/mcopy)
+  sfdisk=$(find_command sfdisk /opt/homebrew/opt/util-linux/sbin/sfdisk /usr/local/opt/util-linux/sbin/sfdisk)
+  fdtput=$(find_command fdtput /opt/homebrew/bin/fdtput /usr/local/bin/fdtput)
+
+  # Find the offset of the boot partition (partition 2) in the image.
+  local sfdisk_dump sector_size boot_start boot_image
+  sfdisk_dump=$("$sfdisk" -d "$image")
+  sector_size=$(awk '/^sector-size:/ {print $2}' <<< "$sfdisk_dump")
+  boot_start=$(awk -v partition="${image}2" '$1 == partition {sub(/.*start= */, ""); sub(/,.*/, ""); print}' <<< "$sfdisk_dump")
+  if [[ -z "$boot_start" ]]; then
+    echo "Error: Could not find Pi image boot partition 2 in $image" >&2
+    exit 1
+  fi
+  boot_image="${image}@@$((boot_start * ${sector_size:-512}))"
+
+  rm -rf "$boot_dir"
+  mkdir -p "$boot_dir"
+  if ! MTOOLS_SKIP_CHECK=1 "$mcopy" -o -i "$boot_image" ::kernel8.img ::initramfs8 ::bcm2711-rpi-4-b.dtb ::cmdline.txt "$boot_dir/" >/dev/null; then
+    echo "Error: Could not extract Pi 4 boot files from the image boot partition" >&2
+    exit 1
+  fi
+
+  # Enable the Pi's dwc2 USB controller in host mode. It's disabled in the stock
+  # device tree (the firmware enables it on real hardware when needed) and it's
+  # the only USB controller QEMU emulates, the USB-A ports behind the PCIe xHCI
+  # controller don't exist in the VM.
+  "$fdtput" -t s "$boot_dir/bcm2711-rpi-4-b.dtb" /soc/usb@7e980000 status okay
+  "$fdtput" -t s "$boot_dir/bcm2711-rpi-4-b.dtb" /soc/usb@7e980000 dr_mode host
+
+  # QEMU attaches the SD card to the legacy SDHCI controller instead of the
+  # EMMC2 controller that drives the SD slot on a real Pi 4. Swap their mmc
+  # aliases so the SD card is still named mmcblk0 like on real hardware
+  # (umbrelOS uses that to detect it's booting from an SD card).
+  "$fdtput" -t s "$boot_dir/bcm2711-rpi-4-b.dtb" /aliases mmc0 /soc/mmcnr@7e300000
+  "$fdtput" -t s "$boot_dir/bcm2711-rpi-4-b.dtb" /aliases mmc1 /emmc2bus/mmc@7e340000
+}
+
+prepare_pi_cmdline() {
+  local boot_dir="$1"
+  local cmdline
+  cmdline=$(tr '\r\n' '  ' < "$boot_dir/cmdline.txt" | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')
+
+  # The kernel can't resolve the serial0 alias in console=, on real hardware
+  # the firmware rewrites it to the real device (ttyS0, the Pi 4 mini-UART)
+  # while loading the cmdline. Do the same, and move it last so the serial
+  # console becomes /dev/console and full boot output is visible in the VM's
+  # stdio rather than on the invisible tty1.
+  cmdline=$(sed -E 's/console=serial0(,[0-9]+)? //' <<< "$cmdline")
+  cmdline="${cmdline} console=ttyS0,115200"
+
+  echo "$cmdline"
+}
+
 # Boot the VM
 boot_vm() {
   local image="$1"
@@ -783,7 +895,6 @@ boot_vm() {
   fi
 
   init_state
-  detect_uefi_firmware "$arch"
 
   if [[ "$boot_disk_transport" != "none" && ! -f "$image" ]]; then
     echo "Error: Image not found: $image" >&2
@@ -800,20 +911,22 @@ boot_vm() {
   fi
   command -v "$qemu_binary" >/dev/null 2>&1 || { echo "Error: '$qemu_binary' not found in PATH" >&2; exit 1; }
 
-  # Setup UEFI VARS
-  local uefi_vars="$STATE_DIR/uefi-vars-${arch}.fd"
-  if [[ ! -f "$uefi_vars" ]]; then
-    cp "$UEFI_VARS_TEMPLATE" "$uefi_vars"
+  # With --boot-disk none the image may not exist (e.g. an unflashed device
+  # booting the USB installer), so only resolve its path when it's used.
+  local image_abs=""
+  if [[ "$boot_disk_transport" != "none" ]]; then
+    image_abs="$(cd "$(dirname "$image")" && pwd)/$(basename "$image")"
   fi
 
   # Setup overlay disk
   local overlay="$STATE_DIR/overlay-${arch}.qcow2"
+  if [[ "$device" == "pi" ]]; then
+    overlay="$STATE_DIR/overlay-pi.qcow2"
+  fi
   if [[ "$boot_disk_transport" == "none" ]]; then
     : # No boot disk, no overlay needed
   elif [[ ! -f "$overlay" ]]; then
     echo "Creating overlay image..."
-    local image_abs
-    image_abs="$(cd "$(dirname "$image")" && pwd)/$(basename "$image")"
     qemu-img create -f qcow2 -F raw -b "$image_abs" "$overlay" "$disk_size" >/dev/null
   else
     echo "Using existing overlay image"
@@ -837,14 +950,45 @@ boot_vm() {
       # Generic NAS boots from eMMC (virtio-blk), has NVMe and SATA slots for storage
       default_boot_disk_transport="emmc"
       ;;
+    pi)
+      # The Pi has no SMBIOS, umbrelOS detects Pi hardware from the device
+      # tree model exposed in /proc/cpuinfo.
+      smbios_args=()
+      # The Pi boots from an SD card.
+      default_boot_disk_transport="sdcard"
+      ;;
   esac
 
   if [[ "$boot_disk_transport" == "default" ]]; then
     boot_disk_transport="$default_boot_disk_transport"
   fi
 
+  if [[ "$device" == "pi" && "$boot_disk_transport" != "sdcard" ]]; then
+    echo "Error: pi VM requires --boot-disk sdcard" >&2
+    exit 1
+  fi
+
   local boot_disk_args
   boot_disk_args=$(build_boot_disk_args "$overlay" "$boot_disk_transport")
+
+  local firmware_args=()
+  local direct_boot_args=()
+  if [[ "$device" == "pi" ]]; then
+    local pi_boot_dir pi_cmdline
+    pi_boot_dir="$STATE_DIR/pi-boot"
+    extract_pi_boot_files "$image_abs" "$pi_boot_dir"
+    pi_cmdline=$(prepare_pi_cmdline "$pi_boot_dir")
+    direct_boot_args=(-dtb "$pi_boot_dir/bcm2711-rpi-4-b.dtb" -kernel "$pi_boot_dir/kernel8.img" -initrd "$pi_boot_dir/initramfs8" -append "$pi_cmdline")
+  else
+    detect_uefi_firmware "$arch"
+
+    # Setup UEFI VARS
+    local uefi_vars="$STATE_DIR/uefi-vars-${arch}.fd"
+    if [[ ! -f "$uefi_vars" ]]; then
+      cp "$UEFI_VARS_TEMPLATE" "$uefi_vars"
+    fi
+    firmware_args=(-drive "if=pflash,format=raw,readonly=on,file=$UEFI_CODE" -drive "if=pflash,format=raw,file=$uefi_vars")
+  fi
 
   # Attach a bootable CD-ROM if requested (e.g. the USB installer ISO). The
   # ide-cd device plugs into the q35 machine's built-in SATA controller which
@@ -867,13 +1011,19 @@ boot_vm() {
   local nvme_args hdd_args usb_args
   nvme_args=$(build_nvme_args "$device" "$boot_nvme_slot")
   hdd_args=$(build_hdd_args)
-  usb_args=$(build_usb_args)
+  usb_args=$(build_usb_args "$device")
 
   # Platform and architecture-specific settings
   local accel_args machine_args cpu_args
   local qemu_sudo=""
 
-  if [[ "$arch" == "arm64" ]]; then
+  if [[ "$device" == "pi" ]]; then
+    # QEMU's raspi4b machine emulates the BCM2711's fixed Cortex-A72 cores so
+    # hardware virtualisation can't be used, even on ARM64 hosts.
+    accel_args="-accel tcg"
+    cpu_args=""
+    machine_args="-machine raspi4b"
+  elif [[ "$arch" == "arm64" ]]; then
     # ARM64 settings
     case "$(uname -s)" in
       Linux)
@@ -925,6 +1075,17 @@ boot_vm() {
     esac
   fi
 
+  # The Pi has no PCI bus for a virtio NIC, networking attaches to the Pi's
+  # dwc2 USB controller instead. The Pi console (serial0 in cmdline.txt) is the
+  # mini-UART, which is the second serial device on QEMU raspi machines (the
+  # first is the PL011, which is reserved for Bluetooth).
+  local network_device="virtio-net-pci"
+  local serial_args="-serial chardev:char0"
+  if [[ "$device" == "pi" ]]; then
+    network_device="usb-net"
+    serial_args="-serial null -serial chardev:char0"
+  fi
+
   echo "Booting VM (${arch}, ${device}, ${boot_disk_transport} boot disk)..."
   echo "  SSH: ssh -p ${ssh_port} umbrel@localhost"
   echo "  HTTP: http://localhost:${http_port}"
@@ -938,14 +1099,14 @@ boot_vm() {
     -smp "$cores" \
     -m "$memory" \
     -rtc base=utc \
-    -nographic -monitor none -chardev stdio,id=char0,signal=off -serial chardev:char0 \
+    -nographic -monitor none -chardev stdio,id=char0,signal=off $serial_args \
     "${smbios_args[@]}" \
-    -drive if=pflash,format=raw,readonly=on,file="$UEFI_CODE" \
-    -drive if=pflash,format=raw,file="$uefi_vars" \
+    "${firmware_args[@]}" \
+    "${direct_boot_args[@]}" \
     $boot_disk_args \
     $cdrom_args \
     -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22,hostfwd=tcp:127.0.0.1:${http_port}-:80 \
-    -device virtio-net-pci,netdev=net0 \
+    -device ${network_device},netdev=net0 \
     $nvme_args \
     $hdd_args \
     $usb_args
@@ -962,6 +1123,12 @@ reflash() {
       found=true
     fi
   done
+  local pi_overlay="$STATE_DIR/overlay-pi.qcow2"
+  if [[ -f "$pi_overlay" ]]; then
+    echo "Removing pi boot disk overlay..."
+    rm -f "$pi_overlay"
+    found=true
+  fi
   # Also check for legacy overlay without arch suffix
   local legacy_overlay="$STATE_DIR/overlay.qcow2"
   if [[ -f "$legacy_overlay" ]]; then
@@ -1222,7 +1389,7 @@ case "$command" in
     boot_nvme_slot=""
     memory="$DEFAULT_MEMORY"
     cores="$DEFAULT_CORES"
-    disk_size="$DEFAULT_DISK_SIZE"
+    disk_size=""
     ssh_port="$DEFAULT_SSH_PORT"
     http_port="$DEFAULT_HTTP_PORT"
 
@@ -1236,16 +1403,16 @@ case "$command" in
       case "$1" in
         --device)
           device="$2"
-          if [[ "$device" != "umbrel-pro" && "$device" != "umbrel-home" && "$device" != "nas" ]]; then
-            echo "Error: --device must be 'umbrel-pro', 'umbrel-home', or 'nas'" >&2
+          if [[ "$device" != "umbrel-pro" && "$device" != "umbrel-home" && "$device" != "nas" && "$device" != "pi" ]]; then
+            echo "Error: --device must be 'umbrel-pro', 'umbrel-home', 'nas', or 'pi'" >&2
             exit 1
           fi
           shift 2
           ;;
         --boot-disk)
           boot_disk_transport="$2"
-          if [[ "$boot_disk_transport" != "default" && "$boot_disk_transport" != "emmc" && "$boot_disk_transport" != "nvme" && "$boot_disk_transport" != "usb" && "$boot_disk_transport" != "none" ]]; then
-            echo "Error: --boot-disk must be 'default', 'emmc', 'nvme', 'usb', or 'none'" >&2
+          if [[ "$boot_disk_transport" != "default" && "$boot_disk_transport" != "emmc" && "$boot_disk_transport" != "nvme" && "$boot_disk_transport" != "usb" && "$boot_disk_transport" != "sdcard" && "$boot_disk_transport" != "none" ]]; then
+            echo "Error: --boot-disk must be 'default', 'emmc', 'nvme', 'usb', 'sdcard', or 'none'" >&2
             exit 1
           fi
           shift 2
@@ -1294,18 +1461,38 @@ case "$command" in
       esac
     done
 
-    # If no image specified, infer from architecture
-    if [[ -z "$image" ]]; then
-      # If arch not specified, use native arch
-      if [[ -z "$arch" ]]; then
-        arch=$(get_native_arch)
-        echo "Using native architecture: $arch"
+    if [[ "$device" == "pi" && -n "$arch" && "$arch" != "arm64" ]]; then
+      echo "Error: pi VM requires --arch arm64" >&2
+      exit 1
+    fi
+
+    if [[ -z "$disk_size" ]]; then
+      if [[ "$device" == "pi" ]]; then
+        disk_size="$DEFAULT_PI_DISK_SIZE"
+      else
+        disk_size="$DEFAULT_DISK_SIZE"
       fi
-      image=$(get_default_image "$arch")
+    fi
+
+    # If no image specified, infer from architecture or device
+    if [[ -z "$image" ]]; then
+      if [[ "$device" == "pi" ]]; then
+        arch="arm64"
+        image=$(get_default_pi_image)
+      else
+        # If arch not specified, use native arch
+        if [[ -z "$arch" ]]; then
+          arch=$(get_native_arch)
+          echo "Using native architecture: $arch"
+        fi
+        image=$(get_default_image "$arch")
+      fi
       echo "Using default image: $image"
     else
-      # Image specified - auto-detect architecture if not specified
-      if [[ -z "$arch" ]]; then
+      if [[ "$device" == "pi" ]]; then
+        arch="arm64"
+      elif [[ -z "$arch" ]]; then
+        # Image specified - auto-detect architecture if not specified
         arch=$(detect_arch "$image")
         echo "Auto-detected architecture: $arch"
       fi

@@ -4,6 +4,30 @@ import {$} from 'execa'
 
 const bootMountPath = `/tmp/umbrel-boot-${process.pid}`
 
+// Parse a USB device's sysfs uevent and return its `<vendorId>:<productId>` if
+// it's bound to the uas driver, otherwise undefined. The vid/pid come from the
+// PRODUCT= field (idVendor/idProduct/bcdDevice in hex, unpadded).
+export function parseUasDeviceId(uevent: string): string | undefined {
+	if (!uevent.includes('DRIVER=uas')) return undefined
+	const productLine = uevent.split('\n').find((line) => line?.startsWith('PRODUCT='))
+	if (!productLine) return undefined
+	const [vendorId, productId] = productLine.replace('PRODUCT=', '').split('/')
+	return `${vendorId}:${productId}`
+}
+
+// Return a new kernel cmdline that forces the given devices onto the USB
+// mass-storage driver. Any existing usb-storage.quirks flag is replaced (not
+// merged) with one listing every device, each with the `:u` (ignore UAS) quirk.
+export function applyUasQuirks(cmdline: string, deviceIds: string[]): string {
+	const withoutExistingQuirks = cmdline
+		.trim()
+		.split(' ')
+		.filter((flag) => !flag.startsWith('usb-storage.quirks='))
+		.join(' ')
+	const quirks = deviceIds.map((deviceId) => `${deviceId}:u`).join(',')
+	return `${withoutExistingQuirks} usb-storage.quirks=${quirks}`
+}
+
 // By default Linux uses the UAS driver for most devices. This causes major
 // stability problems on the Raspberry Pi 4, not due to issues with UAS, but due
 // to devices running in UAS mode using much more power. The Pi can't reliably
@@ -29,13 +53,8 @@ export default async function blacklistUASDriver() {
 		const usbDeviceUeventFiles = await globby('/sys/bus/usb/devices/*/uevent')
 		for (const ueventFile of usbDeviceUeventFiles) {
 			const uevent = await fse.readFile(ueventFile, 'utf8')
-			if (!uevent.includes('DRIVER=uas')) continue
-			const [vendorId, productId] = uevent
-				.split('\n')
-				.find((line) => line?.startsWith('PRODUCT='))!
-				.replace('PRODUCT=', '')
-				.split('/')
-			const deviceId = `${vendorId}:${productId}`
+			const deviceId = parseUasDeviceId(uevent)
+			if (!deviceId) continue
 			console.error(`UAS device found ${deviceId}`)
 			blacklist.push(deviceId)
 		}
@@ -81,15 +100,8 @@ export default async function blacklistUASDriver() {
 				return
 			}
 
-			// Remove any current quirks
-			cmdline = cmdline
-				.trim()
-				.split(' ')
-				.filter((flag) => !flag.startsWith('usb-storage.quirks='))
-				.join(' ')
-			// Add new quirks
-			const quirks = blacklist.map((deviceId) => `${deviceId}:u`).join(',')
-			cmdline = `${cmdline} usb-storage.quirks=${quirks}`
+			// Replace any current quirks with ones for the detected UAS devices
+			cmdline = applyUasQuirks(cmdline, blacklist)
 
 			// Write new cmdline
 			await fse.writeFile(`${bootMountPath}/cmdline.txt`, cmdline)
