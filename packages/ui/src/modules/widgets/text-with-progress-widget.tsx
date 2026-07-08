@@ -28,7 +28,7 @@ export function TextWithProgressWidget({
 			<div className={widgetTextCva({opacity: 'secondary'})}>
 				{progressLabel || (progress ? t('widget.progress.in-progress') : LOADING_DASH)}
 			</div>
-			<Progress value={progress * 100} />
+			<Progress value={progress * 100} trackClassName='shadow-glass-track' />
 		</WidgetContainer>
 	)
 }

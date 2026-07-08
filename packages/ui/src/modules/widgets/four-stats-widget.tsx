@@ -2,6 +2,7 @@ import {LOADING_DASH} from '@/constants'
 import {cn} from '@/lib/utils'
 import type {FourStatsItem, FourStatsWidget, FourStatsWidgetProps} from '@/modules/widgets/shared/constants'
 
+import {glassCellClass} from './shared/glass-cell'
 import {WidgetContainer, widgetTextCva} from './shared/shared'
 
 export function FourStatsWidget({
@@ -33,11 +34,16 @@ export function FourStatsWidget({
 
 function Item(item?: FourStatsItem) {
 	return (
-		<div className='flex h-full flex-col justify-center rounded-5 bg-white/5 px-1 leading-none sm:rounded-12 sm:px-5'>
+		<div
+			className={cn(
+				'flex h-full flex-col justify-center rounded-5 px-1 leading-none sm:rounded-12 sm:px-5',
+				glassCellClass,
+			)}
+		>
 			<p
 				className={cn(
 					widgetTextCva({
-						opacity: 'secondary',
+						opacity: 'primary',
 					}),
 					'text-[8px] sm:text-11',
 				)}
@@ -46,7 +52,7 @@ function Item(item?: FourStatsItem) {
 				{item?.title}
 			</p>
 			<p className={widgetTextCva()}>
-				{item?.text} <span className={widgetTextCva({opacity: 'tertiary'})}>{item?.subtext}</span>
+				{item?.text} <span className={widgetTextCva({opacity: 'secondary'})}>{item?.subtext}</span>
 			</p>
 		</div>
 	)

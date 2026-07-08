@@ -2,8 +2,10 @@ import {ReactNode} from 'react'
 import {take} from 'remeda'
 
 import {LOADING_DASH} from '@/constants'
+import {cn} from '@/lib/utils'
 import type {TextWithButtonsWidgetProps} from '@/modules/widgets/shared/constants'
 
+import {glassCellClass, glassCellInteractiveClass} from './shared/glass-cell'
 import {WidgetContainer} from './shared/shared'
 import {StatText} from './shared/stat-text'
 import {TablerIcon} from './shared/tabler-icon'
@@ -44,7 +46,11 @@ function WidgetButton({onClick, children}: {onClick: () => void; children: React
 	return (
 		<button
 			onClick={onClick}
-			className='flex h-[24px] min-w-0 flex-1 items-center justify-center rounded-5 bg-white/5 px-2.5 text-12 font-medium transition-colors hover:bg-white/10 active:bg-white/5 sm:h-[30px] sm:rounded-full'
+			className={cn(
+				'flex h-[24px] min-w-0 flex-1 items-center justify-center rounded-5 px-2.5 text-12 font-medium sm:h-[30px] sm:rounded-full',
+				glassCellClass,
+				glassCellInteractiveClass,
+			)}
 		>
 			{children}
 		</button>

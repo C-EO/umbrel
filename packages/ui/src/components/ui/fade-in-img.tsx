@@ -2,7 +2,7 @@ import {useState} from 'react'
 
 import {cn} from '@/lib/utils'
 
-export function FadeInImg({src, alt, className, onLoad, ...props}: React.ImgHTMLAttributes<HTMLImageElement>) {
+export function FadeInImg({src, alt, className, onLoad, ...props}: React.ComponentPropsWithRef<'img'>) {
 	const [loaded, setLoaded] = useState(false)
 
 	return (

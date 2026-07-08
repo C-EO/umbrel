@@ -3,12 +3,14 @@ import React, {Suspense} from 'react'
 import {ErrorBoundary} from 'react-error-boundary'
 import {useLocation, useNavigate} from 'react-router-dom'
 
+import {Glass} from '@/components/ui/glass'
 import {useAppsWithUpdates} from '@/hooks/use-apps-with-updates'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useQueryParams} from '@/hooks/use-query-params'
 import {useSettingsNotificationCount} from '@/hooks/use-settings-notification-count'
 import {cn} from '@/lib/utils'
 import {systemAppsKeyed} from '@/providers/apps'
+import {useWallpaper} from '@/providers/wallpaper'
 import {tw} from '@/utils/tw'
 
 import {DockItem} from './dock-item'
@@ -66,6 +68,7 @@ export function Dock() {
 	const {appsWithUpdates} = useAppsWithUpdates()
 	const isMobile = useIsMobile()
 	const {iconSize, iconSizeZoomed, padding, dockHeight} = useDockDimensions()
+	const {wallpaperImgRef} = useWallpaper()
 
 	const appUpdateCount = appsWithUpdates.length
 
@@ -85,63 +88,71 @@ export function Dock() {
 				transition={{type: 'spring', stiffness: 200, damping: 20, delay: 0.2, duration: 0.2}}
 				onPointerMove={(e) => e.pointerType === 'mouse' && mouseX.set(e.pageX)}
 				onPointerLeave={() => mouseX.set(Infinity)}
-				className={cn(dockClass, isMobile && 'gap-2')}
-				style={{
-					height: dockHeight,
-					paddingBottom: padding,
-				}}
+				className='shrink-0 transform-gpu will-change-transform'
 			>
-				<DockItem
-					iconSize={iconSize}
-					iconSizeZoomed={iconSizeZoomed}
-					to={systemAppsKeyed['UMBREL_home'].systemAppTo}
-					open={pathname === '/'}
-					bg={systemAppsKeyed['UMBREL_home'].icon}
-					mouseX={mouseX}
-				/>
-				<DockItem
-					iconSize={iconSize}
-					iconSizeZoomed={iconSizeZoomed}
-					to={systemAppsKeyed['UMBREL_app-store'].systemAppTo}
-					open={pathname.startsWith(systemAppsKeyed['UMBREL_app-store'].systemAppTo)}
-					bg={systemAppsKeyed['UMBREL_app-store'].icon}
-					notificationCount={appUpdateCount}
-					mouseX={mouseX}
-				/>
-				<DockItem
-					iconSize={iconSize}
-					iconSizeZoomed={iconSizeZoomed}
-					to={systemAppsKeyed['UMBREL_files'].systemAppTo}
-					onClick={navigateToLastFilesPath}
-					open={pathname.startsWith('/files')}
-					bg={systemAppsKeyed['UMBREL_files'].icon}
-					mouseX={mouseX}
-				/>
-				<DockItem
-					iconSize={iconSize}
-					iconSizeZoomed={iconSizeZoomed}
-					to={systemAppsKeyed['UMBREL_settings'].systemAppTo}
-					open={pathname.startsWith(systemAppsKeyed['UMBREL_settings'].systemAppTo)}
-					bg={systemAppsKeyed['UMBREL_settings'].icon}
-					notificationCount={settingsNotificationCount}
-					mouseX={mouseX}
-				/>
-				<DockItem
-					iconSize={iconSize}
-					iconSizeZoomed={iconSizeZoomed}
-					to={{search: addLinkSearchParams({dialog: 'live-usage'})}}
-					open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
-					bg={systemAppsKeyed['UMBREL_live-usage'].icon}
-					mouseX={mouseX}
-				/>
-				<DockItem
-					iconSize={iconSize}
-					iconSizeZoomed={iconSizeZoomed}
-					to={systemAppsKeyed['UMBREL_widgets'].systemAppTo}
-					open={pathname.startsWith(systemAppsKeyed['UMBREL_widgets'].systemAppTo)}
-					bg={systemAppsKeyed['UMBREL_widgets'].icon}
-					mouseX={mouseX}
-				/>
+				<Glass
+					{...dockGlassProps}
+					// Only on the bare desktop: the WebGL fallback lens sees just the
+					// wallpaper, and on other routes page content scrolls under the dock
+					refractionTarget={pathname === '/' ? wallpaperImgRef : undefined}
+					className={cn(dockClass, isMobile && 'gap-2')}
+					style={{
+						height: dockHeight,
+						paddingBottom: padding,
+					}}
+				>
+					<DockItem
+						iconSize={iconSize}
+						iconSizeZoomed={iconSizeZoomed}
+						to={systemAppsKeyed['UMBREL_home'].systemAppTo}
+						open={pathname === '/'}
+						bg={systemAppsKeyed['UMBREL_home'].icon}
+						mouseX={mouseX}
+					/>
+					<DockItem
+						iconSize={iconSize}
+						iconSizeZoomed={iconSizeZoomed}
+						to={systemAppsKeyed['UMBREL_app-store'].systemAppTo}
+						open={pathname.startsWith(systemAppsKeyed['UMBREL_app-store'].systemAppTo)}
+						bg={systemAppsKeyed['UMBREL_app-store'].icon}
+						notificationCount={appUpdateCount}
+						mouseX={mouseX}
+					/>
+					<DockItem
+						iconSize={iconSize}
+						iconSizeZoomed={iconSizeZoomed}
+						to={systemAppsKeyed['UMBREL_files'].systemAppTo}
+						onClick={navigateToLastFilesPath}
+						open={pathname.startsWith('/files')}
+						bg={systemAppsKeyed['UMBREL_files'].icon}
+						mouseX={mouseX}
+					/>
+					<DockItem
+						iconSize={iconSize}
+						iconSizeZoomed={iconSizeZoomed}
+						to={systemAppsKeyed['UMBREL_settings'].systemAppTo}
+						open={pathname.startsWith(systemAppsKeyed['UMBREL_settings'].systemAppTo)}
+						bg={systemAppsKeyed['UMBREL_settings'].icon}
+						notificationCount={settingsNotificationCount}
+						mouseX={mouseX}
+					/>
+					<DockItem
+						iconSize={iconSize}
+						iconSizeZoomed={iconSizeZoomed}
+						to={{search: addLinkSearchParams({dialog: 'live-usage'})}}
+						open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
+						bg={systemAppsKeyed['UMBREL_live-usage'].icon}
+						mouseX={mouseX}
+					/>
+					<DockItem
+						iconSize={iconSize}
+						iconSizeZoomed={iconSizeZoomed}
+						to={systemAppsKeyed['UMBREL_widgets'].systemAppTo}
+						open={pathname.startsWith(systemAppsKeyed['UMBREL_widgets'].systemAppTo)}
+						bg={systemAppsKeyed['UMBREL_widgets'].icon}
+						mouseX={mouseX}
+					/>
+				</Glass>
 			</motion.div>
 			<LogoutDialog />
 
@@ -164,7 +175,8 @@ export function DockPreview() {
 	const {iconSize, iconSizeZoomed, padding, dockHeight} = useDockDimensions({isPreview: true})
 
 	return (
-		<div
+		<Glass
+			{...dockGlassProps}
 			className={dockPreviewClass}
 			style={{
 				height: dockHeight,
@@ -208,7 +220,7 @@ export function DockPreview() {
 				iconSize={iconSize}
 				iconSizeZoomed={iconSizeZoomed}
 			/>
-		</div>
+		</Glass>
 	)
 }
 
@@ -225,8 +237,11 @@ export function DockBottomPositioner({children}: {children: React.ReactNode}) {
 	)
 }
 
-const dockClass = tw`mx-auto flex items-end gap-3 rounded-2xl bg-black/10 contrast-more:bg-neutral-700 backdrop-blur-xl contrast-more:backdrop-blur-none px-3 shadow-dock shrink-0 will-change-transform transform-gpu border-hpx border-white/10`
-const dockPreviewClass = tw`mx-auto flex items-end gap-4 rounded-2xl bg-neutral-900/80 px-3 shadow-dock shrink-0 border-hpx border-white/10`
+// Clearer glass than the widget defaults: barely any blur or tint, hard refraction
+const dockGlassProps = {blur: 1.5, saturate: 1.3, brightness: 0.9, scale: 70, chroma: 0.2, bevel: 1.5} as const
+
+const dockClass = tw`mx-auto flex items-end gap-[0.7rem] rounded-2xl contrast-more:bg-neutral-700 px-3 shadow-dock-drop shrink-0`
+const dockPreviewClass = tw`mx-auto flex items-end gap-4 rounded-2xl px-3 shadow-dock-drop shrink-0`
 
 const DockDivider = ({iconSize}: {iconSize: number}) => (
 	<div className='br grid w-1 place-items-center' style={{height: iconSize}}>

@@ -1,4 +1,5 @@
 import {LOADING_DASH} from '@/constants'
+import {cn} from '@/lib/utils'
 import type {ListEmojiItem, ListEmojiWidget, ListEmojiWidgetProps} from '@/modules/widgets/shared/constants'
 
 import {WidgetContainer, widgetTextCva} from './shared/shared'
@@ -16,21 +17,21 @@ export function ListEmojiWidget({
 			{!items && <ListEmojiItem emoji='' text={LOADING_DASH} />}
 			{items?.[0] && <ListEmojiItem emoji={items?.[0].emoji} text={items?.[0].text} />}
 			{items?.[1] && (
-				<div className='origin-left scale-90 opacity-60'>
+				<div className='origin-left scale-90 opacity-90'>
 					<ListEmojiItem emoji={items?.[1].emoji} text={items?.[1].text} />
 				</div>
 			)}
 			{items?.[2] && (
-				<div className='origin-left scale-[.8] opacity-40'>
+				<div className='origin-left scale-[.8] opacity-70'>
 					<ListEmojiItem emoji={items?.[2].emoji} text={items?.[2].text} />
 				</div>
 			)}
 			{items?.[3] && (
-				<div className='origin-left scale-[.7] opacity-20'>
+				<div className='origin-left scale-[.7] opacity-50'>
 					<ListEmojiItem emoji={items?.[3].emoji} text={items?.[3].text} />
 				</div>
 			)}
-			<div className='absolute right-3 bottom-3 w-1/2 truncate text-right text-[33px] leading-none font-semibold -tracking-3 opacity-10'>
+			<div className='absolute right-3 bottom-3 w-1/2 truncate text-right text-[33px] leading-none font-semibold -tracking-3 opacity-20'>
 				{count ?? LOADING_DASH}
 			</div>
 		</WidgetContainer>
@@ -40,7 +41,7 @@ export function ListEmojiWidget({
 function ListEmojiItem(item?: ListEmojiItem) {
 	return (
 		<div className='flex items-center gap-1.5'>
-			<div className='flex h-5 w-5 items-center justify-center rounded-5 bg-white/5'>
+			<div className={cn('flex h-5 w-5 items-center justify-center rounded-5')}>
 				{limitToOneEmoji(item?.emoji ?? '')}
 			</div>
 			<p className={widgetTextCva()}>{item?.text}</p>

@@ -79,6 +79,9 @@ export default {
 					'1.06058px 0px 0px 0px rgba(255, 255, 255, 0.04) inset, -1.06058px 0px 0px 0px rgba(255, 255, 255, 0.04) inset, 0px 1.06058px 0px 0px rgba(255, 255, 255, 0.14) inset, 0px 0.53029px 0px 0px rgba(255, 255, 255, 0.07) inset, 0px 4.04029px 24.24174px 0px rgba(0, 0, 0, 0.56)',
 				'glass-button':
 					'1px 0px 0px 0px rgba(255, 255, 255, 0.04) inset, -1px 0px 0px 0px rgba(255, 255, 255, 0.04) inset, 0px 1px 0px 0px rgba(255, 255, 255, 0.20) inset, 0px 0.5px 0px 0px rgba(255, 255, 255, 0.10) inset',
+				// Outer-only drop shadows for surfaces whose inset shine comes from <Glass>
+				'dock-drop': '0px 4.04029px 24.24174px 0px rgba(0, 0, 0, 0.56)',
+				'widget-drop': '0px 20px 30px 0px rgba(0, 0, 0, 0.30)',
 				widget:
 					'0px 20px 30px 0px rgba(0, 0, 0, 0.30), 0 1px 0 0 rgba(255, 255, 255, 0.2) inset, 1px 0 0 0 rgba(255, 255, 255, 0.04) inset, -1px 0 0 0 rgba(255, 255, 255, 0.04) inset',
 				'context-menu':
@@ -91,6 +94,18 @@ export default {
 				'button-highlight-hpx': '0px 0.5px 0px 0px rgba(255, 255, 255, 0.3) inset',
 				'button-highlight-soft': '0px 1px 0px 0px rgba(255, 255, 255, 0.1) inset',
 				'button-highlight-soft-hpx': '0px 0.5px 0px 0px rgba(255, 255, 255, 0.1) inset',
+				// Inner widget cells (stat cards, icon circles, mini-cards, buttons): a
+				// debossed pocket pressed into the glass — soft shadow settling under the
+				// top rim with a faint light on the bottom lip, so each reads as a
+				// recessed well rather than a flat white sticker (or a raised bump).
+				// Pairs with a gradient fill that darkens toward the top rim (see
+				// modules/widgets/shared/glass-cell.ts). No backdrop-filter — these sit
+				// on real glass already.
+				'glass-cell': '0px 2px 3px -1px rgba(0, 0, 0, 0.22) inset, 0px -1px 0px 0px rgba(255, 255, 255, 0.09) inset',
+				// Progress-bar / gauge tracks: a shallow recessed groove — dark under the
+				// top rim with a faint light on the far lip. The filled bar sits on top.
+				'glass-track':
+					'0px 1px 1.5px 0px rgba(0, 0, 0, 0.22) inset, 0px -0.5px 0px 0px rgba(255, 255, 255, 0.07) inset',
 				'immersive-dialog-close':
 					'0px 32px 32px 0px rgba(0, 0, 0, 0.32), 1px 1px 1px 0px rgba(255, 255, 255, 0.08) inset',
 				'radio-outline': '0 0 0 1px rgba(255, 255, 255, 0.2) inset',

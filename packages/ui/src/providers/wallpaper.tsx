@@ -1,4 +1,14 @@
-import {createContext, ReactNode, useCallback, useContext, useEffect, useLayoutEffect, useState} from 'react'
+import {
+	createContext,
+	ReactNode,
+	RefObject,
+	useCallback,
+	useContext,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from 'react'
 import {usePreviousDistinct} from 'react-use'
 import {arrayIncludes} from 'ts-extras'
 
@@ -151,6 +161,8 @@ type WallpaperType = {
 	setWallpaperId: (id: WallpaperId) => void
 	wallpaperFullyVisible: boolean
 	setWallpaperFullyVisible: () => void
+	/** The full-res wallpaper <img> — Glass surfaces refract from it on browsers without backdrop-filter: url() */
+	wallpaperImgRef: RefObject<HTMLImageElement | null>
 }
 
 const WallPaperContext = createContext<WallpaperType>(null as any)
@@ -196,6 +208,7 @@ export function WallpaperProvider({
 }) {
 	const [isLoading, setIsLoading] = useState(true)
 	const [wallpaperFullyVisible, setWallpaperFullyVisible] = useState(false)
+	const wallpaperImgRef = useRef<HTMLImageElement | null>(null)
 
 	const prevId = usePreviousDistinct(wallpaper.id)
 
@@ -221,6 +234,7 @@ export function WallpaperProvider({
 				},
 				wallpaperFullyVisible,
 				setWallpaperFullyVisible: () => setWallpaperFullyVisible(true),
+				wallpaperImgRef,
 			}}
 		>
 			{children}
@@ -257,7 +271,8 @@ export function Wallpaper({
 	stayBlurred?: boolean
 	isPreview?: boolean
 }) {
-	const {wallpaper, prevWallpaper, isLoading, wallpaperFullyVisible, setWallpaperFullyVisible} = useWallpaper()
+	const {wallpaper, prevWallpaper, isLoading, wallpaperFullyVisible, setWallpaperFullyVisible, wallpaperImgRef} =
+		useWallpaper()
 
 	if (!wallpaper || !wallpaper.id) return null
 
@@ -276,6 +291,7 @@ export function Wallpaper({
 			{!isLoading && !stayBlurred && (
 				<FadeInImg
 					key={wallpaper.url}
+					ref={isPreview ? undefined : wallpaperImgRef}
 					src={wallpaper.url}
 					className={cn(
 						// Using black bg by default because sometimes we want to show the wallpaper before it's loaded, and over other elements

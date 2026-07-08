@@ -11,6 +11,7 @@ import {formatItemName, splitFileName} from '@/features/files/utils/format-files
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {cn} from '@/lib/utils'
 import type {BaseWidget, Link, RegistryWidget} from '@/modules/widgets/shared/constants'
+import {glassCellClass, glassCellInteractiveClass} from '@/modules/widgets/shared/glass-cell'
 import {WidgetContainer} from '@/modules/widgets/shared/shared'
 
 export type FilesListWidget = BaseWidget & {
@@ -241,7 +242,12 @@ export function FilesGridWidget({
 
 function SkeletonGridItem() {
 	return (
-		<div className='flex h-full w-full items-center gap-1 rounded-5 bg-white/5 px-1 leading-none text-white/70 sm:gap-2 sm:px-2 sm:py-3'>
+		<div
+			className={cn(
+				'flex h-full w-full items-center gap-1 rounded-5 px-1 leading-none text-white/70 sm:gap-2 sm:px-2 sm:py-3',
+				glassCellClass,
+			)}
+		>
 			{/* Placeholder icon */}
 			<div className='h-4 w-4 animate-pulse rounded-xs bg-white/10 sm:h-8 sm:w-8 sm:rounded-md' />
 			{/* name */}
@@ -255,10 +261,12 @@ function GridItem({item, count}: {item: FileSystemItem; index: number; count: nu
 	return (
 		<motion.div
 			onClick={() => navigateToDirectory(item.path)}
-			whileHover={{scale: 1.04, backgroundColor: 'rgba(255, 255, 255, 0.1)'}}
-			whileTap={{scale: 0.96, backgroundColor: 'rgba(255, 255, 255, 0.1)'}}
+			whileHover={{scale: 1.04}}
+			whileTap={{scale: 0.96}}
 			className={cn(
-				'flex h-full w-full items-center rounded-5 bg-white/5 px-1 leading-none text-white/70 sm:py-3',
+				'flex h-full w-full items-center rounded-5 px-1 leading-none text-white/70 sm:py-3',
+				glassCellClass,
+				glassCellInteractiveClass,
 				'overflow-hidden',
 				'[overflow-wrap:anywhere]',
 				'sm:rounded-12 sm:px-2',
@@ -274,7 +282,7 @@ function GridItem({item, count}: {item: FileSystemItem; index: number; count: nu
 			/>
 			<p
 				className={cn(
-					'line-clamp-2 text-9 font-medium sm:text-11',
+					'line-clamp-2 text-9 font-medium text-white/90 sm:text-11',
 					count === 1 && 'h-[16px] sm:h-[24px]',
 					count === 2 && 'h-[16px] sm:h-[24px]',
 					count === 3 && 'h-[11px] text-left sm:h-[24px] sm:text-center',

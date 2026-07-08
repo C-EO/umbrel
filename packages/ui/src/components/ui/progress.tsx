@@ -30,6 +30,7 @@ const progressIndicatorVariants = cva('h-full w-full flex-1 bg-white transition-
 
 function Progress({
 	className,
+	trackClassName,
 	value,
 	variant,
 	size,
@@ -39,9 +40,15 @@ function Progress({
 	VariantProps<typeof progressVariants> &
 	VariantProps<typeof progressIndicatorVariants> & {
 		ref?: React.Ref<React.ComponentRef<typeof ProgressPrimitive.Root>>
+		/** Extra classes for the track only (not the filled indicator) */
+		trackClassName?: string
 	}) {
 	return (
-		<ProgressPrimitive.Root ref={ref} className={cn(progressVariants({className, size}), className)} {...props}>
+		<ProgressPrimitive.Root
+			ref={ref}
+			className={cn(progressVariants({className, size}), className, trackClassName)}
+			{...props}
+		>
 			<ProgressPrimitive.Indicator
 				className={cn(progressIndicatorVariants({variant}), className)}
 				style={{transform: `translateX(-${100 - (value || 0)}%)`}}

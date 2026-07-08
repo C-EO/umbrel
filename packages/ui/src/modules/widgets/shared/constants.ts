@@ -153,6 +153,10 @@ export type RegistryWidget<T extends WidgetType = WidgetType> = {
 
 // ------------------------------
 
+// Each glass widget holds its own WebGL context on Safari/Firefox (see
+// components/ui/glass.tsx). Safari evicts the oldest context past ~8 live
+// ones, so raising this beyond ~7 requires consolidating the lenses into one
+// shared canvas renderer first.
 export const MAX_WIDGETS = 3
 
 export const liveUsageWidgets: [

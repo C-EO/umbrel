@@ -30,7 +30,7 @@ export function ListWidget({
 					items.length > 0 &&
 					items.slice(0, 5).map((item, i) => (
 						<Fragment key={i}>
-							{i !== 0 && <hr className='border-white/5' />}
+							{i !== 0 && <hr className='border-white/10' />}
 							<ListItem subtext={item.subtext} text={item.text} />
 						</Fragment>
 					))}
@@ -42,8 +42,8 @@ export function ListWidget({
 function ListItem(item?: ListWidgetItem) {
 	return (
 		<div className='text-12 leading-tight'>
-			<div className='truncate opacity-20'>{item?.subtext ?? LOADING_DASH}</div>
-			<p className='line-clamp-2 text-11 opacity-80 sm:text-12'>{item?.text}</p>
+			<div className='text-10 truncate opacity-50'>{item?.subtext ?? LOADING_DASH}</div>
+			<p className='line-clamp-2 text-11 font-medium text-white sm:text-12'>{item?.text}</p>
 		</div>
 	)
 }
