@@ -252,6 +252,33 @@ test.sequential('restart() restarts an installed app', async () => {
 	// TODO: Check this actually worked
 })
 
+test.sequential('failed lifecycle actions leave an app in a recoverable state', async () => {
+	const appId = 'sparkles-hello-world'
+	const composeFile = path.join(umbreld.instance.dataDirectory, 'app-data', appId, 'docker-compose.yml')
+
+	const expectActionFailure = async (action: () => Promise<unknown>) => {
+		const originalCompose = await fse.readFile(composeFile, 'utf8')
+		try {
+			await fse.writeFile(composeFile, `${originalCompose}\ninvalid: [`)
+			await expect(action()).rejects.toThrow()
+			await expect(umbreld.client.apps.state.query({appId})).resolves.toMatchObject({state: 'unknown'})
+		} finally {
+			await fse.writeFile(composeFile, originalCompose)
+		}
+	}
+
+	// Starting can fail while parsing the compose file before Docker is invoked.
+	await expect(umbreld.client.apps.stop.mutate({appId})).resolves.toBe(true)
+	await expectActionFailure(() => umbreld.client.apps.start.mutate({appId}))
+	await expect(umbreld.client.apps.start.mutate({appId})).resolves.toBe(true)
+
+	// Stop and restart pass the compose file to Docker and can fail there.
+	await expectActionFailure(() => umbreld.client.apps.stop.mutate({appId}))
+	await expect(umbreld.client.apps.restart.mutate({appId})).resolves.toBe(true)
+	await expectActionFailure(() => umbreld.client.apps.restart.mutate({appId}))
+	await expect(umbreld.client.apps.restart.mutate({appId})).resolves.toBe(true)
+})
+
 test.sequential('update() updates an installed app', async () => {
 	await expect(umbreld.client.apps.update.mutate({appId: 'sparkles-hello-world'})).resolves.toStrictEqual(true)
 	// TODO: Check this actually worked

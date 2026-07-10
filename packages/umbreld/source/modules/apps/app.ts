@@ -97,6 +97,22 @@ export default class App {
 		return writeYaml(`${this.dataDirectory}/docker-compose.yml`, compose)
 	}
 
+	async #runStateTransition<T>(
+		state: Extract<AppState, 'starting' | 'stopping' | 'restarting'>,
+		operation: () => Promise<T>,
+	): Promise<T> {
+		this.state = state
+		try {
+			return await operation()
+		} catch (error) {
+			// A failed lifecycle command may have only partially changed the
+			// containers, so don't claim the app is running or stopped. `unknown`
+			// is the existing recoverable state exposed by the UI.
+			this.state = 'unknown'
+			throw error
+		}
+	}
+
 	async patchComposeFile() {
 		const manifest = await this.readManifest()
 		const appRequestsGpuAccess = manifest.permissions?.includes('GPU')
@@ -212,18 +228,19 @@ export default class App {
 
 	async start() {
 		this.logger.log(`Starting app ${this.id}`)
-		this.state = 'starting'
-		// We re-run the patch here to fix an edge case where 0.5.x imported apps
-		// wont run because they haven't been patched.
-		await this.patchComposeFile()
-		await pRetry(() => appScript(this.#umbreld, 'start', this.id), {
-			onFailedAttempt: (error) => {
-				this.logger.error(
-					`Attempt ${error.attemptNumber} starting app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
-					error,
-				)
-			},
-			retries: 2,
+		await this.#runStateTransition('starting', async () => {
+			// We re-run the patch here to fix an edge case where 0.5.x imported apps
+			// wont run because they haven't been patched.
+			await this.patchComposeFile()
+			await pRetry(() => appScript(this.#umbreld, 'start', this.id), {
+				onFailedAttempt: (error) => {
+					this.logger.error(
+						`Attempt ${error.attemptNumber} starting app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
+						error,
+					)
+				},
+				retries: 2,
+			})
 		})
 		this.state = 'ready'
 
@@ -234,15 +251,16 @@ export default class App {
 	}
 
 	async stop({persistState = false}: {persistState?: boolean} = {}) {
-		this.state = 'stopping'
-		await pRetry(() => appScript(this.#umbreld, 'stop', this.id), {
-			onFailedAttempt: (error) => {
-				this.logger.error(
-					`Attempt ${error.attemptNumber} stopping app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
-					error,
-				)
-			},
-			retries: 2,
+		await this.#runStateTransition('stopping', async () => {
+			await pRetry(() => appScript(this.#umbreld, 'stop', this.id), {
+				onFailedAttempt: (error) => {
+					this.logger.error(
+						`Attempt ${error.attemptNumber} stopping app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
+						error,
+					)
+				},
+				retries: 2,
+			})
 		})
 		this.state = 'stopped'
 
@@ -255,9 +273,10 @@ export default class App {
 	}
 
 	async restart() {
-		this.state = 'restarting'
-		await appScript(this.#umbreld, 'stop', this.id)
-		await appScript(this.#umbreld, 'start', this.id)
+		await this.#runStateTransition('restarting', async () => {
+			await appScript(this.#umbreld, 'stop', this.id)
+			await appScript(this.#umbreld, 'start', this.id)
+		})
 		this.state = 'ready'
 
 		// Enable auto-start on boot
