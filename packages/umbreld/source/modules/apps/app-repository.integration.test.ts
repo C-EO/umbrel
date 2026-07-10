@@ -1,7 +1,7 @@
 import {fileURLToPath} from 'node:url'
 import path from 'node:path'
 
-import {describe, beforeAll, afterAll, expect, test} from 'vitest'
+import {describe, beforeAll, afterAll, expect, test, vi} from 'vitest'
 import fse from 'fs-extra'
 
 import runGitServer from '../test-utilities/run-git-server.js'
@@ -140,6 +140,54 @@ describe('appRepository.update()', () => {
 
 		// Check we're on the same commit
 		expect(originalCommit).toBe(postUpdateCommit)
+	})
+})
+
+describe('appRepository.atomicClone()', () => {
+	test('removes its temporary clone and preserves the installed repository when promotion fails', async () => {
+		const dataDirectory = await directory.create()
+		const appRepository = new AppRepository(new Umbreld({dataDirectory}), gitServer.url)
+		const originalMarker = `${appRepository.path}/original-marker`
+		const moveError = new Error('Simulated promotion failure')
+
+		await fse.outputFile(originalMarker, 'original')
+
+		const move = vi.spyOn(fse, 'move').mockImplementationOnce(async (source: string, destination: string) => {
+			expect(destination).toBe(appRepository.path)
+			await expect(fse.pathExists(`${source}/.git`)).resolves.toBe(true)
+			await expect(fse.pathExists(`${source}/umbrel-app-store.yml`)).resolves.toBe(true)
+			throw moveError
+		})
+
+		try {
+			await expect(appRepository.atomicClone()).rejects.toBe(moveError)
+		} finally {
+			move.mockRestore()
+		}
+
+		await expect(fse.readdir(`${dataDirectory}/app-stores/.tmp`)).resolves.toEqual([])
+		await expect(fse.readFile(originalMarker, 'utf8')).resolves.toBe('original')
+		await expect(fse.readdir(appRepository.path)).resolves.toEqual(['original-marker'])
+	})
+
+	test('does not mask a promotion failure when temporary cleanup also fails', async () => {
+		const dataDirectory = await directory.create()
+		const appRepository = new AppRepository(new Umbreld({dataDirectory}), gitServer.url)
+		const moveError = new Error('Simulated promotion failure')
+		const cleanupError = new Error('Simulated cleanup failure')
+		const move = vi.spyOn(fse, 'move').mockRejectedValueOnce(moveError)
+		const remove = vi.spyOn(fse, 'remove').mockRejectedValueOnce(cleanupError)
+		const logError = vi.spyOn(appRepository.logger, 'error').mockImplementation(() => {})
+
+		try {
+			await expect(appRepository.atomicClone()).rejects.toBe(moveError)
+			expect(logError).toHaveBeenCalledWith(expect.stringContaining(`${dataDirectory}/app-stores/.tmp/`), cleanupError)
+		} finally {
+			move.mockRestore()
+			remove.mockRestore()
+			logError.mockRestore()
+			await fse.remove(`${dataDirectory}/app-stores/.tmp`)
+		}
 	})
 })
 

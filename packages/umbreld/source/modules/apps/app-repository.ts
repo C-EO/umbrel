@@ -71,23 +71,32 @@ export default class AppRepository {
 	async atomicClone() {
 		const temporaryPath = `${this.#umbreld.dataDirectory}/app-stores/.tmp/${randomToken(64)}`
 
-		await git.clone({
-			fs: fse,
-			http,
-			url: this.url,
-			dir: temporaryPath,
-			depth: 1,
-			singleBranch: true,
-		})
+		try {
+			await git.clone({
+				fs: fse,
+				http,
+				url: this.url,
+				dir: temporaryPath,
+				depth: 1,
+				singleBranch: true,
+			})
 
-		// We're running as root so we need to relax file permissions so container can access them
-		await $`chown -R 1000:1000 ${temporaryPath}`
+			// We're running as root so we need to relax file permissions so container can access them
+			await $`chown -R 1000:1000 ${temporaryPath}`
 
-		// We also need to strip out all .gitkeep files since some apps cannot be initialised with
-		// a non-empty volume directory
-		await $`find ${temporaryPath} -name .gitkeep -delete`
+			// We also need to strip out all .gitkeep files since some apps cannot be initialised with
+			// a non-empty volume directory
+			await $`find ${temporaryPath} -name .gitkeep -delete`
 
-		await fse.move(temporaryPath, this.path, {overwrite: true})
+			await fse.move(temporaryPath, this.path, {overwrite: true})
+		} catch (error) {
+			await fse
+				.remove(temporaryPath)
+				.catch((cleanupError) =>
+					this.logger.error(`Failed to clean up temporary app repository at ${temporaryPath}`, cleanupError),
+				)
+			throw error
+		}
 	}
 
 	// Get the current local commit
