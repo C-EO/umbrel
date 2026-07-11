@@ -1,11 +1,18 @@
 import {expect, beforeAll, afterAll, beforeEach, describe, test} from 'vitest'
 
-import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
-let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
+let umbreld: Awaited<ReturnType<typeof createTestVm>>
+
+const defaultPreferences = {
+	view: 'list',
+	sortBy: 'name',
+	sortOrder: 'ascending',
+} as const
 
 beforeAll(async () => {
-	umbreld = await createTestUmbreld()
+	umbreld = await createTestVm({device: 'umbrel-home'})
+	await umbreld.vm.powerOn()
 	await umbreld.registerAndLogin()
 })
 
@@ -18,40 +25,17 @@ describe('viewPreferences()', () => {
 		await expect(umbreld.unauthenticatedClient.files.viewPreferences.query()).rejects.toThrow('Invalid token')
 	})
 
+	// This runs before anything mutates preferences so it sees pristine state
 	test('returns default view preferences on first start', async () => {
 		const viewPreferences = await umbreld.client.files.viewPreferences.query()
-		expect(viewPreferences).toStrictEqual({
-			view: 'list',
-			sortBy: 'name',
-			sortOrder: 'ascending',
-		})
-	})
-
-	test('returns updated view preferences from the store', async () => {
-		// Write a modified value to the store
-		await umbreld.instance.store.set('files.preferences', {
-			view: 'icons',
-			sortBy: 'modified',
-			sortOrder: 'descending',
-		})
-
-		const viewPreferences = await umbreld.client.files.viewPreferences.query()
-		expect(viewPreferences).toStrictEqual({
-			view: 'icons',
-			sortBy: 'modified',
-			sortOrder: 'descending',
-		})
+		expect(viewPreferences).toStrictEqual(defaultPreferences)
 	})
 })
 
 describe('updateViewPreferences()', () => {
-	// Reset to default state before each test
+	// Reset to default state through the API before each test
 	beforeEach(async () => {
-		await umbreld.instance.store.set('files.preferences', {
-			view: 'list',
-			sortBy: 'name',
-			sortOrder: 'ascending',
-		})
+		await umbreld.client.files.updateViewPreferences.mutate(defaultPreferences)
 	})
 
 	test('throws invalid error without auth token', async () => {
@@ -73,9 +57,8 @@ describe('updateViewPreferences()', () => {
 			sortOrder: 'ascending',
 		})
 
-		// Verify the preferences were saved to the store
-		const storedPreferences = await umbreld.instance.store.get('files.preferences')
-		expect(storedPreferences).toStrictEqual({
+		// Verify the update round-trips through the query
+		await expect(umbreld.client.files.viewPreferences.query()).resolves.toStrictEqual({
 			view: 'icons',
 			sortBy: 'name',
 			sortOrder: 'ascending',
@@ -93,9 +76,8 @@ describe('updateViewPreferences()', () => {
 			sortOrder: 'ascending',
 		})
 
-		// Verify the preferences were saved to the store
-		const storedPreferences = await umbreld.instance.store.get('files.preferences')
-		expect(storedPreferences).toStrictEqual({
+		// Verify the update round-trips through the query
+		await expect(umbreld.client.files.viewPreferences.query()).resolves.toStrictEqual({
 			view: 'list',
 			sortBy: 'modified',
 			sortOrder: 'ascending',
@@ -113,9 +95,8 @@ describe('updateViewPreferences()', () => {
 			sortOrder: 'descending',
 		})
 
-		// Verify the preferences were saved to the store
-		const storedPreferences = await umbreld.instance.store.get('files.preferences')
-		expect(storedPreferences).toStrictEqual({
+		// Verify the update round-trips through the query
+		await expect(umbreld.client.files.viewPreferences.query()).resolves.toStrictEqual({
 			view: 'list',
 			sortBy: 'name',
 			sortOrder: 'descending',
@@ -135,9 +116,8 @@ describe('updateViewPreferences()', () => {
 			sortOrder: 'descending',
 		})
 
-		// Verify the preferences were saved to the store
-		const storedPreferences = await umbreld.instance.store.get('files.preferences')
-		expect(storedPreferences).toStrictEqual({
+		// Verify the update round-trips through the query
+		await expect(umbreld.client.files.viewPreferences.query()).resolves.toStrictEqual({
 			view: 'icons',
 			sortBy: 'size',
 			sortOrder: 'descending',
@@ -146,7 +126,7 @@ describe('updateViewPreferences()', () => {
 
 	test('preserves existing properties when updating partial preferences', async () => {
 		// Set initial non-default preferences
-		await umbreld.instance.store.set('files.preferences', {
+		await umbreld.client.files.updateViewPreferences.mutate({
 			view: 'icons',
 			sortBy: 'modified',
 			sortOrder: 'descending',
@@ -187,10 +167,25 @@ describe('updateViewPreferences()', () => {
 			sortBy: 'modified',
 			sortOrder: 'descending',
 		})
+	})
+})
 
-		// Verify the store has the correct final state
-		const storedPreferences = await umbreld.instance.store.get('files.preferences')
-		expect(storedPreferences).toStrictEqual({
+describe('persistence', () => {
+	test('view preferences persist across a reboot', async () => {
+		// Set non-default preferences
+		await umbreld.client.files.updateViewPreferences.mutate({
+			view: 'icons',
+			sortBy: 'modified',
+			sortOrder: 'descending',
+		})
+
+		// Power cycle the VM
+		await umbreld.vm.powerOff()
+		await umbreld.vm.powerOn()
+		await umbreld.login()
+
+		// Preferences survived the reboot
+		await expect(umbreld.client.files.viewPreferences.query()).resolves.toStrictEqual({
 			view: 'icons',
 			sortBy: 'modified',
 			sortOrder: 'descending',

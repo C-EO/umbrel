@@ -1,13 +1,14 @@
-import {expect, test, beforeEach, beforeAll, afterAll} from 'vitest'
-import fse from 'fs-extra'
+import {expect, test, beforeAll, afterAll} from 'vitest'
 import AdmZip from 'adm-zip'
 
-import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
-// Create a new umbreld instance for each test
-let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
+let umbreld: Awaited<ReturnType<typeof createTestVm>>
+
+// Each test uses uniquely named files so no cleanup between tests is needed
 beforeAll(async () => {
-	umbreld = await createTestUmbreld()
+	umbreld = await createTestVm({device: 'umbrel-home'})
+	await umbreld.vm.powerOn()
 	await umbreld.registerAndLogin()
 })
 
@@ -15,10 +16,10 @@ afterAll(async () => {
 	await umbreld.cleanup()
 })
 
-beforeEach(async () => {
-	// Clean up any files from previous tests
-	await fse.emptyDir(`${umbreld.instance.dataDirectory}/home`)
-})
+// Create a file through the files API
+async function uploadFile(path: string, content: string | Buffer) {
+	await umbreld.api.post(`files/upload?path=${encodeURIComponent(path)}`, {body: content})
+}
 
 // Helper function to extract files from a zip buffer
 function extractZipBuffer(buffer: Buffer): Record<string, string> {
@@ -73,11 +74,14 @@ test('GET /api/files/download throws 404 error on relative path', async () => {
 })
 
 test('GET /api/files/download throws 404 error on symlink traversal attempt', async () => {
-	// Create a symlink to the root directory
-	await fse.ensureSymlink('/', `${umbreld.instance.dataDirectory}/home/symlink-to-root`)
+	// Create a symlink to the root directory (no product surface creates
+	// symlinks, so seed it over SSH)
+	await umbreld.vm.ssh('ln -s / /home/umbrel/umbrel/home/download-symlink-to-root')
 
 	// Attempt to access files through the symlink
-	const error = await umbreld.api.get('files/download?path=/Home/symlink-to-root/etc/passwd').catch((error) => error)
+	const error = await umbreld.api
+		.get('files/download?path=/Home/download-symlink-to-root/etc/passwd')
+		.catch((error) => error)
 	expect(error).toBeInstanceOf(Error)
 	expect(error.response.statusCode).toBe(404)
 	expect(error.response.body).toMatchObject({error: 'not found'})
@@ -85,11 +89,11 @@ test('GET /api/files/download throws 404 error on symlink traversal attempt', as
 
 test('GET /api/files/download throws 404 error when one of multiple files does not exist', async () => {
 	// Create one file
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/file.txt`, 'contents')
+	await uploadFile('/Home/download-partial.txt', 'contents')
 
 	// Try to download it along with a non-existent file
 	const error = await umbreld.api
-		.get('files/download?path=/Home/file.txt&path=/Home/does-not-exist')
+		.get('files/download?path=/Home/download-partial.txt&path=/Home/does-not-exist')
 		.catch((error) => error)
 	expect(error).toBeInstanceOf(Error)
 	expect(error.response.statusCode).toBe(404)
@@ -98,14 +102,14 @@ test('GET /api/files/download throws 404 error when one of multiple files does n
 
 test('GET /api/files/download throws 400 error when paths are in different directories', async () => {
 	// Create two files in different directories
-	await fse.ensureDir(`${umbreld.instance.dataDirectory}/home/dir1`)
-	await fse.ensureDir(`${umbreld.instance.dataDirectory}/home/dir2`)
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/dir1/file1.txt`, 'contents1')
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/dir2/file2.txt`, 'contents2')
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/download-dir1'})
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/download-dir2'})
+	await uploadFile('/Home/download-dir1/file1.txt', 'contents1')
+	await uploadFile('/Home/download-dir2/file2.txt', 'contents2')
 
 	// Try to download both files
 	const error = await umbreld.api
-		.get('files/download?path=/Home/dir1/file1.txt&path=/Home/dir2/file2.txt')
+		.get('files/download?path=/Home/download-dir1/file1.txt&path=/Home/download-dir2/file2.txt')
 		.catch((error) => error)
 	expect(error).toBeInstanceOf(Error)
 	expect(error.response.statusCode).toBe(400)
@@ -114,15 +118,15 @@ test('GET /api/files/download throws 400 error when paths are in different direc
 
 test('GET /api/files/download downloads a file with a valid cookie', async () => {
 	// Create a file
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/file.txt`, 'contents')
+	await uploadFile('/Home/download-file.txt', 'contents')
 
 	// Download the file
-	const response = await umbreld.api.get('files/download?path=/Home/file.txt', {responseType: 'text'})
+	const response = await umbreld.api.get('files/download?path=/Home/download-file.txt', {responseType: 'text'})
 
 	// Assert the response is correct
 	expect(response.statusCode).toBe(200)
 	expect(response.body).toBe('contents')
-	expect(response.headers['content-disposition']).toBe(`attachment; filename*=UTF-8''file.txt`)
+	expect(response.headers['content-disposition']).toBe(`attachment; filename*=UTF-8''download-file.txt`)
 	expect(response.headers['content-type']).toBe('application/octet-stream')
 	expect(response.headers['x-content-type-options']).toBe('nosniff')
 })
@@ -130,7 +134,7 @@ test('GET /api/files/download downloads a file with a valid cookie', async () =>
 test('GET /api/files/download downloads a file with special characters in name', async () => {
 	// Create a file with special characters in the name
 	const fileName = 'file with spaces & special chars 漢字.txt'
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/${fileName}`, 'special contents')
+	await uploadFile(`/Home/${fileName}`, 'special contents')
 
 	// Download the file
 	const response = await umbreld.api.get(`files/download?path=/Home/${encodeURIComponent(fileName)}`, {
@@ -147,13 +151,17 @@ test('GET /api/files/download downloads a file with special characters in name',
 
 test('GET /api/files/download creates a zip archive for multiple files', async () => {
 	// Create multiple files
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/file1.txt`, 'contents1')
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/file2.txt`, 'contents2')
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/download-multi'})
+	await uploadFile('/Home/download-multi/file1.txt', 'contents1')
+	await uploadFile('/Home/download-multi/file2.txt', 'contents2')
 
 	// Download the files
-	const response = await umbreld.api.get('files/download?path=/Home/file1.txt&path=/Home/file2.txt', {
-		responseType: 'buffer',
-	})
+	const response = await umbreld.api.get(
+		'files/download?path=/Home/download-multi/file1.txt&path=/Home/download-multi/file2.txt',
+		{
+			responseType: 'buffer',
+		},
+	)
 
 	// Assert the response is correct
 	expect(response.statusCode).toBe(200)
@@ -168,11 +176,11 @@ test('GET /api/files/download creates a zip archive for multiple files', async (
 
 test('GET /api/files/download creates a zip archive for a directory', async () => {
 	// Create a directory with files
-	await fse.ensureDir(`${umbreld.instance.dataDirectory}/home/testdir`)
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/testdir/file1.txt`, 'contents1')
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/testdir/file2.txt`, 'contents2')
-	await fse.ensureDir(`${umbreld.instance.dataDirectory}/home/testdir/subdir`)
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/testdir/subdir/file3.txt`, 'contents3')
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/testdir'})
+	await uploadFile('/Home/testdir/file1.txt', 'contents1')
+	await uploadFile('/Home/testdir/file2.txt', 'contents2')
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/testdir/subdir'})
+	await uploadFile('/Home/testdir/subdir/file3.txt', 'contents3')
 
 	// Download the directory
 	const response = await umbreld.api.get('files/download?path=/Home/testdir', {
@@ -191,25 +199,9 @@ test('GET /api/files/download creates a zip archive for a directory', async () =
 	expect(files['testdir/subdir/file3.txt']).toBe('contents3')
 })
 
-test('GET /api/files/download handles files with spaces and special characters', async () => {
-	// Create a file with special characters in the name
-	const filename = 'file with spaces & special chars 漢字.txt'
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/${filename}`, 'special content')
-
-	// Download the file
-	const response = await umbreld.api.get(`files/download?path=/Home/${encodeURIComponent(filename)}`, {
-		responseType: 'text',
-	})
-
-	// Assert the response is correct
-	expect(response.statusCode).toBe(200)
-	expect(response.body).toBe('special content')
-	expect(response.headers['content-disposition']).toBe(`attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
-})
-
 test('GET /api/files/download handles empty directories correctly', async () => {
 	// Create an empty directory
-	await fse.ensureDir(`${umbreld.instance.dataDirectory}/home/empty-dir`)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/empty-dir'})
 
 	// Download the directory
 	const response = await umbreld.api.get('files/download?path=/Home/empty-dir', {
@@ -228,7 +220,7 @@ test('GET /api/files/download handles empty directories correctly', async () => 
 
 test('GET /api/files/download handles files with zero content correctly', async () => {
 	// Create an empty file
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/empty-file.txt`, '')
+	await uploadFile('/Home/empty-file.txt', '')
 
 	// Download the file
 	const response = await umbreld.api.get('files/download?path=/Home/empty-file.txt')
@@ -242,15 +234,15 @@ test('GET /api/files/download handles files with zero content correctly', async 
 test('GET /api/files/download handles binary files correctly', async () => {
 	// Create a small binary file
 	const binaryData = Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xfd, 0xfc])
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/binary-file.bin`, binaryData)
+	await uploadFile('/Home/binary-download.bin', binaryData)
 
 	// Download the file
-	const response = await umbreld.api.get('files/download?path=/Home/binary-file.bin', {
+	const response = await umbreld.api.get('files/download?path=/Home/binary-download.bin', {
 		responseType: 'buffer',
 	})
 
 	// Assert the response is correct
 	expect(response.statusCode).toBe(200)
 	expect(Buffer.from(response.body)).toEqual(binaryData)
-	expect(response.headers['content-disposition']).toBe(`attachment; filename*=UTF-8''binary-file.bin`)
+	expect(response.headers['content-disposition']).toBe(`attachment; filename*=UTF-8''binary-download.bin`)
 })

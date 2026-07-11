@@ -48,9 +48,12 @@ type DiskUsage = {
 export async function getDiskUsageByPath(path: string): Promise<{size: number; totalUsed: number; available: number}> {
 	if (typeof path !== 'string' || path === '') throw new Error('path must be a non-empty string')
 
-	// Piggy back on df and get the result in bytes
+	// Piggy back on df and get the result in bytes. df pads its columns so
+	// adjacent values with different widths are separated by multiple spaces
+	// (e.g used=0 on an empty filesystem), split on runs of whitespace so
+	// those don't parse as empty strings (which Number() coerces to 0).
 	const df = await $`df --output=size,used,avail --block-size=1 ${path}`
-	const [size, totalUsed, available] = df.stdout.split('\n').slice(-1)[0].split(' ').map(Number)
+	const [size, totalUsed, available] = df.stdout.split('\n').slice(-1)[0].trim().split(/\s+/).map(Number)
 
 	return {size, totalUsed, available}
 }

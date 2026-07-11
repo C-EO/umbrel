@@ -465,6 +465,9 @@ export async function createTestVm({
 		vmProcessPid = undefined
 	}
 
+	// The password that most recently authenticated over SSH (see ssh() below)
+	let likelySshPassword = 'umbrel'
+
 	async function ssh(command: string) {
 		const attemptSsh = (password: string) =>
 			new Promise<string>((resolve, reject) => {
@@ -499,16 +502,25 @@ export async function createTestVm({
 				})
 			})
 
-		// Try default 'umbrel' password first, fall back to user password if already synced.
+		// Try the password that last worked first, fall back to the other one and
+		// remember it (registration syncs the user's password over the default
+		// 'umbrel' one). Always leading with 'umbrel' meant every post-registration
+		// call burned a failed auth attempt, and sshd's PerSourcePenalties
+		// (default-on in OpenSSH 9.8+) eventually refuses connections from a
+		// source that keeps failing auth — ssh-heavy tests flaked with
+		// "Connection lost before handshake" once the accumulated penalty tripped.
 		// 9 attempts x (60s handshake budget + 2s wait) stays just inside the
 		// 10 minute test timeout.
 		return pRetry(
 			async () => {
+				const fallbackPassword = likelySshPassword === 'umbrel' ? userCredentials.password : 'umbrel'
 				try {
-					return await attemptSsh('umbrel')
+					return await attemptSsh(likelySshPassword)
 				} catch (error) {
 					if ((error as {level?: string}).level === 'client-authentication') {
-						return await attemptSsh(userCredentials.password)
+						const output = await attemptSsh(fallbackPassword)
+						likelySshPassword = fallbackPassword
+						return output
 					}
 					throw error
 				}
@@ -520,7 +532,10 @@ export async function createTestVm({
 	async function sshAsRoot(command: string) {
 		const encodedCommand = Buffer.from(command).toString('base64')
 		const exitMarker = '__umbrel_vm_ssh_as_root_exit__'
-		const output = await ssh(`
+		const authFailureMarker = '__umbrel_vm_ssh_as_root_auth_failed__'
+		const output = await pRetry(
+			async () => {
+				const output = await ssh(`
 set -u
 encoded_command='${encodedCommand}'
 for password in '${userCredentials.password}' 'umbrel'; do
@@ -532,8 +547,22 @@ for password in '${userCredentials.password}' 'umbrel'; do
 		exit 0
 	fi
 done
-printf '\\n${exitMarker}255\\n'
+printf '\\n${authFailureMarker}\\n'
 `)
+
+				// Registration changes both the login and sudo password. There is a
+				// brief window while that change is being applied where neither the old
+				// nor new sudo password works, even though SSH itself is available.
+				// Retry only this pre-command authentication failure; command failures
+				// are parsed below and are never re-executed.
+				if (output.trim() === authFailureMarker) {
+					throw new Error('Root SSH authentication was temporarily unavailable')
+				}
+
+				return output
+			},
+			{retries: 8, minTimeout: 2000, maxTimeout: 2000},
+		)
 		const match = output.match(new RegExp(`\\n?${exitMarker}(\\d+)\\n?$`))
 		if (!match) throw new Error(`Root SSH command did not report an exit status:\n${output}`)
 

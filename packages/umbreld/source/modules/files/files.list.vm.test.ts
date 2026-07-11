@@ -1,21 +1,30 @@
-import {setTimeout as sleep} from 'node:timers/promises'
+import {expect, beforeAll, afterAll, test} from 'vitest'
 
-import {vi, expect, beforeAll, afterAll, test} from 'vitest'
-import {$} from 'execa'
-import fse from 'fs-extra'
+import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
-import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+// The entire files.list() API runs end-to-end here, including recovery from a
+// real filesystem status failure caused by a disconnected FUSE mount.
 
-let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
+let umbreld: Awaited<ReturnType<typeof createTestVm>>
 
+// Each test uses uniquely named directories so no cleanup between tests is
+// needed
 beforeAll(async () => {
-	umbreld = await createTestUmbreld()
+	umbreld = await createTestVm({device: 'umbrel-home'})
+	await umbreld.vm.powerOn()
 	await umbreld.registerAndLogin()
 })
 
 afterAll(async () => {
 	await umbreld.cleanup()
 })
+
+const guestHome = '/home/umbrel/umbrel/home'
+
+// Create a file through the files API
+async function uploadFile(path: string, content: string) {
+	await umbreld.api.post(`files/upload?path=${encodeURIComponent(path)}`, {body: content})
+}
 
 test('list() throws invalid error whithout auth token', async () => {
 	await expect(umbreld.unauthenticatedClient.files.list.query({path: '/'})).rejects.toThrow('Invalid token')
@@ -26,8 +35,10 @@ test('list() throws on directory traversal attempt', async () => {
 })
 
 test('list() throws on symlink traversal attempt', async () => {
-	// Create a symlink to the root directory in at the virtual path /Home/symlink-to-root
-	await $`ln -s / ${umbreld.instance.dataDirectory}/home/symlink-to-root`
+	// Create a symlink to the root directory at the virtual path
+	// /Home/symlink-to-root (no product surface creates symlinks, so seed it
+	// over SSH)
+	await umbreld.vm.ssh(`ln -s / ${guestHome}/symlink-to-root`)
 	// Ensure the symlink exists at the correct location
 	await expect(umbreld.client.files.list.query({path: '/Home'})).resolves.toMatchObject({
 		files: expect.arrayContaining([
@@ -39,8 +50,8 @@ test('list() throws on symlink traversal attempt', async () => {
 	// Attempt to list it
 	await expect(umbreld.client.files.list.query({path: '/Home/symlink-to-root'})).rejects.toThrow('[escapes-base]')
 
-	// Remove the symlink
-	await fse.remove(umbreld.instance.dataDirectory + '/home/symlink-to-root')
+	// Remove the symlink so it doesn't affect the /Home listing tests
+	await umbreld.vm.ssh(`rm ${guestHome}/symlink-to-root`)
 })
 
 test('list() throws on relative paths', async () => {
@@ -56,6 +67,73 @@ test('list() throws on non existent paths', async () => {
 		expect(umbreld.client.files.list.query({path: '/DoesNotExist'})).rejects.toThrow('[invalid-base]'),
 		expect(umbreld.client.files.list.query({path: '/Home/DoesNotExist'})).rejects.toThrow('[does-not-exist]'),
 	])
+})
+
+test('list() skips entries whose filesystem status cannot be read', async () => {
+	const virtualDirectory = '/Home/status-failure-test'
+	const guestDirectory = `${guestHome}/status-failure-test`
+	const mountSource = '/tmp/files-list-status-failure-source'
+	const mountPoint = `${guestDirectory}/disconnected-mount`
+
+	await umbreld.client.files.createDirectory.mutate({path: virtualDirectory})
+	await uploadFile(`${virtualDirectory}/readable.txt`, 'readable content')
+
+	try {
+		// bindfs is part of the production OS image. Kill its FUSE daemon without
+		// unmounting it so lstat() on this one directory entry fails with a real
+		// kernel error (typically ENOTCONN), as it can for a lost filesystem.
+		await umbreld.vm.sshAsRoot(`
+set -eu
+source='${mountSource}'
+mountpoint='${mountPoint}'
+log='/tmp/files-list-status-failure-bindfs.log'
+
+rm -rf "$source"
+mkdir -p "$source" "$mountpoint"
+printf 'mounted content' > "$source/file.txt"
+
+bindfs -f "$source" "$mountpoint" > "$log" 2>&1 &
+pid=$!
+
+attempt=0
+while ! mountpoint -q "$mountpoint"; do
+	attempt=$((attempt + 1))
+	if [ "$attempt" -ge 100 ]; then
+		cat "$log" >&2
+		kill "$pid" 2>/dev/null || true
+		exit 1
+	fi
+	sleep 0.1
+done
+
+kill -9 "$pid"
+wait "$pid" 2>/dev/null || true
+
+attempt=0
+while stat "$mountpoint" >/dev/null 2>&1; do
+	attempt=$((attempt + 1))
+	if [ "$attempt" -ge 100 ]; then
+		echo 'FUSE mount still accepted stat calls after its daemon exited' >&2
+		exit 1
+	fi
+	sleep 0.1
+done
+`)
+
+		const listing = await umbreld.client.files.list.query({path: virtualDirectory})
+		const names = listing.files.map((file) => file.name)
+
+		expect(names).toContain('readable.txt')
+		expect(names).not.toContain('disconnected-mount')
+	} finally {
+		// Always detach the dead FUSE mount so it cannot affect later tests or VM
+		// shutdown, even if the listing assertion fails.
+		await umbreld.vm.sshAsRoot(`
+mountpoint='${mountPoint}'
+fusermount3 -uz "$mountpoint" 2>/dev/null || umount -l "$mountpoint" 2>/dev/null || true
+rm -rf '${mountSource}' '${guestDirectory}' /tmp/files-list-status-failure-bindfs.log
+`)
+	}
 })
 
 test('list() lists the root directory', async () => {
@@ -124,24 +202,21 @@ test('list() lists the /Home directory', async () => {
 
 test('list() returns correct types for various files and directories', async () => {
 	// Create a test directory with files of different types
-	const mimeDir = `${umbreld.instance.dataDirectory}/home/mime-test`
-	await fse.mkdir(mimeDir)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/mime-test'})
 
 	// Create test files with different mime types
 	await Promise.all([
-		fse.writeFile(`${mimeDir}/text.txt`, ''),
-		fse.writeFile(`${mimeDir}/image.png`, ''),
-		fse.writeFile(`${mimeDir}/video.mp4`, ''),
-		fse.writeFile(`${mimeDir}/unknown`, ''),
+		uploadFile('/Home/mime-test/text.txt', ''),
+		uploadFile('/Home/mime-test/image.png', ''),
+		uploadFile('/Home/mime-test/video.mp4', ''),
+		uploadFile('/Home/mime-test/unknown', ''),
 	])
 
 	// Create a subdirectory
-	const subDir = `${mimeDir}/subdir`
-	await fse.mkdir(subDir)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/mime-test/subdir'})
 
-	// Create a symlink
-	const symlinkPath = `${mimeDir}/symlink-to-text`
-	await fse.symlink(`${mimeDir}/text.txt`, symlinkPath)
+	// Create a symlink (no product surface creates symlinks)
+	await umbreld.vm.ssh(`ln -s ${guestHome}/mime-test/text.txt ${guestHome}/mime-test/symlink-to-text`)
 
 	// Query the directory
 	const mimeTypes = await umbreld.client.files.list.query({path: '/Home/mime-test'})
@@ -157,21 +232,17 @@ test('list() returns correct types for various files and directories', async () 
 	].forEach(({name, type}) => {
 		expect(mimeTypes.files.find((file) => file.name === name)?.type).toEqual(type)
 	})
-
-	// Clean up
-	await fse.remove(mimeDir)
 })
 
 test('list() shows dotfiles', async () => {
 	// Create a test directory with dotfiles
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/dotfiles-test`
-	await fse.mkdir(testDirectory)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/dotfiles-test'})
 
 	// Create regular files and dotfiles
 	await Promise.all([
-		fse.writeFile(`${testDirectory}/regular.txt`, ''),
-		fse.writeFile(`${testDirectory}/.dotfile`, ''),
-		fse.writeFile(`${testDirectory}/.hidden-config`, ''),
+		uploadFile('/Home/dotfiles-test/regular.txt', ''),
+		uploadFile('/Home/dotfiles-test/.dotfile', ''),
+		uploadFile('/Home/dotfiles-test/.hidden-config', ''),
 	])
 
 	// Query the directory listing
@@ -192,21 +263,16 @@ test('list() shows dotfiles', async () => {
 			}),
 		]),
 	)
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() hides .DS_Store files', async () => {
-	// Create a test directory with .DS_Store file
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/ds-store-test`
-	await fse.mkdir(testDirectory)
+	// Create a test directory
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/ds-store-test'})
+	await uploadFile('/Home/ds-store-test/regular.txt', '')
 
-	// Create regular files and .DS_Store file
-	await Promise.all([
-		fse.writeFile(`${testDirectory}/regular.txt`, ''),
-		fse.writeFile(`${testDirectory}/.DS_Store`, ''),
-	])
+	// .DS_Store files appear out-of-band (e.g. macOS clients over SMB), so
+	// seed it over SSH
+	await umbreld.vm.ssh(`touch ${guestHome}/ds-store-test/.DS_Store`)
 
 	// Query the directory listing
 	const listing = await umbreld.client.files.list.query({
@@ -216,22 +282,13 @@ test('list() hides .DS_Store files', async () => {
 	// Verify that .DS_Store is not included but other files are
 	expect(listing.files.map((file) => file.name)).not.toContain('.DS_Store')
 	expect(listing.files.map((file) => file.name)).toContain('regular.txt')
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() paginates directory listings', async () => {
-	// Create a test directory with 150 files
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/pagination-test`
-	await fse.mkdir(testDirectory)
-
-	// Create 150 files
-	await Promise.all(
-		Array.from({length: 150}, (_, i) => i + 1).map((i) =>
-			fse.writeFile(`${testDirectory}/file${i.toString().padStart(3, '0')}.txt`, ''),
-		),
-	)
+	// Create a test directory with 150 files. Bulk fixtures are seeded with a
+	// single SSH command, uploading them one-by-one through the API would be
+	// needlessly slow.
+	await umbreld.vm.ssh(`mkdir -p ${guestHome}/pagination-test && touch ${guestHome}/pagination-test/file{001..150}.txt`)
 
 	// Test first page (100 files because that's the default limit)
 	const firstPage = await umbreld.client.files.list.query({path: '/Home/pagination-test'})
@@ -260,21 +317,12 @@ test('list() paginates directory listings', async () => {
 	expect(thirdPage.files).toHaveLength(0)
 	expect(thirdPage.totalFiles).toBe(150)
 	expect(thirdPage.hasMore).toBe(false)
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() paginates directory listings with a custom limit', async () => {
 	// Create a test directory with 150 files
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/custom-limit-test`
-	await fse.mkdir(testDirectory)
-
-	// Create 150 files
-	await Promise.all(
-		Array.from({length: 150}, (_, i) => i + 1).map((i) =>
-			fse.writeFile(`${testDirectory}/file${i.toString().padStart(3, '0')}.txt`, ''),
-		),
+	await umbreld.vm.ssh(
+		`mkdir -p ${guestHome}/custom-limit-test && touch ${guestHome}/custom-limit-test/file{001..150}.txt`,
 	)
 
 	// Test with a custom limit of 42 files
@@ -290,20 +338,13 @@ test('list() paginates directory listings with a custom limit', async () => {
 	expect(result.files[customLimit - 1].name).toBe(`file${customLimit.toString().padStart(3, '0')}.txt`)
 	expect(result.totalFiles).toBe(150)
 	expect(result.hasMore).toBe(true)
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test("list() truncates a listing if it's larger than the max listing size", async () => {
 	const maxListingSize = 10000
 	// Create a test directory with just under the max listing size
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/max-listing-size`
-	await fse.mkdir(testDirectory)
-	await Promise.all(
-		Array.from({length: maxListingSize - 1}, (_, i) => i + 1).map((i) =>
-			fse.writeFile(`${testDirectory}/file${i.toString()}.txt`, ''),
-		),
+	await umbreld.vm.ssh(
+		`mkdir -p ${guestHome}/max-listing-size && touch ${guestHome}/max-listing-size/file{1..${maxListingSize - 1}}.txt`,
 	)
 
 	// Test results are not truncated
@@ -312,28 +353,24 @@ test("list() truncates a listing if it's larger than the max listing size", asyn
 	)
 
 	// Create one more file
-	await fse.writeFile(`${testDirectory}/file${maxListingSize}.txt`, '')
+	await umbreld.vm.ssh(`touch ${guestHome}/max-listing-size/file${maxListingSize}.txt`)
 
 	// Test results are truncated
 	await expect(umbreld.client.files.list.query({path: '/Home/max-listing-size'})).resolves.toHaveProperty(
 		'truncatedAt',
 		maxListingSize,
 	)
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() sorts by name', async () => {
 	// Create a test directory with files - using unique path
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/sort-by-name-test`
-	await fse.mkdir(testDirectory)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/sort-by-name-test'})
 
 	// Create test files with different names
 	await Promise.all([
-		fse.writeFile(`${testDirectory}/b.txt`, ''),
-		fse.writeFile(`${testDirectory}/c.txt`, ''),
-		fse.writeFile(`${testDirectory}/a.txt`, ''),
+		uploadFile('/Home/sort-by-name-test/b.txt', ''),
+		uploadFile('/Home/sort-by-name-test/c.txt', ''),
+		uploadFile('/Home/sort-by-name-test/a.txt', ''),
 	])
 
 	// Test ascending sort
@@ -351,22 +388,14 @@ test('list() sorts by name', async () => {
 		sortOrder: 'descending',
 	})
 	expect(descending.files.map((f) => f.name)).toEqual(['c.txt', 'b.txt', 'a.txt'])
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() sorts by modified time', async () => {
-	// Create a test directory with files - using unique path
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/sort-by-modified-test`
-	await fse.mkdir(testDirectory)
-
-	// Create files with different modified times
-	await fse.writeFile(`${testDirectory}/oldest.txt`, '')
-	await sleep(100)
-	await fse.writeFile(`${testDirectory}/middle.txt`, '')
-	await sleep(100)
-	await fse.writeFile(`${testDirectory}/newest.txt`, '')
+	// Create files with explicitly different modified times (deterministic,
+	// no sleeps needed)
+	await umbreld.vm.ssh(
+		`mkdir -p ${guestHome}/sort-by-modified-test && cd ${guestHome}/sort-by-modified-test && touch -d '2020-01-01' oldest.txt && touch -d '2021-01-01' middle.txt && touch -d '2022-01-01' newest.txt`,
+	)
 
 	// Test ascending sort (oldest first)
 	const ascending = await umbreld.client.files.list.query({
@@ -383,20 +412,16 @@ test('list() sorts by modified time', async () => {
 		sortOrder: 'descending',
 	})
 	expect(descending.files.map((f) => f.name)).toEqual(['newest.txt', 'middle.txt', 'oldest.txt'])
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() sorts by size', async () => {
 	// Create a test directory with files - using unique path
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/sort-by-size-test`
-	await fse.mkdir(testDirectory)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/sort-by-size-test'})
 
 	// Create files with different sizes
-	await fse.writeFile(`${testDirectory}/small.txt`, 'a')
-	await fse.writeFile(`${testDirectory}/medium.txt`, 'aaa')
-	await fse.writeFile(`${testDirectory}/large.txt`, 'aaaaa')
+	await uploadFile('/Home/sort-by-size-test/small.txt', 'a')
+	await uploadFile('/Home/sort-by-size-test/medium.txt', 'aaa')
+	await uploadFile('/Home/sort-by-size-test/large.txt', 'aaaaa')
 
 	// Test ascending sort (smallest first)
 	const ascending = await umbreld.client.files.list.query({
@@ -413,20 +438,16 @@ test('list() sorts by size', async () => {
 		sortOrder: 'descending',
 	})
 	expect(descending.files.map((f) => f.name)).toEqual(['large.txt', 'medium.txt', 'small.txt'])
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() sorts by type', async () => {
 	// Create a test directory with files - using unique path
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/sort-by-type-test`
-	await fse.mkdir(testDirectory)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/sort-by-type-test'})
 
 	// Create files with different types
-	await fse.writeFile(`${testDirectory}/document.txt`, '')
-	await fse.writeFile(`${testDirectory}/image.png`, '')
-	await fse.writeFile(`${testDirectory}/archive.zip`, '')
+	await uploadFile('/Home/sort-by-type-test/document.txt', '')
+	await uploadFile('/Home/sort-by-type-test/image.png', '')
+	await uploadFile('/Home/sort-by-type-test/archive.zip', '')
 
 	// Test ascending sort
 	const ascending = await umbreld.client.files.list.query({
@@ -443,28 +464,11 @@ test('list() sorts by type', async () => {
 		sortOrder: 'descending',
 	})
 	expect(descending.files.map((f) => f.name)).toEqual(['document.txt', 'image.png', 'archive.zip'])
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() sorts files numerically by name', async () => {
 	// Create a test directory with files named numerically
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/numeric-sort-test`
-	await fse.mkdir(testDirectory)
-
-	// Create files with numeric names
-	await fse.writeFile(`${testDirectory}/0.txt`, '')
-	await fse.writeFile(`${testDirectory}/1.txt`, '')
-	await fse.writeFile(`${testDirectory}/2.txt`, '')
-	await fse.writeFile(`${testDirectory}/3.txt`, '')
-	await fse.writeFile(`${testDirectory}/4.txt`, '')
-	await fse.writeFile(`${testDirectory}/5.txt`, '')
-	await fse.writeFile(`${testDirectory}/6.txt`, '')
-	await fse.writeFile(`${testDirectory}/7.txt`, '')
-	await fse.writeFile(`${testDirectory}/8.txt`, '')
-	await fse.writeFile(`${testDirectory}/9.txt`, '')
-	await fse.writeFile(`${testDirectory}/10.txt`, '')
+	await umbreld.vm.ssh(`mkdir -p ${guestHome}/numeric-sort-test && touch ${guestHome}/numeric-sort-test/{0..10}.txt`)
 
 	// Test ascending sort by name
 	const ascending = await umbreld.client.files.list.query({
@@ -505,28 +509,13 @@ test('list() sorts files numerically by name', async () => {
 		'1.txt',
 		'0.txt',
 	])
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() falls back to name sorting when numeric values are equal', async () => {
-	// Create a test directory with files - using unique path
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/sort-fallback-test`
-	await fse.mkdir(testDirectory)
-
 	// Create files with the same size but different names
-	await fse.writeFile(`${testDirectory}/0.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/1.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/2.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/3.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/4.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/5.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/6.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/7.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/8.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/9.txt`, 'same size')
-	await fse.writeFile(`${testDirectory}/10.txt`, 'same size')
+	await umbreld.vm.ssh(
+		`mkdir -p ${guestHome}/sort-fallback-test && cd ${guestHome}/sort-fallback-test && for f in {0..10}; do printf 'same size' > $f.txt; done`,
+	)
 
 	// Test ascending sort by size, should fall back to name
 	const ascending = await umbreld.client.files.list.query({
@@ -567,20 +556,16 @@ test('list() falls back to name sorting when numeric values are equal', async ()
 		'1.txt',
 		'0.txt',
 	])
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() reports size as zero for directories', async () => {
 	// Create a test directory with a subdirectory and files - using unique path
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/dir-size-test`
-	await fse.mkdir(testDirectory)
-	await fse.mkdir(`${testDirectory}/subdir`)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/dir-size-test'})
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/dir-size-test/subdir'})
 
 	// Add files to the subdirectory
-	await fse.writeFile(`${testDirectory}/subdir/file1.txt`, 'content1')
-	await fse.writeFile(`${testDirectory}/subdir/file2.txt`, 'content2')
+	await uploadFile('/Home/dir-size-test/subdir/file1.txt', 'content1')
+	await uploadFile('/Home/dir-size-test/subdir/file2.txt', 'content2')
 
 	// Query the directory listing
 	const listing = await umbreld.client.files.list.query({
@@ -591,19 +576,15 @@ test('list() reports size as zero for directories', async () => {
 	const subdir = listing.files.find((f) => f.name === 'subdir')
 	expect(subdir).toBeDefined()
 	expect(subdir!.size).toBe(0)
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() reports correct size for files in bytes', async () => {
 	// Create a test directory with files - using unique path
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/file-size-test`
-	await fse.mkdir(testDirectory)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/file-size-test'})
 
 	// Create files with specific sizes
-	await fse.writeFile(`${testDirectory}/file1.txt`, '12345') // 5 bytes
-	await fse.writeFile(`${testDirectory}/file2.txt`, '1234567890') // 10 bytes
+	await uploadFile('/Home/file-size-test/file1.txt', '12345') // 5 bytes
+	await uploadFile('/Home/file-size-test/file2.txt', '1234567890') // 10 bytes
 
 	// Query the directory listing
 	const listing = await umbreld.client.files.list.query({
@@ -618,98 +599,32 @@ test('list() reports correct size for files in bytes', async () => {
 	const file2 = listing.files.find((f) => f.name === 'file2.txt')
 	expect(file2).toBeDefined()
 	expect(file2!.size).toBe(10)
-
-	// Clean up
-	await fse.remove(testDirectory)
 })
 
 test('list() reports correct modified time for a single file', async () => {
 	// Create a test directory - using unique path
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/modified-time-test`
-	await fse.mkdir(testDirectory)
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/modified-time-test'})
 
-	// Get the time before creating the file
-	const beforeCreation = Date.now()
-	await sleep(100)
+	// Get the guest's time before creating the file (the modified time is set
+	// by the VM's clock, so don't compare against the host's clock)
+	const beforeCreation = Number(await umbreld.vm.ssh('date +%s%3N'))
 
 	// Create a file
-	await fse.writeFile(`${testDirectory}/file1.txt`, 'content1')
+	await uploadFile('/Home/modified-time-test/file1.txt', 'content1')
 
-	// Get the time after creating the file
-	await sleep(100)
-	const afterCreation = Date.now()
+	// Get the guest's time after creating the file
+	const afterCreation = Number(await umbreld.vm.ssh('date +%s%3N'))
 
 	// Query the directory listing
 	const listing = await umbreld.client.files.list.query({
 		path: '/Home/modified-time-test',
 	})
 
-	// Check that the file modified time is reported correctly
+	// Check that the file modified time is reported correctly. The kernel
+	// stamps mtimes from its coarse clock which can lag the precise clock read
+	// by `date` by a tick, so allow a small tolerance on the lower bound.
 	const file = listing.files.find((f) => f.name === 'file1.txt')
 	expect(file).toBeDefined()
-	expect(file!.modified).toBeGreaterThanOrEqual(beforeCreation)
+	expect(file!.modified).toBeGreaterThanOrEqual(beforeCreation - 50)
 	expect(file!.modified).toBeLessThanOrEqual(afterCreation)
-
-	// Clean up
-	await fse.remove(testDirectory)
-})
-
-test('list() handles unreadable files gracefully without killing the entire listing', async () => {
-	// Create a test directory - using unique path
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/unreadable-files-test`
-	await fse.mkdir(testDirectory)
-
-	// Create a readable file
-	await fse.writeFile(`${testDirectory}/readable.txt`, 'readable content')
-
-	// Create an unreadable file
-	await fse.writeFile(`${testDirectory}/unreadable.txt`, 'unreadable content')
-
-	// Mock fse.lstat to throw an error for the unreadable file
-	const originalLstat = fse.lstat
-	vi.spyOn(fse, 'lstat').mockImplementation(async (path: fse.PathLike) => {
-		// Mock a stat failure if reading the unreadable file
-		if (path.toString().endsWith('/unreadable.txt')) throw new Error('Permission denied')
-
-		// Else pass through to the original logic
-		return originalLstat(path)
-	})
-
-	// Query the directory listing
-	await expect(
-		umbreld.client.files.list.query({
-			path: '/Home/unreadable-files-test',
-		}),
-	).resolves.toMatchObject({
-		files: [
-			expect.objectContaining({
-				name: 'readable.txt',
-				path: '/Home/unreadable-files-test/readable.txt',
-				type: 'text/plain',
-				size: 16,
-				modified: expect.any(Number),
-			}),
-		],
-	})
-
-	// Restore the original lstat implementation
-	vi.restoreAllMocks()
-
-	// Check the mock is removed
-	// Query the directory listing
-	await expect(
-		umbreld.client.files.list.query({
-			path: '/Home/unreadable-files-test',
-		}),
-	).resolves.toMatchObject({
-		files: expect.arrayContaining([
-			expect.objectContaining({
-				name: 'unreadable.txt',
-				type: 'text/plain',
-			}),
-		]),
-	})
-
-	// Clean up
-	await fse.remove(testDirectory)
 })

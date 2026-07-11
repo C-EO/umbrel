@@ -1,21 +1,26 @@
 import {expect, beforeAll, afterAll, describe, test} from 'vitest'
-import fse from 'fs-extra'
 
-import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
-let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
+let umbreld: Awaited<ReturnType<typeof createTestVm>>
 
-// Spin up a single Umbreld instance for the entire test suite to save time.
-// Each test creates its own unique files so state leakage across tests does
-// not affect expectations.
+// Spin up a single VM for the entire test suite to save time. Each test
+// creates its own unique files so state leakage across tests does not affect
+// expectations.
 beforeAll(async () => {
-	umbreld = await createTestUmbreld()
+	umbreld = await createTestVm({device: 'umbrel-home'})
+	await umbreld.vm.powerOn()
 	await umbreld.registerAndLogin()
 })
 
 afterAll(async () => {
 	await umbreld.cleanup()
 })
+
+// Create a file through the files API
+async function uploadFile(path: string, content: string) {
+	await umbreld.api.post(`files/upload?path=${path}`, {body: content})
+}
 
 describe('files.search()', () => {
 	test('throws "Invalid token" error without auth token', async () => {
@@ -24,14 +29,13 @@ describe('files.search()', () => {
 
 	test('finds files that match the query', async () => {
 		// Create a unique directory with some files to search for
-		const testDir = `${umbreld.instance.dataDirectory}/home/search-find-test`
-		await fse.mkdir(testDir)
+		await umbreld.client.files.createDirectory.mutate({path: '/Home/search-find-test'})
 
 		// Create test files
 		await Promise.all([
-			fse.writeFile(`${testDir}/hello-world.txt`, 'hello world'),
-			fse.writeFile(`${testDir}/hello-mars.txt`, 'hello mars'),
-			fse.writeFile(`${testDir}/unrelated.txt`, 'nothing to see here'),
+			uploadFile('/Home/search-find-test/hello-world.txt', 'hello world'),
+			uploadFile('/Home/search-find-test/hello-mars.txt', 'hello mars'),
+			uploadFile('/Home/search-find-test/unrelated.txt', 'nothing to see here'),
 		])
 
 		// Perform the search
@@ -52,12 +56,9 @@ describe('files.search()', () => {
 	})
 
 	test('fuzzy matches against filename', async () => {
-		// Create a unique directory with some files to search for
-		const testDir = `${umbreld.instance.dataDirectory}/home/search-fuzzy-test`
-		await fse.mkdir(testDir)
-
-		// Create test files
-		await fse.writeFile(`${testDir}/bitcoin.pdf`, '')
+		// Create a unique directory with a file to search for
+		await umbreld.client.files.createDirectory.mutate({path: '/Home/search-fuzzy-test'})
+		await uploadFile('/Home/search-fuzzy-test/bitcoin.pdf', '')
 
 		// Perform the search
 		const results = await umbreld.client.files.search.query({query: 'bit corn'})
@@ -74,13 +75,12 @@ describe('files.search()', () => {
 	})
 
 	test('respects maxResults', async () => {
-		const limitDir = `${umbreld.instance.dataDirectory}/home/search-limit-test`
-		await fse.mkdir(limitDir)
+		await umbreld.client.files.createDirectory.mutate({path: '/Home/search-limit-test'})
 
 		// Create more than 10 files that will all match the query
 		const fileCreationPromises = []
 		for (let i = 0; i < 20; i++) {
-			fileCreationPromises.push(fse.writeFile(`${limitDir}/alpha-${i}.txt`, String(i)))
+			fileCreationPromises.push(uploadFile(`/Home/search-limit-test/alpha-${i}.txt`, String(i)))
 		}
 		await Promise.all(fileCreationPromises)
 

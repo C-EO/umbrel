@@ -1,21 +1,26 @@
-// TODO: Re-enable this, we temporarily disable TS here since we broke tests
-// and have since changed the API. We'll refactor these later.
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-nocheck
-import {expect, beforeAll, afterAll, test} from 'vitest'
+import {expect, beforeAll, beforeEach, afterAll, afterEach, test} from 'vitest'
 
-import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
-import runGitServer from '../test-utilities/run-git-server.js'
+import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
-let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
-let communityAppStoreGitServer: Awaited<ReturnType<typeof runGitServer>>
+let umbreld: Awaited<ReturnType<typeof createTestVm>>
+let failed = false
 
 beforeAll(async () => {
-	;[umbreld, communityAppStoreGitServer] = await Promise.all([createTestUmbreld(), runGitServer()])
+	umbreld = await createTestVm({device: 'umbrel-home'})
+	await umbreld.vm.powerOn()
 })
 
 afterAll(async () => {
-	await Promise.all([communityAppStoreGitServer.close(), umbreld.cleanup()])
+	await umbreld.cleanup()
+})
+
+// The tests are stateful steps of one scenario, skip the rest after a failure
+afterEach(({task}) => {
+	if (task.result?.state === 'fail') failed = true
+})
+
+beforeEach(({skip}) => {
+	if (failed) skip()
 })
 
 // The following tests are stateful and must be run in order

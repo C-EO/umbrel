@@ -1,17 +1,28 @@
-import {expect, beforeAll, afterAll, test, vi} from 'vitest'
+import {expect, beforeAll, beforeEach, afterAll, afterEach, test} from 'vitest'
 
 import * as totp from '../utilities/totp.js'
 
-import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
-let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
+let umbreld: Awaited<ReturnType<typeof createTestVm>>
+let failed = false
 
 beforeAll(async () => {
-	umbreld = await createTestUmbreld()
+	umbreld = await createTestVm({device: 'umbrel-home'})
+	await umbreld.vm.powerOn()
 })
 
 afterAll(async () => {
 	await umbreld.cleanup()
+})
+
+// The tests are stateful steps of one scenario, skip the rest after a failure
+afterEach(({task}) => {
+	if (task.result?.state === 'fail') failed = true
+})
+
+beforeEach(({skip}) => {
+	if (failed) skip()
 })
 
 const testUserCredentials = {
@@ -232,9 +243,10 @@ test.sequential("changePassword() changes the user's password", async () => {
 // NOTE: The test below will wipe the above state and create a new user
 // We need it to test registering a user with language
 test.sequential('register() creates a new user with language', async () => {
-	// Create fresh instance so we can register a new user
+	// Create a fresh VM so we can register a new user
 	await umbreld.cleanup()
-	umbreld = await createTestUmbreld()
+	umbreld = await createTestVm({device: 'umbrel-home'})
+	await umbreld.vm.powerOn()
 
 	// Register a new user with language
 	await expect(umbreld.client.user.register.mutate({...testUserCredentials, language: testUserLanguage})).resolves.toBe(

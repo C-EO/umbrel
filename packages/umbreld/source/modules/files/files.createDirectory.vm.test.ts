@@ -1,13 +1,12 @@
 import {expect, beforeAll, afterAll, test} from 'vitest'
-import {$} from 'execa'
-import fse from 'fs-extra'
 
-import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
-let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
+let umbreld: Awaited<ReturnType<typeof createTestVm>>
 
 beforeAll(async () => {
-	umbreld = await createTestUmbreld()
+	umbreld = await createTestVm({device: 'umbrel-home'})
+	await umbreld.vm.powerOn()
 	await umbreld.registerAndLogin()
 })
 
@@ -28,16 +27,14 @@ test('createDirectory() throws on directory traversal attempt', async () => {
 })
 
 test('createDirectory() throws on symlink traversal attempt', async () => {
-	// Create a symlink to the root directory
-	await $`ln -s / ${umbreld.instance.dataDirectory}/home/symlink-to-root`
+	// Create a symlink to the root directory (no product surface creates
+	// symlinks, so seed it over SSH)
+	await umbreld.vm.ssh('ln -s / /home/umbrel/umbrel/home/symlink-to-root')
 
 	// Attempt to create directory through symlink
 	await expect(umbreld.client.files.createDirectory.mutate({path: '/Home/symlink-to-root/new-dir'})).rejects.toThrow(
 		'[escapes-base]',
 	)
-
-	// Clean up
-	await fse.remove(umbreld.instance.dataDirectory + '/home/symlink-to-root')
 })
 
 test('createDirectory() throws on relative paths', async () => {
@@ -55,20 +52,19 @@ test('createDirectory() throws on invalid base directory', async () => {
 })
 
 test("createDirectory() throws when containing directory doesn't exist", async () => {
-	const path = '/Home/parent/child/grandchild'
-
-	// Create nested directories
-	await expect(umbreld.client.files.createDirectory.mutate({path})).rejects.toThrow('[parent-not-exist]')
+	await expect(umbreld.client.files.createDirectory.mutate({path: '/Home/parent/child/grandchild'})).rejects.toThrow(
+		'[parent-not-exist]',
+	)
 })
 
 test('createDirectory() throws when creating directory inside a file', async () => {
-	const path = '/Home/file.txt/new-dir'
+	// Create the file through the files API
+	await umbreld.api.post('files/upload?path=/Home/file.txt', {body: 'test'})
 
-	// Create file
-	await fse.writeFile(umbreld.instance.dataDirectory + '/home/file.txt', 'test')
-
-	// Create nested directories
-	await expect(umbreld.client.files.createDirectory.mutate({path})).rejects.toThrow('[parent-not-directory]')
+	// Attempt to create a directory inside the file
+	await expect(umbreld.client.files.createDirectory.mutate({path: '/Home/file.txt/new-dir'})).rejects.toThrow(
+		'[parent-not-directory]',
+	)
 })
 
 test('createDirectory() creates directory in /Home', async () => {
@@ -86,9 +82,6 @@ test('createDirectory() creates directory in /Home', async () => {
 			type: 'directory',
 		}),
 	)
-
-	// Clean up
-	await fse.remove(umbreld.instance.dataDirectory + '/home/test-directory')
 })
 
 test('createDirectory() returns true for existing directories', async () => {
@@ -99,22 +92,13 @@ test('createDirectory() returns true for existing directories', async () => {
 
 	// Try creating same directory again
 	await expect(umbreld.client.files.createDirectory.mutate({path})).resolves.toBe(true)
-
-	// Clean up
-	await fse.remove(umbreld.instance.dataDirectory + '/home/existing-directory')
 })
 
 test('createDirectory() creates directory with correct permissions', async () => {
-	const path = '/Home/permissions-test'
-
 	// Create directory
-	await umbreld.client.files.createDirectory.mutate({path})
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/permissions-test'})
 
-	// Check permissions
-	const stats = await fse.stat(umbreld.instance.dataDirectory + '/home/permissions-test')
-	expect(stats.uid).toBe(1000) // Check owner is umbrel user
-	expect(stats.gid).toBe(1000) // Check group is umbrel group
-
-	// Clean up
-	await fse.remove(umbreld.instance.dataDirectory + '/home/permissions-test')
+	// Check ownership is the umbrel user and group (low-level OS fact via SSH)
+	const stat = await umbreld.vm.ssh('stat --format "%u %g" /home/umbrel/umbrel/home/permissions-test')
+	expect(stat.trim()).toBe('1000 1000')
 })

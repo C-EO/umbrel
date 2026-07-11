@@ -1,21 +1,40 @@
-import {setTimeout as sleep} from 'node:timers/promises'
-import nodePath from 'node:path'
-import {Writable} from 'node:stream'
 import {once} from 'node:events'
 
-import {vi, expect, beforeAll, afterAll, test, beforeEach, afterEach} from 'vitest'
-import fse from 'fs-extra'
+import {expect, beforeAll, afterAll, test} from 'vitest'
+import pWaitFor from 'p-wait-for'
 
-import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
-let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
+// The entire upload API runs end-to-end here, including the disk-full write
+// error case which is triggered by genuinely filling a filesystem (a tiny
+// tmpfs mount) rather than mocking the server's write stream.
+
+let umbreld: Awaited<ReturnType<typeof createTestVm>>
+
+// Each test uses uniquely named files so no cleanup between tests is needed
 beforeAll(async () => {
-	umbreld = await createTestUmbreld()
+	umbreld = await createTestVm({device: 'umbrel-home'})
+	await umbreld.vm.powerOn()
 	await umbreld.registerAndLogin()
 })
-afterAll(() => umbreld.cleanup())
-beforeEach(() => fse.emptyDir(`${umbreld.instance.dataDirectory}/home`))
-afterEach(() => vi.restoreAllMocks())
+
+afterAll(async () => {
+	await umbreld.cleanup()
+})
+
+const guestHome = '/home/umbrel/umbrel/home'
+
+// Read a file's content from inside the VM (low-level assertion via SSH)
+async function readGuestFile(guestPath: string) {
+	return umbreld.vm.ssh(`cat '${guestPath}'`)
+}
+
+// Check a path exists inside the VM. The ssh helper ignores exit codes so we
+// echo a marker instead.
+async function guestPathExists(guestPath: string) {
+	const output = await umbreld.vm.ssh(`test -e '${guestPath}' && echo exists || echo missing`)
+	return output.trim() === 'exists'
+}
 
 test('POST /api/files/upload throws unauthorized error without cookie', async () => {
 	const error = await umbreld.unauthenticatedApi
@@ -54,19 +73,17 @@ test('POST /api/files/upload throws 400 error on relative path', async () => {
 })
 
 test('POST /api/files/upload throws 400 error on symlink traversal attempt', async () => {
-	// Create a symlink to the root directory
-	await fse.ensureSymlink('/', `${umbreld.instance.dataDirectory}/home/symlink-to-root`)
+	// Create a symlink to the root directory (no product surface creates
+	// symlinks, so seed it over SSH)
+	await umbreld.vm.ssh(`ln -s / ${guestHome}/upload-symlink-to-root`)
 
 	// Attempt to upload a file through the symlink
 	const error = await umbreld.api
-		.post('files/upload?path=/Home/symlink-to-root/etc/dangerous-file.txt', {body: 'malicious content'})
+		.post('files/upload?path=/Home/upload-symlink-to-root/etc/dangerous-file.txt', {body: 'malicious content'})
 		.catch((error) => error)
 	expect(error).toBeInstanceOf(Error)
 	expect(error.response.statusCode).toBe(400)
 	expect(error.response.body).toMatchObject({error: 'invalid path'})
-
-	// Clean up
-	await fse.remove(`${umbreld.instance.dataDirectory}/home/symlink-to-root`)
 })
 
 test('POST /api/files/upload successfully uploads a file with valid cookie and returns success response', async () => {
@@ -79,13 +96,8 @@ test('POST /api/files/upload successfully uploads a file with valid cookie and r
 	expect(response.statusCode).toBe(200)
 	expect(response.body).toEqual({path: '/Home/new-file.txt'})
 
-	// Verify the file was created
-	const exists = await fse.pathExists(`${umbreld.instance.dataDirectory}/home/new-file.txt`)
-	expect(exists).toBe(true)
-
-	// Verify the content
-	const content = await fse.readFile(`${umbreld.instance.dataDirectory}/home/new-file.txt`, 'utf8')
-	expect(content).toBe('uploaded content')
+	// Verify the file was created with the right content
+	await expect(readGuestFile(`${guestHome}/new-file.txt`)).resolves.toBe('uploaded content')
 })
 
 test('POST /api/files/upload creates parent directories if they do not exist', async () => {
@@ -97,13 +109,8 @@ test('POST /api/files/upload creates parent directories if they do not exist', a
 	// Assert the response is correct
 	expect(response.statusCode).toBe(200)
 
-	// Verify the directories and file were created
-	const exists = await fse.pathExists(`${umbreld.instance.dataDirectory}/home/new-dir/sub-dir/new-file.txt`)
-	expect(exists).toBe(true)
-
-	// Verify the content
-	const content = await fse.readFile(`${umbreld.instance.dataDirectory}/home/new-dir/sub-dir/new-file.txt`, 'utf8')
-	expect(content).toBe('nested content')
+	// Verify the directories and file were created with the right content
+	await expect(readGuestFile(`${guestHome}/new-dir/sub-dir/new-file.txt`)).resolves.toBe('nested content')
 })
 
 test('POST /api/files/upload handles files with special characters in name', async () => {
@@ -118,13 +125,8 @@ test('POST /api/files/upload handles files with special characters in name', asy
 	// Assert the response is correct
 	expect(response.statusCode).toBe(200)
 
-	// Verify the file was created
-	const exists = await fse.pathExists(`${umbreld.instance.dataDirectory}/home/${fileName}`)
-	expect(exists).toBe(true)
-
-	// Verify the content
-	const content = await fse.readFile(`${umbreld.instance.dataDirectory}/home/${fileName}`, 'utf8')
-	expect(content).toBe('special content')
+	// Verify the file was created with the right content
+	await expect(readGuestFile(`${guestHome}/${fileName}`)).resolves.toBe('special content')
 })
 
 test('POST /api/files/upload handles files with URL-encoded characters in path', async () => {
@@ -139,29 +141,20 @@ test('POST /api/files/upload handles files with URL-encoded characters in path',
 	// Assert the response is correct
 	expect(response.statusCode).toBe(200)
 
-	// Verify the file was created
-	const exists = await fse.pathExists(`${umbreld.instance.dataDirectory}/home/${filename}`)
-	expect(exists).toBe(true)
-
-	// Verify the content
-	const content = await fse.readFile(`${umbreld.instance.dataDirectory}/home/${filename}`, 'utf8')
-	expect(content).toBe('url encoded content')
+	// Verify the file was created with the right content
+	await expect(readGuestFile(`${guestHome}/${filename}`)).resolves.toBe('url encoded content')
 })
 
 test('POST /api/files/upload handles empty files correctly', async () => {
 	// Upload an empty file
-	const response = await umbreld.api.post('files/upload?path=/Home/empty-file.txt', {body: ''})
+	const response = await umbreld.api.post('files/upload?path=/Home/empty-file-upload.txt', {body: ''})
 
 	// Assert the response is correct
 	expect(response.statusCode).toBe(200)
 
-	// Verify the file was created
-	const exists = await fse.pathExists(`${umbreld.instance.dataDirectory}/home/empty-file.txt`)
-	expect(exists).toBe(true)
-
-	// Verify the content is empty
-	const content = await fse.readFile(`${umbreld.instance.dataDirectory}/home/empty-file.txt`, 'utf8')
-	expect(content).toBe('')
+	// Verify the file was created and is empty
+	await expect(guestPathExists(`${guestHome}/empty-file-upload.txt`)).resolves.toBe(true)
+	await expect(readGuestFile(`${guestHome}/empty-file-upload.txt`)).resolves.toBe('')
 })
 
 test('POST /api/files/upload handles binary data correctly', async () => {
@@ -169,81 +162,43 @@ test('POST /api/files/upload handles binary data correctly', async () => {
 	const binaryData = Buffer.from([0x00, 0x01, 0x02, 0x03, 0xff, 0xfe, 0xfd, 0xfc]).toString('base64')
 
 	// Upload binary file
-	const response = await umbreld.api.post('files/upload?path=/Home/binary-file.bin', {
+	const response = await umbreld.api.post('files/upload?path=/Home/binary-upload.bin', {
 		body: binaryData,
 	})
 
 	// Assert the response is correct
 	expect(response.statusCode).toBe(200)
 
-	// Verify the file was created
-	const exists = await fse.pathExists(`${umbreld.instance.dataDirectory}/home/binary-file.bin`)
-	expect(exists).toBe(true)
-
-	// Verify the content
-	const content = await fse.readFile(`${umbreld.instance.dataDirectory}/home/binary-file.bin`)
-	expect(content).toEqual(Buffer.from(binaryData))
+	// Verify the content round-trips
+	await expect(readGuestFile(`${guestHome}/binary-upload.bin`)).resolves.toBe(binaryData)
 })
 
 test('POST /api/files/upload creates file with correct permissions', async () => {
 	// Upload a file
-	const response = await umbreld.api.post('files/upload?path=/Home/permissions-test.txt', {
+	const response = await umbreld.api.post('files/upload?path=/Home/permissions-upload.txt', {
 		body: 'permissions content',
 	})
 
 	// Assert the response is correct
 	expect(response.statusCode).toBe(200)
 
-	// Check permissions
-	const stats = await fse.stat(`${umbreld.instance.dataDirectory}/home/permissions-test.txt`)
-	expect(stats.uid).toBe(1000) // Check owner is umbrel user
-	expect(stats.gid).toBe(1000) // Check group is umbrel group
-})
-
-test('POST /api/files/upload handles write errors correctly', async () => {
-	// Create a test file to verify it gets cleaned up
-	const systemPath = `${umbreld.instance.dataDirectory}/home/should-fail.txt`
-	const temporarySystemPath = `${systemPath}.umbrel-upload`
-	await fse.ensureDir(nodePath.dirname(systemPath))
-
-	// Mock a writable stream that will immediately fail when written to
-	vi.spyOn(fse, 'createWriteStream').mockImplementation((path) => {
-		const mockStream = new Writable({
-			write: (chunk, encoding, callback) => callback(new Error('Simulated disk full error')),
-		}) as any
-		mockStream.path = path
-		return mockStream
-	})
-
-	// Try to upload a file - this should trigger the simulated error
-	const error = await umbreld.api
-		.post('files/upload?path=/Home/should-fail.txt', {body: 'This upload should fail due to a simulated disk error'})
-		.catch((err) => err)
-
-	// Verify the error response
-	expect(error).toBeInstanceOf(Error)
-	expect(error.response.statusCode).toBe(500)
-	expect(error.response.body).toEqual({error: 'error writing file'})
-
-	// Verify the file was cleaned up (doesn't exist)
-	await expect(fse.pathExists(systemPath)).resolves.toBe(false)
-	await expect(fse.pathExists(temporarySystemPath)).resolves.toBe(false)
+	// Check ownership is the umbrel user and group (low-level OS fact via SSH)
+	const stat = await umbreld.vm.ssh(`stat --format '%u %g' ${guestHome}/permissions-upload.txt`)
+	expect(stat.trim()).toBe('1000 1000')
 })
 
 test('POST /api/files/upload correctly handles streaming data in chunks', async () => {
 	// Test file path
 	const filePath = '/Home/streaming-test.txt'
-	const systemPath = `${umbreld.instance.dataDirectory}/home/streaming-test.txt`
-	const directory = nodePath.dirname(systemPath)
-	const fileName = nodePath.basename(systemPath)
-	const temporarySystemPath = nodePath.join(directory, `.${fileName}.umbrel-upload`)
+	const systemPath = `${guestHome}/streaming-test.txt`
+	const temporarySystemPath = `${guestHome}/.streaming-test.txt.umbrel-upload`
 
 	// Get a stream for the request
 	const uploadStream = umbreld.api.stream.post(`files/upload?path=${filePath}`)
 
 	// Check file doesn't yet exist
-	await expect(fse.pathExists(systemPath)).resolves.toBe(false)
-	await expect(fse.pathExists(temporarySystemPath)).resolves.toBe(false)
+	await expect(guestPathExists(systemPath)).resolves.toBe(false)
+	await expect(guestPathExists(temporarySystemPath)).resolves.toBe(false)
 
 	// Chunks of data to pipe to the upload stream
 	const chunks = [
@@ -256,15 +211,23 @@ test('POST /api/files/upload correctly handles streaming data in chunks', async 
 		// Write the chunk to the upload stream
 		uploadStream.write(chunk)
 
-		// Wait to let the chunk be processed
-		await sleep(100)
+		// Wait for the chunk to land in the temporary file. Single ssh command
+		// per poll since each ssh call is a fresh connection with real latency.
+		let lastContent = ''
+		await pWaitFor(
+			async () => {
+				lastContent = await umbreld.vm.ssh(`cat '${temporarySystemPath}' 2>/dev/null || true`)
+				return lastContent.includes(chunk.toString())
+			},
+			{interval: 500, timeout: 60_000},
+		).catch((error) => {
+			throw new Error(`Timed out waiting for chunk '${chunk}' in temporary file, last content: '${lastContent}'`, {
+				cause: error,
+			})
+		})
 
-		// Check only temporary file exists
-		await expect(fse.pathExists(temporarySystemPath)).resolves.toBe(true)
-		await expect(fse.pathExists(systemPath)).resolves.toBe(false)
-
-		// Check the temporary file contains the current chunk
-		await expect(fse.readFile(temporarySystemPath, 'utf8')).resolves.toContain(chunk.toString())
+		// Check the final file still doesn't exist while the upload is in progress
+		await expect(guestPathExists(systemPath)).resolves.toBe(false)
 	}
 
 	// End the stream
@@ -275,52 +238,75 @@ test('POST /api/files/upload correctly handles streaming data in chunks', async 
 	expect(response.statusCode).toBe(200)
 
 	// Check if the file was moved to the final path
-	await expect(fse.pathExists(temporarySystemPath)).resolves.toBe(false)
-	await expect(fse.pathExists(systemPath)).resolves.toBe(true)
+	await pWaitFor(async () => guestPathExists(systemPath), {interval: 500, timeout: 60_000})
+	await expect(guestPathExists(temporarySystemPath)).resolves.toBe(false)
 
 	// Check the content of the final file
-	await expect(fse.readFile(systemPath, 'utf8')).resolves.toBe(chunks.join(''))
+	await expect(readGuestFile(systemPath)).resolves.toBe(chunks.join(''))
 })
 
 test('POST /api/files/upload cleans up temporary files when client aborts partially uploaded file', async () => {
 	// Test file path
 	const filePath = '/Home/aborted-upload.txt'
-	const systemPath = `${umbreld.instance.dataDirectory}/home/aborted-upload.txt`
-	const directory = nodePath.dirname(systemPath)
-	const fileName = nodePath.basename(systemPath)
-	const temporarySystemPath = nodePath.join(directory, `.${fileName}.umbrel-upload`)
+	const systemPath = `${guestHome}/aborted-upload.txt`
+	const temporarySystemPath = `${guestHome}/.aborted-upload.txt.umbrel-upload`
 
 	// Get a stream for the request
 	const uploadStream = umbreld.api.stream.post(`files/upload?path=${filePath}`)
 
 	// Check files don't exist yet
-	await expect(fse.pathExists(systemPath)).resolves.toBe(false)
-	await expect(fse.pathExists(temporarySystemPath)).resolves.toBe(false)
+	await expect(guestPathExists(systemPath)).resolves.toBe(false)
+	await expect(guestPathExists(temporarySystemPath)).resolves.toBe(false)
 
 	// Write the chunk to the upload stream
 	uploadStream.write(Buffer.from('First chunk'))
 
-	// Wait to verify the temporary file was created
-	await sleep(100)
-
-	// Verify temporary file exists but not the final file
-	await expect(fse.pathExists(temporarySystemPath)).resolves.toBe(true)
-	await expect(fse.pathExists(systemPath)).resolves.toBe(false)
+	// Wait for the temporary file to be created
+	await pWaitFor(async () => guestPathExists(temporarySystemPath), {interval: 500, timeout: 60_000})
+	await expect(guestPathExists(systemPath)).resolves.toBe(false)
 
 	// Now abort the request
 	uploadStream.destroy()
 
-	// Wait for backend to handle the abortion
-	await sleep(100)
+	// Wait for the backend to clean up the partially uploaded temporary file
+	await pWaitFor(async () => !(await guestPathExists(temporarySystemPath)), {interval: 500, timeout: 60_000})
+	await expect(guestPathExists(systemPath)).resolves.toBe(false)
+})
 
-	// Verify temporary file is left partiall uploaded
-	await expect(fse.pathExists(temporarySystemPath)).resolves.toBe(false)
-	await expect(fse.pathExists(systemPath)).resolves.toBe(false)
+test('POST /api/files/upload handles disk full write errors correctly', {retry: 5}, async () => {
+	// Mount a tiny tmpfs so writing the uploaded file genuinely fails with
+	// ENOSPC, exercising the server's write error path with a real full disk
+	const guestDirectory = `${guestHome}/disk-full-test`
+	await umbreld.vm.sshAsRoot(`mkdir -p '${guestDirectory}' && mount -t tmpfs -o size=1m tmpfs '${guestDirectory}'`)
+
+	try {
+		// Upload a file slightly larger than the filesystem so the request body
+		// is fully received before the final write fails
+		const error = await umbreld.api
+			.post('files/upload?path=/Home/disk-full-test/should-fail.bin', {body: Buffer.alloc(1024 * 1024 + 8 * 1024)})
+			.catch((error) => error)
+
+		// Verify the error response
+		expect(error).toBeInstanceOf(Error)
+		expect(error.response.statusCode).toBe(500)
+		expect(error.response.body).toMatchObject({error: 'error writing file'})
+
+		// Verify the partially written temporary file was cleaned up and the
+		// final file was never created
+		await pWaitFor(async () => !(await guestPathExists(`${guestDirectory}/.should-fail.bin.umbrel-upload`)), {
+			interval: 500,
+			timeout: 60_000,
+		})
+		await expect(guestPathExists(`${guestDirectory}/should-fail.bin`)).resolves.toBe(false)
+	} finally {
+		// Remove the tmpfs mount
+		await umbreld.vm.sshAsRoot(`umount '${guestDirectory}' && rmdir '${guestDirectory}'`)
+	}
 })
 
 test('POST /api/files/upload with collision=error (default) throws 400 when file already exists', async () => {
-	// Create a file
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/collision-test.txt`, 'original content')
+	// Create a file through the upload API
+	await umbreld.api.post('files/upload?path=/Home/collision-test.txt', {body: 'original content'})
 
 	// Try to upload to the same path
 	const error = await umbreld.api
@@ -331,13 +317,12 @@ test('POST /api/files/upload with collision=error (default) throws 400 when file
 	expect(error.response.body).toMatchObject({error: '[destination-already-exists]'})
 
 	// Verify the file wasn't changed
-	const content = await fse.readFile(`${umbreld.instance.dataDirectory}/home/collision-test.txt`, 'utf8')
-	expect(content).toBe('original content')
+	await expect(readGuestFile(`${guestHome}/collision-test.txt`)).resolves.toBe('original content')
 })
 
 test('POST /api/files/upload with collision=error throws 400 when explicitly set and file already exists', async () => {
-	// Create a file
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/explicit-error-test.txt`, 'original content')
+	// Create a file through the upload API
+	await umbreld.api.post('files/upload?path=/Home/explicit-error-test.txt', {body: 'original content'})
 
 	// Try to upload to the same path with explicit error strategy
 	const error = await umbreld.api
@@ -348,13 +333,12 @@ test('POST /api/files/upload with collision=error throws 400 when explicitly set
 	expect(error.response.body).toMatchObject({error: '[destination-already-exists]'})
 
 	// Verify the file wasn't changed
-	const content = await fse.readFile(`${umbreld.instance.dataDirectory}/home/explicit-error-test.txt`, 'utf8')
-	expect(content).toBe('original content')
+	await expect(readGuestFile(`${guestHome}/explicit-error-test.txt`)).resolves.toBe('original content')
 })
 
 test('POST /api/files/upload with collision=keep-both creates uniquely named file when file already exists', async () => {
-	// Create a file
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/keep-both-test.txt`, 'original content')
+	// Create a file through the upload API
+	await umbreld.api.post('files/upload?path=/Home/keep-both-test.txt', {body: 'original content'})
 
 	// Upload to the same path with keep-both strategy
 	const response = await umbreld.api.post('files/upload?path=/Home/keep-both-test.txt&collision=keep-both', {
@@ -366,17 +350,16 @@ test('POST /api/files/upload with collision=keep-both creates uniquely named fil
 	expect(response.body).toEqual({path: '/Home/keep-both-test (2).txt'})
 
 	// Verify both files exist with correct content
-	const originalContent = await fse.readFile(`${umbreld.instance.dataDirectory}/home/keep-both-test.txt`, 'utf8')
-	expect(originalContent).toBe('original content')
-
-	const newContent = await fse.readFile(`${umbreld.instance.dataDirectory}/home/keep-both-test (2).txt`, 'utf8')
-	expect(newContent).toBe('new content')
+	await expect(readGuestFile(`${guestHome}/keep-both-test.txt`)).resolves.toBe('original content')
+	await expect(readGuestFile(`${guestHome}/keep-both-test (2).txt`)).resolves.toBe('new content')
 })
 
 test('POST /api/files/upload with collision=keep-both increments number for multiple collisions', async () => {
-	// Create a file and its first duplicate
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/multiple-test.txt`, 'original content')
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/multiple-test (2).txt`, 'first duplicate')
+	// Create a file and its first duplicate through the upload API
+	await umbreld.api.post('files/upload?path=/Home/multiple-test.txt', {body: 'original content'})
+	await umbreld.api.post(`files/upload?path=${encodeURIComponent('/Home/multiple-test (2).txt')}`, {
+		body: 'first duplicate',
+	})
 
 	// Upload to the same path with keep-both strategy
 	const response = await umbreld.api.post('files/upload?path=/Home/multiple-test.txt&collision=keep-both', {
@@ -388,19 +371,14 @@ test('POST /api/files/upload with collision=keep-both increments number for mult
 	expect(response.body).toEqual({path: '/Home/multiple-test (3).txt'})
 
 	// Verify all files exist with correct content
-	const originalContent = await fse.readFile(`${umbreld.instance.dataDirectory}/home/multiple-test.txt`, 'utf8')
-	expect(originalContent).toBe('original content')
-
-	const firstDuplicate = await fse.readFile(`${umbreld.instance.dataDirectory}/home/multiple-test (2).txt`, 'utf8')
-	expect(firstDuplicate).toBe('first duplicate')
-
-	const secondDuplicate = await fse.readFile(`${umbreld.instance.dataDirectory}/home/multiple-test (3).txt`, 'utf8')
-	expect(secondDuplicate).toBe('second duplicate')
+	await expect(readGuestFile(`${guestHome}/multiple-test.txt`)).resolves.toBe('original content')
+	await expect(readGuestFile(`${guestHome}/multiple-test (2).txt`)).resolves.toBe('first duplicate')
+	await expect(readGuestFile(`${guestHome}/multiple-test (3).txt`)).resolves.toBe('second duplicate')
 })
 
 test('POST /api/files/upload with collision=replace overwrites existing file', async () => {
-	// Create a file
-	await fse.writeFile(`${umbreld.instance.dataDirectory}/home/replace-test.txt`, 'original content')
+	// Create a file through the upload API
+	await umbreld.api.post('files/upload?path=/Home/replace-test.txt', {body: 'original content'})
 
 	// Upload to the same path with replace strategy
 	const response = await umbreld.api.post('files/upload?path=/Home/replace-test.txt&collision=replace', {
@@ -412,8 +390,7 @@ test('POST /api/files/upload with collision=replace overwrites existing file', a
 	expect(response.body).toEqual({path: '/Home/replace-test.txt'})
 
 	// Verify file exists with new content
-	const content = await fse.readFile(`${umbreld.instance.dataDirectory}/home/replace-test.txt`, 'utf8')
-	expect(content).toBe('replacement content')
+	await expect(readGuestFile(`${guestHome}/replace-test.txt`)).resolves.toBe('replacement content')
 })
 
 test('POST /api/files/upload with invalid collision parameter returns 400 error', async () => {
