@@ -1,9 +1,8 @@
-import {useLanguage} from '@/hooks/use-language'
 import {trpcReact} from '@/trpc/trpc'
-import {SupportedLanguageCode} from '@/utils/language'
 import {keyBy} from '@/utils/misc'
 
-const languageCodesWithFahrenheitTemperature: SupportedLanguageCode[] = ['en']
+// Regions that commonly use Fahrenheit (US and its territories, plus a few others)
+const regionsWithFahrenheitTemperature = ['US', 'AS', 'BS', 'BZ', 'FM', 'GU', 'KY', 'MH', 'MP', 'PR', 'PW', 'VI']
 
 export const temperatureDescriptions = [
 	{id: 'c', label: '°C'},
@@ -11,6 +10,18 @@ export const temperatureDescriptions = [
 ] as const
 
 export type TemperatureUnit = (typeof temperatureDescriptions)[number]['id']
+
+// Returns the temperature unit commonly used in a locale's region, e.g. 'en-US' → 'f', 'en-GB' → 'c'.
+// `maximize()` infers the likely region for bare language codes, e.g. 'en' → 'US', 'de' → 'DE'.
+export function temperatureUnitFromLocale(locale: string): TemperatureUnit {
+	try {
+		const region = new Intl.Locale(locale).maximize().region
+		return region && regionsWithFahrenheitTemperature.includes(region) ? 'f' : 'c'
+	} catch {
+		// Ignore malformed locales
+		return 'c'
+	}
+}
 
 export const temperatureDescriptionsKeyed = keyBy(temperatureDescriptions, 'id')
 
@@ -29,10 +40,9 @@ export function useTemperatureUnit(
 		userSetMut.mutate({temperatureUnit})
 	}
 
-	// Fall back to determine the unit from the user's language
-	const [languageCode] = useLanguage()
-	const languageUnit = languageCodesWithFahrenheitTemperature.includes(languageCode) ? 'f' : 'c'
-	const defaultUnit = optionalUnit || languageUnit
+	// Fall back to the unit commonly used in the browser's locale
+	const localeUnit = temperatureUnitFromLocale(navigator.language)
+	const defaultUnit = optionalUnit || localeUnit
 
 	// Use preferred unit stored on the backend once set
 	const preferredUnit = userGetQ.data?.temperatureUnit
