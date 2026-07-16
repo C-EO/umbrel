@@ -53,6 +53,7 @@ export const AppManifestSchema = z.object({
 	deterministicPassword: z.boolean().optional(),
 	optimizedForUmbrelHome: z.boolean().optional(),
 	torOnly: z.boolean().optional(),
+	requiresHttps: z.boolean().optional(),
 	// In bytes
 	installSize: z.number().int().optional(),
 	// TODO: Define this type

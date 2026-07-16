@@ -26,6 +26,7 @@ import {
 import {cn} from '@/lib/utils'
 import {useConfirmation} from '@/providers/confirmation'
 import {useGlobalSystemState} from '@/providers/global-system-state'
+import {HttpsAccessInstructions} from '@/routes/settings/https-access'
 import {linkClass} from '@/utils/element-classes'
 
 const NETWORK_INTERFACES_REFETCH_INTERVAL_MS = 2000
@@ -82,7 +83,15 @@ function StatusDot({connected}: {connected: boolean}) {
 
 // ─── Network Panel (main view) ──────────────────────────────────────
 
-export function NetworkPanel({onBack}: {onBack: () => void}) {
+export function NetworkPanel({
+	onBack,
+	onOpenHttpsCertificateSettings,
+	expandHttpsAccessInstructions = false,
+}: {
+	onBack: () => void
+	onOpenHttpsCertificateSettings: () => void
+	expandHttpsAccessInstructions?: boolean
+}) {
 	const {interfaces, isLoading, isError} = useNetworkInterfaces({
 		refetchInterval: NETWORK_INTERFACES_REFETCH_INTERVAL_MS,
 		staleTime: 0,
@@ -99,6 +108,8 @@ export function NetworkPanel({onBack}: {onBack: () => void}) {
 			isLoading={isLoading}
 			isError={isError}
 			onSelectInterface={(iface) => setSelectedMac(iface.mac)}
+			onOpenHttpsCertificateSettings={onOpenHttpsCertificateSettings}
+			expandHttpsAccessInstructions={expandHttpsAccessInstructions}
 		/>
 	)
 }
@@ -109,12 +120,16 @@ function NetworkMainView({
 	isLoading,
 	isError,
 	onSelectInterface,
+	onOpenHttpsCertificateSettings,
+	expandHttpsAccessInstructions,
 }: {
 	onBack: () => void
 	interfaces: NetworkInterface[] | undefined
 	isLoading: boolean
 	isError: boolean
 	onSelectInterface: (iface: NetworkInterface) => void
+	onOpenHttpsCertificateSettings: () => void
+	expandHttpsAccessInstructions: boolean
 }) {
 	const {t} = useTranslation()
 
@@ -123,6 +138,13 @@ function NetworkMainView({
 			<BackButton onClick={onBack}>{t('advanced-settings')}</BackButton>
 
 			<HostnameSection />
+
+			<Divider />
+
+			<HttpsAccessSection
+				onOpenCertificateSettings={onOpenHttpsCertificateSettings}
+				expandInstructions={expandHttpsAccessInstructions}
+			/>
 
 			<Divider />
 
@@ -136,6 +158,67 @@ function NetworkMainView({
 			<Divider />
 
 			<DnsSection />
+		</div>
+	)
+}
+
+function HttpsAccessSection({
+	onOpenCertificateSettings,
+	expandInstructions,
+}: {
+	onOpenCertificateSettings: () => void
+	expandInstructions: boolean
+}) {
+	const {t} = useTranslation()
+	const [showInstructions, setShowInstructions] = useState(expandInstructions)
+	const secureUrl = `https://${window.location.host}`
+
+	useEffect(() => {
+		if (expandInstructions) setShowInstructions(true)
+	}, [expandInstructions])
+
+	return (
+		<div className='flex w-full items-start justify-between gap-3 py-1'>
+			<div className='min-w-0 flex-1'>
+				<div className='space-y-1'>
+					<div className='text-13 font-medium -tracking-2'>{t('https-access-network-title')}</div>
+					<div className='text-12 leading-tight text-white/35'>{t('https-access-description')}</div>
+				</div>
+				<div className='mt-2 text-12 leading-tight text-white/30'>{t('https-access-private-access-note')}</div>
+				<div className='mt-3 space-y-3'>
+					<button
+						type='button'
+						onClick={() => setShowInstructions((value) => !value)}
+						className='flex w-full items-center justify-between text-xs font-medium text-brand-lightest transition-opacity duration-300 hover:opacity-80'
+					>
+						{t('https-access-view-instructions')}
+						<ChevronDown className={cn('size-4 transition-transform', showInstructions && 'rotate-180')} />
+					</button>
+					<AnimatePresence>
+						{showInstructions && (
+							<motion.div
+								initial={{height: 0, opacity: 0}}
+								animate={{height: 'auto', opacity: 1}}
+								exit={{height: 0, opacity: 0}}
+								transition={{duration: 0.2}}
+								className='overflow-hidden'
+							>
+								<div className='space-y-3'>
+									<HttpsAccessInstructions secureUrl={secureUrl} />
+									<button
+										type='button'
+										onClick={onOpenCertificateSettings}
+										className='group inline-flex items-center gap-0.5 text-12 font-medium text-white/45 transition-colors hover:text-white/65'
+									>
+										{t('https-access-certificate-settings-title')}
+										<TbChevronRight className='size-3 transition-transform group-hover:translate-x-0.5' />
+									</button>
+								</div>
+							</motion.div>
+						)}
+					</AnimatePresence>
+				</div>
+			</div>
 		</div>
 	)
 }
@@ -205,6 +288,8 @@ function HostnameSection() {
 			const result = await confirm({
 				title: t('network.hostname-confirm-title'),
 				// Use literal keys (not a variable) so the translation CI's unused-key scanner can find them
+				// HTTPS certificates regenerate automatically after hostname changes. Browsers using
+				// click-through certificate exceptions may still warn again for the new hostname.
 				message: isHostnameAccess
 					? t('network.hostname-confirm-message-hostname-access', {currentHostname: hostname, newHostname: editValue})
 					: t('network.hostname-confirm-message-ip-access', {currentHostname: hostname, newHostname: editValue}),
@@ -579,6 +664,7 @@ function InterfaceDetail({iface, onBack}: {iface: NetworkInterface; onBack: () =
 
 		// Wait for the interface to bounce (nmcli down/up) before opening the new tab,
 		// reducing the chance of the browser showing a brief "can't reach" error.
+		// Keep this on HTTP: the new IP may not be in the HTTPS cert until after confirmation.
 		setTimeout(() => {
 			window.open(`http://${ip}/confirm-static-ip`, '_blank')
 			setTabOpened(true)

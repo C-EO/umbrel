@@ -18,6 +18,11 @@ async function getAppPort(app) {
 	return appManifest.port;
 }
 
+function hostWithPort(hostname, port) {
+	const host = hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+	return host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`;
+}
+
 async function host(req, app, origin) {
 	try {
 		switch(origin) {
@@ -26,7 +31,7 @@ async function host(req, app, origin) {
 			case "host":
 				const appPort = (await getAppPort(app));
 
-				return `${req.hostname}:${appPort}`;
+				return hostWithPort(req.hostname, appPort);
 		}
 	} catch (e) {
 		throw new Error("Failed to determine host");

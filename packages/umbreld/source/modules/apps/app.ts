@@ -93,6 +93,14 @@ export default class App {
 		return deterministicPassword
 	}
 
+	async refreshLanIngress() {
+		try {
+			await this.#umbreld.lanIngress.refresh()
+		} catch (error) {
+			this.logger.error(`Failed to refresh LAN ingress`, error)
+		}
+	}
+
 	writeCompose(compose: Compose) {
 		return writeYaml(`${this.dataDirectory}/docker-compose.yml`, compose)
 	}
@@ -174,20 +182,25 @@ export default class App {
 
 		await this.patchComposeFile()
 		await this.pull()
+		await this.refreshLanIngress()
 
-		await pRetry(() => appScript(this.#umbreld, 'install', this.id), {
-			onFailedAttempt: (error) => {
-				this.logger.error(
-					`Attempt ${error.attemptNumber} installing app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
-					error,
-				)
-			},
-			retries: 2,
-		})
-		this.state = 'ready'
-		this.stateProgress = 0
+		try {
+			await pRetry(() => appScript(this.#umbreld, 'install', this.id), {
+				onFailedAttempt: (error) => {
+					this.logger.error(
+						`Attempt ${error.attemptNumber} installing app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
+						error,
+					)
+				},
+				retries: 2,
+			})
+			this.state = 'ready'
+			this.stateProgress = 0
 
-		return true
+			return true
+		} finally {
+			await this.refreshLanIngress()
+		}
 	}
 
 	async update() {
@@ -209,49 +222,104 @@ export default class App {
 		await appScript(this.#umbreld, 'pre-patch-update', this.id)
 		await this.patchComposeFile()
 		await this.pull()
-		await appScript(this.#umbreld, 'post-patch-update', this.id)
+		await this.refreshLanIngress()
 
-		// Delete the old images if we can. Silently fail on error cos docker
-		// will return an error even if only one image is still needed.
 		try {
-			await $({stdio: 'inherit'})`docker rmi ${oldImages}`
-		} catch {}
+			await appScript(this.#umbreld, 'post-patch-update', this.id)
 
-		this.state = 'ready'
-		this.stateProgress = 0
+			// Delete the old images if we can. Silently fail on error cos docker
+			// will return an error even if only one image is still needed.
+			try {
+				await $({stdio: 'inherit'})`docker rmi ${oldImages}`
+			} catch {}
 
-		// Enable auto-start on boot
-		await this.setAutoStart(true)
+			this.state = 'ready'
+			this.stateProgress = 0
 
-		return true
+			// Enable auto-start on boot
+			await this.setAutoStart(true)
+
+			return true
+		} finally {
+			await this.refreshLanIngress()
+		}
 	}
 
 	async start() {
 		this.logger.log(`Starting app ${this.id}`)
-		await this.#runStateTransition('starting', async () => {
-			// We re-run the patch here to fix an edge case where 0.5.x imported apps
-			// wont run because they haven't been patched.
-			await this.patchComposeFile()
-			await pRetry(() => appScript(this.#umbreld, 'start', this.id), {
-				onFailedAttempt: (error) => {
-					this.logger.error(
-						`Attempt ${error.attemptNumber} starting app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
-						error,
-					)
-				},
-				retries: 2,
+		try {
+			await this.#runStateTransition('starting', async () => {
+				// We re-run the patch here to fix an edge case where 0.5.x imported apps
+				// wont run because they haven't been patched.
+				await this.patchComposeFile()
+				await this.refreshLanIngress()
+				await pRetry(() => appScript(this.#umbreld, 'start', this.id), {
+					onFailedAttempt: (error) => {
+						this.logger.error(
+							`Attempt ${error.attemptNumber} starting app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
+							error,
+						)
+					},
+					retries: 2,
+				})
 			})
-		})
-		this.state = 'ready'
+			this.state = 'ready'
 
-		// Enable auto-start on boot
-		await this.setAutoStart(true)
+			// Enable auto-start on boot
+			await this.setAutoStart(true)
 
-		return true
+			return true
+		} finally {
+			await this.refreshLanIngress()
+		}
 	}
 
 	async stop({persistState = false}: {persistState?: boolean} = {}) {
-		await this.#runStateTransition('stopping', async () => {
+		try {
+			await this.#runStateTransition('stopping', async () => {
+				await pRetry(() => appScript(this.#umbreld, 'stop', this.id), {
+					onFailedAttempt: (error) => {
+						this.logger.error(
+							`Attempt ${error.attemptNumber} stopping app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
+							error,
+						)
+					},
+					retries: 2,
+				})
+			})
+			this.state = 'stopped'
+
+			// Disable auto-start on boot
+			if (persistState) {
+				await this.setAutoStart(false)
+			}
+
+			return true
+		} finally {
+			await this.refreshLanIngress()
+		}
+	}
+
+	async restart() {
+		try {
+			await this.#runStateTransition('restarting', async () => {
+				await appScript(this.#umbreld, 'stop', this.id)
+				await appScript(this.#umbreld, 'start', this.id)
+			})
+			this.state = 'ready'
+
+			// Enable auto-start on boot
+			await this.setAutoStart(true)
+
+			return true
+		} finally {
+			await this.refreshLanIngress()
+		}
+	}
+
+	async uninstall() {
+		this.state = 'uninstalling'
+		try {
 			await pRetry(() => appScript(this.#umbreld, 'stop', this.id), {
 				onFailedAttempt: (error) => {
 					this.logger.error(
@@ -261,61 +329,30 @@ export default class App {
 				},
 				retries: 2,
 			})
-		})
-		this.state = 'stopped'
+			await appScript(this.#umbreld, 'nuke-images', this.id)
+			await fse.remove(this.dataDirectory)
 
-		// Disable auto-start on boot
-		if (persistState) {
-			await this.setAutoStart(false)
+			await this.#umbreld.store.getWriteLock(async ({get, set}) => {
+				let apps = (await get('apps')) || []
+				apps = apps.filter((appId) => appId !== this.id)
+				await set('apps', apps)
+
+				// Remove app from recentlyOpenedApps
+				let recentlyOpenedApps = (await get('recentlyOpenedApps')) || []
+				recentlyOpenedApps = recentlyOpenedApps.filter((appId) => appId !== this.id)
+				await set('recentlyOpenedApps', recentlyOpenedApps)
+
+				// Disable any associated widgets
+				let widgets = (await get('widgets')) || []
+				widgets = widgets.filter((widget) => !widget.startsWith(`${this.id}:`))
+				await set('widgets', widgets)
+			})
+
+			return true
+		} finally {
+			// Regenerate from current app state so partial uninstalls don't leave stale LAN ingress routes.
+			await this.refreshLanIngress()
 		}
-
-		return true
-	}
-
-	async restart() {
-		await this.#runStateTransition('restarting', async () => {
-			await appScript(this.#umbreld, 'stop', this.id)
-			await appScript(this.#umbreld, 'start', this.id)
-		})
-		this.state = 'ready'
-
-		// Enable auto-start on boot
-		await this.setAutoStart(true)
-
-		return true
-	}
-
-	async uninstall() {
-		this.state = 'uninstalling'
-		await pRetry(() => appScript(this.#umbreld, 'stop', this.id), {
-			onFailedAttempt: (error) => {
-				this.logger.error(
-					`Attempt ${error.attemptNumber} stopping app ${this.id} failed. There are ${error.retriesLeft} retries left.`,
-					error,
-				)
-			},
-			retries: 2,
-		})
-		await appScript(this.#umbreld, 'nuke-images', this.id)
-		await fse.remove(this.dataDirectory)
-
-		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
-			let apps = (await get('apps')) || []
-			apps = apps.filter((appId) => appId !== this.id)
-			await set('apps', apps)
-
-			// Remove app from recentlyOpenedApps
-			let recentlyOpenedApps = (await get('recentlyOpenedApps')) || []
-			recentlyOpenedApps = recentlyOpenedApps.filter((appId) => appId !== this.id)
-			await set('recentlyOpenedApps', recentlyOpenedApps)
-
-			// Disable any associated widgets
-			let widgets = (await get('widgets')) || []
-			widgets = widgets.filter((widget) => !widget.startsWith(`${this.id}:`))
-			await set('widgets', widgets)
-		})
-
-		return true
 	}
 
 	async getContainerNames() {

@@ -594,6 +594,9 @@ export default class Backups {
 		// Ignore temporary migration directory
 		ignoreFileContents.push('.temporary-migration')
 
+		// Local HTTPS certificates are per-device and regenerated after restore.
+		ignoreFileContents.push('lan-ingress')
+
 		// Ignore backup mount points
 		ignoreFileContents.push(this.internalMountPath)
 		ignoreFileContents.push(this.backupRoot)

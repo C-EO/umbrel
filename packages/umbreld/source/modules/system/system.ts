@@ -592,8 +592,9 @@ export function getIpAddresses(): string[] {
 		/^services/,
 		// Virtual ethernet (pairs)
 		/^veth/,
-		// TODO: Tunnel interfaces?
-		// /^tun/,
+		// Tunnel/VPN interfaces (e.g. tailscale0 in kernel TUN mode) are deliberately
+		// included: their IPs land in the HTTPS certificate SANs, so users who install
+		// the Umbrel CA get valid HTTPS over VPN access too.
 	]
 	// Known good IPv4 ranges:
 	// - Class A private: 10.0.0.0/8 := /^10\./
@@ -828,6 +829,7 @@ export async function setStaticIp(
 		settings[mac] = {ip, subnetPrefix, gateway, dns}
 		await set('settings.staticIp', settings)
 	})
+	await umbreld.lanIngress.refresh().catch((error) => umbreld.logger.error('Failed to refresh LAN ingress', error))
 }
 
 // Clear static IP and revert to DHCP
@@ -851,6 +853,7 @@ export async function clearStaticIp(umbreld: Umbreld, {mac}: {mac: string}) {
 		delete settings[mac]
 		await set('settings.staticIp', settings)
 	})
+	await umbreld.lanIngress.refresh().catch((error) => umbreld.logger.error('Failed to refresh LAN ingress', error))
 }
 
 // Restore static IP settings from store on startup
@@ -950,6 +953,7 @@ async function applyHostname(umbreld: Umbreld, hostname: string) {
 
 	// Restart hostname-dependent services
 	await $`systemctl restart avahi-daemon`
+	await umbreld.lanIngress.refresh().catch((error) => umbreld.logger.error('Failed to refresh LAN ingress', error))
 
 	umbreld.logger.log(`Applied hostname '${hostname}'`)
 	return hostname

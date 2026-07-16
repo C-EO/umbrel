@@ -54,10 +54,15 @@ router.post(
     }
 
     const expires = new Date(Date.now() + ONE_WEEK);
-    res.cookie("UMBREL_PROXY_TOKEN", token, {
+    const cookieName = req.secure
+      ? CONSTANTS.UMBREL_COOKIE_NAME
+      : CONSTANTS.UMBREL_HTTP_COOKIE_NAME;
+    res.cookie(cookieName, token, {
       httpOnly: true,
       expires,
+      path: "/",
       sameSite: "lax",
+      secure: req.secure,
     });
 
     // Force redirect target to be same-origin by rebasing onto a placeholder

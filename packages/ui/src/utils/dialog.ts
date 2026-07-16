@@ -9,7 +9,12 @@ import {sleep} from '@/utils/misc'
 export const EXIT_DURATION_MS = 100
 
 export type GlobalDialogKey = 'logout' | 'live-usage' | 'whats-new' | 'add-shortcut'
-export type AppStoreDialogKey = 'updates' | 'add-community-store' | 'default-credentials' | 'app-settings'
+export type AppStoreDialogKey =
+	| 'updates'
+	| 'add-community-store'
+	| 'default-credentials'
+	| 'app-settings'
+	| 'app-requires-https'
 export type FilesDialogKey =
 	| 'files-share-info'
 	| 'files-empty-trash-confirmation'

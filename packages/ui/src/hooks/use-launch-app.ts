@@ -5,7 +5,7 @@ import {toast} from '@/components/ui/toast'
 import {useApps} from '@/providers/apps'
 import {trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
-import {appToUrl, appToUrlWithAppPath, isOnionPage, urlJoin} from '@/utils/misc'
+import {appToUrl, appToUrlWithAppPath, getAlwaysOpenHttpsRequiredApps, isOnionPage, urlJoin} from '@/utils/misc'
 
 /**
  * There's a strong temptation to make launching an app just a link to the app's URL:
@@ -39,7 +39,7 @@ export function useLaunchApp() {
 		},
 	})
 
-	const handleLaunch = (appId: string, options?: {path?: string; direct?: boolean}) => {
+	const handleLaunch = (appId: string, options?: {path?: string; direct?: boolean; protocol?: 'http:' | 'https:'}) => {
 		const app = userApp.userAppsKeyed?.[appId]
 
 		if (!app) {
@@ -47,25 +47,30 @@ export function useLaunchApp() {
 			throw new Error(t('app-not-found', {app: appId}))
 		}
 
-		const open = (path?: string) => {
+		const open = (path?: string, protocol = location.protocol) => {
 			trackOpenMut.mutate({appId})
-			const url = path ? urlJoin(appToUrl(app), path) : appToUrlWithAppPath(app)
+			const url = path ? urlJoin(appToUrl(app, protocol), path) : appToUrlWithAppPath(app, protocol)
 			window.open(url, '_blank')?.focus()
 		}
 
 		// If we're already in the credentials dialog, don't show the dialog again.
 		if (app.credentials?.showBeforeOpen && !options?.direct) {
 			navigate(linkToDialog('default-credentials', {for: appId, direct: 'true'}))
-		} else {
-			if (app.torOnly) {
-				if (isOnionPage()) {
-					open(options?.path)
-				} else {
-					toast.warning(t('app-only-over-tor', {app: app.name}))
-				}
+		} else if (app.torOnly && !isOnionPage()) {
+			toast.warning(t('app-only-over-tor', {app: app.name}))
+		} else if (
+			app.requiresHttps &&
+			!isOnionPage() &&
+			window.location.protocol !== 'https:' &&
+			options?.protocol !== 'https:'
+		) {
+			if (getAlwaysOpenHttpsRequiredApps()) {
+				open(options?.path, 'https:')
 			} else {
-				open(options?.path)
+				navigate(linkToDialog('app-requires-https', {for: appId, ...(options?.path ? {path: options.path} : {})}))
 			}
+		} else {
+			open(options?.path, options?.protocol)
 		}
 	}
 

@@ -202,6 +202,9 @@ export default class Apps {
 
 		// Wait for current installed apps to finish starting
 		await startAppsPromise
+		await this.#umbreld.lanIngress
+			.refresh()
+			.catch((error) => this.logger.error('Failed to refresh LAN ingress after starting apps', error))
 	}
 
 	private async reinstallMissingAppsAfterRestore(appIds: string[]) {
@@ -323,6 +326,11 @@ export default class Apps {
 		} catch (error) {
 			this.logger.error(`Failed to install app ${appId}`, error)
 			this.instances = this.instances.filter((app) => app.id !== appId)
+			await this.#umbreld.lanIngress
+				.refresh()
+				.catch((refreshError) =>
+					this.logger.error('Failed to refresh LAN ingress after failed app install', refreshError),
+				)
 			return false
 		}
 

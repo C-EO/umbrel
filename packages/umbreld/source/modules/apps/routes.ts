@@ -48,6 +48,7 @@ export const apps = router({
 							dependencies,
 							implements: implements_,
 							torOnly,
+							requiresHttps,
 						},
 						selectedDependencies,
 					] = await Promise.all([app.readManifest(), app.getSelectedDependencies()])
@@ -77,6 +78,7 @@ export const apps = router({
 						selectedDependencies,
 						implements: implements_,
 						torOnly,
+						requiresHttps: requiresHttps === true,
 					}
 				} catch (error) {
 					ctx.apps.logger.error(`Failed to read manifest for app ${app.id}`, error)

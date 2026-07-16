@@ -21,7 +21,8 @@ function createUnauthenticatedClient(port: number) {
 	return createTRPCProxyClient<AppRouter>({
 		links: [
 			httpBatchLink({
-				url: `http://localhost:${port}/trpc`,
+				// umbreld binds IPv4 loopback by default and localhost can resolve to ::1 first
+				url: `http://127.0.0.1:${port}/trpc`,
 			}),
 		],
 	})

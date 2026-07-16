@@ -1,6 +1,7 @@
 import {useEffect} from 'react'
 
 import {useCmdkOpen} from '@/components/cmdk'
+import {AppRequiresHttpsDialog} from '@/modules/app-store/app-page/app-requires-https-dialog'
 import {AppSettingsDialog} from '@/modules/app-store/app-page/app-settings-dialog'
 import {DefaultCredentialsDialog} from '@/modules/app-store/app-page/default-credentials-dialog'
 import {DesktopContent} from '@/modules/desktop/desktop-content'
@@ -77,6 +78,7 @@ function DesktopPage() {
 			</div>
 			<DefaultCredentialsDialog />
 			<AppSettingsDialog />
+			<AppRequiresHttpsDialog />
 		</>
 	)
 }

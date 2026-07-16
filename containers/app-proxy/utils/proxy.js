@@ -9,7 +9,13 @@ const CONSTANTS = require("./const.js");
 const safeHandler = require("./safe_handler.js");
 
 function stripUmbrelCookie(proxyReq, req) {
-  const cookies = expressUtils.removeCookie(req, CONSTANTS.UMBREL_COOKIE_NAME);
+  const withoutHttpsToken = expressUtils.removeCookie(req, CONSTANTS.UMBREL_COOKIE_NAME);
+  // HTTP and HTTPS app access use separate proxy-token cookies, but neither token
+  // should be forwarded to the app itself.
+  const cookies = expressUtils.removeCookie(
+    { headers: { cookie: withoutHttpsToken } },
+    CONSTANTS.UMBREL_HTTP_COOKIE_NAME
+  );
   if (cookies.trim().length === 0) {
     // "the user agent sends a Cookie request header to the origin server if it has cookies"
     // More info: https://datatracker.ietf.org/doc/html/rfc2109#section-4.3.4
@@ -17,6 +23,14 @@ function stripUmbrelCookie(proxyReq, req) {
   } else {
     proxyReq.setHeader("cookie", cookies);
   }
+}
+
+function hostWithPort(hostname, port) {
+  const host =
+    hostname.startsWith("[") && hostname.endsWith("]")
+      ? hostname.slice(1, -1)
+      : hostname;
+  return host.includes(":") ? `[${host}]:${port}` : `${host}:${port}`;
 }
 
 function onProxyReq(proxyReq, req, res, config) {
@@ -92,6 +106,7 @@ function apply(app) {
       const authorized = await authUtils.isAuthorized({
         cookieHeader: req.headers.cookie,
         pathname: req.path,
+        secure: req.secure,
       });
 
       if (!authorized) {
@@ -122,9 +137,10 @@ function apply(app) {
           );
         } else {
           return res.redirect(
-            `${req.protocol}://${req.hostname}:${
+            `${req.protocol}://${hostWithPort(
+              req.hostname,
               CONSTANTS.UMBREL_AUTH_PORT
-            }/?${searchParams.toString()}`
+            )}/?${searchParams.toString()}`
           );
         }
       }

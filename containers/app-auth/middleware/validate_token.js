@@ -9,6 +9,15 @@ const CONSTANTS = require('../utils/const.js');
 
 const APP_PROXY_AUTH_TOKEN_PATH = "/umbrel_/api/v1/auth/token";
 
+function proxyToken(req) {
+	// Secure cookies are not sent over HTTP, and browsers can protect them from
+	// being replaced by HTTP responses. Keep a separate HTTP app token so both
+	// app URL schemes can stay usable with HTTPS access.
+	return req.secure
+		? req.cookies[CONSTANTS.UMBREL_COOKIE_NAME]
+		: req.cookies[CONSTANTS.UMBREL_HTTP_COOKIE_NAME];
+}
+
 async function redirectState(token, req) {
 	const app = expressUtils.getQueryParam(req, "app");
 	const origin = expressUtils.getQueryParam(req, "origin");
@@ -42,7 +51,7 @@ async function redirect(res, token, req) {
 
 function mw () {
 	return async function (req, res, next) {
-		const token = req.cookies.UMBREL_PROXY_TOKEN;
+		const token = proxyToken(req);
 
 		// If we already have a valid token
 		// Then the user doesn't need to login again

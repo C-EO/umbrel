@@ -12,6 +12,9 @@ const CONSTANTS = require('../utils/const.js');
 const app = express();
 
 app.disable('x-powered-by');
+// LAN ingress is the browser-facing entry point. In Docker, the proxied request
+// can arrive from the host gateway rather than loopback, so trust only those paths.
+app.set('trust proxy', CONSTANTS.TRUSTED_PROXY_IPS);
 app.set('view engine', 'ejs');
 
 app.use(cookieParser(CONSTANTS.UMBREL_AUTH_SECRET));

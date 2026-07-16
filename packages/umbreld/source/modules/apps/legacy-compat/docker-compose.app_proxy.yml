@@ -8,8 +8,14 @@ services:
     restart: on-failure
     hostname: $APP_PROXY_HOSTNAME
     ports:
-      - '${APP_PROXY_PORT}:${APP_PROXY_PORT}'
+      - '${APP_PROXY_BIND_IP}:${APP_PROXY_PUBLIC_PORT}:${APP_PROXY_PORT}'
     volumes:
+      # TODO: Remove these bind-mount overrides after publishing an app-proxy image with the LAN ingress changes.
+      - '${UMBREL_CONTAINER_SOURCE_DIR}/app-proxy/bin/www:/app/bin/www:ro'
+      - '${UMBREL_CONTAINER_SOURCE_DIR}/app-proxy/routes/umbrel.js:/app/routes/umbrel.js:ro'
+      - '${UMBREL_CONTAINER_SOURCE_DIR}/app-proxy/utils/auth.js:/app/utils/auth.js:ro'
+      - '${UMBREL_CONTAINER_SOURCE_DIR}/app-proxy/utils/const.js:/app/utils/const.js:ro'
+      - '${UMBREL_CONTAINER_SOURCE_DIR}/app-proxy/utils/proxy.js:/app/utils/proxy.js:ro'
       - '${APP_MANIFEST_FILE}:/extra/umbrel-app.yml:ro'
       - '${TOR_DATA_DIR}:/var/lib/tor:ro'
       - '${APP_DATA_DIR}:/data:ro'
@@ -22,6 +28,7 @@ services:
       APP_HOST:
       APP_PORT:
       AUTH_SERVICE_PORT: $AUTH_PORT
+      UMBREL_AUTH_PORT: $AUTH_PORT
       UMBREL_AUTH_SECRET: $UMBREL_AUTH_SECRET
       MANAGER_IP: $MANAGER_IP
       MANAGER_PORT: 3006

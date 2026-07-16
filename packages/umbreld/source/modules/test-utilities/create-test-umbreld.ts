@@ -47,8 +47,10 @@ function createTestHelpers(port: number) {
 	}) as typeof fetch
 
 	// Create WebSocket client for subscriptions
+	// Connect via 127.0.0.1 rather than localhost: umbreld binds IPv4 loopback by
+	// default, and localhost can resolve to ::1 first.
 	const wsClient = createWSClient({
-		url: () => `ws://localhost:${port}/trpc?token=${jwt}`,
+		url: () => `ws://127.0.0.1:${port}/trpc?token=${jwt}`,
 		retryDelayMs: () => 100,
 	})
 
@@ -58,7 +60,7 @@ function createTestHelpers(port: number) {
 				condition: (op) => op.type === 'subscription',
 				true: wsLink({client: wsClient}),
 				false: httpBatchLink({
-					url: `http://localhost:${port}/trpc`,
+					url: `http://127.0.0.1:${port}/trpc`,
 					fetch: fetchWithRetry,
 					headers: async () => ({
 						Authorization: `Bearer ${jwt}`,
@@ -71,14 +73,14 @@ function createTestHelpers(port: number) {
 	const unauthenticatedClient = createTRPCProxyClient<AppRouter>({
 		links: [
 			httpBatchLink({
-				url: `http://localhost:${port}/trpc`,
+				url: `http://127.0.0.1:${port}/trpc`,
 				fetch: fetchWithRetry,
 			}),
 		],
 	})
 
 	const unauthenticatedApi = got.extend({
-		prefixUrl: `http://localhost:${port}/api`,
+		prefixUrl: `http://127.0.0.1:${port}/api`,
 		retry: {limit: 0},
 		responseType: 'json',
 	})
@@ -232,10 +234,12 @@ export default async function createTestUmbreld({autoLogin = false, autoStart = 
 export async function createTestVm({
 	device,
 	bootDisk,
+	forwardPorts = [],
 	startupTimeout = 300_000,
 }: {
 	device?: 'umbrel-pro' | 'umbrel-home' | 'nas' | 'pi'
 	bootDisk?: 'default' | 'emmc' | 'nvme' | 'usb' | 'sdcard' | 'none'
+	forwardPorts?: Array<{hostPort: number; guestPort: number}>
 	startupTimeout?: number
 } = {}) {
 	const vmScript = path.resolve(currentDirectory, '../../../../os/vm.sh')
@@ -283,10 +287,14 @@ export async function createTestVm({
 		const bootDiskArgs = bootDisk ? ['--boot-disk', bootDisk] : []
 		const cdromArgs = cdrom ? ['--cdrom', cdrom] : []
 		const bootNvmeSlotArgs = bootNvmeSlot ? ['--boot-nvme-slot', String(bootNvmeSlot)] : []
+		const forwardPortArgs = forwardPorts.flatMap(({hostPort, guestPort}) => [
+			'--forward-port',
+			`${hostPort}:${guestPort}`,
+		])
 		const vmProcess = $({
 			env,
 			detached: true,
-		})`${vmScript} boot ${deviceArgs} ${bootDiskArgs} ${cdromArgs} ${bootNvmeSlotArgs} --ssh-port ${sshPort} --http-port ${httpPort}`
+		})`${vmScript} boot ${deviceArgs} ${bootDiskArgs} ${cdromArgs} ${bootNvmeSlotArgs} ${forwardPortArgs} --ssh-port ${sshPort} --http-port ${httpPort}`
 		vmProcessPid = vmProcess.pid
 
 		// Capture output and track if process exits

@@ -27,16 +27,22 @@ services:
       UMBREL_AUTH_SECRET: $UMBREL_AUTH_SECRET
       MANAGER_IP: $MANAGER_IP
       MANAGER_PORT: 3006
-      DASHBOARD_IP: $DASHBOARD_IP
-      DASHBOARD_PORT: 3004
+      DASHBOARD_IP: host.docker.internal
+      DASHBOARD_PORT: 80
       JWT_SECRET: $JWT_SECRET
       UMBRELD_RPC_HOST: $UMBRELD_RPC_HOST
     volumes:
+      # TODO: Remove these bind-mount overrides after publishing an auth-server image with the LAN ingress changes.
+      - ${UMBREL_CONTAINER_SOURCE_DIR}/app-auth/bin/www:/app/bin/www:ro
+      - ${UMBREL_CONTAINER_SOURCE_DIR}/app-auth/middleware/validate_token.js:/app/middleware/validate_token.js:ro
+      - ${UMBREL_CONTAINER_SOURCE_DIR}/app-auth/routes/auth.js:/app/routes/auth.js:ro
+      - ${UMBREL_CONTAINER_SOURCE_DIR}/app-auth/utils/const.js:/app/utils/const.js:ro
+      - ${UMBREL_CONTAINER_SOURCE_DIR}/app-auth/utils/host_resolution.js:/app/utils/host_resolution.js:ro
       - ${UMBREL_DATA_DIR}/tor/data:/var/lib/tor:ro
       - ${UMBREL_DATA_DIR}/app-data:/app-data:ro
       - ${UMBREL_DATA_DIR}:/data:ro
     ports:
-      - '${AUTH_PORT}:${AUTH_PORT}'
+      - '${AUTH_BIND_IP}:${AUTH_PUBLISHED_PORT}:${AUTH_PORT}'
     extra_hosts:
       - 'host.docker.internal:host-gateway'
     networks:

@@ -10,7 +10,16 @@ function readFromEnvOrTerminate(key) {
 	return value;
 }
 
+const UMBREL_GATEWAY_IP = "10.21.0.1";
+
 module.exports = Object.freeze({
+	// The HTTPS proxy token uses the browser-enforced __Host- prefix. Any code
+	// setting this cookie must include Secure, Path=/, and no Domain attribute.
+	UMBREL_COOKIE_NAME: "__Host-UMBREL_PROXY_TOKEN_HTTPS",
+	UMBREL_HTTP_COOKIE_NAME: "UMBREL_PROXY_TOKEN",
+	UMBREL_GATEWAY_IP,
+	TRUSTED_PROXY_IPS: ["loopback", UMBREL_GATEWAY_IP],
+
 	LOG_LEVEL: process.env.LOG_LEVEL || "info",
 
 	PORT: parseInt(process.env.PORT) || 2000,

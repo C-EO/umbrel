@@ -102,11 +102,7 @@ export default router({
 			// Set proxy token cookie
 			const proxyToken = await ctx.server.signProxyToken()
 			const expires = new Date(Date.now() + ONE_WEEK)
-			ctx.response!.cookie('UMBREL_PROXY_TOKEN', proxyToken, {
-				httpOnly: true,
-				expires,
-				sameSite: 'lax',
-			})
+			ctx.server.setProxyTokenCookie(ctx.response!, ctx.request!, proxyToken, expires)
 
 			// Return API token
 			return ctx.server.signToken()
@@ -128,11 +124,7 @@ export default router({
 		// Renew proxy token cookie
 		const proxyToken = await ctx.server.signProxyToken()
 		const expires = new Date(Date.now() + ONE_WEEK)
-		ctx.response!.cookie('UMBREL_PROXY_TOKEN', proxyToken, {
-			httpOnly: true,
-			expires,
-			sameSite: 'lax',
-		})
+		ctx.server.setProxyTokenCookie(ctx.response!, ctx.request!, proxyToken, expires)
 
 		// Return API token
 		return ctx.server.signToken()
@@ -141,7 +133,7 @@ export default router({
 	// Deletes the proxy token cookie
 	// The JWT needs to be deleted from the client side
 	logout: privateProcedure.mutation(async ({ctx}) => {
-		ctx.response!.clearCookie('UMBREL_PROXY_TOKEN')
+		ctx.server.clearProxyTokenCookies(ctx.response!)
 
 		// Return API token
 		return true

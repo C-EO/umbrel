@@ -16,6 +16,12 @@ VERSION="0.0.3"
 
 UMBREL_ROOT="${SCRIPT_UMBREL_ROOT}"
 USER_FILE="${UMBREL_ROOT}/db/user.json"
+# TODO: Remove this override source path after publishing app-auth/app-proxy images with the LAN ingress changes.
+if [[ -d "/umbrel-dev/containers" ]]; then
+  export UMBREL_CONTAINER_SOURCE_DIR="/umbrel-dev/containers"
+else
+  export UMBREL_CONTAINER_SOURCE_DIR="/opt/containers"
+fi
 
 CURRENT_SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
 
@@ -204,6 +210,8 @@ source_app() {
   # This provides the app proxy with context of the app
   export APP_PROXY_HOSTNAME="app_proxy_${app}"
   export APP_PROXY_PORT=$(cat "${APP_MANIFEST_FILE}" | yq '.port')
+  export APP_PROXY_BIND_IP="127.0.0.1"
+  export APP_PROXY_PUBLIC_PORT="${APP_PROXY_PORT}"
   
   export APP_DATA_DIR="${app_data_dir}"
   export APP_DOMAIN="${app_domain}"

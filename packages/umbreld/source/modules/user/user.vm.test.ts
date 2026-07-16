@@ -1,14 +1,22 @@
 import {expect, beforeAll, beforeEach, afterAll, afterEach, test} from 'vitest'
+import getPort from 'get-port'
+import got from 'got'
 
 import * as totp from '../utilities/totp.js'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
 let umbreld: Awaited<ReturnType<typeof createTestVm>>
+let httpsPort = 0
 let failed = false
 
 beforeAll(async () => {
-	umbreld = await createTestVm({device: 'umbrel-home'})
+	// Forward the VM's HTTPS port so proxy cookie behavior can be tested over real TLS.
+	httpsPort = await getPort({host: '127.0.0.1'})
+	umbreld = await createTestVm({
+		device: 'umbrel-home',
+		forwardPorts: [{hostPort: httpsPort, guestPort: 443}],
+	})
 	await umbreld.vm.powerOn()
 })
 
@@ -106,6 +114,30 @@ test.sequential('login() returns a token', async () => {
 	const token = await umbreld.client.user.login.mutate(testUserCredentials)
 	expect(typeof token).toBe('string')
 	umbreld.setJwt(token)
+})
+
+test.sequential('login() sets the HTTP proxy cookie on HTTP requests', async () => {
+	const response = await umbreld.unauthenticatedApi.post('../trpc/user.login', {json: testUserCredentials})
+	const setCookies = response.headers['set-cookie'] ?? []
+	expect(setCookies.some((cookie) => /^UMBREL_PROXY_TOKEN=[^;]/.test(cookie))).toBe(true)
+	expect(setCookies.some((cookie) => /^__Host-UMBREL_PROXY_TOKEN_HTTPS=[^;]/.test(cookie))).toBe(false)
+})
+
+test.sequential('login() sets the HTTPS proxy cookie on HTTPS requests', async () => {
+	// A real TLS request through LAN ingress. Client-supplied forwarded headers are
+	// overwritten at the ingress boundary, so the scheme cannot be spoofed here the
+	// way the previous non-VM version of this test did.
+	const {caCertificate} = await umbreld.client.lanIngress.getCertificateStatus.query()
+	const response = await got.post(`https://127.0.0.1:${httpsPort}/trpc/user.login`, {
+		json: testUserCredentials,
+		https: {certificateAuthority: caCertificate},
+	})
+	const setCookies = response.headers['set-cookie'] ?? []
+	const httpsProxyCookie = setCookies.find((cookie) => /^__Host-UMBREL_PROXY_TOKEN_HTTPS=[^;]/.test(cookie))
+	expect(httpsProxyCookie).toContain('; Path=/')
+	expect(httpsProxyCookie).toContain('; Secure')
+	expect(httpsProxyCookie).not.toContain('Domain=')
+	expect(setCookies.some((cookie) => /^UMBREL_PROXY_TOKEN=[^;]/.test(cookie))).toBe(false)
 })
 
 test.sequential("renewToken() returns a new token when we're logged in", async () => {

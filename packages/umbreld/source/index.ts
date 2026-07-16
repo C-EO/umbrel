@@ -19,6 +19,7 @@ import EventBus from './modules/event-bus/event-bus.js'
 import Dbus from './modules/dbus/dbus.js'
 import Backups from './modules/backups/backups.js'
 import SystemNg from './modules/system-ng/system-ng.js'
+import LanIngress from './modules/lan-ingress/lan-ingress.js'
 
 import {
 	commitOsPartition,
@@ -133,11 +134,15 @@ export default class Umbreld {
 	dbus: Dbus
 	backups: Backups
 	systemNg: SystemNg
+	lanIngress: LanIngress
 	isBackupRestoreFirstStart = false
 
 	constructor({
 		dataDirectory,
-		port = 80,
+		// LAN ingress owns the public browser-facing ports and proxies dashboard
+		// traffic to this internal server port, so the default must not collide
+		// with it.
+		port = 22080,
 		logLevel = 'normal',
 		defaultAppStoreRepo = UMBREL_APP_STORE_REPO,
 	}: UmbreldOptions) {
@@ -159,6 +164,7 @@ export default class Umbreld {
 		this.dbus = new Dbus(this)
 		this.backups = new Backups(this)
 		this.systemNg = new SystemNg(this)
+		this.lanIngress = new LanIngress(this)
 	}
 
 	async start() {
@@ -219,6 +225,11 @@ export default class Umbreld {
 			await this.apps.cleanDockerState().catch((error) => this.logger.error(`Failed to clean Docker state`, error))
 		}
 
+		// LAN ingress is the browser-facing boundary. Start it before the internal
+		// dashboard server and apps so public ports are owned by ingress and app-port
+		// nftables rules are in place before app proxies begin accepting traffic.
+		await this.lanIngress.start()
+
 		// Initialise modules
 		await Promise.all([
 			this.user.start(),
@@ -250,8 +261,13 @@ export default class Umbreld {
 
 	async stop() {
 		try {
-			// Stop backups first because it depends on files
-			await this.backups.stop()
+			await Promise.all([
+				// Stop backups before file/storage modules because backup work depends on them.
+				this.backups.stop(),
+				// Stop LAN ingress before app/module teardown so public listeners close and
+				// nftables rules are cleared before app shutdown tries to refresh ingress.
+				this.lanIngress.stop(),
+			])
 
 			// Stop modules
 			await Promise.all([

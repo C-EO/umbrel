@@ -132,6 +132,21 @@ test.sequential('list() lists installed apps', async () => {
 	])
 })
 
+test.sequential('list() reports when an app requires HTTPS', async () => {
+	const manifestPath = path.join(umbreld.instance.dataDirectory, 'app-data', 'sparkles-hello-world', 'umbrel-app.yml')
+	const manifest = yaml.load(await fse.readFile(manifestPath, 'utf8')) as AppManifest
+	manifest.requiresHttps = true
+	await fse.writeFile(manifestPath, yaml.dump(manifest))
+
+	try {
+		const apps = await umbreld.client.apps.list.query()
+		expect(apps.find((app: any) => app.id === 'sparkles-hello-world')).toMatchObject({requiresHttps: true})
+	} finally {
+		delete manifest.requiresHttps
+		await fse.writeFile(manifestPath, yaml.dump(manifest))
+	}
+})
+
 test.sequential('getBackupIgnoredPaths() returns sanitised absolute paths for installed app', async () => {
 	const dataDir = umbreld.instance.dataDirectory
 	const expected = ['data', 'logs', 'cache'].map((p) => path.join(dataDir, 'app-data', 'sparkles-hello-world', p))

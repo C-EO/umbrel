@@ -7,6 +7,7 @@ import {createGzip} from 'node:zlib'
 import {pipeline} from 'node:stream/promises'
 
 import {$} from 'execa'
+import fse from 'fs-extra'
 import express from 'express'
 import cookieParser from 'cookie-parser'
 import helmet from 'helmet'
@@ -31,6 +32,9 @@ export type ApiOptions = {
 	privateApi: express.Router
 	umbreld: Umbreld
 }
+
+const PROXY_HTTPS_COOKIE_NAME = '__Host-UMBREL_PROXY_TOKEN_HTTPS'
+const PROXY_HTTP_COOKIE_NAME = 'UMBREL_PROXY_TOKEN'
 
 // Safely wrapps async request handlers in logic to catch errors and pass them to the errror handling middleware
 const asyncHandler = (
@@ -88,6 +92,32 @@ class Server {
 		return jwt.verifyProxyToken(token, await this.getJwtSecret())
 	}
 
+	proxyTokenFromRequest(request: express.Request) {
+		return request.cookies?.[request.secure ? PROXY_HTTPS_COOKIE_NAME : PROXY_HTTP_COOKIE_NAME]
+	}
+
+	setProxyTokenCookie(response: express.Response, request: express.Request, token: string, expires: Date) {
+		const secure = request.secure
+		// The HTTPS token uses the browser-enforced __Host- prefix so HTTP
+		// responses cannot plant or overwrite it. That requires Secure, Path=/,
+		// and no Domain attribute.
+		response.cookie(secure ? PROXY_HTTPS_COOKIE_NAME : PROXY_HTTP_COOKIE_NAME, token, {
+			httpOnly: true,
+			expires,
+			path: '/',
+			sameSite: 'lax',
+			secure,
+		})
+	}
+
+	clearProxyTokenCookies(response: express.Response) {
+		// Proxy tokens are stateless JWTs, so logout clears the cookies this
+		// response is allowed to affect. HTTP cannot clear the Secure HTTPS
+		// cookie, but HTTPS logout clears both cookie names.
+		response.clearCookie(PROXY_HTTPS_COOKIE_NAME, {path: '/', secure: true})
+		response.clearCookie(PROXY_HTTP_COOKIE_NAME, {path: '/'})
+	}
+
 	// Creates an isolated WebSocket server and mounts it at a specific path
 	// All WebSocket servers require a valid auth token to connect
 	mountWebSocketServer(path: string, setupHandler: (wss: WebSocketServer) => void) {
@@ -107,6 +137,9 @@ class Server {
 
 		// Create the handler and server
 		this.app = express()
+		// LAN ingress is the browser-facing entry point. Only trust forwarded
+		// headers from the loopback proxy path, not arbitrary client requests.
+		this.app.set('trust proxy', 'loopback')
 		this.server = http.createServer(this.app)
 
 		// Don't timeout for slow uploads/downloads
@@ -215,7 +248,7 @@ class Server {
 			const publicApi = express.Router()
 			const privateApi = express.Router()
 			privateApi.use(async (request, response, next) => {
-				const token = request?.cookies?.UMBREL_PROXY_TOKEN
+				const token = this.proxyTokenFromRequest(request)
 				const isValid = await this.verifyProxyToken(token).catch(() => false)
 				if (!isValid) return response.status(401).json({error: 'unauthorized'})
 
@@ -240,7 +273,7 @@ class Server {
 			try {
 				// We shouldn't really use the proxy token for this but it's
 				// fine until we have subdomains and refactor to session cookies
-				await this.verifyProxyToken(request?.cookies?.UMBREL_PROXY_TOKEN)
+				await this.verifyProxyToken(this.proxyTokenFromRequest(request))
 			} catch (error) {
 				return response.status(401).send('Unauthorized')
 			}
@@ -252,6 +285,31 @@ class Server {
 				await pipeline(journal.stdout!, createGzip(), response)
 			} catch (error) {
 				this.logger.error(`Error streaming logs`, error)
+			}
+		})
+
+		// Handle local HTTPS CA certificate downloads. Serving the certificate MIME
+		// type from a real URL (instead of a forced attachment download) lets iOS
+		// Safari offer its configuration profile install flow. Other browsers
+		// download the file as normal, named from the URL path.
+		this.app.get('/lan-ingress/umbrel-local-ca.crt', async (request, response) => {
+			// Check the user is logged in
+			try {
+				await this.verifyProxyToken(this.proxyTokenFromRequest(request))
+			} catch (error) {
+				return response.status(401).send('Unauthorized')
+			}
+
+			try {
+				const caCertificate = await fse.readFile(this.umbreld.lanIngress.caCertificatePath)
+				// Send a Buffer, not a string: express rewrites string bodies' Content-Type
+				// to append "; charset=utf-8", and iOS profile-install detection needs the
+				// bare certificate MIME type.
+				response.set('Content-Type', 'application/x-x509-ca-cert')
+				response.send(caCertificate)
+			} catch (error) {
+				this.logger.error(`Error serving CA certificate`, error)
+				response.status(500).send('Internal Server Error')
 			}
 		})
 
@@ -315,11 +373,13 @@ class Server {
 		// TODO: We can remove this if we move to express 5
 		wrapHandlersWithAsyncHandler(this.app._router)
 
-		// Start the server
-		const listen = promisify(this.server.listen.bind(this.server)) as (port: number) => Promise<void>
-		await listen(this.umbreld.port)
+		// Start the server. The internal server only ever binds loopback: LAN
+		// ingress is the sole network entry point and proxies browser traffic
+		// here over 127.0.0.1. Use an SSH tunnel to debug it directly.
+		const listen = promisify(this.server.listen.bind(this.server)) as (port: number, host: string) => Promise<void>
+		await listen(this.umbreld.port, '127.0.0.1')
 		this.port = (this.server.address() as any).port
-		this.logger.log(`Listening on port ${this.port}`)
+		this.logger.log(`Listening on 127.0.0.1:${this.port}`)
 
 		return this
 	}

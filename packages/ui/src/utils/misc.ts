@@ -39,14 +39,26 @@ export function pathJoin(base: string, path: string) {
 	return base.replace(/\/$/, '') + '/' + path.replace(/^\//, '')
 }
 
-export function appToUrl(app: UserApp) {
-	return isOnionPage()
-		? `${location.protocol}//${app.hiddenService}`
-		: `${location.protocol}//${location.hostname}:${app.port}`
+export function appToUrl(app: UserApp, protocol = location.protocol) {
+	return isOnionPage() ? `${location.protocol}//${app.hiddenService}` : `${protocol}//${location.hostname}:${app.port}`
 }
 
-export function appToUrlWithAppPath(app: UserApp) {
-	return urlJoin(appToUrl(app), app.path ?? '')
+export function appToUrlWithAppPath(app: UserApp, protocol = location.protocol) {
+	return urlJoin(appToUrl(app, protocol), app.path ?? '')
+}
+
+const ALWAYS_OPEN_HTTPS_REQUIRED_APPS_KEY = 'UMBREL_ALWAYS_OPEN_HTTPS_REQUIRED_APPS'
+
+export function getAlwaysOpenHttpsRequiredApps() {
+	return localStorage.getItem(ALWAYS_OPEN_HTTPS_REQUIRED_APPS_KEY) === 'true'
+}
+
+export function setAlwaysOpenHttpsRequiredApps(value: boolean) {
+	if (value) {
+		localStorage.setItem(ALWAYS_OPEN_HTTPS_REQUIRED_APPS_KEY, 'true')
+	} else {
+		localStorage.removeItem(ALWAYS_OPEN_HTTPS_REQUIRED_APPS_KEY)
+	}
 }
 
 export function isOnionPage() {

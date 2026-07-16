@@ -126,6 +126,7 @@ Boot Options:
                                    sdcard boot disks require a power-of-2 size)
     --ssh-port <port>              Local SSH port forward (default: ${DEFAULT_SSH_PORT})
     --http-port <port>             Local HTTP port forward (default: ${DEFAULT_HTTP_PORT})
+    --forward-port <host:guest>    Extra local TCP port forward to the VM, repeatable
 
 Disk Options:
     --size <size>                  Disk size for nvme/sata/usb add (default: ${DEFAULT_NVME_SIZE} nvme, ${DEFAULT_HDD_SIZE} sata, ${DEFAULT_USB_STORAGE_SIZE} usb)
@@ -888,6 +889,8 @@ boot_vm() {
   local boot_disk_transport="$9"
   local cdrom_iso="${10}"
   local boot_nvme_slot="${11}"
+  shift 11
+  local forward_ports=("$@")
 
   if [[ -n "$cdrom_iso" && -n "$boot_nvme_slot" ]]; then
     echo "Error: --cdrom and --boot-nvme-slot are mutually exclusive (both claim first boot priority)" >&2
@@ -1089,7 +1092,17 @@ boot_vm() {
   echo "Booting VM (${arch}, ${device}, ${boot_disk_transport} boot disk)..."
   echo "  SSH: ssh -p ${ssh_port} umbrel@localhost"
   echo "  HTTP: http://localhost:${http_port}"
+  # ${arr[@]+...} guard: empty array expansion errors under set -u on bash < 4.4 (stock macOS bash 3.2)
+  for port_forward in ${forward_ports[@]+"${forward_ports[@]}"}; do
+    echo "  TCP ${port_forward#*:}: localhost:${port_forward%%:*}"
+  done
   echo
+
+  local netdev_arg="user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22,hostfwd=tcp:127.0.0.1:${http_port}-:80"
+  # ${arr[@]+...} guard: empty array expansion errors under set -u on bash < 4.4 (stock macOS bash 3.2)
+  for port_forward in ${forward_ports[@]+"${forward_ports[@]}"}; do
+    netdev_arg="${netdev_arg},hostfwd=tcp:127.0.0.1:${port_forward%%:*}-:${port_forward#*:}"
+  done
 
   # shellcheck disable=SC2086
   exec $qemu_sudo "$qemu_binary" \
@@ -1105,7 +1118,7 @@ boot_vm() {
     "${direct_boot_args[@]}" \
     $boot_disk_args \
     $cdrom_args \
-    -netdev user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22,hostfwd=tcp:127.0.0.1:${http_port}-:80 \
+    -netdev "$netdev_arg" \
     -device ${network_device},netdev=net0 \
     $nvme_args \
     $hdd_args \
@@ -1392,6 +1405,7 @@ case "$command" in
     disk_size=""
     ssh_port="$DEFAULT_SSH_PORT"
     http_port="$DEFAULT_HTTP_PORT"
+    forward_ports=()
 
     # Check if first argument is an image path (not an option)
     if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then
@@ -1454,6 +1468,14 @@ case "$command" in
           http_port="$2"
           shift 2
           ;;
+        --forward-port)
+          if [[ ! "$2" =~ ^[0-9]+:[0-9]+$ ]]; then
+            echo "Error: --forward-port must be in host:guest format" >&2
+            exit 1
+          fi
+          forward_ports+=("$2")
+          shift 2
+          ;;
         *)
           echo "Error: Unknown option: $1" >&2
           exit 1
@@ -1498,7 +1520,8 @@ case "$command" in
       fi
     fi
 
-    boot_vm "$image" "$arch" "$device" "$memory" "$cores" "$disk_size" "$ssh_port" "$http_port" "$boot_disk_transport" "$cdrom_iso" "$boot_nvme_slot"
+    # ${arr[@]+...} guard: empty array expansion errors under set -u on bash < 4.4 (stock macOS bash 3.2)
+    boot_vm "$image" "$arch" "$device" "$memory" "$cores" "$disk_size" "$ssh_port" "$http_port" "$boot_disk_transport" "$cdrom_iso" "$boot_nvme_slot" ${forward_ports[@]+"${forward_ports[@]}"}
     ;;
 
   *)

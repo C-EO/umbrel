@@ -4,7 +4,7 @@ const { StatusCodes } = require("http-status-codes");
 const fs = require("fs").promises;
 const yaml = require("js-yaml");
 
-// const CONSTANTS = require("../utils/const.js");
+const CONSTANTS = require("../utils/const.js");
 const manager = require("../utils/manager.js");
 const dashboard = require("../utils/dashboard.js");
 const safeHandler = require("../utils/safe_handler.js");
@@ -63,8 +63,12 @@ router.post(
     if (setCookieHeader) {
       // `set-cookie` header can be an array if multiple cookies are set
       setCookieHeader.forEach((cookie) => {
-        if (cookie.startsWith("UMBREL_PROXY_TOKEN=")) {
-          proxyToken = cookie.split(";")[0].split("=")[1];
+        if (
+          cookie.startsWith(`${CONSTANTS.UMBREL_COOKIE_NAME}=`) ||
+          cookie.startsWith(`${CONSTANTS.UMBREL_HTTP_COOKIE_NAME}=`)
+        ) {
+          const cookieValue = cookie.split(";")[0].split("=")[1];
+          if (cookieValue) proxyToken = cookieValue;
         }
       });
     }
@@ -76,13 +80,17 @@ router.post(
       const ONE_DAY = 24 * ONE_HOUR;
       const ONE_WEEK = 7 * ONE_DAY;
       const expires = new Date(Date.now() + ONE_WEEK);
-      res
-        .cookie("UMBREL_PROXY_TOKEN", proxyToken, {
-          httpOnly: true,
-          expires,
-          sameSite: "lax",
-        })
-        .json(await validateToken.redirectState(proxyToken, req));
+      const cookieName = req.secure
+        ? CONSTANTS.UMBREL_COOKIE_NAME
+        : CONSTANTS.UMBREL_HTTP_COOKIE_NAME;
+      res.cookie(cookieName, proxyToken, {
+        httpOnly: true,
+        expires,
+        path: "/",
+        sameSite: "lax",
+        secure: req.secure,
+      });
+      res.json(await validateToken.redirectState(proxyToken, req));
     } else {
       // This case should never happen as an error is thrown
       // if the credentials are bad and is handled above (catch block)

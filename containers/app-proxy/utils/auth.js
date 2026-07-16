@@ -61,7 +61,17 @@ function pathMatches(pathname, paths) {
   });
 }
 
-async function isAuthorized({ cookieHeader, pathname }) {
+async function isValidToken(token) {
+  if (typeof token !== "string") return false;
+
+  try {
+    return await tokenUtils.validate(token);
+  } catch {
+    return false;
+  }
+}
+
+async function isAuthorized({ cookieHeader, pathname, secure }) {
   if (!CONSTANTS.PROXY_AUTH_ADD) return true;
 
   const whitelisted = pathMatches(pathname, CONSTANTS.PROXY_AUTH_WHITELIST);
@@ -70,14 +80,9 @@ async function isAuthorized({ cookieHeader, pathname }) {
   if (whitelisted && !blacklisted) return true;
 
   const cookies = parseCookieHeader(cookieHeader);
-  const token = cookies.UMBREL_PROXY_TOKEN;
-  if (typeof token !== "string") return false;
+  if (secure) return isValidToken(cookies[CONSTANTS.UMBREL_COOKIE_NAME]);
 
-  try {
-    return await tokenUtils.validate(token);
-  } catch {
-    return false;
-  }
+  return isValidToken(cookies[CONSTANTS.UMBREL_HTTP_COOKIE_NAME]);
 }
 
 module.exports = {

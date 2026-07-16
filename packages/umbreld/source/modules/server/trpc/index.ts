@@ -17,6 +17,7 @@ import notifications from '../../notifications/routes.js'
 import eventBus from '../../event-bus/routes.js'
 import backups from '../../backups/routes.js'
 import shortcuts from '../../shortcuts/routes.js'
+import lanIngress from '../../lan-ingress/routes.js'
 
 import {type WebSocketServer} from 'ws'
 import type Umbreld from '../../../index.js'
@@ -36,6 +37,7 @@ const appRouter = router({
 	eventBus,
 	backups,
 	shortcuts,
+	lanIngress,
 })
 
 export type AppRouter = typeof appRouter
