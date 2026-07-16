@@ -20,7 +20,6 @@ export type FilesDialogKey =
 	| 'files-empty-trash-confirmation'
 	| 'files-extension-change-confirmation'
 	| 'files-permanently-delete-confirmation'
-	| 'files-external-storage-unsupported'
 	| 'files-add-network-share'
 	| 'files-format-drive'
 export type DialogKey = GlobalDialogKey | AppStoreDialogKey | SettingsDialogKey | FilesDialogKey

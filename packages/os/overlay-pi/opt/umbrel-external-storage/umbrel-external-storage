@@ -3,15 +3,13 @@
 set -euo pipefail
 
 # This script will:
-# - Look for external storage devices
-# - Check if they contain an Umbrel install
-# - If yes
-# - - Mount it
-# - If no
-# - - Format it
-# - - Mount it
-# - - Install Umbrel on it
+# - Look for legacy external Umbrel storage devices
+# - Mount an existing legacy external Umbrel installation
 # - Bind mount the external installation on top of the local installation
+#
+# New external drives are never formatted during normal boot. The
+# --allow-legacy-setup flag retains the retired setup path so VM tests can
+# construct an authentic legacy installation.
 
 UMBREL_ROOT="/home/umbrel/umbrel"
 MOUNT_POINT="/mnt/data"
@@ -38,7 +36,7 @@ check_dependencies () {
 }
 
 running_off_sdcard() {
-  if df -h | grep --silent /dev/mmcblk0
+  if df -h | grep /dev/mmcblk0 >/dev/null
   then
     echo "true"
   else
@@ -119,7 +117,19 @@ format_block_device () {
   # We need to run sync here to make sure the filesystem is reflecting the
   # the latest changes in /dev/*
   sync
-  mkfs.ext4 -F -L umbrel "${partition_path}"
+
+  # Slow emulated USB controllers can expose, remove, and recreate the
+  # partition node after parted returns. Retry the actual format operation
+  # instead of trusting a transient node. This setup path is only reachable
+  # through the explicit --allow-legacy-setup test-fixture flag.
+  for _ in {1..60}; do
+    if [[ -b "${partition_path}" ]] && mkfs.ext4 -F -L umbrel "${partition_path}"; then
+      return
+    fi
+    sleep 1
+  done
+  echo "Could not format partition ${partition_path}"
+  exit 1
 }
 
 # Mounts the device given in the first argument at $MOUNT_POINT
@@ -134,7 +144,8 @@ unmount_partition () {
   umount "${MOUNT_POINT}"
 }
 
-# Formats and sets up a new device
+# Formats and sets up a new device. This retired path is only reachable with
+# --allow-legacy-setup and exists so VM tests can create a real legacy layout.
 setup_new_device () {
   block_device="${1}"
   partition_path="${2}"
@@ -163,6 +174,14 @@ copy_docker_to_external_storage () {
 
 main () {
   echo "Running external storage mount script..."
+  allow_legacy_setup="false"
+  if [[ "${1:-}" == "--allow-legacy-setup" ]]; then
+    allow_legacy_setup="true"
+  elif [[ $# -gt 0 ]]; then
+    echo "Usage: $0 [--allow-legacy-setup]"
+    exit 1
+  fi
+
   check_root
   check_dependencies sed wipefs parted mount sync umount
 
@@ -194,8 +213,8 @@ main () {
 
   done
 
-  if [[ $no_of_block_devices -gt 1 ]]; then
-    echo "Multiple block devices found, only one drive is supported"
+  if [[ "${allow_legacy_setup}" == "true" && $no_of_block_devices -gt 1 ]]; then
+    echo "Multiple block devices found, only one drive is supported for legacy setup"
     echo "Exiting mount script without doing anything"
     exit 1
   fi
@@ -209,8 +228,65 @@ main () {
     return
   fi
 
-  # At this point we know there is only one block device attached
-  block_device=$(list_block_devices)
+  if [[ "${allow_legacy_setup}" == "false" ]]; then
+    # Find an existing legacy Umbrel data drive. Probe each ext4 first
+    # partition read-only so unrelated drives remain untouched.
+    mkdir -p "${MOUNT_POINT}"
+
+    while true; do
+      legacy_block_device=""
+      legacy_partition_path=""
+      legacy_drive_count=0
+
+      while read -r candidate; do
+        [[ -z "${candidate}" ]] && continue
+
+        candidate_path="/dev/${candidate}"
+        candidate_partition=$(get_first_partition_path "${candidate_path}")
+
+        if [[ $(is_device_umbrelos_install "${candidate_path}") == "true" ]] || ! is_partition_ext4 "${candidate_partition}"; then
+          continue
+        fi
+
+        if ! mount -o ro,noload "${candidate_partition}" "${MOUNT_POINT}"; then
+          continue
+        fi
+
+        if [[ -f "${EXTERNAL_UMBREL_ROOT}"/.umbrel ]]; then
+          legacy_block_device="${candidate}"
+          legacy_partition_path="${candidate_partition}"
+          legacy_drive_count=$(( legacy_drive_count + 1 ))
+        fi
+
+        unmount_partition
+      done < <(list_block_devices)
+
+      if [[ ${legacy_drive_count} -gt 0 ]]; then
+        break
+      fi
+
+      echo "No legacy Umbrel data drive found"
+      echo "Waiting for 5 seconds before checking again..."
+      sleep 5
+
+      retry_for_block_devices=$(( retry_for_block_devices + 1 ))
+      if [[ $retry_for_block_devices -gt 20 ]]; then
+        echo "No legacy Umbrel data drive found; leaving all external drives untouched"
+        exit 0
+      fi
+    done
+
+    if [[ ${legacy_drive_count} -gt 1 ]]; then
+      echo "Multiple legacy Umbrel data drives found; refusing to choose between them"
+      exit 1
+    fi
+
+    block_device="${legacy_block_device}"
+  else
+    # Retain the original setup path for creating legacy fixtures in VM tests.
+    block_device=$(list_block_devices)
+  fi
+
   block_device_path="/dev/${block_device}"
   partition_path=$(get_first_partition_path "${block_device_path}")
   block_device_model=$(get_block_device_model $block_device)
@@ -244,16 +320,23 @@ main () {
 
     if [[ -f "${EXTERNAL_UMBREL_ROOT}"/.umbrel ]]; then
       echo "Yes, it contains an Umbrel install"
-    else
+    elif [[ "${allow_legacy_setup}" == "true" ]]; then
       echo "No, it doesn't contain an Umbrel install"
       echo "Unmounting partition..."
       unmount_partition
       setup_new_device $block_device $partition_path
+    else
+      echo "Legacy marker disappeared while mounting device, exiting..."
+      unmount_partition
+      exit 1
     fi
 
-  else
+  elif [[ "${allow_legacy_setup}" == "true" ]]; then
     echo "No, it's not ext4"
     setup_new_device $block_device $partition_path
+  else
+    echo "Legacy device is no longer ext4, exiting..."
+    exit 1
   fi
 
   if [[ ! -d "${EXTERNAL_DOCKER_DIR}" ]]; then
@@ -300,4 +383,4 @@ main () {
   echo "Mount script completed successfully!"
 }
 
-main
+main "$@"

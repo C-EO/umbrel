@@ -2,6 +2,16 @@ import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useNavigate} from 'react-router-dom'
 
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import {AnimatedInputError, Input, PasswordInput} from '@/components/ui/input'
 import {useDeviceInfo} from '@/hooks/use-device-info'
 import {useLanguage} from '@/hooks/use-language'
@@ -33,8 +43,11 @@ export default function CreateAccount() {
 	const [confirmPassword, setConfirmPassword] = useState('')
 	const [localError, setLocalError] = useState('')
 	const [isNavigating, setIsNavigating] = useState(false)
+	const [showExternalDriveConfirmation, setShowExternalDriveConfirmation] = useState(false)
 
 	const isPro = deviceInfo?.umbrelHostEnvironment === 'umbrel-pro'
+	const isRaspberryPi = deviceInfo?.umbrelHostEnvironment === 'raspberry-pi'
+	const externalDevicesQ = trpcReact.files.externalDevices.useQuery(undefined, {enabled: isRaspberryPi})
 
 	const loginMut = trpcReact.user.login.useMutation({
 		onSuccess: async (jwt) => {
@@ -46,6 +59,20 @@ export default function CreateAccount() {
 	const registerMut = trpcReact.user.register.useMutation({
 		onSuccess: async () => loginMut.mutate({password, totpToken: ''}),
 	})
+
+	const completeAccountSetup = () => {
+		if (isPro) {
+			// For Umbrel Pro we navigate to RAID setup
+			setIsNavigating(true)
+			const credentials: AccountCredentials = {name, password, language}
+
+			// Pass credentials to RAID setup page
+			navigate('/onboarding/raid', {state: {credentials}})
+		} else {
+			// For non-Pro devices we do standard registration flow
+			registerMut.mutate({name, password, language})
+		}
+	}
 
 	const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault()
@@ -69,17 +96,15 @@ export default function CreateAccount() {
 			return
 		}
 
-		if (isPro) {
-			// For Umbrel Pro we navigate to RAID setup
-			setIsNavigating(true)
-			const credentials: AccountCredentials = {name, password, language}
-
-			// Pass credentials to RAID setup page
-			navigate('/onboarding/raid', {state: {credentials}})
-		} else {
-			// For non-Pro devices we do standard registration flow
-			registerMut.mutate({name, password, language})
+		const externalDevices = isRaspberryPi
+			? (externalDevicesQ.data ?? (await externalDevicesQ.refetch()).data)
+			: undefined
+		if (externalDevices?.length) {
+			setShowExternalDriveConfirmation(true)
+			return
 		}
+
+		completeAccountSetup()
 	}
 
 	const remoteFormError = !registerMut.error?.data?.zodError && registerMut.error?.message
@@ -123,6 +148,24 @@ export default function CreateAccount() {
 					</button>
 				</fieldset>
 			</form>
+
+			<AlertDialog open={showExternalDriveConfirmation} onOpenChange={setShowExternalDriveConfirmation}>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>{t('onboarding.create-account.external-drive.title')}</AlertDialogTitle>
+						<AlertDialogDescription className='space-y-3'>
+							<span className='block'>{t('onboarding.create-account.external-drive.description')}</span>
+							<span className='block'>{t('onboarding.create-account.external-drive.main-storage')}</span>
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>{t('onboarding.create-account.external-drive.go-back')}</AlertDialogCancel>
+						<AlertDialogAction onClick={completeAccountSetup}>
+							{t('onboarding.create-account.external-drive.continue')}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</Layout>
 	)
 }

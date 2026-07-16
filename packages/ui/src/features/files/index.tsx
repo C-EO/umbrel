@@ -22,9 +22,6 @@ const ShareInfoDialog = lazy(() => import('@/features/files/components/dialogs/s
 const PermanentlyDeleteConfirmationDialog = lazy(
 	() => import('@/features/files/components/dialogs/permanently-delete-confirmation-dialog'),
 )
-const ExternalStorageUnsupportedDialog = lazy(
-	() => import('@/features/files/components/dialogs/external-storage-unsupported-dialog'),
-)
 const AddNetworkShareDialog = lazy(() => import('@/features/files/components/dialogs/add-network-share-dialog'))
 const FormatDriveDialog = lazy(() => import('@/features/files/components/dialogs/format-drive-dialog'))
 
@@ -106,9 +103,6 @@ export default function FilesLayout() {
 							</Suspense>
 							<Suspense>
 								<PermanentlyDeleteConfirmationDialog />
-							</Suspense>
-							<Suspense>
-								<ExternalStorageUnsupportedDialog />
 							</Suspense>
 							<Suspense>
 								<AddNetworkShareDialog />

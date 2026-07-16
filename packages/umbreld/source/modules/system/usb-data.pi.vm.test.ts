@@ -2,6 +2,7 @@ import {expect, beforeAll, afterAll, describe, test} from 'vitest'
 import pRetry from 'p-retry'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
+import {createLegacyUsbInstall} from './pi-storage-test-helpers.js'
 
 type LsblkDevice = {
 	name: string
@@ -64,8 +65,6 @@ describe('Pi VM boot from SD card with USB external storage', () => {
 	// hardware it enumerates in seconds. Wait for the disk to prove it's
 	// attached, and if the mount script had already given up by the time it
 	// appeared, power cycle so the script gets a boot with the disk present.
-	// Production behaviour is preserved: the script only ever runs at boot,
-	// ordered before docker and umbreld.
 	const ensureBootSawUsbStorage = async () => {
 		await pRetry(
 			async () => {
@@ -83,30 +82,39 @@ describe('Pi VM boot from SD card with USB external storage', () => {
 		}
 	}
 
+	const expectUsbSystemMounts = async () => {
+		const umbrelMountSource = await umbreld.vm.ssh('findmnt -n -o SOURCE /home/umbrel/umbrel')
+		expect(topmostMountSource(umbrelMountSource)).toMatch(/^\/dev\/sd[a-z]\d/)
+
+		const dockerMountSource = await umbreld.vm.ssh('findmnt -n -o SOURCE /var/lib/docker')
+		expect(topmostMountSource(dockerMountSource)).toMatch(/^\/dev\/sd[a-z]\d/)
+
+		const swapMountSource = await umbreld.vm.ssh('findmnt -n -o SOURCE /swap')
+		expect(topmostMountSource(swapMountSource)).toMatch(/^\/dev\/sd[a-z]\d/)
+
+		const sdRootMountTarget = await umbreld.vm.ssh('findmnt -n -o TARGET /sd-root')
+		expect(sdRootMountTarget.trim()).toBe('/sd-root')
+	}
+
 	test(
-		'formats and bind mounts USB storage during Pi boot',
+		'leaves the blank USB disk untouched during normal boot',
 		async () => {
 			await ensureBootSawUsbStorage()
+			const {blockdevices} = JSON.parse(await umbreld.vm.ssh('lsblk --json --output NAME,TYPE,TRAN')) as {
+				blockdevices: LsblkDevice[]
+			}
+			const usbDisk = blockdevices.find((device) => device.type === 'disk' && device.tran === 'usb')
+			expect(usbDisk).toBeDefined()
+			expect(usbDisk!.children ?? []).toHaveLength(0)
+		},
+		startupTimeout + 600_000,
+	)
 
-			await pRetry(
-				async () => {
-					const serviceStatus = await umbreld.vm.ssh('systemctl is-active umbrel-external-storage.service')
-					expect(serviceStatus.trim()).toBe('active')
-
-					const umbrelMountSource = await umbreld.vm.ssh('findmnt -n -o SOURCE /home/umbrel/umbrel')
-					expect(topmostMountSource(umbrelMountSource)).toMatch(/^\/dev\/sd[a-z]\d/)
-
-					const dockerMountSource = await umbreld.vm.ssh('findmnt -n -o SOURCE /var/lib/docker')
-					expect(topmostMountSource(dockerMountSource)).toMatch(/^\/dev\/sd[a-z]\d/)
-
-					const swapMountSource = await umbreld.vm.ssh('findmnt -n -o SOURCE /swap')
-					expect(topmostMountSource(swapMountSource)).toMatch(/^\/dev\/sd[a-z]\d/)
-
-					const sdRootMountTarget = await umbreld.vm.ssh('findmnt -n -o TARGET /sd-root')
-					expect(sdRootMountTarget.trim()).toBe('/sd-root')
-				},
-				{retries: 30, minTimeout: 1000, maxTimeout: 1000},
-			)
+	test(
+		'creates a legacy USB installation only with the explicit setup flag',
+		async () => {
+			await createLegacyUsbInstall(umbreld)
+			await expectUsbSystemMounts()
 
 			const {blockdevices} = JSON.parse(
 				await umbreld.vm.ssh('lsblk --json --output NAME,TYPE,TRAN,LABEL,MOUNTPOINTS'),
@@ -121,6 +129,21 @@ describe('Pi VM boot from SD card with USB external storage', () => {
 		startupTimeout + 600_000,
 	)
 
+	test(
+		'mounts the legacy USB installation through the normal boot path',
+		async () => {
+			const uuidBeforeReboot = (await umbreld.vm.ssh('lsblk -no UUID /dev/disk/by-label/umbrel')).trim()
+
+			await umbreld.vm.powerOff()
+			await umbreld.vm.powerOn()
+			await ensureBootSawUsbStorage()
+			await expectUsbSystemMounts()
+
+			expect((await umbreld.vm.ssh('lsblk -no UUID /dev/disk/by-label/umbrel')).trim()).toBe(uuidBeforeReboot)
+		},
+		startupTimeout + 600_000,
+	)
+
 	test('creates an account and serves authenticated requests', async () => {
 		await umbreld.registerAndLogin()
 
@@ -129,38 +152,23 @@ describe('Pi VM boot from SD card with USB external storage', () => {
 		expect(homeListing).toBeDefined()
 	})
 
-	// The first boot formats the blank USB drive; every boot after that takes
-	// the other branch of the mount script and mounts the existing drive. A
-	// reformat here would be user data loss, so prove the filesystem survives
-	// and the account and files from the previous boot are still there.
+	// Every normal boot takes the mount-existing path. A reformat here would be
+	// user data loss, so prove the filesystem and account survive another boot.
 	test(
 		'mounts existing USB storage and preserves user data across a reboot',
 		async () => {
-			// Drop a marker file into the user's Home (backed by the USB disk) and
-			// capture the filesystem UUID so a reformat can't go unnoticed.
 			await umbreld.vm.ssh('touch /home/umbrel/umbrel/home/created-before-reboot')
 			const uuidBeforeReboot = (await umbreld.vm.ssh('lsblk -no UUID /dev/disk/by-label/umbrel')).trim()
 			expect(uuidBeforeReboot).not.toBe('')
 
 			await umbreld.vm.powerOff()
 			await umbreld.vm.powerOn()
-
-			// The reboot rolls the same QEMU enumeration dice as the first boot.
 			await ensureBootSawUsbStorage()
+			await expectUsbSystemMounts()
 
-			// The mount script must come up via its mount-existing path.
-			const serviceStatus = await umbreld.vm.ssh('systemctl is-active umbrel-external-storage.service')
-			expect(serviceStatus.trim()).toBe('active')
-
-			// Same filesystem as before the reboot, not a fresh format.
 			const uuidAfterReboot = (await umbreld.vm.ssh('lsblk -no UUID /dev/disk/by-label/umbrel')).trim()
 			expect(uuidAfterReboot).toBe(uuidBeforeReboot)
 
-			// umbreld data is bind mounted from the USB disk again.
-			const umbrelMountSource = await umbreld.vm.ssh('findmnt -n -o SOURCE /home/umbrel/umbrel')
-			expect(topmostMountSource(umbrelMountSource)).toMatch(/^\/dev\/sd[a-z]\d/)
-
-			// The account from the previous boot still logs in and its data is intact.
 			await umbreld.login()
 			const homeListing = await umbreld.client.files.list.query({path: '/Home'})
 			expect(homeListing.files).toContainEqual(expect.objectContaining({name: 'created-before-reboot'}))

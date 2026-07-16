@@ -2,13 +2,10 @@ import nodePath from 'node:path'
 import {setTimeout} from 'node:timers/promises'
 
 import pRetry from 'p-retry'
-import pWaitFor from 'p-wait-for'
 
 import fse from 'fs-extra'
 import {$} from 'execa'
 import PQueue from 'p-queue'
-
-import {isRaspberryPi} from '../system/system.js'
 
 import type Umbreld from '../../index.js'
 
@@ -100,12 +97,8 @@ export default class ExternalStorage {
 		this.logger = umbreld.logger.createChildLogger(`files:${name.toLocaleLowerCase()}`)
 	}
 
-	// Only enable this module on non raspberry pi devices.
-	// We disable on Pi due to unreliable power issues when running USB storage devices
-	// and also due to complexities with the current mount script.
 	async supported() {
-		const isNotRaspberryPi = !(await isRaspberryPi())
-		return isNotRaspberryPi
+		return true
 	}
 
 	// Add listener
@@ -165,16 +158,18 @@ export default class ExternalStorage {
 			// type that is always unknown.
 			// If we don't do this we'll end up mounting all partitions as "Untitled".
 			let externalStorageDevices: BlockDevice[] = []
-			await pWaitFor(
-				async () => {
-					externalStorageDevices = await this.#getExternalDevices()
-					const hasMissingData = externalStorageDevices.some((device) =>
-						device.partitions.some((partition) => partition.type === 'unknown'),
-					)
-					return !hasMissingData
-				},
-				{interval: 100, timeout: {milliseconds: 2000, fallback: () => {}}},
-			)
+			const metadataDeadline = Date.now() + 2000
+			do {
+				// Always wait for the scan itself to finish. On slower systems the
+				// lsblk/df calls can take longer than the metadata deadline, and
+				// timing out the in-flight scan would leave this as an empty list.
+				externalStorageDevices = await this.#getExternalDevices()
+				const hasMissingData = externalStorageDevices.some((device) =>
+					device.partitions.some((partition) => partition.type === 'unknown'),
+				)
+				if (!hasMissingData || Date.now() >= metadataDeadline) break
+				await setTimeout(100)
+			} while (true)
 
 			// Loop over external devices
 			for (const device of externalStorageDevices) {
@@ -213,7 +208,16 @@ export default class ExternalStorage {
 						// Mount partition
 						await fse.ensureDir(systemMountpoint)
 						await this.#umbreld.files.chownSystemPath(systemMountpoint)
-						await $`mount /dev/${partition.id} ${systemMountpoint}`
+						await pRetry(() => $`mount /dev/${partition.id} ${systemMountpoint}`, {
+							retries: 10,
+							minTimeout: 500,
+							factor: 1,
+							onFailedAttempt: (error) => {
+								this.logger.log(
+									`Mount attempt ${error.attemptNumber} for ${partition.id} failed, ${error.retriesLeft} retries left`,
+								)
+							},
+						})
 
 						// Log on success
 						const virtualMountPoint = this.#umbreld.files.systemToVirtualPath(systemMountpoint)
@@ -518,14 +522,5 @@ export default class ExternalStorage {
 				this.logger.error(`Failed to clean up left over mount point ${mountPoint}`, error)
 			}
 		}
-	}
-
-	// Check if an external drive is connected on unsupported hardware
-	// This is used to notify unsupported users why they can't see their hardware.
-	async isExternalDeviceConnectedOnUnsupportedDevice() {
-		const isSupported = await this.supported()
-		const externalBlockDevices = await this.#getExternalDevices()
-
-		return !isSupported && externalBlockDevices.length > 0
 	}
 }

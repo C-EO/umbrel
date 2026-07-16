@@ -12,17 +12,6 @@ let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
 // rewrite these tests to not use mocking and test against virtual USB block devices
 // being attached/removed from the VM.
 
-// Mock isUmbrelHome for testing
-let isRaspberryPiMockValue = false
-afterEach(() => (isRaspberryPiMockValue = false))
-vi.mock('../system/system.js', async () => {
-	const original = (await vi.importActual('../system/system.js')) as any
-	return {
-		...original,
-		isRaspberryPi: vi.fn(() => isRaspberryPiMockValue),
-	}
-})
-
 // Mock fse.writeFile for testing
 const nullWriteFile = (path: string, data: string) => {}
 let mockWriteFile = nullWriteFile
@@ -78,13 +67,8 @@ beforeEach(async () => {
 afterEach(() => umbreld.cleanup())
 
 describe('enabled', () => {
-	test('is enabled on Umbrel Home and amd64', async () => {
+	test('is enabled on all hardware, including Raspberry Pi', async () => {
 		await expect(umbreld.instance.files.externalStorage.supported()).resolves.toBe(true)
-	})
-
-	test('is disabled on Raspberry Pi', async () => {
-		isRaspberryPiMockValue = true
-		await expect(umbreld.instance.files.externalStorage.supported()).resolves.toBe(false)
 	})
 })
 
@@ -159,6 +143,27 @@ describe('files.mountedExternalDevices', () => {
 
 		const externalDevices = await umbreld.client.files.externalDevices.query()
 		await expect(externalDevices).toEqual([])
+	})
+
+	test('shows additional USB disks when the running system also uses USB storage', async () => {
+		const blockDevices = getLsblkUsbSystemDisk()
+		const externalDisk = structuredClone(LSBLK_EXTERNAL_DISK_ATTACHED.blockdevices[0]) as any
+		externalDisk.name = 'sdb'
+		externalDisk.kname = 'sdb'
+		for (const partition of externalDisk.children) {
+			partition.name = partition.name.replace('sda', 'sdb')
+			partition.kname = partition.kname.replace('sda', 'sdb')
+		}
+		blockDevices.blockdevices.push(externalDisk)
+
+		mockCommand = (command: string) => {
+			if (command.startsWith('lsblk')) return JSON.stringify(blockDevices)
+			if (command.startsWith('df')) return {stdout: 'Filesystem\n/dev/sda4'}
+		}
+
+		const externalDevices = await umbreld.client.files.externalDevices.query()
+		expect(externalDevices).toHaveLength(1)
+		expect(externalDevices[0].id).toBe('sdb')
 	})
 
 	test('returns external devices that are attached but not mounted', async () => {
@@ -305,83 +310,6 @@ describe('files.unmountExternalDevice', () => {
 	})
 })
 
-describe('files.isExternalDeviceConnectedOnUnsupportedDevice', () => {
-	test('throws unauthorized error without auth token', async () => {
-		await expect(
-			umbreld.unauthenticatedClient.files.isExternalDeviceConnectedOnUnsupportedDevice.query(),
-		).rejects.toThrow('Invalid token')
-	})
-
-	test('returns false when on Umbrel Home and amd64 but no external devices connected', async () => {
-		// Mock lsblk to show an external USB device
-		mockCommand = (command: string) => {
-			if (command.startsWith('lsblk')) return JSON.stringify(LSBLK_NO_EXTERNAL_DISK)
-			if (command.startsWith('df')) return {stdout: 'Filesystem\n/dev/nvme0n1p4'}
-		}
-
-		// Check the result
-		const result = await umbreld.client.files.isExternalDeviceConnectedOnUnsupportedDevice.query()
-		expect(result).toBe(false)
-	})
-
-	test('returns false when on Umbrel Home and amd64 and external devices connected', async () => {
-		// Mock lsblk to show an external USB device
-		mockCommand = (command: string) => {
-			if (command.startsWith('lsblk')) return JSON.stringify(LSBLK_EXTERNAL_DISK_ATTACHED)
-			if (command.startsWith('df')) return {stdout: 'Filesystem\n/dev/nvme0n1p4'}
-		}
-
-		// Check the result
-		const result = await umbreld.client.files.isExternalDeviceConnectedOnUnsupportedDevice.query()
-		expect(result).toBe(false)
-	})
-
-	test('returns false when on Raspberry Pi but no external devices are connected', async () => {
-		// Set isRaspberryPi to return false
-		isRaspberryPiMockValue = true
-
-		// Mock lsblk to show no external USB devices
-		mockCommand = (command: string) => {
-			if (command.startsWith('lsblk')) return JSON.stringify(LSBLK_NO_EXTERNAL_DISK)
-			if (command.startsWith('df')) return {stdout: 'Filesystem\n/dev/nvme0n1p4'}
-		}
-
-		// Check the result
-		const result = await umbreld.client.files.isExternalDeviceConnectedOnUnsupportedDevice.query()
-		expect(result).toBe(false)
-	})
-
-	test('returns true when on Raspberry Pi and external devices connected', async () => {
-		// Set isRaspberryPi to return false
-		isRaspberryPiMockValue = true
-
-		// Mock lsblk to show external USB devices and df to show system disk is not USB
-		mockCommand = (command: string) => {
-			if (command.startsWith('lsblk')) return JSON.stringify(LSBLK_EXTERNAL_DISK_ATTACHED)
-			if (command.startsWith('df')) return {stdout: 'Filesystem\n/dev/nvme0n1p4'}
-		}
-
-		// Check the result
-		const result = await umbreld.client.files.isExternalDeviceConnectedOnUnsupportedDevice.query()
-		expect(result).toBe(true)
-	})
-
-	test('excludes external devices that contain the data directory (to avoid USB Pi false positives)', async () => {
-		// Set isRaspberryPi to return false
-		isRaspberryPiMockValue = true
-
-		// Mock lsblk to show external USB devices but df to show system disk is USB
-		mockCommand = (command: string) => {
-			if (command.startsWith('lsblk')) return JSON.stringify(LSBLK_EXTERNAL_DISK_ATTACHED)
-			if (command.startsWith('df')) return {stdout: 'Filesystem\n/dev/sda2'}
-		}
-
-		// Check the result - should be false as the system disk is on the USB device
-		const result = await umbreld.client.files.isExternalDeviceConnectedOnUnsupportedDevice.query()
-		expect(result).toBe(false)
-	})
-})
-
 describe('externalstorage.#cleanLeftOverMountPoints()', () => {
 	test('cleans up any left over mount points on startup', async () => {
 		// Stop umbreld
@@ -403,6 +331,30 @@ describe('externalstorage.#cleanLeftOverMountPoints()', () => {
 })
 
 describe('externalstorage.#mountExternalDevices', () => {
+	test('waits for a slow initial device scan before mounting', async () => {
+		let lsblkCommands = 0
+		let mountCommands = 0
+		mockCommand = (command: string) => {
+			if (command.startsWith('lsblk')) {
+				lsblkCommands++
+				if (lsblkCommands === 1) {
+					return delay(2500).then(() => ({stdout: JSON.stringify(LSBLK_EXTERNAL_DISK_ATTACHED)}))
+				}
+				return JSON.stringify(LSBLK_EXTERNAL_DISK_ATTACHED)
+			}
+			if (command.startsWith('mountpoint')) return {exitCode: 1}
+			if (command.startsWith('mount /dev/')) {
+				mountCommands++
+				return 'fake mount worked'
+			}
+		}
+
+		await umbreld.instance.eventBus.emit('system:disk:change')
+		await delay(3000)
+
+		expect(mountCommands).toBe(1)
+	})
+
 	test('does nothing when no external devices are attached', async () => {
 		mockCommand = (command: string) => {
 			// Mock lsblk command to return a valid response for no external disks
@@ -448,6 +400,27 @@ describe('externalstorage.#mountExternalDevices', () => {
 		const mountPoint = `${umbreld.instance.dataDirectory}/external/Untitled`
 		const exists = await fse.pathExists(mountPoint)
 		expect(exists).toBe(false)
+	})
+
+	test('retries transient external partition mount failures', async () => {
+		let mountCommands = 0
+		mockCommand = (command: string) => {
+			if (command.startsWith('lsblk')) return JSON.stringify(LSBLK_EXTERNAL_DISK_ATTACHED)
+			if (command.startsWith('mountpoint')) return {exitCode: 1}
+			if (command.startsWith('mount /dev/')) {
+				mountCommands++
+				if (mountCommands < 3) return Promise.reject(new Error('transient mount failure'))
+				return 'fake mount worked'
+			}
+		}
+
+		await umbreld.instance.eventBus.emit('system:disk:change')
+		await delay(2000)
+
+		expect(mountCommands).toBe(3)
+		mockCommand = (command: string) => {
+			if (command.startsWith('lsblk')) return JSON.stringify(LSBLK_NO_EXTERNAL_DISK)
+		}
 	})
 
 	// Skip this for now since it breaks with the new cleanup logic which will remove the directory before we can test it exists

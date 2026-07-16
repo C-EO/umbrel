@@ -658,13 +658,23 @@ build_usb_args() {
         serial="usb${slot}"
       fi
 
-      # The Pi has no PCI bus for an xHCI controller, USB devices attach to the
-      # Pi's own dwc2 USB controller instead.
-      if [[ "$device" != "pi" && "$has_usb_storage" == "false" ]]; then
-        usb_args="$usb_args -device qemu-xhci,id=usb_storage_xhci"
+      if [[ "$has_usb_storage" == "false" ]]; then
+        if [[ "$device" != "pi" ]]; then
+          usb_args="$usb_args -device qemu-xhci,id=usb_storage_xhci"
+        fi
         has_usb_storage=true
       fi
-      if [[ "$device" != "pi" ]]; then
+
+      if [[ "$device" == "pi" ]]; then
+        # The Pi VM's USB devices share its single dwc2 root port through two
+        # emulated hubs. Port 1.1 is reserved for networking; slots 1-6 use the
+        # first hub and slots 7-8 use the nested hub on port 1.8.
+        if (( slot <= 6 )); then
+          bus_arg=",bus=usb-bus.0,port=1.$(( slot + 1 ))"
+        else
+          bus_arg=",bus=usb-bus.0,port=1.8.$(( slot - 6 ))"
+        fi
+      else
         bus_arg=",bus=usb_storage_xhci.0"
       fi
 
@@ -1083,10 +1093,16 @@ boot_vm() {
   # mini-UART, which is the second serial device on QEMU raspi machines (the
   # first is the PL011, which is reserved for Bluetooth).
   local network_device="virtio-net-pci"
+  local pi_usb_hub_args=""
   local serial_args="-serial chardev:char0"
   if [[ "$device" == "pi" ]]; then
     network_device="usb-net"
     serial_args="-serial null -serial chardev:char0"
+    if [[ -n "$usb_args" ]]; then
+      pi_usb_hub_args="-device usb-hub,id=usb_storage_hub,bus=usb-bus.0,port=1"
+      pi_usb_hub_args="$pi_usb_hub_args -device usb-hub,id=usb_storage_hub_overflow,bus=usb-bus.0,port=1.8"
+      network_device="usb-net,bus=usb-bus.0,port=1.1"
+    fi
   fi
 
   echo "Booting VM (${arch}, ${device}, ${boot_disk_transport} boot disk)..."
@@ -1119,6 +1135,7 @@ boot_vm() {
     $boot_disk_args \
     $cdrom_args \
     -netdev "$netdev_arg" \
+    $pi_usb_hub_args \
     -device ${network_device},netdev=net0 \
     $nvme_args \
     $hdd_args \
