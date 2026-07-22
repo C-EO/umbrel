@@ -7,6 +7,7 @@ import {toast} from '@/components/ui/toast'
 import type {FileSystemItem} from '@/features/files/types'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
 import {splitFileName} from '@/features/files/utils/format-filesystem-name'
+import {dashboardAuthHeaders} from '@/modules/auth/http-auth'
 import {useConfirmation} from '@/providers/confirmation'
 import type {RouterOutput} from '@/trpc/trpc'
 import {trpcReact} from '@/trpc/trpc'
@@ -257,6 +258,8 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 
 			const uploadUrl = `/api/files/upload?path=${encodeURIComponent(item.path)}&collision=${collisionStrategy}`
 			xhr.open('POST', uploadUrl)
+			const authorization = dashboardAuthHeaders().Authorization
+			if (authorization) xhr.setRequestHeader('Authorization', authorization)
 
 			let lastLoaded = 0
 			let lastTime = Date.now()

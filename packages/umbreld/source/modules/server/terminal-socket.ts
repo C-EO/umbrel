@@ -2,7 +2,7 @@ import type http from 'node:http'
 
 import {$} from 'execa'
 import pty, {IPty} from 'node-pty'
-import {type WebSocket} from 'ws'
+import {WebSocket} from 'ws'
 
 import type Umbreld from '../../index.js'
 import type createLogger from '../utilities/logger.js'
@@ -27,12 +27,19 @@ export default function createTerminalWebSocketHandler({
 	logger: ReturnType<typeof createLogger>
 }) {
 	return async function (ws: WebSocket, request: http.IncomingMessage) {
+		let ptyProcess: IPty | undefined
+		let socketClosed = false
+		// Install cleanup before any asynchronous app/container lookup. Otherwise
+		// an early disconnect can be missed and leave a later-spawned PTY orphaned.
+		ws.once('close', () => {
+			socketClosed = true
+			ptyProcess?.kill()
+		})
+
 		try {
 			const appId = new URL(`https://localhost/${request.url}`).searchParams.get('appId')
 			const cols = Number(new URL(`https://localhost/${request.url}`).searchParams.get('cols'))
 			const rows = Number(new URL(`https://localhost/${request.url}`).searchParams.get('rows'))
-
-			let ptyProcess: IPty
 
 			if (appId) {
 				const app = await umbreld.apps.getApp(appId)
@@ -54,6 +61,7 @@ export default function createTerminalWebSocketHandler({
 					container = Object.values(compose.services!).filter((service) => service.image && service.container_name)[0]
 						?.container_name as string
 				}
+				if (socketClosed || ws.readyState !== WebSocket.OPEN) return
 
 				// Launch terminal with interactive docker shell
 				// We set a consistent '$ ' prompt across different containers regardless of the shell environment (bash or sh)
@@ -86,6 +94,7 @@ export default function createTerminalWebSocketHandler({
 			} else {
 				// Get username of first non-root user on the system
 				const {stdout: username} = await $`id -nu 1000`
+				if (socketClosed || ws.readyState !== WebSocket.OPEN) return
 				// launch terminal with non-root user
 				ptyProcess = pty.spawn(
 					'sudo',
@@ -98,16 +107,18 @@ export default function createTerminalWebSocketHandler({
 				)
 			}
 			// Stream output from the shell to the WebSocket
-			ptyProcess.onData((data) => ws.send(data))
+			ptyProcess.onData((data) => {
+				if (ws.readyState === WebSocket.OPEN) ws.send(data)
+			})
 
-			// Stream input from the WebSocket to the shell
-			ws.on('message', (data) => ptyProcess.write(data.toString()))
-
-			// Kill process when WebSocket is closed
-			ws.on('close', () => ptyProcess.kill())
+			// A hostile peer can continue delivering buffered frames after a graceful
+			// close begins. Never write terminal input unless the socket is fully open.
+			ws.on('message', (data) => {
+				if (ws.readyState === WebSocket.OPEN) ptyProcess?.write(data.toString())
+			})
 		} catch (error) {
 			logger.error(`Terminal socket`, error)
-			ws?.close()
+			if (ws.readyState === WebSocket.OPEN) ws.close()
 		}
 	}
 }

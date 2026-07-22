@@ -1131,7 +1131,7 @@ boot_vm() {
     -nographic -monitor none -chardev stdio,id=char0,signal=off $serial_args \
     "${smbios_args[@]}" \
     "${firmware_args[@]}" \
-    "${direct_boot_args[@]}" \
+    ${direct_boot_args[@]+"${direct_boot_args[@]}"} \
     $boot_disk_args \
     $cdrom_args \
     -netdev "$netdev_arg" \

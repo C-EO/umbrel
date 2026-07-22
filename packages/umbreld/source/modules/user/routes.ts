@@ -4,12 +4,12 @@ import {z} from 'zod'
 import {router, publicProcedure, privateProcedure} from '../server/trpc/trpc.js'
 import {detectDevice} from '../system/system.js'
 import * as totp from '../utilities/totp.js'
-
-const ONE_SECOND = 1000
-const ONE_MINUTE = 60 * ONE_SECOND
-const ONE_HOUR = 60 * ONE_MINUTE
-const ONE_DAY = 24 * ONE_HOUR
-const ONE_WEEK = 7 * ONE_DAY
+import {appGatewayTokenFromRequest, clearAppGatewayCookies, setAppGatewayCookie} from '../auth/app-gateway-cookie.js'
+import {
+	browserSessionTokenFromRequest,
+	clearBrowserSessionCookies,
+	setBrowserSessionCookie,
+} from '../auth/browser-session-cookie.js'
 
 // Returns the default wallpaper based on device type
 // Pro/Home get forest wallpaper (22), others get classic (18)
@@ -80,62 +80,103 @@ export default router({
 			}),
 		)
 		.mutation(async ({ctx, input}) => {
-			if (!(await ctx.user.validatePassword(input.password))) {
-				throw new TRPCError({code: 'UNAUTHORIZED', message: 'Incorrect password'})
-			}
+			const loginError = await ctx.user.validateLogin(input.password, input.totpToken)
+			if (loginError) throw new TRPCError({code: 'UNAUTHORIZED', message: loginError})
+			const session = await ctx.umbreld.auth.createSession({userAgent: ctx.request!.get('user-agent')})
+			setAppGatewayCookie(ctx.response!, ctx.request!, session.appGatewayToken, new Date(session.expiresAt))
+			setBrowserSessionCookie(ctx.response!, ctx.request!, session.browserSessionToken, new Date(session.expiresAt))
 
-			// 2FA
-			if (await ctx.user.is2faEnabled()) {
-				// Check we have a token
-				if (!input.totpToken) {
-					throw new TRPCError({code: 'UNAUTHORIZED', message: 'Missing 2FA code'})
-				}
-
-				// Verify the token
-				if (!(await ctx.user.validate2faToken(input.totpToken))) {
-					throw new TRPCError({code: 'UNAUTHORIZED', message: 'Incorrect 2FA code'})
-				}
-			}
-
-			// At this point we have a valid login
-
-			// Set proxy token cookie
-			const proxyToken = await ctx.server.signProxyToken()
-			const expires = new Date(Date.now() + ONE_WEEK)
-			ctx.server.setProxyTokenCookie(ctx.response!, ctx.request!, proxyToken, expires)
-
-			// Return API token
-			return ctx.server.signToken()
+			return session.dashboardToken
 		}),
 
 	// Checks if the request has a valid token
 	isLoggedIn: publicProcedure.query(async ({ctx}) => {
 		try {
 			const token = ctx.request!.headers.authorization?.split(' ')[1]
-			await ctx.server.verifyToken(token!)
+			await ctx.umbreld.auth.authenticateDashboardCredentials(token!, browserSessionTokenFromRequest(ctx.request!))
 			return true
 		} catch {
 			return false
 		}
 	}),
 
-	// Returns a new token for a user
+	// Extends the current session and returns its unchanged dashboard token.
 	renewToken: privateProcedure.mutation(async ({ctx}) => {
-		// Renew proxy token cookie
-		const proxyToken = await ctx.server.signProxyToken()
-		const expires = new Date(Date.now() + ONE_WEEK)
-		ctx.server.setProxyTokenCookie(ctx.response!, ctx.request!, proxyToken, expires)
+		const token = ctx.request!.headers.authorization?.split(' ')[1]
+		if (!token) throw new TRPCError({code: 'UNAUTHORIZED', message: 'Invalid token'})
+		const session = await ctx.umbreld.auth.renewSession(ctx.principal!)
 
-		// Return API token
-		return ctx.server.signToken()
+		// Keep the app credential stable across dashboard renewal. Rotating it here
+		// would invalidate app cookies on every other hostname and Tor onion.
+		const appGatewayToken = appGatewayTokenFromRequest(ctx.request!)
+		if (appGatewayToken) {
+			const appPrincipal = await ctx.umbreld.auth.authenticate(appGatewayToken, 'app-gateway').catch(() => null)
+			if (appPrincipal?.sessionId === session.principal.sessionId) {
+				setAppGatewayCookie(ctx.response!, ctx.request!, appGatewayToken, new Date(session.expiresAt))
+			}
+		}
+
+		// The browser credential is stable for the session. Reissue the credential
+		// that authenticated this exact request so its browser expiry follows the
+		// sliding backend session. A missing cookie cannot bootstrap a replacement.
+		const browserSessionToken = browserSessionTokenFromRequest(ctx.request!)
+		if (!browserSessionToken) throw new TRPCError({code: 'UNAUTHORIZED', message: 'Invalid token'})
+		setBrowserSessionCookie(ctx.response!, ctx.request!, browserSessionToken, new Date(session.expiresAt))
+
+		return token
 	}),
 
-	// Deletes the proxy token cookie
-	// The JWT needs to be deleted from the client side
-	logout: privateProcedure.mutation(async ({ctx}) => {
-		ctx.server.clearProxyTokenCookies(ctx.response!)
+	createWebSocketTicket: privateProcedure.mutation(async ({ctx}) =>
+		ctx.umbreld.auth.issueWebSocketTicket(ctx.principal!),
+	),
 
-		// Return API token
+	getHttpApiToken: privateProcedure.query(async ({ctx}) => {
+		if (!ctx.request || !ctx.response) {
+			throw new TRPCError({code: 'METHOD_NOT_SUPPORTED', message: 'HTTP transport required'})
+		}
+		const token = await ctx.umbreld.auth.getHttpApiToken(ctx.principal!)
+		ctx.response.set('Cache-Control', 'no-store')
+		return token
+	}),
+
+	listSessions: privateProcedure.query(async ({ctx}) => ctx.umbreld.auth.listSessions(ctx.principal!)),
+
+	revokeSession: privateProcedure
+		.input(z.object({sessionId: z.string().regex(/^[0-9a-f]{32}$/)}))
+		.mutation(async ({ctx, input}) => {
+			const result = await ctx.umbreld.auth.revokeSessionForAccount(ctx.principal!, input.sessionId)
+			if (result.revokedCurrent) {
+				clearAppGatewayCookies(ctx.response!)
+				clearBrowserSessionCookies(ctx.response!)
+			}
+			return result
+		}),
+
+	revokeOtherSessions: privateProcedure.mutation(async ({ctx}) => ({
+		revokedCount: await ctx.umbreld.auth.revokeOtherSessionsForAccount(ctx.principal!),
+	})),
+
+	revokeAllSessions: privateProcedure.mutation(async ({ctx}) => {
+		const revokedCount = await ctx.umbreld.auth.revokeAllSessionsForAccount(ctx.principal!)
+		clearAppGatewayCookies(ctx.response!)
+		clearBrowserSessionCookies(ctx.response!)
+		return {revokedCount, revokedCurrent: true}
+	}),
+
+	// Log out only the session making this request. Global revocation remains an
+	// explicit action in the active-sessions UI.
+	logout: privateProcedure.mutation(async ({ctx}) => {
+		await ctx.umbreld.auth.revokeSession(ctx.principal!.sessionId)
+		clearAppGatewayCookies(ctx.response!)
+		clearBrowserSessionCookies(ctx.response!)
+		return true
+	}),
+
+	// Verifies a sensitive action without creating a replacement login session.
+	verifyPassword: privateProcedure.input(z.object({password: z.string()})).mutation(async ({ctx, input}) => {
+		if (!(await ctx.user.validatePassword(input.password))) {
+			throw new TRPCError({code: 'UNAUTHORIZED', message: 'Incorrect password'})
+		}
 		return true
 	}),
 

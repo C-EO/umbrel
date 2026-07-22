@@ -50,9 +50,9 @@ export default function CreateAccount() {
 	const externalDevicesQ = trpcReact.files.externalDevices.useQuery(undefined, {enabled: isRaspberryPi})
 
 	const loginMut = trpcReact.user.login.useMutation({
-		onSuccess: async (jwt) => {
+		onSuccess: async (token) => {
 			setIsNavigating(true)
-			auth.signUpWithJwt(jwt, '/onboarding/account-created')
+			auth.signUpWithToken(token, '/onboarding/account-created')
 		},
 	})
 

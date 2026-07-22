@@ -2,9 +2,11 @@
 import {useEffect, useRef} from 'react'
 import {Video} from 'react-video-kit'
 
+import {AuthorizedUrlState} from '@/features/files/components/file-viewer/authorized-url-state'
 import {ViewerWrapper} from '@/features/files/components/file-viewer/viewer-wrapper'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import {FileSystemItem} from '@/features/files/types'
+import {useAuthorizedHttpUrlQuery} from '@/modules/auth/http-auth'
 
 interface VideoViewerProps {
 	item: FileSystemItem
@@ -12,7 +14,7 @@ interface VideoViewerProps {
 
 export default function VideoViewer({item}: VideoViewerProps) {
 	const viewerMode = useFilesStore((s) => s.viewerMode)
-	const previewUrl = `/api/files/view?path=${encodeURIComponent(item.path)}`
+	const previewUrl = useAuthorizedHttpUrlQuery(`/api/files/view?path=${encodeURIComponent(item.path)}`)
 	const containerRef = useRef<HTMLDivElement>(null)
 
 	// Ensure video is fully stopped on unmount to prevent lingering audio
@@ -28,43 +30,47 @@ export default function VideoViewer({item}: VideoViewerProps) {
 	}, [])
 
 	return (
-		<ViewerWrapper dontCloseOnSpacebar={viewerMode !== 'preview'}>
-			<div ref={containerRef} className='bg-black'>
-				<Video.Root
-					key={item.path}
-					src={previewUrl}
-					title={item.name}
-					autoPlay
-					hotkeys={{scope: 'global', enabled: viewerMode !== 'preview'}}
-				>
-					<Video.Media />
-					<Video.Backdrop />
-					<Video.Header>
-						<div className='rv-w-full rv-flex'>
-							<Video.FullscreenToggle />
-							<Video.PipToggle />
-						</div>
-						<div className='rv-w-full rv-flex rv-justify-end rv-items-center rv-h-fit'>
-							<Video.Volume.Button />
-							<Video.Volume.Slider />
-						</div>
-					</Video.Header>
-					<Video.Center>
-						<Video.SeekBack seconds={10} />
-						<Video.PlayPause />
-						<Video.SeekForward seconds={10} />
-						<Video.Loading />
-					</Video.Center>
-					<Video.Footer>
-						<Video.Title />
-						<Video.Timeline />
-						<div className='rv-flex rv-justify-between rv-w-full'>
-							<Video.Time.Current />
-							<Video.Time.Remaining negative />
-						</div>
-					</Video.Footer>
-				</Video.Root>
-			</div>
-		</ViewerWrapper>
+		<AuthorizedUrlState query={previewUrl}>
+			{(url) => (
+				<ViewerWrapper dontCloseOnSpacebar={viewerMode !== 'preview'}>
+					<div ref={containerRef} className='bg-black'>
+						<Video.Root
+							key={item.path}
+							src={url}
+							title={item.name}
+							autoPlay
+							hotkeys={{scope: 'global', enabled: viewerMode !== 'preview'}}
+						>
+							<Video.Media />
+							<Video.Backdrop />
+							<Video.Header>
+								<div className='rv-w-full rv-flex'>
+									<Video.FullscreenToggle />
+									<Video.PipToggle />
+								</div>
+								<div className='rv-w-full rv-flex rv-justify-end rv-items-center rv-h-fit'>
+									<Video.Volume.Button />
+									<Video.Volume.Slider />
+								</div>
+							</Video.Header>
+							<Video.Center>
+								<Video.SeekBack seconds={10} />
+								<Video.PlayPause />
+								<Video.SeekForward seconds={10} />
+								<Video.Loading />
+							</Video.Center>
+							<Video.Footer>
+								<Video.Title />
+								<Video.Timeline />
+								<div className='rv-flex rv-justify-between rv-w-full'>
+									<Video.Time.Current />
+									<Video.Time.Remaining negative />
+								</div>
+							</Video.Footer>
+						</Video.Root>
+					</div>
+				</ViewerWrapper>
+			)}
+		</AuthorizedUrlState>
 	)
 }

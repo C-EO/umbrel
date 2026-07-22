@@ -2,6 +2,7 @@ import React from 'react'
 import {useTranslation} from 'react-i18next'
 import {RiPauseFill, RiPlayFill} from 'react-icons/ri'
 
+import {Button} from '@/components/ui/button'
 import {MusicEqualizer} from '@/features/files/components/floating-islands/audio-island/equalizer'
 
 interface ExpandedContentProps {
@@ -9,6 +10,9 @@ interface ExpandedContentProps {
 	isPlaying: boolean
 	currentTime: number
 	duration: number
+	authorizationFailed: boolean
+	isRetryingAuthorization: boolean
+	onRetryAuthorization: () => void
 	onTogglePlay: (e?: React.MouseEvent) => void
 	onProgressChange: (e: React.ChangeEvent<HTMLInputElement>) => void
 	analyserNode?: AnalyserNode
@@ -25,12 +29,27 @@ export const ExpandedContent: React.FC<ExpandedContentProps> = ({
 	isPlaying,
 	currentTime,
 	duration,
+	authorizationFailed,
+	isRetryingAuthorization,
+	onRetryAuthorization,
 	onTogglePlay,
 	onProgressChange,
 	analyserNode,
 }) => {
 	const {t} = useTranslation()
 	const progressPercentage = duration ? (currentTime / duration) * 100 : 0
+	if (authorizationFailed) {
+		return (
+			<div className='flex h-full flex-col items-center justify-center gap-3 px-6 text-center'>
+				<p className='text-13 text-white/60'>
+					{t('files-audio-island.auth-error', 'Umbrel could not authorize this audio file.')}
+				</p>
+				<Button onClick={onRetryAuthorization} disabled={isRetryingAuthorization}>
+					{isRetryingAuthorization ? t('loading') : t('try-again')}
+				</Button>
+			</div>
+		)
+	}
 
 	return (
 		<>

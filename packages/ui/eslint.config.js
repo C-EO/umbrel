@@ -9,7 +9,7 @@ import tseslint from 'typescript-eslint'
 export default [
 	// Global ignores
 	{
-		ignores: ['dist/**', 'dist-app-auth/**'],
+		ignores: ['dist/**'],
 	},
 
 	// Base JS recommended rules

@@ -1,0 +1,6 @@
+# This service definition is used only with `docker compose config` to render
+# the legacy app_proxy settings after app-script has sourced app exports. It is
+# never included in runtime Compose commands and does not create a container.
+services:
+  app_proxy:
+    image: app-proxy-config-only

@@ -1,8 +1,12 @@
 import {setTimeout} from 'node:timers/promises'
+import {fileURLToPath} from 'node:url'
 import path from 'node:path'
 import {expect, beforeAll, afterAll, test, vi} from 'vitest'
+import {$} from 'execa'
 import fse from 'fs-extra'
+import getPort from 'get-port'
 import yaml from 'js-yaml'
+import pRetry from 'p-retry'
 
 import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
 import {BACKUP_RESTORE_FIRST_START_FLAG} from '../../constants.js'
@@ -11,13 +15,15 @@ import type {AppManifest} from './schema.js'
 
 let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
 let communityAppStoreGitServer: Awaited<ReturnType<typeof runGitServer>>
+let stopAppAuthUi = async () => {}
 
 beforeAll(async () => {
+	stopAppAuthUi = await startAppAuthUi()
 	;[umbreld, communityAppStoreGitServer] = await Promise.all([createTestUmbreld(), runGitServer()])
 })
 
 afterAll(async () => {
-	await Promise.all([communityAppStoreGitServer.close(), umbreld.cleanup()])
+	await Promise.all([communityAppStoreGitServer.close(), umbreld.cleanup(), stopAppAuthUi()])
 })
 
 // The following tests are stateful and must be run in order
@@ -110,6 +116,91 @@ test.sequential('state() becomes ready once install completes', async () => {
 		await setTimeout(1000)
 	} while (true)
 	await expect(lastState).toMatchObject({state: 'ready'})
+})
+
+test.sequential('app auth dev proxy serves executable UI modules with scoped handoff CSP', async () => {
+	const document = await umbreld.unauthenticatedApi.get('../app-auth/?origin=host&app=sparkles-hello-world&path=%2F', {
+		responseType: 'text',
+	})
+	expect(document.headers['content-type']).toMatch(/^text\/html/)
+	expect(document.headers['content-security-policy']).toContain("form-action 'self' http://127.0.0.1:*")
+
+	const scripts = [...document.body.matchAll(/<script[^>]+src="([^"]+)"/g)].map((match) => match[1])
+	expect(scripts.length).toBeGreaterThan(0)
+	expect(scripts).toContain('/src/app-auth.tsx')
+	expect(scripts).not.toContain('/src/dashboard.tsx')
+	for (const source of scripts) {
+		const url = new URL(source, 'http://umbrel.local')
+		const module = await umbreld.unauthenticatedApi.get(`../app-auth${url.pathname}${url.search}`, {
+			responseType: 'text',
+		})
+		expect(module.statusCode, source).toBe(200)
+		expect(module.headers['content-type'], source).toMatch(/javascript/)
+		expect(module.body, source).not.toMatch(/^\s*<!doctype html>/i)
+	}
+
+	const hiddenService = `${'a'.repeat(56)}.onion`
+	const hiddenServicePath = path.join(umbreld.instance.dataDirectory, 'tor/data/app-sparkles-hello-world/hostname')
+	await fse.outputFile(hiddenServicePath, hiddenService)
+	try {
+		const torDocument = await umbreld.unauthenticatedApi.get(
+			'../app-auth/?origin=tor&app=sparkles-hello-world&path=%2F',
+			{responseType: 'text'},
+		)
+		expect(torDocument.headers['content-security-policy']).toContain(`form-action 'self' http://${hiddenService}`)
+		expect(torDocument.headers['content-security-policy']).not.toContain(`${hiddenService}:*`)
+	} finally {
+		await fse.remove(hiddenServicePath)
+	}
+})
+
+test.sequential('runs app proxying in umbreld without an app-proxy container', async () => {
+	const appDataDirectory = path.join(umbreld.instance.dataDirectory, 'app-data', 'sparkles-hello-world')
+	const originalCompose = yaml.load(
+		await fse.readFile(path.join(appDataDirectory, 'docker-compose.yml'), 'utf8'),
+	) as any
+	const runtimeCompose = yaml.load(
+		await fse.readFile(path.join(appDataDirectory, 'docker-compose.umbreld.yml'), 'utf8'),
+	) as any
+	const gatewayConfig = await fse.readJson(path.join(appDataDirectory, 'app-gateway.json'))
+
+	expect(originalCompose.services.app_proxy).toBeDefined()
+	expect(originalCompose.services.app_proxy.environment).toEqual({
+		APP_HOST: '$APP_SPARKLES_HELLO_WORLD_HOST',
+		APP_PORT: '$APP_SPARKLES_HELLO_WORLD_PORT',
+	})
+	expect(gatewayConfig).toMatchObject({
+		APP_HOST: 'sparkles-hello-world_server_1',
+		APP_PORT: '3000',
+	})
+	expect(runtimeCompose.services.app_proxy).toBeUndefined()
+	await expect(umbreld.instance.apps.getApp('sparkles-hello-world').getContainerNames()).resolves.not.toContain(
+		'sparkles-hello-world_app_proxy_1',
+	)
+})
+
+test.sequential('app auth exchanges its cookie for an app-bound one-time handoff', async () => {
+	const login = await umbreld.unauthenticatedApi.post('../trpc/user.login', {json: {password: 'moneyprintergobrrr'}})
+	const appSession = (login.headers['set-cookie'] ?? [])
+		.find((cookie) => cookie.startsWith('UMBREL_APP_SESSION='))
+		?.split(';')[0]
+	expect(appSession).toBeDefined()
+
+	const handoff = await umbreld.unauthenticatedApi
+		.get('../app-auth/v1/account/session?origin=host&app=sparkles-hello-world&path=%2Fsettings%3Ftab%3Dnetwork', {
+			headers: {cookie: appSession!},
+		})
+		.json<{url: string; params: {r: string; handoff: string}}>()
+	expect(handoff.url).toMatch(/^http:\/\/127\.0\.0\.1:4000\/umbrel_\/api\/v1\/auth\/handoff$/)
+	expect(handoff.params.r).toBe('/settings?tab=network')
+	expect(handoff.params).not.toHaveProperty('token')
+
+	await expect(
+		umbreld.instance.auth.consumeAppHandoff('sparkles-hello-world', handoff.params.handoff),
+	).resolves.toMatchObject({principal: {accountId: 'owner'}})
+	await expect(umbreld.instance.auth.consumeAppHandoff('sparkles-hello-world', handoff.params.handoff)).rejects.toThrow(
+		'Invalid app handoff',
+	)
 })
 
 test.sequential('list() lists installed apps', async () => {
@@ -221,6 +312,9 @@ test.sequential('auto-reinstalls app when data directory is missing on first boo
 
 	// Start umbreld; missing app should be auto-reinstalled in background
 	await umbreld.instance.start()
+	// Restore boots deliberately revoke every existing session. Authenticate
+	// again just as the dashboard requires after restored account data returns.
+	await umbreld.login()
 	// Re-install can complete quickly so we skip asserting initial absence to avoid flakiness.
 
 	// Poll until the app reaches ready state (auto-installed and started)
@@ -349,3 +443,41 @@ test.sequential('list() lists no apps after uninstall', async () => {
 	const installedApps = await umbreld.client.apps.list.query()
 	expect(installedApps.length).toStrictEqual(0)
 })
+
+async function startAppAuthUi() {
+	if (process.env.UMBREL_UI_PROXY) return async () => {}
+
+	const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
+	const uiDirectory = path.resolve(currentDirectory, '../../../../ui')
+	const vite = path.join(uiDirectory, 'node_modules/.bin/vite')
+	if (!(await fse.pathExists(vite))) {
+		throw new Error(`App auth integration test requires UI dependencies at ${vite}`)
+	}
+
+	const port = await getPort({host: '127.0.0.1'})
+	const viteProcess = $({
+		cwd: uiDirectory,
+		reject: false,
+	})`${vite} --host 127.0.0.1 --port ${port} --strictPort`
+	process.env.UMBREL_UI_PROXY = `http://127.0.0.1:${port}`
+	try {
+		await pRetry(
+			async () => {
+				const response = await fetch(`http://127.0.0.1:${port}/app-auth/`)
+				if (!response.ok) throw new Error(`App auth Vite server returned ${response.status}`)
+			},
+			{retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100},
+		)
+	} catch (error) {
+		viteProcess.kill('SIGTERM')
+		await viteProcess
+		delete process.env.UMBREL_UI_PROXY
+		throw error
+	}
+
+	return async () => {
+		delete process.env.UMBREL_UI_PROXY
+		viteProcess.kill('SIGTERM')
+		await viteProcess
+	}
+}

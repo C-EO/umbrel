@@ -19,6 +19,7 @@ import {cn} from '@/lib/utils'
 import {useSettingsDialogProps} from '@/routes/settings/_components/shared'
 import {NetworkPanel} from '@/routes/settings/advanced-network'
 import {HttpsCertificateSettingsPanel} from '@/routes/settings/https-access'
+import {SessionsPanel} from '@/routes/settings/sessions'
 import {trpcReact} from '@/trpc/trpc'
 import {tw} from '@/utils/tw'
 
@@ -40,6 +41,8 @@ export default function AdvancedSettingsDrawerOrDialog() {
 	const [torEnabling, setTorEnabling] = React.useState(false)
 	const [showNetwork, setShowNetwork] = React.useState(false)
 	const [showHttpsCertificateSettings, setShowHttpsCertificateSettings] = React.useState(false)
+	const [showSessions, setShowSessions] = React.useState(false)
+	const sessionsQ = trpcReact.user.listSessions.useQuery()
 
 	const handleTorToggle = (checked: boolean) => {
 		setTorEnabling(checked)
@@ -47,7 +50,7 @@ export default function AdvancedSettingsDrawerOrDialog() {
 	}
 
 	const {advancedSelection} = useParams<{
-		advancedSelection?: 'beta-program' | 'network' | 'tor'
+		advancedSelection?: 'beta-program' | 'network' | 'tor' | 'sessions'
 	}>()
 	const [searchParams] = useSearchParams()
 
@@ -55,6 +58,9 @@ export default function AdvancedSettingsDrawerOrDialog() {
 	React.useEffect(() => {
 		if (advancedSelection === 'network') {
 			setShowNetwork(true)
+		}
+		if (advancedSelection === 'sessions') {
+			setShowSessions(true)
 		}
 	}, [advancedSelection])
 
@@ -84,6 +90,21 @@ export default function AdvancedSettingsDrawerOrDialog() {
 			className={cn(cardClass, 'pointer-events-auto cursor-pointer text-left transition-colors hover:bg-white/8')}
 		>
 			<CardText title={t('network')} description={t('network-description')} />
+			<TbChevronRight className='pointer-events-auto mt-0.5 size-4.5 shrink-0 self-center text-white/30' />
+		</button>
+	)
+
+	const activeSessionsSettingRow = (
+		<button
+			onClick={() => setShowSessions(true)}
+			className={cn(cardClass, 'pointer-events-auto cursor-pointer text-left transition-colors hover:bg-white/8')}
+		>
+			<CardText
+				title={t('sessions.title')}
+				description={
+					sessionsQ.data ? t('sessions.description', {count: sessionsQ.data.length}) : t('sessions.panel-description')
+				}
+			/>
 			<TbChevronRight className='pointer-events-auto mt-0.5 size-4.5 shrink-0 self-center text-white/30' />
 		</button>
 	)
@@ -118,6 +139,7 @@ export default function AdvancedSettingsDrawerOrDialog() {
 				/>
 			</label>
 			{networkSettingRow}
+			{activeSessionsSettingRow}
 			{remoteTorAccessSettingRow}
 			<label className={cardClass}>
 				<CardText title={t('factory-reset')} description={t('factory-reset-description')} />
@@ -128,7 +150,9 @@ export default function AdvancedSettingsDrawerOrDialog() {
 		</div>
 	)
 
-	const animatedContent = showHttpsCertificateSettings ? (
+	const animatedContent = showSessions ? (
+		<SessionsPanel onBack={() => setShowSessions(false)} />
+	) : showHttpsCertificateSettings ? (
 		<HttpsCertificateSettingsPanel onBack={() => setShowHttpsCertificateSettings(false)} />
 	) : showNetwork ? (
 		<NetworkPanel
@@ -144,7 +168,7 @@ export default function AdvancedSettingsDrawerOrDialog() {
 		return (
 			<Drawer {...dialogProps}>
 				<DrawerContent fullHeight>
-					{!showNetwork && !showHttpsCertificateSettings && (
+					{!showNetwork && !showHttpsCertificateSettings && !showSessions && (
 						<DrawerHeader>
 							<DrawerTitle>{title}</DrawerTitle>
 						</DrawerHeader>
@@ -159,7 +183,7 @@ export default function AdvancedSettingsDrawerOrDialog() {
 		<Dialog {...dialogProps}>
 			<DialogScrollableContent>
 				<div className='space-y-6 px-5 py-6'>
-					{!showNetwork && !showHttpsCertificateSettings && (
+					{!showNetwork && !showHttpsCertificateSettings && !showSessions && (
 						<DialogHeader>
 							<DialogTitle>{title}</DialogTitle>
 						</DialogHeader>

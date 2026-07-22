@@ -1,7 +1,7 @@
 import {useTranslation} from 'react-i18next'
 import {arrayIncludes} from 'ts-extras'
 
-import {JWT_LOCAL_STORAGE_KEY} from '@/modules/auth/shared'
+import {AUTH_TOKEN_LOCAL_STORAGE_KEY} from '@/modules/auth/shared'
 import {trpcReact} from '@/trpc/trpc'
 import {SupportedLanguageCode, supportedLanguageCodes} from '@/utils/language'
 
@@ -36,11 +36,11 @@ export function useLanguage(): [SupportedLanguageCode, (code: SupportedLanguageC
 		// Switch language immediately — useTranslation() subscribers re-render automatically
 		i18n.changeLanguage(language)
 
-		const hasJwt = Boolean(localStorage.getItem(JWT_LOCAL_STORAGE_KEY))
+		const hasAuthToken = Boolean(localStorage.getItem(AUTH_TOKEN_LOCAL_STORAGE_KEY))
 		const isOnboarding = window.location.pathname.startsWith('/onboarding')
 
-		// Persist to backend if logged in (not during onboarding since there's no valid JWT yet)
-		if (!isOnboarding && hasJwt) {
+		// Persist to the backend if logged in (onboarding does not have a session yet).
+		if (!isOnboarding && hasAuthToken) {
 			userSetMut.mutate({language})
 		}
 	}

@@ -28,9 +28,10 @@ const userCredentials = {
 }
 
 function createTestHelpers(port: number) {
-	let jwt = ''
-	const setJwt = (newJwt: string) => {
-		jwt = newJwt
+	let authToken = ''
+	const cookieJar = new CookieJar()
+	const setAuthToken = (token: string) => {
+		authToken = token
 	}
 
 	// Node's fetch doesn't retry when a kept-alive connection is closed by the
@@ -46,11 +47,39 @@ function createTestHelpers(port: number) {
 		}
 	}) as typeof fetch
 
+	// Node's fetch does not retain cookies. Wrap it with the same cookie jar used
+	// by browserApi so tRPC and non-tRPC requests represent one browser session.
+	const fetchWithBrowserSession = (async (input: any, init?: any) => {
+		const url = input instanceof Request ? input.url : String(input)
+		const headers = new Headers(input instanceof Request ? input.headers : undefined)
+		new Headers(init?.headers).forEach((value, name) => headers.set(name, value))
+		const cookie = await cookieJar.getCookieString(url)
+		if (cookie) headers.set('cookie', cookie)
+
+		const response = await fetchWithRetry(input, {...init, headers})
+		const setCookies = (response.headers as typeof response.headers & {getSetCookie?: () => string[]}).getSetCookie?.()
+		for (const setCookie of setCookies ?? []) await cookieJar.setCookie(setCookie, url)
+		return response
+	}) as typeof fetch
+
+	const ticketClient = createTRPCProxyClient<AppRouter>({
+		links: [
+			httpBatchLink({
+				url: `http://127.0.0.1:${port}/trpc`,
+				fetch: fetchWithBrowserSession,
+				headers: async () => ({Authorization: `Bearer ${authToken}`}),
+			}),
+		],
+	})
+
 	// Create WebSocket client for subscriptions
 	// Connect via 127.0.0.1 rather than localhost: umbreld binds IPv4 loopback by
 	// default, and localhost can resolve to ::1 first.
 	const wsClient = createWSClient({
-		url: () => `ws://127.0.0.1:${port}/trpc?token=${jwt}`,
+		url: async () => {
+			const ticket = await ticketClient.user.createWebSocketTicket.mutate()
+			return `ws://127.0.0.1:${port}/trpc?ticket=${ticket}`
+		},
 		retryDelayMs: () => 100,
 	})
 
@@ -61,9 +90,9 @@ function createTestHelpers(port: number) {
 				true: wsLink({client: wsClient}),
 				false: httpBatchLink({
 					url: `http://127.0.0.1:${port}/trpc`,
-					fetch: fetchWithRetry,
+					fetch: fetchWithBrowserSession,
 					headers: async () => ({
-						Authorization: `Bearer ${jwt}`,
+						Authorization: `Bearer ${authToken}`,
 					}),
 				}),
 			}),
@@ -84,8 +113,33 @@ function createTestHelpers(port: number) {
 		retry: {limit: 0},
 		responseType: 'json',
 	})
-	const cookieJar = new CookieJar()
-	const api = unauthenticatedApi.extend({cookieJar})
+	// Represents a browser navigation: cookies are retained, but no dashboard
+	// Authorization header is added. This is useful for testing URL-authenticated APIs.
+	const browserApi = unauthenticatedApi.extend({cookieJar})
+	const api = browserApi.extend({
+		hooks: {
+			beforeRequest: [
+				async (options) => {
+					if (!options.url) throw new Error('Request URL is missing')
+					const url = new URL(options.url)
+					const isUrlAuthenticatedRead =
+						options.method === 'GET' &&
+						(/^\/api\/files\/(?:view|download|thumbnail)(?:\/|$)/.test(url.pathname) ||
+							url.pathname === '/logs' ||
+							url.pathname === '/logs/' ||
+							url.pathname === '/lan-ingress/umbrel-local-ca.crt')
+					if (isUrlAuthenticatedRead) {
+						// Browser file URLs use the read-only token plus the shared browser cookie,
+						// never the more powerful dashboard credential.
+						url.searchParams.set('token', await client.user.getHttpApiToken.query())
+						options.url = url
+					} else if (authToken) {
+						options.headers.authorization = `Bearer ${authToken}`
+					}
+				},
+			],
+		},
+	})
 
 	async function signup({
 		raidDevices,
@@ -105,8 +159,7 @@ function createTestHelpers(port: number) {
 			async () => {
 				try {
 					const token = await client.user.login.mutate(userCredentials)
-					setJwt(token)
-					await api.post('../trpc/user.login', {json: userCredentials})
+					setAuthToken(token)
 					return true
 				} catch {
 					return false
@@ -166,8 +219,9 @@ function createTestHelpers(port: number) {
 		client,
 		unauthenticatedClient,
 		api,
+		browserApi,
 		unauthenticatedApi,
-		setJwt,
+		setAuthToken,
 		signup,
 		login,
 		registerAndLogin,
@@ -195,8 +249,9 @@ export default async function createTestUmbreld({autoLogin = false, autoStart = 
 		client,
 		unauthenticatedClient,
 		api,
+		browserApi,
 		unauthenticatedApi,
-		setJwt,
+		setAuthToken,
 		signup,
 		login,
 		registerAndLogin,
@@ -220,8 +275,9 @@ export default async function createTestUmbreld({autoLogin = false, autoStart = 
 		client,
 		unauthenticatedClient,
 		api,
+		browserApi,
 		unauthenticatedApi,
-		setJwt,
+		setAuthToken,
 		signup,
 		login,
 		registerAndLogin,
@@ -256,8 +312,9 @@ export async function createTestVm({
 		client,
 		unauthenticatedClient,
 		api,
+		browserApi,
 		unauthenticatedApi,
-		setJwt,
+		setAuthToken,
 		signup,
 		login,
 		registerAndLogin,
@@ -613,8 +670,9 @@ printf '\\n${authFailureMarker}\\n'
 		client,
 		unauthenticatedClient,
 		api,
+		browserApi,
 		unauthenticatedApi,
-		setJwt,
+		setAuthToken,
 		signup,
 		login,
 		registerAndLogin,

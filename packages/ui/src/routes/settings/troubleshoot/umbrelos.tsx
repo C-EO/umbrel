@@ -2,6 +2,7 @@ import {useTranslation} from 'react-i18next'
 
 import {Button} from '@/components/ui/button'
 import {ImmersiveDialogFooter} from '@/components/ui/immersive-dialog'
+import {authorizedHttpUrl} from '@/modules/auth/http-auth'
 import {ImmersivePickerDialogContent} from '@/modules/immersive-picker'
 import {LogResults, SystemLogType, TroubleshootTitleBackLink} from '@/routes/settings/troubleshoot/_shared'
 import {trpcReact} from '@/trpc/trpc'
@@ -17,7 +18,11 @@ export default function TroubleshootUmbrelOs() {
 			</div>
 			<LogResults>{logs}</LogResults>
 			<ImmersiveDialogFooter className='justify-center'>
-				<Button variant='primary' size='dialog' onClick={() => (window.location.href = '/logs')}>
+				<Button
+					variant='primary'
+					size='dialog'
+					onClick={async () => (window.location.href = await authorizedHttpUrl('/logs'))}
+				>
 					{t('troubleshoot.system-download', {label: t('troubleshoot.umbrelos-logs')})}
 				</Button>
 			</ImmersiveDialogFooter>

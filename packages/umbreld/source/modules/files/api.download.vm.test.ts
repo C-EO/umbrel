@@ -34,7 +34,7 @@ function extractZipBuffer(buffer: Buffer): Record<string, string> {
 	return files
 }
 
-test('GET /api/files/download throws unauthorized error whithout cookie', async () => {
+test('GET /api/files/download throws unauthorized error without a credential', async () => {
 	const error = await umbreld.unauthenticatedApi.get('files/download').catch((error) => error)
 	expect(error).toBeInstanceOf(Error)
 	expect(error.response.statusCode).toBe(401)
@@ -116,7 +116,7 @@ test('GET /api/files/download throws 400 error when paths are in different direc
 	expect(error.response.body).toMatchObject({error: 'paths must be in same directory'})
 })
 
-test('GET /api/files/download downloads a file with a valid cookie', async () => {
+test('GET /api/files/download downloads a file with the HTTP API token and browser cookie', async () => {
 	// Create a file
 	await uploadFile('/Home/download-file.txt', 'contents')
 

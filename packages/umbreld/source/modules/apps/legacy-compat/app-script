@@ -8,20 +8,11 @@ set -euo pipefail
 # Figure out what other stuff we need from the old .env and how to pass it through.
 export NETWORK_IP='10.21.0.0'
 export GATEWAY_IP='10.21.0.1'
-export AUTH_PORT='2000'
-export UMBREL_AUTH_SECRET='DEADBEEF'
-export MANAGER_IP="10.21.21.4"
 
 VERSION="0.0.3"
 
 UMBREL_ROOT="${SCRIPT_UMBREL_ROOT}"
 USER_FILE="${UMBREL_ROOT}/db/user.json"
-# TODO: Remove this override source path after publishing app-auth/app-proxy images with the LAN ingress changes.
-if [[ -d "/umbrel-dev/containers" ]]; then
-  export UMBREL_CONTAINER_SOURCE_DIR="/umbrel-dev/containers"
-else
-  export UMBREL_CONTAINER_SOURCE_DIR="/opt/containers"
-fi
 
 CURRENT_SCRIPT_PATH="$(realpath "${BASH_SOURCE[0]}")"
 
@@ -207,11 +198,8 @@ source_app() {
   export APP_MANIFEST_FILE="${app_data_dir}/umbrel-app.yml"
   export APP_VERSION=$(cat "${APP_MANIFEST_FILE}" | yq '.version')
   
-  # This provides the app proxy with context of the app
-  export APP_PROXY_HOSTNAME="app_proxy_${app}"
+  # The manifest port remains the browser-facing port owned by umbreld's app gateway.
   export APP_PROXY_PORT=$(cat "${APP_MANIFEST_FILE}" | yq '.port')
-  export APP_PROXY_BIND_IP="127.0.0.1"
-  export APP_PROXY_PUBLIC_PORT="${APP_PROXY_PORT}"
   
   export APP_DATA_DIR="${app_data_dir}"
   export APP_DOMAIN="${app_domain}"
@@ -226,7 +214,7 @@ source_app() {
   export TOR_DATA_DIR="${UMBREL_ROOT}/tor/data"
   export TOR_ENTRYPOINT_SCRIPT="${SCRIPT_DOCKER_FRAGMENTS}/tor-entrypoint.sh"
   export TOR_HS_APP_DIR="/data/app-${app}"
-  export TOR_HS_PORTS="80:${APP_PROXY_HOSTNAME}:${APP_PROXY_PORT}"
+  export TOR_HS_PORTS="80:${GATEWAY_IP}:${APP_PROXY_PORT}"
 
   # TODO: Look into why this needed to be commented out for Mark.
   # tor_extra_hs_varname=$(echo "APP_${APP_ID^^}_TOR_HS_EXTRA_PORTS" | tr '-' '_')
@@ -327,15 +315,14 @@ compose() {
   source_app "${app}"
 
   # Define support compose files
-  local -r app_proxy_compose_file="${SCRIPT_DOCKER_FRAGMENTS}/docker-compose.app_proxy.yml"
+  local -r app_gateway_compose_file="${SCRIPT_DOCKER_FRAGMENTS}/docker-compose.app_gateway.yml"
   local -r tor_compose_file="${SCRIPT_DOCKER_FRAGMENTS}/docker-compose.tor.yml"
   local -r common_compose_file="${SCRIPT_DOCKER_FRAGMENTS}/docker-compose.common.yml"
   local -r app_compose_file="${app_data_dir}/docker-compose.yml"
+  local app_runtime_compose_file="${app_compose_file}"
 
   local -r umbrel_env_file="${UMBREL_ROOT}/.env"
 
-  # We need to use the proxy compose file first
-  # To allow vars. in the app's compose file to override variables
   compose_files=()
 
   # Detect if the 'app_proxy' service has been defined
@@ -343,12 +330,44 @@ compose() {
   has_app_proxy_service=$(cat "${app_compose_file}" | yq ".services | has(\"${APP_PROXY_SERVICE_NAME}\")")
 
   if [[ "${has_app_proxy_service}" == "true" ]]; then
-    compose_files+=( "--file" "${app_proxy_compose_file}" )
+    # Render app_proxy configuration with the exact environment Docker Compose
+    # uses for the app. Umbreld consumes this file for its in-process gateway;
+    # the app_proxy service itself is still removed from the runtime compose.
+    local app_gateway_config_file="${app_data_dir}/app-gateway.json"
+    local app_gateway_config_temp_file="${app_gateway_config_file}.tmp.$$"
+    if ! docker compose \
+      --project-name "${app}" \
+      --file "${app_gateway_compose_file}" \
+      --file "${app_compose_file}" \
+      config --format json \
+      | jq '(.services.app_proxy.environment // {}) | {
+          APP_HOST: .APP_HOST,
+          APP_PORT: .APP_PORT,
+          APP_PROTOCOL: .APP_PROTOCOL,
+          PROXY_AUTH_ADD: .PROXY_AUTH_ADD,
+          PROXY_AUTH_WHITELIST: .PROXY_AUTH_WHITELIST,
+          PROXY_AUTH_BLACKLIST: .PROXY_AUTH_BLACKLIST,
+          PROXY_TRUST_UPSTREAM: .PROXY_TRUST_UPSTREAM,
+          PROXY_TIMEOUT: .PROXY_TIMEOUT
+        } | with_entries(select(.value != null))' > "${app_gateway_config_temp_file}"
+    then
+      rm -f "${app_gateway_config_temp_file}"
+      return 1
+    fi
+    mv "${app_gateway_config_temp_file}" "${app_gateway_config_file}"
+    chmod 600 "${app_gateway_config_file}"
+
+    # app_proxy is now implemented in umbreld. Keep its declaration in the
+    # installed compose file as gateway configuration, but never create a sidecar.
+    app_runtime_compose_file="${app_data_dir}/docker-compose.umbreld.yml"
+    yq 'del(.services.app_proxy)' "${app_compose_file}" > "${app_runtime_compose_file}"
+  else
+    rm -f "${app_data_dir}/app-gateway.json"
   fi
 
   # If remote Tor access is enabled and the app has an app_proxy service
-  # then include a compose file for Tor. The hidden service always points
-  # at the app_proxy container so apps without one (e.g. host network apps
+  # then include a compose file for Tor. The hidden service points at the
+  # host app gateway, so apps without one (e.g. host network apps
   # like Tailscale) must not get a tor_server sidecar, it would crash loop
   # trying to resolve a hostname that never exists.
   if [[ "${REMOTE_TOR_ACCESS}" == "true" ]] && [[ "${has_app_proxy_service}" == "true" ]]; then
@@ -358,7 +377,7 @@ compose() {
   # Add app's compose file last so that it can override
   # Any of the other compose files
   compose_files+=( "--file" "${common_compose_file}" )
-  compose_files+=( "--file" "${app_compose_file}" )
+  compose_files+=( "--file" "${app_runtime_compose_file}" )
 
   # Merge compose files and args. passed into 'compose'
   compose_args=("${compose_files[@]}" "${@}")
@@ -455,13 +474,6 @@ wait_for_tor_hs() {
   # Let's allow 10 seconds to generate it and then start the app
   if [[ "${REMOTE_TOR_ACCESS}" == "true" ]]; then
     echo "Generating hidden services for ${app}..."
-    # We must first start the App Proxy
-    # So that it's hostname is resolvable by Tor
-    # More details here: https://github.com/torproject/tor/blob/01bda6c23f58947ad1e20ea6367a5c260f53dfab/src/feature/hs/hs_common.c#L743
-    # And here: https://github.com/torproject/tor/blob/22552ad88e1e95ef9d2c6655c7602b7b25836075/src/lib/net/resolve.c#L297
-    # Otherwise Tor will throw this error:
-    # Unparseable address in hidden service port configuration.
-    compose "${app}" up --detach app_proxy
     compose "${app}" up --detach tor_server
 
     for attempt in $(seq 1 100); do

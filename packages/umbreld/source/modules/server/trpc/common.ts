@@ -8,10 +8,18 @@ export type {AppRouter} from './index.js'
 export const httpOnlyPaths = [
 	// sets cookie
 	'user.login',
-	// reads Authorization header
+	// reads the Authorization header and browser-session cookie
 	'user.isLoggedIn',
-	// renews cookie
+	// extends the session and its browser-session cookie
 	'user.renewToken',
+	// exchanges the Authorization header for a one-time WebSocket ticket
+	'user.createWebSocketTicket',
+	// returns the stable URL token paired with the browser-session cookie
+	'user.getHttpApiToken',
+	// may revoke the calling session and must deliver cookie clears before its WebSocket closes
+	'user.revokeSession',
+	'user.revokeOtherSessions',
+	'user.revokeAllSessions',
 	// clears cookie
 	'user.logout',
 	// system.status doesn't use cookies/headers, but the UI polls it across restarts to detect when umbreld is back online; we force HTTP to avoid WS reconnect handshake

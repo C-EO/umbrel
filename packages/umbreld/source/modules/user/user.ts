@@ -144,6 +144,14 @@ export default class User {
 		return totp.verify(totpUri!, token)
 	}
 
+	async validateLogin(password: string, totpToken?: string) {
+		if (!(await this.validatePassword(password))) return 'Incorrect password'
+		if (!(await this.is2faEnabled())) return null
+		if (!totpToken) return 'Missing 2FA code'
+		if (!(await this.validate2faToken(totpToken))) return 'Incorrect 2FA code'
+		return null
+	}
+
 	// Enable 2FA
 	async enable2fa(totpUri: string) {
 		return this.#store.set('user.totpUri', totpUri)

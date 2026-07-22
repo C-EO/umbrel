@@ -141,7 +141,7 @@ export default router({
 			}),
 		)
 		.mutation(async ({ctx, input}) => setStaticIp(ctx.umbreld, input)),
-	// Public so it can be called from a new origin after an IP change, where no JWT is available.
+	// Public so it can be called from a new origin after an IP change, where no browser credential is available.
 	confirmStaticIp: publicProcedure
 		.input(
 			z.object({

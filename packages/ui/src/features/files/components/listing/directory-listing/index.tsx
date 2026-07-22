@@ -20,6 +20,7 @@ import {useNewFolder} from '@/features/files/hooks/use-new-folder'
 import {useIsFilesEmbedded} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FilesStore} from '@/features/files/store/use-files-store'
+import {dashboardAuthHeaders} from '@/modules/auth/http-auth'
 import {trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
 
@@ -83,7 +84,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 			await fetch(`/api/files/upload?path=${encodeURIComponent(filePath)}&collision=keep-both`, {
 				method: 'POST',
 				body: '',
-				headers: {'Content-Type': 'text/plain; charset=utf-8'},
+				headers: {...dashboardAuthHeaders(), 'Content-Type': 'text/plain; charset=utf-8'},
 			})
 			await utils.files.list.invalidate({path: currentPath})
 			// Open the new file in the editor

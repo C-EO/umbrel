@@ -9,10 +9,8 @@
 	"scripts": {
 		"dev": "vite --port 3000",
 		"build": "vite build",
-		"app-auth:dev": "vite --config app-auth/vite.config.js --port 2001",
-		"app-auth:build": "vite build --config app-auth/vite.config.js && mv dist-app-auth/app-auth/index.html dist-app-auth/index.html",
-		"app-auth:start": "serve -p 2003 dist-app-auth",
 		"lint": "eslint .",
+		"test:unit": "node --experimental-strip-types --test src/modules/auth/*.unit.test.ts src/routes/settings/terminal/*.unit.test.ts",
 		"typecheck": "tsc --noEmit",
 		"preview": "vite preview",
 		"format": "prettier --write .",

@@ -5,7 +5,8 @@ import express from 'express'
 import fse from 'fs-extra'
 import mime from 'mime-types'
 
-import type {ApiOptions} from '../server/index.js'
+import type Umbreld from '../../index.js'
+import {authorizeDashboardRequest, authorizeHttpRequest} from '../auth/http-request.js'
 
 // Only allow file types that are safe to preview inline from a same-origin user-controlled endpoint.
 const inlineViewMimeTypes = new Set([
@@ -58,17 +59,54 @@ function acceptsEmbeddedSvg(request: express.Request) {
 	return explicitlyAcceptsSvg && !acceptsDocument
 }
 
-export default function api({publicApi, privateApi, umbreld}: ApiOptions) {
+function virtualPaths(request: express.Request) {
+	if (typeof request.query.path === 'string') return [request.query.path]
+	if (Array.isArray(request.query.path)) return request.query.path.map(String)
+	return []
+}
+
+function requireFileApiAuth(umbreld: Umbreld) {
+	return (request: express.Request, response: express.Response, next: express.NextFunction) => {
+		const path = request.path.replace(/\/+$/, '') || '/'
+		let authorization: Promise<unknown> | undefined
+
+		if (request.method === 'GET' && (path === '/thumbnail' || path.startsWith('/thumbnail/'))) {
+			authorization = authorizeHttpRequest(umbreld, request, 'file-thumbnail')
+		} else if (request.method === 'GET' && path === '/download') {
+			authorization = authorizeHttpRequest(umbreld, request, 'file-download', JSON.stringify(virtualPaths(request)))
+		} else if (request.method === 'GET' && path === '/view') {
+			authorization = authorizeHttpRequest(
+				umbreld,
+				request,
+				'file-view',
+				typeof request.query.path === 'string' ? request.query.path : undefined,
+			)
+		} else if (request.method === 'POST' && path === '/upload') {
+			authorization = authorizeDashboardRequest(umbreld, request)
+		}
+
+		// This router is deny-by-default. Adding a handler below also requires an
+		// explicit policy here, so a future endpoint cannot accidentally be public.
+		if (!authorization) return response.status(401).json({error: 'unauthorized'})
+
+		authorization.then(() => next()).catch(() => response.status(401).json({error: 'unauthorized'}))
+	}
+}
+
+export default function api(umbreld: Umbreld) {
+	const api = express.Router()
+	api.use(requireFileApiAuth(umbreld))
+
 	// Serve thumbnails from the thumbnails directory
 	// GET /api/files/thumbnail/:thumbnail
-	privateApi.use(
+	api.use(
 		'/thumbnail',
 		// Serve the thumbnail assets
 		express.static(umbreld.files.thumbnails.thumbnailDirectory, {
 			// Thumbnail assets are named with a hash that only changes when the file is modified
-			// So we can cache these aggressively
-			maxAge: '1 year',
-			immutable: true,
+			// so a browser can cache them for the session without a shared cache retaining private data.
+			cacheControl: false,
+			setHeaders: (response) => response.setHeader('Cache-Control', 'private, max-age=31536000, immutable'),
 			// Don't serve directory indexes
 			index: false,
 		}),
@@ -78,18 +116,16 @@ export default function api({publicApi, privateApi, umbreld}: ApiOptions) {
 
 	// Downloads a file, directory or multiple files
 	// GET /api/files/download?path=/Home/file.txt&path=/Home/file-2.txt
-	privateApi.get('/download', async (request, response) => {
+	api.get('/download', async (request, response) => {
 		// Normalise a single path or multiple paths into an array
-		let virtualPaths: string[] = []
-		if (typeof request.query.path === 'string') virtualPaths = [String(request.query.path)]
-		if (Array.isArray(request.query.path)) virtualPaths = request.query.path.map(String)
+		const requestedPaths = virtualPaths(request)
 
 		// Check that at least one path is provided
-		if (virtualPaths.length < 1) return response.status(400).json({error: 'bad request'})
+		if (requestedPaths.length < 1) return response.status(400).json({error: 'bad request'})
 
 		// Get file data
 		const files = await Promise.all(
-			virtualPaths.map(async (path) => {
+			requestedPaths.map(async (path) => {
 				try {
 					const systemPath = await umbreld.files.virtualToSystemPath(path)
 					if (!(await fse.exists(systemPath))) throw new Error('not found')
@@ -131,7 +167,7 @@ export default function api({publicApi, privateApi, umbreld}: ApiOptions) {
 
 	// Views a file
 	// GET /api/files/view?path=/Home/file.txt
-	privateApi.get('/view', async (request, response) => {
+	api.get('/view', async (request, response) => {
 		try {
 			if (typeof request.query.path !== 'string') return response.status(400).json({error: 'path is required'})
 			const systemPath = await umbreld.files.virtualToSystemPath(request.query.path)
@@ -167,7 +203,7 @@ export default function api({publicApi, privateApi, umbreld}: ApiOptions) {
 	// Note: We must set the `Connection: close` header on error to prevent the XHR upload logic
 	// from uploading the entire file before checking for errors in the response. cURL handles this
 	// without the extra header, I'm not sure why it's only needed in the browser.
-	privateApi.post('/upload', async (request, response) => {
+	api.post('/upload', async (request, response) => {
 		// Check we have a path
 		if (typeof request.query.path !== 'string') {
 			response.setHeader('Connection', 'close')
@@ -242,4 +278,5 @@ export default function api({publicApi, privateApi, umbreld}: ApiOptions) {
 		// Return success
 		return response.status(200).json({path: umbreld.files.systemToVirtualPath(systemPath)})
 	})
+	return api
 }

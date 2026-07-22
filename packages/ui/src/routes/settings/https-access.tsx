@@ -16,6 +16,7 @@ import macOsIcon from '@/features/files/assets/sharing-info-platforms/macos.png'
 import windowsIcon from '@/features/files/assets/sharing-info-platforms/windows.png'
 import {InlineCopyableField} from '@/features/files/components/dialogs/share-info-dialog/platform-instructions/inline-copyable-field'
 import {formatFilesystemDateOnly} from '@/features/files/utils/format-filesystem-date'
+import {authorizedHttpUrl} from '@/modules/auth/http-auth'
 import {useConfirmation} from '@/providers/confirmation'
 import {trpcReact} from '@/trpc/trpc'
 import {SupportedLanguageCode} from '@/utils/language'
@@ -74,11 +75,11 @@ export function HttpsCertificateSettingsPanel({onBack}: {onBack: () => void}) {
 
 	const invalidate = () => utils.lanIngress.getCertificateStatus.invalidate()
 
-	const downloadCa = () => {
+	const downloadCa = async () => {
 		if (!status?.caCertificate) return
 		// A real navigation instead of a blob download so iOS Safari can offer
 		// its configuration profile install flow for the certificate.
-		window.location.href = '/lan-ingress/umbrel-local-ca.crt'
+		window.location.href = await authorizedHttpUrl('/lan-ingress/umbrel-local-ca.crt')
 	}
 
 	const resetCertificate = async () => {

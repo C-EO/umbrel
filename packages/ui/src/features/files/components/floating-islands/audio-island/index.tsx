@@ -3,6 +3,7 @@ import React, {useCallback, useEffect, useRef, useState} from 'react'
 import {ExpandedContent} from '@/features/files/components/floating-islands/audio-island/expanded'
 import {MinimizedContent} from '@/features/files/components/floating-islands/audio-island/minimized'
 import {useFilesStore} from '@/features/files/store/use-files-store'
+import {useAuthorizedHttpUrlQuery} from '@/modules/auth/http-auth'
 import {Island, IslandExpanded, IslandMinimized} from '@/modules/floating-island/bare-island'
 import {useGlobalFiles} from '@/providers/global-files'
 
@@ -31,7 +32,9 @@ export function AudioIsland() {
 	const sourceNodeRef = useRef<MediaElementAudioSourceNode | undefined>(undefined)
 	const isInitializedRef = useRef(false)
 
-	const downloadUrl = `/api/files/download?path=${encodeURIComponent(path || '')}`
+	const downloadUrl = useAuthorizedHttpUrlQuery(
+		path ? `/api/files/download?path=${encodeURIComponent(path)}` : undefined,
+	)
 	const fileName = name ? name.split('.').slice(0, -1).join('.') : ''
 
 	// Memoized state update to reduce re-renders
@@ -212,7 +215,7 @@ export function AudioIsland() {
 	return (
 		<>
 			<div className='invisible absolute z-[-1]'>
-				<audio ref={audioRef} src={downloadUrl} preload='auto' />
+				<audio ref={audioRef} src={downloadUrl.url} preload='auto' />
 			</div>
 			<Island id='audio-island' onClose={onClose}>
 				<IslandMinimized>
@@ -222,6 +225,7 @@ export function AudioIsland() {
 						currentTime={playerState.currentTime}
 						duration={playerState.duration}
 						analyserNode={analyserNodeRef.current}
+						authorizationFailed={downloadUrl.status === 'error'}
 					/>
 				</IslandMinimized>
 				<IslandExpanded>
@@ -230,6 +234,9 @@ export function AudioIsland() {
 						isPlaying={playerState.isPlaying}
 						currentTime={playerState.currentTime}
 						duration={playerState.duration}
+						authorizationFailed={downloadUrl.status === 'error'}
+						isRetryingAuthorization={downloadUrl.isRetrying}
+						onRetryAuthorization={downloadUrl.retry}
 						onTogglePlay={handleTogglePlay}
 						onProgressChange={handleProgress}
 						analyserNode={analyserNodeRef.current}

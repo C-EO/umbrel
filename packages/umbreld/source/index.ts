@@ -20,6 +20,7 @@ import Dbus from './modules/dbus/dbus.js'
 import Backups from './modules/backups/backups.js'
 import SystemNg from './modules/system-ng/system-ng.js'
 import LanIngress from './modules/lan-ingress/lan-ingress.js'
+import Auth from './modules/auth/auth.js'
 
 import {
 	commitOsPartition,
@@ -135,6 +136,7 @@ export default class Umbreld {
 	backups: Backups
 	systemNg: SystemNg
 	lanIngress: LanIngress
+	auth: Auth
 	isBackupRestoreFirstStart = false
 
 	constructor({
@@ -165,6 +167,7 @@ export default class Umbreld {
 		this.backups = new Backups(this)
 		this.systemNg = new SystemNg(this)
 		this.lanIngress = new LanIngress(this)
+		this.auth = new Auth(this)
 	}
 
 	async start() {
@@ -197,6 +200,7 @@ export default class Umbreld {
 
 		// Detect first boot after a backup restore (we run after migrations move 'import' into dataDirectory)
 		await this.setBackupRestoreFirstStartFlag()
+		await this.auth.start()
 
 		// Restore configured hostname after boot/update (non-blocking)
 		restoreHostname(this)
@@ -278,6 +282,7 @@ export default class Umbreld {
 				this.appStore.stop(),
 				this.dbus.stop(),
 				this.systemNg.stop(),
+				this.auth.stop(),
 			])
 			return true
 		} catch (error) {

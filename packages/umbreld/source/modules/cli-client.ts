@@ -3,21 +3,27 @@ import process from 'node:process'
 import {createTRPCClient, httpLink, createWSClient, wsLink, splitLink} from '@trpc/client'
 import fse from 'fs-extra'
 
-import * as jwt from './jwt.js'
-
 import {type AppRouter, httpOnlyPaths} from './server/trpc/common.js'
 
 // TODO: Maybe just read the endpoint from the data dir
 const dataDir = process.env.UMBREL_DATA_DIR ?? '/home/umbrel/umbrel'
 const trpcEndpoint = process.env.UMBREL_TRPC_ENDPOINT ?? `http://localhost/trpc`
 
-async function signJwt() {
-	const secret = await fse.readFile(`${dataDir}/secrets/jwt`, {encoding: 'utf8'})
-	const token = await jwt.sign(secret)
-	return token
-}
+// This credential deliberately lives below a 0700 auth directory as a 0600
+// file. The production CLI is therefore root-only; loosening the file mode
+// would turn local shell access into full umbreld API access.
+const systemToken = () => fse.readFile(`${dataDir}/secrets/auth/system-token`, {encoding: 'utf8'})
 
-// The CLI client always authenticates by signing a JWT; no unauthenticated mode.
+const ticketClient = createTRPCClient<AppRouter>({
+	links: [
+		httpLink({
+			url: trpcEndpoint,
+			headers: async () => ({Authorization: `Bearer ${await systemToken()}`}),
+		}),
+	],
+})
+
+// The CLI client always authenticates with the local system credential; no unauthenticated mode.
 // We use HTTP only for `httpOnlyPaths` (needs request/response semantics like cookies/headers), and WS otherwise.
 const trpc = createTRPCClient<AppRouter>({
 	links: [
@@ -26,11 +32,13 @@ const trpc = createTRPCClient<AppRouter>({
 			true: httpLink({
 				url: trpcEndpoint,
 				headers: async () => ({
-					Authorization: `Bearer ${await signJwt()}`,
+					Authorization: `Bearer ${await systemToken()}`,
 				}),
 			}),
 			false: wsLink({
-				client: createWSClient({url: async () => `${trpcEndpoint}?token=${await signJwt()}`}),
+				client: createWSClient({
+					url: async () => `${trpcEndpoint}?ticket=${await ticketClient.user.createWebSocketTicket.mutate()}`,
+				}),
 			}),
 		}),
 	],

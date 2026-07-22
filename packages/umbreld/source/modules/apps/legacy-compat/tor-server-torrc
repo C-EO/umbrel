@@ -21,4 +21,4 @@ HiddenServicePort 80 172.17.0.1:80
 # Auth Hidden Service
 
 HiddenServiceDir /data/auth
-HiddenServicePort 80 10.21.21.6:2000
+HiddenServicePort 80 10.21.0.1:2000

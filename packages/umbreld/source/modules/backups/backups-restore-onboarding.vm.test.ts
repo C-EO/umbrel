@@ -67,7 +67,9 @@ describe.sequential('Backup restore during onboarding', () => {
 
 		await restoreBackupAndWait({umbreld, backupId: backup!.id, authenticated: false})
 
-		await expect(umbreld.client.user.exists.query()).resolves.toBe(true)
+		await expect(umbreld.unauthenticatedClient.user.exists.query()).resolves.toBe(true)
+		// The backup contains the account, not a reusable login session. Restores
+		// intentionally revoke all sessions, including the one from before reflash.
 		const homeListing = await umbreld.client.files.list.query({path: '/Home'})
 		expect(homeListing.files.map((file) => file.name)).toContain('fresh-restore-marker')
 		// A real VM restore reboots into a fresh umbreld process, so the

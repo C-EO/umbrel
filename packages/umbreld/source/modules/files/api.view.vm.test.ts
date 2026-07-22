@@ -3,12 +3,21 @@ import {expect, beforeAll, afterAll, test} from 'vitest'
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
 let umbreld: Awaited<ReturnType<typeof createTestVm>>
+let dashboardToken = ''
 
 // Each test uses uniquely named files so no cleanup between tests is needed
 beforeAll(async () => {
 	umbreld = await createTestVm({device: 'umbrel-home'})
 	await umbreld.vm.powerOn()
-	await umbreld.registerAndLogin()
+	await umbreld.signup()
+
+	// Establish a browser session in the harness cookie jar and use its dashboard
+	// credential so URL-token requests and cookies refer to the same session.
+	const login = await umbreld.browserApi.post('../trpc/user.login', {json: {password: 'moneyprintergobrrr'}})
+	const loginToken = (login.body as unknown as {result?: {data?: unknown}}).result?.data
+	if (typeof loginToken !== 'string') throw new Error('Login did not return a dashboard credential')
+	dashboardToken = loginToken
+	umbreld.setAuthToken(dashboardToken)
 })
 
 afterAll(async () => {
@@ -20,7 +29,7 @@ async function uploadFile(path: string, content: string | Buffer) {
 	await umbreld.api.post(`files/upload?path=${encodeURIComponent(path)}`, {body: content})
 }
 
-test('GET /api/files/view throws unauthorized error without cookie', async () => {
+test('GET /api/files/view throws unauthorized error without a credential', async () => {
 	const error = await umbreld.unauthenticatedApi.get('files/view').catch((error) => error)
 	expect(error).toBeInstanceOf(Error)
 	expect(error.response.statusCode).toBe(401)
@@ -82,7 +91,14 @@ test('GET /api/files/view throws 404 error when trying to view a directory', asy
 	expect(error.response.body).toMatchObject({error: 'cannot view a directory'})
 })
 
-test('GET /api/files/view serves a file with a valid cookie', async () => {
+test('GET /api/files/view rejects the dashboard credential even with the browser cookie', async () => {
+	const error = await umbreld.browserApi
+		.get('files/view?path=/Home/view-file.txt', {headers: {Authorization: `Bearer ${dashboardToken}`}})
+		.catch((error) => error)
+	expect(error.response.statusCode).toBe(401)
+})
+
+test('GET /api/files/view serves a file with the HTTP API token and browser cookie', async () => {
 	// Create a file
 	await uploadFile('/Home/view-file.txt', 'contents')
 
@@ -101,6 +117,48 @@ test('GET /api/files/view serves a file with a valid cookie', async () => {
 	expect(response.headers['content-type']).toBe('text/plain')
 	expect(response.headers['content-disposition']).toBeUndefined()
 	// View doesn't set Content-Disposition header as it's for viewing, not downloading
+})
+
+test('GET /api/files/view requires the URL token and browser cookie from the same session', async () => {
+	await uploadFile('/Home/http-api-view.txt', 'HTTP API contents')
+	const path = encodeURIComponent('/Home/http-api-view.txt')
+	const urlToken = await umbreld.client.user.getHttpApiToken.query()
+
+	// A normal browser navigation carries the browser cookie retained at login and
+	// the stable session token in the URL.
+	const response = await umbreld.browserApi.get(`files/view?path=${path}&token=${urlToken}`, {responseType: 'text'})
+	expect(response.body).toBe('HTTP API contents')
+
+	// Neither half of the credential pair is sufficient by itself.
+	const tokenOnly = await umbreld.unauthenticatedApi
+		.get(`files/view?path=${path}&token=${urlToken}`)
+		.catch((error) => error)
+	expect(tokenOnly.response.statusCode).toBe(401)
+	const cookieOnly = await umbreld.browserApi.get(`files/view?path=${path}`).catch((error) => error)
+	expect(cookieOnly.response.statusCode).toBe(401)
+
+	// A token from a second valid session cannot be combined with the first
+	// session's cookie.
+	const secondLogin = await umbreld.unauthenticatedApi.post('../trpc/user.login', {
+		json: {password: 'moneyprintergobrrr'},
+	})
+	const secondDashboardToken = (secondLogin.body as unknown as {result?: {data?: unknown}}).result?.data
+	const secondBrowserCookie = (secondLogin.headers['set-cookie'] ?? [])
+		.find((cookie) => cookie.startsWith('UMBREL_BROWSER_SESSION='))
+		?.split(';')[0]
+	if (typeof secondDashboardToken !== 'string' || !secondBrowserCookie) throw new Error('Second login failed')
+	const secondTokenResponse = await umbreld.unauthenticatedApi.get('../trpc/user.getHttpApiToken', {
+		headers: {
+			Authorization: `Bearer ${secondDashboardToken}`,
+			cookie: secondBrowserCookie,
+		},
+	})
+	const secondSessionUrlToken = (secondTokenResponse.body as unknown as {result?: {data?: unknown}}).result?.data
+	if (typeof secondSessionUrlToken !== 'string') throw new Error('Second HTTP API token request failed')
+	const mismatched = await umbreld.browserApi
+		.get(`files/view?path=${path}&token=${secondSessionUrlToken}`)
+		.catch((error) => error)
+	expect(mismatched.response.statusCode).toBe(401)
 })
 
 test('GET /api/files/view forces HTML files to download', async () => {

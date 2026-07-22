@@ -15,26 +15,18 @@ import helmet from 'helmet'
 import {WebSocketServer} from 'ws'
 import {createProxyMiddleware} from 'http-proxy-middleware'
 
-import getOrCreateFile from '../utilities/get-or-create-file.js'
-import randomToken from '../utilities/random-token.js'
-
 import type Umbreld from '../../index.js'
-import * as jwt from '../jwt.js'
+import type {Principal} from '../auth/auth.js'
 import {trpcExpressHandler, trpcWssHandler} from './trpc/index.js'
 import createTerminalWebSocketHandler from './terminal-socket.js'
+import createAppAuthRouter from './app-auth.js'
+import {authorizeHttpRequest} from '../auth/http-request.js'
 
 import fileApi from '../files/api.js'
 
 export type ServerOptions = {umbreld: Umbreld}
 
-export type ApiOptions = {
-	publicApi: express.Router
-	privateApi: express.Router
-	umbreld: Umbreld
-}
-
-const PROXY_HTTPS_COOKIE_NAME = '__Host-UMBREL_PROXY_TOKEN_HTTPS'
-const PROXY_HTTP_COOKIE_NAME = 'UMBREL_PROXY_TOKEN'
+export type AuthenticatedWebSocketRequest = http.IncomingMessage & {authPrincipal?: Principal}
 
 // Safely wrapps async request handlers in logic to catch errors and pass them to the errror handling middleware
 const asyncHandler = (
@@ -71,53 +63,6 @@ class Server {
 		this.logger = umbreld.logger.createChildLogger(name.toLowerCase())
 	}
 
-	async getJwtSecret() {
-		const jwtSecretPath = `${this.umbreld.dataDirectory}/secrets/jwt`
-		return getOrCreateFile(jwtSecretPath, randomToken(256))
-	}
-
-	async signToken() {
-		return jwt.sign(await this.getJwtSecret())
-	}
-
-	async signProxyToken() {
-		return jwt.signProxyToken(await this.getJwtSecret())
-	}
-
-	async verifyToken(token: string) {
-		return jwt.verify(token, await this.getJwtSecret())
-	}
-
-	async verifyProxyToken(token: string) {
-		return jwt.verifyProxyToken(token, await this.getJwtSecret())
-	}
-
-	proxyTokenFromRequest(request: express.Request) {
-		return request.cookies?.[request.secure ? PROXY_HTTPS_COOKIE_NAME : PROXY_HTTP_COOKIE_NAME]
-	}
-
-	setProxyTokenCookie(response: express.Response, request: express.Request, token: string, expires: Date) {
-		const secure = request.secure
-		// The HTTPS token uses the browser-enforced __Host- prefix so HTTP
-		// responses cannot plant or overwrite it. That requires Secure, Path=/,
-		// and no Domain attribute.
-		response.cookie(secure ? PROXY_HTTPS_COOKIE_NAME : PROXY_HTTP_COOKIE_NAME, token, {
-			httpOnly: true,
-			expires,
-			path: '/',
-			sameSite: 'lax',
-			secure,
-		})
-	}
-
-	clearProxyTokenCookies(response: express.Response) {
-		// Proxy tokens are stateless JWTs, so logout clears the cookies this
-		// response is allowed to affect. HTTP cannot clear the Secure HTTPS
-		// cookie, but HTTPS logout clears both cookie names.
-		response.clearCookie(PROXY_HTTPS_COOKIE_NAME, {path: '/', secure: true})
-		response.clearCookie(PROXY_HTTP_COOKIE_NAME, {path: '/'})
-	}
-
 	// Creates an isolated WebSocket server and mounts it at a specific path
 	// All WebSocket servers require a valid auth token to connect
 	mountWebSocketServer(path: string, setupHandler: (wss: WebSocketServer) => void) {
@@ -132,9 +77,6 @@ class Server {
 	}
 
 	async start() {
-		// Ensure the JWT secret exists
-		await this.getJwtSecret()
-
 		// Create the handler and server
 		this.app = express()
 		// LAN ingress is the browser-facing entry point. Only trust forwarded
@@ -212,12 +154,20 @@ class Server {
 				// since they get leaked to other apps running on different ports on the same hostname
 				// due to relaxed browser sandboxing.
 				// We can't set custom headers because that not allowed by the WebSocket browser spec.
-				const token = searchParams.get('token')
-				if (await this.verifyToken(token!)) {
-					this.logger.verbose(`WS upgrade for ${pathname}`)
-					// Upgrade connection to WebSocket and fire the connection handler
-					wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request))
-				}
+				const ticket = searchParams.get('ticket')
+				if (!ticket) throw new Error('Missing WebSocket ticket')
+				const principal = await this.umbreld.auth.consumeWebSocketTicket(ticket)
+				;(request as AuthenticatedWebSocketRequest).authPrincipal = principal
+
+				this.logger.verbose(`WS upgrade for ${pathname}`)
+				// Upgrade connection to WebSocket and fire the connection handler
+				wss.handleUpgrade(request, socket, head, (ws) => {
+					// Authentication contains asynchronous account checks. Atomically
+					// re-check the session while registering so a socket cannot arrive
+					// immediately after its revocation sweep has completed.
+					if (!this.umbreld.auth.registerWebSocket(principal, ws)) return
+					wss.emit('connection', ws, request)
+				})
 			} catch (error) {
 				this.logger.error(`Error upgrading websocket`, error)
 				socket.destroy()
@@ -229,6 +179,10 @@ class Server {
 		this.app.get('/manager-api/v1/system/update-status', (request, response) => {
 			response.json({state: 'success', progress: 100, description: '', updateTo: ''})
 		})
+
+		// App authentication is served by umbreld. LAN ingress rewrites traffic
+		// from the dedicated browser-facing app-auth port onto this private prefix.
+		this.app.use('/app-auth', createAppAuthRouter(this.umbreld))
 
 		// Handle tRPC routes
 		this.app.use('/trpc', trpcExpressHandler)
@@ -242,39 +196,14 @@ class Server {
 			wss.on('connection', createTerminalWebSocketHandler({umbreld: this.umbreld, logger}))
 		})
 
-		// Handle API routes
-		const createApi = (registerApi: ({publicApi, privateApi, umbreld}: ApiOptions) => void) => {
-			// Create public and private routers
-			const publicApi = express.Router()
-			const privateApi = express.Router()
-			privateApi.use(async (request, response, next) => {
-				const token = this.proxyTokenFromRequest(request)
-				const isValid = await this.verifyProxyToken(token).catch(() => false)
-				if (!isValid) return response.status(401).json({error: 'unauthorized'})
-
-				next()
-			})
-
-			// Register API handlers
-			registerApi({publicApi, privateApi, umbreld: this.umbreld})
-
-			// Mount the public and private on a single router
-			const api = express.Router()
-			api.use(publicApi)
-			api.use(privateApi)
-
-			return api
-		}
-		this.app.use('/api/files', createApi(fileApi))
+		// Every file endpoint is mounted beneath an authentication-first subrouter.
+		this.app.use('/api/files', fileApi(this.umbreld))
 
 		// Handle log file downloads
 		this.app.get('/logs/', async (request, response) => {
-			// Check the user is logged in
 			try {
-				// We shouldn't really use the proxy token for this but it's
-				// fine until we have subdomains and refactor to session cookies
-				await this.verifyProxyToken(this.proxyTokenFromRequest(request))
-			} catch (error) {
+				await authorizeHttpRequest(this.umbreld, request, 'logs-download')
+			} catch {
 				return response.status(401).send('Unauthorized')
 			}
 
@@ -293,10 +222,9 @@ class Server {
 		// Safari offer its configuration profile install flow. Other browsers
 		// download the file as normal, named from the URL path.
 		this.app.get('/lan-ingress/umbrel-local-ca.crt', async (request, response) => {
-			// Check the user is logged in
 			try {
-				await this.verifyProxyToken(this.proxyTokenFromRequest(request))
-			} catch (error) {
+				await authorizeHttpRequest(this.umbreld, request, 'ca-download')
+			} catch {
 				return response.status(401).send('Unauthorized')
 			}
 

@@ -8,7 +8,6 @@ import {BareCoverMessage, CoverMessageParagraph} from '@/components/ui/cover-mes
 import {DebugOnlyBare} from '@/components/ui/debug-only'
 import {toast} from '@/components/ui/toast'
 import {usePrefixedLocalStorage} from '@/hooks/use-prefixed-local-storage'
-import {useJwt} from '@/modules/auth/use-auth'
 import {MigratingCover, useMigrate} from '@/providers/global-system-state/migrate'
 import {RestartingCover, useRestart} from '@/providers/global-system-state/restart'
 import {ShuttingDownCover, useShutdown} from '@/providers/global-system-state/shutdown'
@@ -31,21 +30,20 @@ const GlobalSystemStateContext = createContext<{
 	getError(): RouterError | null
 	clearError(): void
 	// We call this before triggering a custom restart flow (e.g., RAID setup) to prevent error boundary from showing when requests fail.
-	// Unlike the normal restart flow, this does NOT trigger logout-on-running behavior.
+	// Unlike the normal restart flow, this does NOT trigger reload-on-running behavior.
 	suppressErrors: () => void
 } | null>(null)
 
 export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 	const {t} = useTranslation()
-	const jwt = useJwt()
 	const [triggered, setTriggered] = useState(false)
 	const [failure, setFailure] = useState(false)
 	const [restoreFailure, setRestoreFailure] = useState(false)
-	const [shouldLogoutOnRunning, setShouldLogoutOnRunning] = usePrefixedLocalStorage('should-logout-on-running', false)
+	const [shouldReloadOnRunning, setShouldReloadOnRunning] = usePrefixedLocalStorage('should-reload-on-running', false)
 	const [startShutdownTimer, setStartShutdownTimer] = useState(false)
 	const [shutdownComplete, setShutdownComplete] = useState(false)
 	const [routerError, setRouterError] = useState<RouterError | null>(null)
-	// Separate flag for suppressing errors without triggering logout-on-running (e.g., RAID setup)
+	// Separate flag for suppressing errors without triggering reload-on-running (e.g., RAID setup)
 	const [errorsSuppressedOnly, setErrorsSuppressedOnly] = useState(false)
 
 	// Start over fresh when any of the supported actions is triggered
@@ -53,7 +51,7 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 		setTriggered(true)
 		setFailure(false)
 		setRestoreFailure(false)
-		setShouldLogoutOnRunning(false)
+		setShouldReloadOnRunning(false)
 		setStartShutdownTimer(false)
 		setShutdownComplete(false)
 		setRouterError(null)
@@ -70,13 +68,13 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 		}
 		setTriggered(false)
 
-		// Prevent logout/redirect when error occurs
-		setShouldLogoutOnRunning(false)
+		// Prevent the post-action reload when an error occurs
+		setShouldReloadOnRunning(false)
 	}
 	const getError = () => routerError
 	const clearError = () => setRouterError(null)
 	// Allow external code to suppress errors (e.g., RAID setup doing its own restart flow)
-	// This sets a separate flag so it doesn't trigger logout-on-running behavior
+	// This sets a separate flag so it doesn't trigger reload-on-running behavior
 	const suppressErrors = () => setErrorsSuppressedOnly(true)
 
 	const queryClient = useQueryClient()
@@ -90,7 +88,7 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 		utils.system.status.cancel() // avoid receiving an outdated status
 		if (!success) {
 			setTriggered(false)
-			setShouldLogoutOnRunning(false)
+			setShouldReloadOnRunning(false)
 			setStartShutdownTimer(false)
 		}
 	}
@@ -145,33 +143,32 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 
 	// When global system state is triggered and status switches to anything but
 	// 'running', we know that the action is now in progress. So we'll now wait
-	// until the system becomes 'running' again before logging the user out.
+	// until the system becomes 'running' again before reloading the UI.
 	// Here, `undefined` is a valid non-running status in that it indicates that
 	// the system has stopped responding, so is likely rebooting.
 	useEffect(() => {
-		if (status !== 'running' && triggered && !shouldLogoutOnRunning) {
-			setShouldLogoutOnRunning(true)
+		if (status !== 'running' && triggered && !shouldReloadOnRunning) {
+			setShouldReloadOnRunning(true)
 		}
-	}, [setShouldLogoutOnRunning, shouldLogoutOnRunning, status, triggered])
+	}, [setShouldReloadOnRunning, shouldReloadOnRunning, status, triggered])
 
-	// When the system becomes running again after setting shouldLogoutOnRunning
-	// above, log the user out and redirect them to the follow-up page, in turn
+	// When the system becomes running again after setting shouldReloadOnRunning
+	// above, reload the UI while preserving the session, in turn
 	// resetting global system state provider incl. its various state vars.
 	useEffect(() => {
-		if (status === 'running' && shouldLogoutOnRunning) {
-			// shouldLogoutOnRunning is stored in local storage for when the user
+		if (status === 'running' && shouldReloadOnRunning) {
+			// shouldReloadOnRunning is stored in local storage for when the user
 			// manually reloads the page even though they shouldn't. Hence we unset it
 			// explicitly here and delay for a moment to be sure that local storage
 			// has been updated.
-			setShouldLogoutOnRunning(false)
+			setShouldReloadOnRunning(false)
 			setTimeout(() => {
-				queryClient.cancelQueries() // prevent auth errors
-				jwt.removeJwt()
+				queryClient.cancelQueries()
 				location.href = '/'
 			}, 500)
 			return
 		}
-	}, [status, prevStatus, shouldLogoutOnRunning, jwt, setShouldLogoutOnRunning, queryClient, triggered])
+	}, [status, prevStatus, shouldReloadOnRunning, setShouldReloadOnRunning, queryClient, triggered])
 
 	// Start shutdown timer when status endpoint starts failing, showing the
 	// shutdown complete cover after a sensible delay.
@@ -221,7 +218,7 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 						triggered,
 						failure,
 						restoreFailure,
-						shouldLogoutOnRunning,
+						shouldReloadOnRunning,
 						startShutdownTimer,
 						shutdownComplete,
 						statusIsError: systemStatusQ.isError,

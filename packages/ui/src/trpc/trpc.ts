@@ -10,7 +10,8 @@ import {
 } from '@trpc/react-query'
 import {inferRouterInputs, inferRouterOutputs} from '@trpc/server'
 
-import {JWT_LOCAL_STORAGE_KEY} from '@/modules/auth/shared'
+import {finishLogoutOnUnauthorized} from '@/modules/auth/logout'
+import {AUTH_TOKEN_LOCAL_STORAGE_KEY} from '@/modules/auth/shared'
 import {IS_DEV} from '@/utils/misc'
 
 import {httpOnlyPaths, type AppRouter} from '../../../umbreld/source/modules/server/trpc/common'
@@ -29,14 +30,37 @@ export const trpcHttpUrl = `${httpOrigin}/trpc`
 const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:'
 const trpcWsUrl = `${wsProtocol}//${hostname}${portPart}/trpc`
 
-// TODO: Getting jwt from `localStorage` like this means auth flow require a page refresh
-const getJwt = () => localStorage.getItem(JWT_LOCAL_STORAGE_KEY)
+// TODO: Getting the auth token from localStorage like this means auth flow requires a page refresh.
+const getAuthToken = () => localStorage.getItem(AUTH_TOKEN_LOCAL_STORAGE_KEY)
+
+const webSocketTicketClient = createTRPCClient<AppRouter>({
+	links: [
+		httpLink({
+			url: trpcHttpUrl,
+			headers: () => {
+				const token = getAuthToken()
+				return token ? {Authorization: `Bearer ${token}`} : {}
+			},
+		}),
+	],
+})
 
 const wsClient = createWSClient({
-	url: () => {
-		const token = getJwt()
-		return token ? `${trpcWsUrl}?token=${token}` : `${trpcWsUrl}`
+	url: async () => {
+		try {
+			const ticket = await webSocketTicketClient.user.createWebSocketTicket.mutate()
+			return `${trpcWsUrl}?ticket=${ticket}`
+		} catch (error) {
+			// A server-side revocation closes the live socket. If reconnecting then
+			// proves this browser session is invalid, clear the stale token instead
+			// of leaving every WS operation queued behind an endless retry loop.
+			finishLogoutOnUnauthorized(error, localStorage, (path) => window.location.replace(path))
+			throw error
+		}
 	},
+	// Do not mint tickets or open a socket on login/onboarding pages. The first
+	// WS-routed operation opens it; active subscriptions keep it alive.
+	lazy: {enabled: true, closeMs: 30_000},
 	// Detect dead connections and keep NAT/proxy tables alive. The client is the
 	// primary keepAlive driver in foreground tabs; the server takes over in background
 	// tabs where browsers throttle setTimeout to ~1/minute.
@@ -58,18 +82,18 @@ export const links = [
 		condition: (op) => op.type === 'subscription',
 		true: wsLink({client: wsClient}),
 		// Split 2: HTTP vs WebSocket for queries/mutations
-		// We route over HTTP when there is no JWT (public/onboarding, no WS auth yet) or the procedure is in `httpOnlyPaths` (needs request/response semantics like cookies/headers)
+		// We route over HTTP when there is no auth token (public/onboarding, no WS auth yet) or the procedure is in `httpOnlyPaths` (needs request/response semantics like cookies/headers)
 		// Otherwise we use WebSocket
 		false: splitLink({
 			condition: (operation) => {
-				const noToken = !getJwt()
+				const noToken = !getAuthToken()
 				const isHttpOnlyPath = httpOnlyPaths.includes(operation.path as (typeof httpOnlyPaths)[number])
 				return noToken || isHttpOnlyPath
 			},
 			true: httpLink({
 				url: trpcHttpUrl,
 				headers: () => {
-					const token = getJwt()
+					const token = getAuthToken()
 					return token ? {Authorization: `Bearer ${token}`} : {}
 				},
 			}),
@@ -90,7 +114,7 @@ export const trpcClient = createTRPCClient<AppRouter>({
 		httpLink({
 			url: trpcHttpUrl,
 			headers: () => {
-				const token = getJwt()
+				const token = getAuthToken()
 				return token ? {Authorization: `Bearer ${token}`} : {}
 			},
 		}),

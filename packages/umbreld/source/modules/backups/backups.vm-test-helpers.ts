@@ -169,6 +169,10 @@ function ignoreRestoreDisconnect(error: unknown) {
 		message.includes('terminated') ||
 		message.includes('econnreset') ||
 		message.includes('socket hang up') ||
+		// The shared test fetch wrapper retries once after a dropped connection.
+		// A successful restore revokes sessions before that retry reaches the new
+		// umbreld process, so the retry can correctly receive this response.
+		message.includes('invalid token') ||
 		(message.includes('command was killed with sigterm') && message.includes('reboot'))
 	if (!expectedDisconnect) throw error
 }

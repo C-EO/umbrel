@@ -40,6 +40,7 @@ import type {FileSystemItem} from '@/features/files/types'
 import {splitFileName} from '@/features/files/utils/format-filesystem-name'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
 import {isDirectoryAnExternalDrivePartition} from '@/features/files/utils/is-directory-an-external-drive-partition'
+import {useAuthorizedHttpUrl} from '@/modules/auth/http-auth'
 import {trpcReact} from '@/trpc/trpc'
 
 interface FileItemIcon {
@@ -280,6 +281,7 @@ const Thumbnail = ({
 	overlay?: React.ReactNode
 }) => {
 	const {thumbnailUrl} = useOnDemandThumbnail(item)
+	const authorizedThumbnailUrl = useAuthorizedHttpUrl(thumbnailUrl)
 
 	// Track if the image failed to load so we can gracefully fall back to the
 	// default thumbnail component
@@ -288,12 +290,12 @@ const Thumbnail = ({
 	// Reset the error flag whenever the thumbnail url or file changes
 	useEffect(() => {
 		setHadError(false)
-	}, [thumbnailUrl, item.path])
+	}, [authorizedThumbnailUrl, item.path])
 
 	const imageNode =
-		thumbnailUrl && !hadError ? (
+		authorizedThumbnailUrl && !hadError ? (
 			<img
-				src={thumbnailUrl}
+				src={authorizedThumbnailUrl}
 				alt={item.name}
 				onError={() => setHadError(true)}
 				className={`rounded-xs object-contain ${className || ''}`}

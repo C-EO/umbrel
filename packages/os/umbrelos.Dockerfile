@@ -41,7 +41,7 @@ COPY packages/umbreld/source/modules/server/trpc/common.ts /umbreld/source/modul
 RUN rm -rf node_modules || true
 RUN npm ci
 
-# Build the app
+# Build the shared dashboard and app-auth frontend
 RUN npm run build
 
 
@@ -286,7 +286,6 @@ RUN usermod -aG sudo umbrel
 RUN sudo apt-get install --yes skopeo
 RUN mkdir -p /images
 RUN skopeo copy docker://ghcr.io/getumbrel/tor@sha256:e382b8629c0dfef6ceb396b062622d4e4e955b19d6f16b883fd2c0723ad5671a docker-archive:/images/tor
-RUN skopeo copy docker://getumbrel/auth-server@sha256:7fc9d52d4176639e84044b63aa07efcac78a508a05bb4480436be9db977a7191 docker-archive:/images/auth
 
 # Install umbreld
 COPY packages/umbreld /opt/umbreld
@@ -295,19 +294,6 @@ WORKDIR /opt/umbreld
 RUN rm -rf node_modules || true
 RUN npm clean-install --omit dev && npm link
 WORKDIR /
-
-# TODO: Remove these bind-mount override files after publishing app-auth/app-proxy images with the LAN ingress changes.
-RUN mkdir -p /opt/containers/app-auth/bin /opt/containers/app-auth/middleware /opt/containers/app-auth/routes /opt/containers/app-auth/utils /opt/containers/app-proxy/bin /opt/containers/app-proxy/routes /opt/containers/app-proxy/utils
-COPY containers/app-auth/bin/www /opt/containers/app-auth/bin/www
-COPY containers/app-auth/middleware/validate_token.js /opt/containers/app-auth/middleware/validate_token.js
-COPY containers/app-auth/routes/auth.js /opt/containers/app-auth/routes/auth.js
-COPY containers/app-auth/utils/const.js /opt/containers/app-auth/utils/const.js
-COPY containers/app-auth/utils/host_resolution.js /opt/containers/app-auth/utils/host_resolution.js
-COPY containers/app-proxy/bin/www /opt/containers/app-proxy/bin/www
-COPY containers/app-proxy/routes/umbrel.js /opt/containers/app-proxy/routes/umbrel.js
-COPY containers/app-proxy/utils/auth.js /opt/containers/app-proxy/utils/auth.js
-COPY containers/app-proxy/utils/const.js /opt/containers/app-proxy/utils/const.js
-COPY containers/app-proxy/utils/proxy.js /opt/containers/app-proxy/utils/proxy.js
 
 # Copy in filesystem overlay
 COPY packages/os/overlay /

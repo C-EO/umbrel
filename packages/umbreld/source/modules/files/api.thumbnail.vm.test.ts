@@ -63,7 +63,7 @@ test('GET /api/files/thumbnail/:thumbnail serves a thumbnail with valid hash and
 	expect(response.statusCode).toBe(200)
 
 	// Check that we get cache headers
-	expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable')
+	expect(response.headers['cache-control']).toBe('private, max-age=31536000, immutable')
 
 	// Check content type header is for webp images
 	expect(response.headers['content-type']).toBe('image/webp')

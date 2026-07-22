@@ -163,7 +163,6 @@ export default class App {
 
 	async pull() {
 		const defaultImages = [
-			'getumbrel/app-proxy:1.7.0@sha256:ec0de0b944a2e63d52fdd82b3760d90a35f8b442d17a8407afdee3af3e842d5a',
 			'ghcr.io/getumbrel/tor:0.4.9.11@sha256:e382b8629c0dfef6ceb396b062622d4e4e955b19d6f16b883fd2c0723ad5671a',
 		]
 		const compose = await this.readCompose()
@@ -357,8 +356,9 @@ export default class App {
 
 	async getContainerNames() {
 		const compose = await this.readCompose()
-		const containers = Object.values(compose.services!).map((service) => service.container_name) as string[]
-		containers.push(`${this.id}_app_proxy_1`)
+		const containers = Object.entries(compose.services!)
+			.filter(([serviceName]) => serviceName !== 'app_proxy')
+			.map(([, service]) => service.container_name) as string[]
 		containers.push(`${this.id}_tor_server_1`)
 		return containers
 	}

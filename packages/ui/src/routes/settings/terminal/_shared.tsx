@@ -8,6 +8,9 @@ import {Button} from '@/components/ui/button'
 import {useIsTouchDevice} from '@/features/files/hooks/use-is-touch-device'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {BackLink} from '@/modules/immersive-picker'
+import {trpcClient} from '@/trpc/trpc'
+
+import {createAuthenticatedTerminalSocket} from './terminal-connection'
 
 import '@xterm/xterm/css/xterm.css'
 
@@ -37,6 +40,8 @@ export const XTermTerminal = ({appId}: {appId?: string}) => {
 
 	const [parentContainerRef, {width: containerWidth, height: containerHeight}] = useMeasure()
 	const [charMeasureRef, {width: charWidth}] = useMeasure()
+	const [connectionFailed, setConnectionFailed] = useState(false)
+	const [connectionAttempt, setConnectionAttempt] = useState(0)
 
 	// Paste UI state for touch devices
 	const [showPasteInput, setShowPasteInput] = useState(false)
@@ -70,6 +75,7 @@ export const XTermTerminal = ({appId}: {appId?: string}) => {
 
 	useEffect(() => {
 		if (containerWidth === 0 || containerHeight === 0) return
+		let cancelled = false
 
 		// Clean up previous instances if they exist
 		terminalRef.current?.dispose()
@@ -79,7 +85,8 @@ export const XTermTerminal = ({appId}: {appId?: string}) => {
 		const fitAddon = new FitAddon()
 		terminalRef.current = terminal
 
-		if (containerRef.current) {
+		const connect = async () => {
+			if (!containerRef.current) return
 			terminal.loadAddon(fitAddon)
 			terminal.open(containerRef.current)
 			terminal.focus()
@@ -96,30 +103,58 @@ export const XTermTerminal = ({appId}: {appId?: string}) => {
 			const cols = terminal.cols
 			const rows = terminal.rows
 
-			// Build ws url
-			const path = `/terminal?appId=${appId ?? ''}&rows=${rows}&cols=${cols}&token=${localStorage.getItem('jwt')}`
-			const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://'
-			const port = window.location.port ? `:${window.location.port}` : ''
-			ws.current = new WebSocket(`${wsProtocol}${window.location.hostname}${port}${path}`)
+			const socket = await createAuthenticatedTerminalSocket({
+				getTicket: () => trpcClient.user.createWebSocketTicket.mutate(),
+				createSocket: (ticket) => {
+					const path = `/terminal?appId=${appId ?? ''}&rows=${rows}&cols=${cols}&ticket=${ticket}`
+					const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://'
+					const port = window.location.port ? `:${window.location.port}` : ''
+					return new WebSocket(`${wsProtocol}${window.location.hostname}${port}${path}`)
+				},
+				isCancelled: () => cancelled,
+				onConnected: () => setConnectionFailed(false),
+				onDisconnected: () => setConnectionFailed(true),
+			})
+			if (!socket || cancelled) return
+			ws.current = socket
 
-			ws.current.onmessage = (event) => {
+			socket.onmessage = (event) => {
 				terminal.write(event.data)
 				scrollToCursor()
 			}
 			terminal.onData((data) => ws.current?.send(data))
 		}
+		void connect()
 
 		return () => {
+			cancelled = true
 			terminal.dispose()
 			ws.current?.close()
 		}
-	}, [appId, containerWidth, containerHeight])
+	}, [appId, connectionAttempt, containerWidth, containerHeight])
 
 	return (
 		<div
 			ref={parentContainerRef as React.LegacyRef<HTMLDivElement>}
 			className='relative h-full w-full overflow-hidden rounded-12 bg-black/50'
 		>
+			{connectionFailed && (
+				<div className='absolute inset-0 z-20 flex items-center justify-center bg-black/80'>
+					<div className='flex flex-col items-center gap-3 text-center'>
+						<p className='text-13 text-white/60'>
+							{t('terminal.connection-failed', 'The terminal connection was interrupted.')}
+						</p>
+						<Button
+							onClick={() => {
+								setConnectionFailed(false)
+								setConnectionAttempt((attempt) => attempt + 1)
+							}}
+						>
+							{t('try-again')}
+						</Button>
+					</div>
+				</div>
+			)}
 			{/* Hidden character to measure monospace character width */}
 			<div
 				ref={charMeasureRef as React.LegacyRef<HTMLDivElement>}

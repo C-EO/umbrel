@@ -3,8 +3,8 @@ version: '3.7'
 services:
   app_proxy:
     environment:
-      APP_HOST: sparkles-hello-world_server_1
-      APP_PORT: 3000
+      APP_HOST: $APP_SPARKLES_HELLO_WORLD_HOST
+      APP_PORT: $APP_SPARKLES_HELLO_WORLD_PORT
 
   server:
     image: getumbrel/community-app-store-hello-world:latest

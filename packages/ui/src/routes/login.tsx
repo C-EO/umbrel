@@ -31,10 +31,10 @@ export default function Login() {
 	const confirmedIp = (location.state as {confirmedIp?: string} | null)?.confirmedIp
 	const [showConfirmDialog, setShowConfirmDialog] = useState(!!confirmedIp)
 
-	const {loginWithJwt} = useAuth()
+	const {loginWithToken} = useAuth()
 
 	const loginMut = trpcReact.user.login.useMutation({
-		onSuccess: loginWithJwt,
+		onSuccess: loginWithToken,
 		onError: (error) => {
 			if (error.message === 'Missing 2FA code') {
 				setStep('2fa')

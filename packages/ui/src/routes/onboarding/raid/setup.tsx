@@ -211,8 +211,8 @@ export default function RaidSetup() {
 
 	// Login mutation for auto-login after setup complete
 	const loginMut = trpcReact.user.login.useMutation({
-		onSuccess: (jwt) => {
-			auth.signUpWithJwt(jwt, '/')
+		onSuccess: (token) => {
+			auth.signUpWithToken(token, '/')
 		},
 		onError: () => {
 			// If login fails, just redirect to login page

@@ -2,6 +2,7 @@ import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
 import {X509Certificate} from 'node:crypto'
+import {lookup} from 'node:dns/promises'
 import {rename} from 'node:fs/promises'
 
 import {$} from 'execa'
@@ -13,6 +14,7 @@ import type Umbreld from '../../index.js'
 import randomToken from '../utilities/random-token.js'
 import {getHostname, getIpAddresses} from '../system/system.js'
 import runEvery from '../utilities/run-every.js'
+import AppGateway, {readAppGatewayConfig, type AppGatewayConfig} from '../app-gateway/app-gateway.js'
 
 const NFT_BIN = '/usr/sbin/nft'
 
@@ -20,14 +22,16 @@ const NFT_BIN = '/usr/sbin/nft'
 // owned by apps; nftables redirects inbound LAN traffic to hidden Node listeners.
 const NFT_TABLE_NAME = 'umbrel_lan_ingress'
 const APP_AUTH_PUBLIC_PORT = 2000
-const APP_AUTH_INTERNAL_PORT = 22000
 const HIDDEN_INGRESS_PORT_START = 23_000
 const HIDDEN_INGRESS_PORT_END = 65_535
+const APP_TARGET_RECOVERY_RETRY_DELAYS = [0, 250, 1000, 2000]
+const APP_TARGET_RECOVERY_COOLDOWN = 10_000
 
 type AppIngressRoute = {
 	id: string
 	publicPort: number
 	hiddenPort: number
+	gateway?: AppGatewayConfig
 }
 
 type IngressPortMapping = {
@@ -35,20 +39,66 @@ type IngressPortMapping = {
 	hiddenPort: number
 }
 
+type UmbrelProxyOptions = {
+	includeForwardedFor?: boolean
+	pathPrefix?: string
+	redirectUnexpectedAppAuthNavigation?: boolean
+}
+
 type AppMuxServer = {
 	route: AppIngressRoute
 	server: net.Server
 	httpsProxyServer?: https.Server
+	gatewayServer?: http.Server
 }
 
 type ComposeFile = {
 	services?: Record<
 		string,
 		{
+			container_name?: unknown
+			hostname?: unknown
 			network_mode?: unknown
 			ports?: unknown
 		}
 	>
+}
+
+export function appAuthDashboardRedirect({
+	protocol,
+	host,
+	url,
+	method,
+	accept,
+}: {
+	protocol: 'http' | 'https'
+	host?: string
+	url?: string
+	method?: string
+	accept?: string
+}) {
+	// This is a convenience redirect for browser navigations, not an API rule.
+	if (method !== 'GET' || !accept?.toLowerCase().includes('text/html') || !host) return
+
+	try {
+		// Never let the request target choose the redirect authority. In particular,
+		// a request target beginning with // is a protocol-relative URL to URL().
+		const target = new URL(`${protocol}://${host}`)
+		// Tor exposes this listener as port 80 on a dedicated hidden service and
+		// forwards to port 2000 internally. Only redirect when the browser itself
+		// used :2000, otherwise the auth onion would redirect back to itself.
+		if (target.port !== APP_AUTH_PUBLIC_PORT.toString()) return
+
+		const requestTarget = new URL(url ?? '/', 'http://request.invalid')
+		if (requestTarget.pathname === '/app-auth' || requestTarget.pathname.startsWith('/app-auth/')) return
+
+		target.pathname = requestTarget.pathname
+		target.search = requestTarget.search
+		target.port = ''
+		return target.toString()
+	} catch {
+		return
+	}
 }
 
 export default class LanIngress {
@@ -56,10 +106,13 @@ export default class LanIngress {
 	#stopPeriodicRefresh?: () => void
 	#refreshPromise?: Promise<void>
 	#refreshQueued = false
+	#appTargetRecoveries = new Map<string, Promise<void>>()
+	#nextAppTargetRecoveryAt = new Map<string, number>()
 	#isStopped = true
 	#dashboardHttpServer?: http.Server
 	#dashboardHttpsServer?: https.Server
 	#appAuthMuxServer?: net.Server
+	#appAuthHttpProxyServer?: http.Server
 	#appAuthHttpsProxyServer?: https.Server
 	#appMuxServers = new Map<string, AppMuxServer>()
 	// Track sockets at the TCP layer because Node's HTTP force-close helper does not cover
@@ -131,6 +184,7 @@ export default class LanIngress {
 		this.#isStopped = true
 		this.#stopPeriodicRefresh?.()
 		this.#stopPeriodicRefresh = undefined
+		this.#nextAppTargetRecoveryAt.clear()
 		// Let any in-flight refresh finish before cleanup. Otherwise a refresh could
 		// re-create listeners or re-apply nftables after stop() has cleared them.
 		await this.#refreshPromise?.catch((error) =>
@@ -364,7 +418,7 @@ export default class LanIngress {
 					const manifestPath = `${appDataDirectory}/${appId}/umbrel-app.yml`
 					const manifest = await fse.readFile(manifestPath, 'utf8').catch(() => '')
 					if (!manifest) return null
-					const parsed = yaml.load(manifest) as {port?: unknown} | null
+					const parsed = yaml.load(manifest) as {port?: unknown; name?: unknown; icon?: unknown} | null
 					const publicPort = Number(parsed?.port)
 					if (!Number.isInteger(publicPort) || publicPort <= 0 || publicPort > 65_535) return null
 
@@ -379,7 +433,25 @@ export default class LanIngress {
 					// routes early too while the uninstall is still removing images/data.
 					if (app?.state === 'stopped' || app?.state === 'uninstalling') return {reservedPorts, route: null}
 
-					if (!this.canRouteApp(compose, publicPort, publishedPorts)) {
+					const gateway = compose
+						? await readAppGatewayConfig(appId, `${appDataDirectory}/${appId}`, compose as any, {
+								name: typeof parsed?.name === 'string' ? parsed.name : undefined,
+								icon: typeof parsed?.icon === 'string' ? parsed.icon : undefined,
+							})
+						: null
+					if (gateway) {
+						const targetAddress = await this.resolveAppTarget(appId, gateway.targetHost, compose)
+						if (!targetAddress) {
+							this.logger.verbose(`Skipping LAN ingress route for ${appId}; app gateway target is unavailable`)
+							return {reservedPorts, route: null}
+						}
+						return {
+							reservedPorts,
+							route: {id: appId, publicPort, gateway: {...gateway, targetAddress}},
+						}
+					}
+
+					if (!this.canRouteAppDirectly(compose, publicPort, publishedPorts)) {
 						this.logger.verbose(`Skipping LAN ingress route for ${appId}; app has no internal HTTP upstream`)
 						return {reservedPorts, route: null}
 					}
@@ -417,11 +489,8 @@ export default class LanIngress {
 		return [...mappingsByHiddenPort.values()]
 	}
 
-	private canRouteApp(compose: ComposeFile | null, publicPort: number, publishedPorts: number[]) {
+	private canRouteAppDirectly(compose: ComposeFile | null, publicPort: number, publishedPorts: number[]) {
 		if (!compose?.services) return false
-		// Most bridge-network apps expose their UI through the app_proxy service.
-		if (compose.services.app_proxy) return true
-
 		// Some apps publish their UI port directly without app_proxy.
 		if (publishedPorts.includes(publicPort)) return true
 
@@ -429,6 +498,90 @@ export default class LanIngress {
 		// intercept LAN traffic before it reaches the app-owned socket.
 		const hasHostNetworkService = Object.values(compose.services).some((service) => service.network_mode === 'host')
 		return hasHostNetworkService
+	}
+
+	private async resolveAppTarget(appId: string, host: string, compose: ComposeFile | null) {
+		if (net.isIP(host)) return host
+
+		const directAddress = await this.inspectContainerAddress(host)
+		if (directAddress) return directAddress
+
+		const matchingService = Object.entries(compose?.services ?? {}).find(([serviceName, service]) => {
+			if (serviceName === host || service.container_name === host || service.hostname === host) return true
+			return host === `${appId}_${serviceName}_1`
+		})?.[0]
+		if (matchingService) {
+			const container = await $({
+				reject: false,
+			})`docker ps --filter label=com.docker.compose.project=${appId} --filter label=com.docker.compose.service=${matchingService} --format {{.ID}}`
+			const containerId = container.stdout.trim().split('\n')[0]
+			if (container.exitCode === 0 && containerId) {
+				const serviceAddress = await this.inspectContainerAddress(containerId)
+				if (serviceAddress) return serviceAddress
+			}
+		}
+
+		return lookup(host)
+			.then(({address}) => address)
+			.catch(() => null)
+	}
+
+	// A gateway normally keeps using its resolved container IP. If Docker replaces a
+	// container outside umbreld's lifecycle that IP can change, so probe again after
+	// an upstream connection error and refresh the route as soon as a new IP appears.
+	// Concurrent failures share one recovery and repeated failures are rate-limited.
+	private requestAppTargetRecovery(config: AppGatewayConfig) {
+		const existingRecovery = this.#appTargetRecoveries.get(config.appId)
+		if (existingRecovery) return existingRecovery
+		if (Date.now() < (this.#nextAppTargetRecoveryAt.get(config.appId) ?? 0)) return
+
+		this.#nextAppTargetRecoveryAt.set(config.appId, Date.now() + APP_TARGET_RECOVERY_COOLDOWN)
+		const recovery = this.recoverAppTarget(config)
+			.catch((error) => this.logger.error(`Failed to recover app gateway target for ${config.appId}`, error))
+			.finally(() => this.#appTargetRecoveries.delete(config.appId))
+		this.#appTargetRecoveries.set(config.appId, recovery)
+		return recovery
+	}
+
+	private async recoverAppTarget(config: AppGatewayConfig) {
+		for (const retryDelay of APP_TARGET_RECOVERY_RETRY_DELAYS) {
+			if (retryDelay) await new Promise((resolve) => setTimeout(resolve, retryDelay))
+
+			const composePath = `${this.#umbreld.dataDirectory}/app-data/${config.appId}/docker-compose.yml`
+			const compose = await fse
+				.readFile(composePath, 'utf8')
+				.then((contents) => yaml.load(contents) as ComposeFile | null)
+				.catch(() => null)
+			const targetAddress = await this.resolveAppTarget(config.appId, config.targetHost, compose)
+			if (!targetAddress) continue
+			if (targetAddress === config.targetAddress) return
+
+			this.logger.log(
+				`App gateway target for ${config.appId} moved from ${config.targetAddress ?? 'unknown'} to ${targetAddress}; refreshing LAN ingress`,
+			)
+			await this.refresh()
+			return
+		}
+	}
+
+	private async inspectContainerAddress(container: string) {
+		// Interpolate the Go template so Execa passes it as one argument. Quotes in an
+		// Execa command template are literal (there is no shell to remove them), which
+		// would wrap Docker's JSON output in single quotes and make it unparsable.
+		const networksFormat = '{{json .NetworkSettings.Networks}}'
+		const inspection = await $({
+			reject: false,
+		})`docker inspect --format ${networksFormat} -- ${container}`
+		if (inspection.exitCode !== 0) return null
+		try {
+			const networks = JSON.parse(inspection.stdout) as Record<string, {IPAddress?: unknown}>
+			const addresses = [networks.umbrel_main_network, ...Object.values(networks)]
+				.map((network) => network?.IPAddress)
+				.filter((address): address is string => typeof address === 'string')
+			return addresses.find((address) => net.isIP(address)) ?? null
+		} catch {
+			return null
+		}
 	}
 
 	private getPublishedPorts(compose: ComposeFile | null) {
@@ -467,14 +620,7 @@ export default class LanIngress {
 	) {
 		// Hidden ingress listeners are real host ports, so avoid Umbrel-owned ports
 		// and every app-published port we discovered from compose.
-		const reservedPorts = new Set([
-			80,
-			443,
-			APP_AUTH_PUBLIC_PORT,
-			APP_AUTH_INTERNAL_PORT,
-			this.#umbreld.port,
-			...reservedAppPorts,
-		])
+		const reservedPorts = new Set([80, 443, APP_AUTH_PUBLIC_PORT, this.#umbreld.port, ...reservedAppPorts])
 		const allocatedHiddenPorts = new Set<number>()
 		const allocations: Record<string, {publicPort: number; hiddenPort: number}> = {}
 		const sortedRoutes = [...routes].sort((a, b) => a.id.localeCompare(b.id))
@@ -568,8 +714,18 @@ export default class LanIngress {
 	}
 
 	private async ensureAppAuthMuxServer() {
+		if (!this.#appAuthHttpProxyServer) {
+			this.#appAuthHttpProxyServer = this.createHttpProxyServer(this.#umbreld.port, 'http', {
+				pathPrefix: '/app-auth',
+				redirectUnexpectedAppAuthNavigation: true,
+			})
+			await this.listen(this.#appAuthHttpProxyServer, 0, '127.0.0.1')
+		}
 		if (!this.#appAuthHttpsProxyServer) {
-			this.#appAuthHttpsProxyServer = await this.createHttpsProxyServer(APP_AUTH_INTERNAL_PORT)
+			this.#appAuthHttpsProxyServer = await this.createHttpsProxyServer(this.#umbreld.port, {
+				pathPrefix: '/app-auth',
+				redirectUnexpectedAppAuthNavigation: true,
+			})
 			// The mux owns the public port. TLS requests are forwarded to this
 			// loopback-only HTTPS server so Node handles the normal TLS lifecycle.
 			await this.listen(this.#appAuthHttpsProxyServer, 0, '127.0.0.1')
@@ -582,7 +738,7 @@ export default class LanIngress {
 		// directly instead of relying on nftables redirection.
 		this.#appAuthMuxServer = this.createMuxServer({
 			listenPort: APP_AUTH_PUBLIC_PORT,
-			httpPort: APP_AUTH_INTERNAL_PORT,
+			httpPort: this.serverPort(this.#appAuthHttpProxyServer),
 			getHttpsProxyServer: () => this.#appAuthHttpsProxyServer,
 		})
 		await this.listen(this.#appAuthMuxServer, APP_AUTH_PUBLIC_PORT)
@@ -594,27 +750,41 @@ export default class LanIngress {
 			if (
 				nextRoute &&
 				nextRoute.publicPort === entry.route.publicPort &&
-				nextRoute.hiddenPort === entry.route.hiddenPort
+				nextRoute.hiddenPort === entry.route.hiddenPort &&
+				JSON.stringify(nextRoute.gateway) === JSON.stringify(entry.route.gateway)
 			) {
 				continue
 			}
-			await Promise.all([this.closeServer(entry.server), this.closeServer(entry.httpsProxyServer)])
+			await Promise.all([
+				this.closeServer(entry.server),
+				this.closeServer(entry.httpsProxyServer),
+				this.closeServer(entry.gatewayServer),
+			])
 			this.#appMuxServers.delete(id)
 		}
 
 		for (const route of appRoutes) {
 			if (this.#appMuxServers.has(route.id)) continue
-			const httpsProxyServer = await this.createHttpsProxyServer(route.publicPort, {includeForwardedFor: false})
+			let gatewayServer: http.Server | undefined
+			let upstreamPort = route.publicPort
+			if (route.gateway) {
+				gatewayServer = new AppGateway(this.#umbreld, route.gateway, {
+					onUpstreamUnavailable: () => void this.requestAppTargetRecovery(route.gateway!),
+				}).server
+				await this.listen(gatewayServer, 0, '127.0.0.1')
+				upstreamPort = this.serverPort(gatewayServer)
+			}
+			const httpsProxyServer = await this.createHttpsProxyServer(upstreamPort, {includeForwardedFor: false})
 			// The public app port still belongs to the app. nftables redirects LAN
 			// traffic to the mux, and TLS requests go to this loopback HTTPS proxy.
 			await this.listen(httpsProxyServer, 0, '127.0.0.1')
 			const server = this.createMuxServer({
 				listenPort: route.hiddenPort,
-				httpPort: route.publicPort,
+				httpPort: upstreamPort,
 				getHttpsProxyServer: () => httpsProxyServer,
 			})
 			await this.listen(server, route.hiddenPort)
-			this.#appMuxServers.set(route.id, {route, server, httpsProxyServer})
+			this.#appMuxServers.set(route.id, {route, server, httpsProxyServer, gatewayServer})
 		}
 	}
 
@@ -629,17 +799,27 @@ export default class LanIngress {
 		getHttpsProxyServer: () => https.Server | undefined
 	}) {
 		const server = net.createServer((socket) => {
-			socket.once('data', (firstChunk: Buffer) => {
+			const chunks: Buffer[] = []
+			let length = 0
+			const classify = (chunk: Buffer) => {
+				chunks.push(chunk)
+				length += chunk.length
+				// A TLS record header needs three bytes to distinguish it from HTTP.
+				// TCP is a byte stream, so even these first bytes may be fragmented.
+				if (length < 3) return
+				socket.off('data', classify)
 				// Pause immediately after peeking. Request bodies can arrive in
 				// later chunks, and those bytes must wait until the upstream pipe
 				// exists or POST requests can hang waiting for a body we already lost.
 				socket.pause()
+				const firstChunk = Buffer.concat(chunks, length)
 				if (this.isTlsClientHello(firstChunk)) {
 					this.handleTlsSocket(socket, firstChunk, getHttpsProxyServer())
 					return
 				}
 				this.forwardTcp(socket, firstChunk, httpPort)
-			})
+			}
+			socket.on('data', classify)
 			socket.setTimeout(5000, () => socket.destroy())
 			socket.on('error', (error) => this.logger.verbose(`LAN ingress mux socket error on ${listenPort}: ${error}`))
 		})
@@ -683,9 +863,27 @@ export default class LanIngress {
 		return chunk.length >= 3 && chunk[0] === 0x16 && chunk[1] === 0x03
 	}
 
-	private createHttpProxyServer(upstreamPort: number, originalProtocol: 'http' | 'https') {
-		const middleware = this.createProxyMiddleware(upstreamPort, originalProtocol)
+	private createHttpProxyServer(
+		upstreamPort: number,
+		originalProtocol: 'http' | 'https',
+		options: UmbrelProxyOptions = {},
+	) {
+		const middleware = this.createProxyMiddleware(upstreamPort, originalProtocol, options)
 		const server = http.createServer((request, response) => {
+			if (options.redirectUnexpectedAppAuthNavigation) {
+				const redirect = appAuthDashboardRedirect({
+					protocol: originalProtocol,
+					host: request.headers.host,
+					url: request.url,
+					method: request.method,
+					accept: request.headers.accept,
+				})
+				if (redirect) {
+					response.writeHead(302, {location: redirect})
+					response.end()
+					return
+				}
+			}
 			middleware(request as any, response as any, (error?: unknown) => {
 				// Reset instead of an error response for the same reason as onError above.
 				this.logger.verbose(`LAN ingress proxy error to ${upstreamPort}: ${error}`)
@@ -696,14 +894,29 @@ export default class LanIngress {
 		return server
 	}
 
-	private async createHttpsProxyServer(upstreamPort: number, {includeForwardedFor = true} = {}) {
-		const middleware = this.createProxyMiddleware(upstreamPort, 'https', {includeForwardedFor})
+	private async createHttpsProxyServer(upstreamPort: number, options: UmbrelProxyOptions = {}) {
+		const {includeForwardedFor = true, pathPrefix} = options
+		const middleware = this.createProxyMiddleware(upstreamPort, 'https', {includeForwardedFor, pathPrefix})
 		const server = https.createServer(
 			{
 				cert: await fse.readFile(this.serverCertificatePath),
 				key: await fse.readFile(this.serverKeyPath),
 			},
 			(request, response) => {
+				if (options.redirectUnexpectedAppAuthNavigation) {
+					const redirect = appAuthDashboardRedirect({
+						protocol: 'https',
+						host: request.headers.host,
+						url: request.url,
+						method: request.method,
+						accept: request.headers.accept,
+					})
+					if (redirect) {
+						response.writeHead(302, {location: redirect})
+						response.end()
+						return
+					}
+				}
 				middleware(request as any, response as any, (error?: unknown) => {
 					// Reset instead of an error response for the same reason as onError above.
 					this.logger.verbose(`LAN ingress proxy error to ${upstreamPort}: ${error}`)
@@ -718,12 +931,19 @@ export default class LanIngress {
 	private createProxyMiddleware(
 		upstreamPort: number,
 		originalProtocol: 'http' | 'https',
-		{includeForwardedFor = true} = {},
+		{includeForwardedFor = true, pathPrefix}: UmbrelProxyOptions = {},
 	): RequestHandler {
+		const rewritePath = pathPrefix
+			? (path: string) =>
+					path === pathPrefix || path.startsWith(`${pathPrefix}/`) || path.startsWith(`${pathPrefix}?`)
+						? path
+						: `${pathPrefix}${path}`
+			: undefined
 		return createProxyMiddleware({
 			target: `http://127.0.0.1:${upstreamPort}`,
 			changeOrigin: false,
 			ws: true,
+			pathRewrite: rewritePath,
 			// Umbrel-owned upstreams (dashboard, app-auth) get X-Forwarded-For since they
 			// only trust it from loopback. App upstreams must not: some apps reject any
 			// X-Forwarded-For from an unconfigured proxy (Home Assistant returns 400),
@@ -770,6 +990,12 @@ export default class LanIngress {
 
 	private attachProxyUpgradeHandler(server: http.Server, middleware: RequestHandler) {
 		server.on('upgrade', (request, socket, head) => middleware.upgrade?.(request as any, socket as net.Socket, head))
+	}
+
+	private serverPort(server: net.Server | http.Server) {
+		const address = server.address()
+		if (typeof address === 'string' || address === null) throw new Error('LAN ingress server is not listening')
+		return address.port
 	}
 
 	// Attach tracking before listen() so shutdown can close accepted sockets explicitly.
@@ -836,12 +1062,15 @@ export default class LanIngress {
 			this.closeServer(this.#dashboardHttpServer).then(() => (this.#dashboardHttpServer = undefined)),
 			this.closeServer(this.#dashboardHttpsServer).then(() => (this.#dashboardHttpsServer = undefined)),
 			this.closeServer(this.#appAuthMuxServer).then(() => (this.#appAuthMuxServer = undefined)),
+			this.closeServer(this.#appAuthHttpProxyServer),
 			this.closeServer(this.#appAuthHttpsProxyServer),
 			...Array.from(this.#appMuxServers.values()).flatMap((entry) => [
 				this.closeServer(entry.server),
 				this.closeServer(entry.httpsProxyServer),
+				this.closeServer(entry.gatewayServer),
 			]),
 		])
+		this.#appAuthHttpProxyServer = undefined
 		this.#appAuthHttpsProxyServer = undefined
 		this.#appMuxServers.clear()
 	}

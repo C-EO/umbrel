@@ -18,6 +18,7 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {AuthorizedUrlState} from '@/features/files/components/file-viewer/authorized-url-state'
 import {
 	getFileExtension,
 	getLanguageLabel,
@@ -31,6 +32,7 @@ import {APPS_PATH} from '@/features/files/constants'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
+import {dashboardAuthHeaders, useAuthorizedHttpUrl, useAuthorizedHttpUrlQuery} from '@/modules/auth/http-auth'
 import {useWallpaper} from '@/providers/wallpaper'
 import {trpcReact} from '@/trpc/trpc'
 
@@ -131,6 +133,8 @@ export default function TextViewer({item}: TextViewerProps) {
 	if (item.size && item.size > MAX_EDITOR_FILE_SIZE) {
 		throw new Error('File too large for text editor')
 	}
+	const downloadUrl = useAuthorizedHttpUrl(`/api/files/download?path=${encodeURIComponent(item.path)}`)
+	const viewUrl = useAuthorizedHttpUrlQuery(`/api/files/view?path=${encodeURIComponent(item.path)}`)
 
 	const {t} = useTranslation()
 	const viewerMode = useFilesStore((s) => s.viewerMode)
@@ -180,9 +184,10 @@ export default function TextViewer({item}: TextViewerProps) {
 
 	// Fetch file content
 	useEffect(() => {
+		if (viewUrl.status !== 'ready') return
 		const fetchContent = async () => {
 			try {
-				const response = await fetch(`/api/files/view?path=${encodeURIComponent(item.path)}`)
+				const response = await fetch(viewUrl.url)
 				if (!response.ok) {
 					setError(response.status === 404 ? 'not-found' : 'fetch-error')
 					setLoading(false)
@@ -209,7 +214,7 @@ export default function TextViewer({item}: TextViewerProps) {
 		}
 
 		fetchContent()
-	}, [item.path, item.size])
+	}, [item.path, item.size, viewUrl.status, viewUrl.url])
 
 	// Load language extension
 	useEffect(() => {
@@ -234,7 +239,7 @@ export default function TextViewer({item}: TextViewerProps) {
 			const response = await fetch(`/api/files/upload?path=${encodeURIComponent(item.path)}&collision=replace`, {
 				method: 'POST',
 				body: content,
-				headers: {'Content-Type': 'text/plain; charset=utf-8'},
+				headers: {...dashboardAuthHeaders(), 'Content-Type': 'text/plain; charset=utf-8'},
 			})
 
 			if (!response.ok) {
@@ -339,6 +344,10 @@ export default function TextViewer({item}: TextViewerProps) {
 		return exts
 	}, [languageExtension, ext])
 
+	if (viewUrl.status !== 'ready') {
+		return <AuthorizedUrlState query={viewUrl}>{() => null}</AuthorizedUrlState>
+	}
+
 	// Error states — glassmorphic error cards
 	if (error === 'encoding' || error === 'not-found' || error === 'fetch-error') {
 		const errorConfig = {
@@ -383,7 +392,7 @@ export default function TextViewer({item}: TextViewerProps) {
 					<div className='flex gap-2'>
 						{errorConfig.showDownload && (
 							<a
-								href={`/api/files/download?path=${encodeURIComponent(item.path)}`}
+								href={downloadUrl}
 								download
 								className='umbrel-button inline-flex h-[30px] items-center rounded-full border-[0.5px] border-white/20 bg-white/10 px-4 text-13 font-medium text-white/90 shadow-button-highlight-soft-hpx transition-all duration-300 hover:bg-white/15 active:scale-[0.97] active:bg-white/6'
 							>

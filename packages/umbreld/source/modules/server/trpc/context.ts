@@ -1,5 +1,6 @@
 import {type CreateExpressContextOptions} from '@trpc/server/adapters/express'
 import type Umbreld from '../../../index.js'
+import type {AuthenticatedWebSocketRequest} from '../index.js'
 
 export const createContextExpress = ({req, res}: CreateExpressContextOptions) => {
 	const umbreld = req.app.get('umbreld') as Umbreld
@@ -12,10 +13,19 @@ export const createContextExpress = ({req, res}: CreateExpressContextOptions) =>
 	}
 }
 
-export const createContextWss = ({umbreld, logger}: {umbreld: Umbreld; logger: Umbreld['logger']}) => {
+export const createContextWss = ({
+	umbreld,
+	logger,
+	request,
+}: {
+	umbreld: Umbreld
+	logger: Umbreld['logger']
+	request: AuthenticatedWebSocketRequest
+}) => {
 	return {
 		...createContext({umbreld, logger}),
 		transport: 'ws' as const,
+		principal: request.authPrincipal,
 	}
 }
 

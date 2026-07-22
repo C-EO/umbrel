@@ -36,13 +36,57 @@ async function guestPathExists(guestPath: string) {
 	return output.trim() === 'exists'
 }
 
-test('POST /api/files/upload throws unauthorized error without cookie', async () => {
+test('POST /api/files/upload throws unauthorized error without a bearer credential', async () => {
 	const error = await umbreld.unauthenticatedApi
 		.post('files/upload?path=/Home/test-file.txt', {body: 'test content'})
 		.catch((error) => error)
 	expect(error).toBeInstanceOf(Error)
 	expect(error.response.statusCode).toBe(401)
 	expect(error.response.body).toMatchObject({error: 'unauthorized'})
+})
+
+test('POST /api/files/upload rejects the dashboard credential without its browser cookie', async () => {
+	const login = await umbreld.unauthenticatedApi.post('../trpc/user.login', {
+		json: {password: 'moneyprintergobrrr'},
+	})
+	const dashboardToken = (login.body as unknown as {result?: {data?: unknown}}).result?.data
+	if (typeof dashboardToken !== 'string') throw new Error('Login did not return a dashboard credential')
+
+	const error = await umbreld.unauthenticatedApi
+		.post('files/upload?path=/Home/token-only-must-not-upload.txt', {
+			body: 'test content',
+			headers: {Authorization: `Bearer ${dashboardToken}`},
+		})
+		.catch((error) => error)
+	expect(error.response.statusCode).toBe(401)
+	await expect(guestPathExists(`${guestHome}/token-only-must-not-upload.txt`)).resolves.toBe(false)
+})
+
+test('POST /api/files/upload rejects the browser cookie without its dashboard credential', async () => {
+	const error = await umbreld.browserApi
+		.post('files/upload?path=/Home/cookie-only-must-not-upload.txt', {body: 'test content'})
+		.catch((error) => error)
+	expect(error.response.statusCode).toBe(401)
+	await expect(guestPathExists(`${guestHome}/cookie-only-must-not-upload.txt`)).resolves.toBe(false)
+})
+
+test('POST /api/files/upload does not accept the app-session cookie', async () => {
+	const login = await umbreld.unauthenticatedApi.post('../trpc/user.login', {
+		json: {password: 'moneyprintergobrrr'},
+	})
+	const appSession = (login.headers['set-cookie'] ?? [])
+		.find((cookie) => cookie.startsWith('UMBREL_APP_SESSION='))
+		?.split(';')[0]
+	expect(appSession).toBeDefined()
+
+	const error = await umbreld.unauthenticatedApi
+		.post('files/upload?path=/Home/app-cookie-must-not-upload.txt', {
+			body: 'test content',
+			headers: {cookie: appSession!},
+		})
+		.catch((error) => error)
+	expect(error.response.statusCode).toBe(401)
+	await expect(guestPathExists(`${guestHome}/app-cookie-must-not-upload.txt`)).resolves.toBe(false)
 })
 
 test('POST /api/files/upload throws 400 error without path parameter', async () => {
@@ -86,7 +130,7 @@ test('POST /api/files/upload throws 400 error on symlink traversal attempt', asy
 	expect(error.response.body).toMatchObject({error: 'invalid path'})
 })
 
-test('POST /api/files/upload successfully uploads a file with valid cookie and returns success response', async () => {
+test('POST /api/files/upload succeeds with matching dashboard and browser credentials', async () => {
 	// Upload a file
 	const response = await umbreld.api.post('files/upload?path=/Home/new-file.txt', {
 		body: 'uploaded content',

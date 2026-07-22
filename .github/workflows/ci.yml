@@ -205,7 +205,23 @@ jobs:
       - uses: actions/checkout@v3
       - id: find
         run: |
-          tests=$(find packages/umbreld/source -name "*.vm.test.ts" ! -name "*.pi.vm.test.ts" | sed 's|packages/umbreld/||' | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({path: ., name: (. | split("/") | last | sub("\\.vm\\.test\\.ts$"; ""))})')
+          tests=$(
+            find packages/umbreld/source -name "*.vm.test.ts" ! -name "*.pi.vm.test.ts" |
+              while IFS= read -r test_path; do
+                relative_path="${test_path#packages/umbreld/}"
+                name="$(basename "${test_path}" .vm.test.ts)"
+                requires_playwright=false
+                if grep --quiet '^// @vm-requires-playwright$' "${test_path}"; then
+                  requires_playwright=true
+                fi
+                jq --null-input --compact-output \
+                  --arg path "${relative_path}" \
+                  --arg name "${name}" \
+                  --argjson requiresPlaywright "${requires_playwright}" \
+                  '{path: $path, name: $name, requiresPlaywright: $requiresPlaywright}'
+              done |
+              jq --slurp --compact-output
+          )
           echo "tests=$tests" >> $GITHUB_OUTPUT
 
   # Pi VM tests run from the Pi image in an emulated Raspberry Pi 4 so they get
@@ -254,6 +270,10 @@ jobs:
       - name: Install umbreld dependencies
         working-directory: packages/umbreld
         run: npm clean-install
+      - name: Install browser for LAN ingress end-to-end test
+        if: matrix.test.requiresPlaywright
+        working-directory: packages/umbreld
+        run: npx playwright install --with-deps chromium
       - name: Run VM test
         working-directory: packages/umbreld
         run: npm run test -- ${{ matrix.test.path }}
@@ -404,6 +424,7 @@ jobs:
         task:
           - lint
           - format:check
+          - test:unit
           - typecheck
     steps:
       - name: Checkout code

@@ -8,6 +8,7 @@ import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
 import {splitFileName} from '@/features/files/utils/format-filesystem-name'
+import {authorizedHttpUrl} from '@/modules/auth/http-auth'
 import {useConfirmation} from '@/providers/confirmation'
 import {trpcReact} from '@/trpc/trpc'
 
@@ -504,10 +505,10 @@ export function useFilesOperations() {
 	// ------------------
 
 	// Download selected items
-	const downloadSelectedItems = () => {
+	const downloadSelectedItems = async () => {
 		// For multiple items, construct URL with multiple path parameters
 		const paths = selectedItems.map((item) => `path=${encodeURIComponent(item.path)}`).join('&')
-		const url = `/api/files/download?${paths}`
+		const url = await authorizedHttpUrl(`/api/files/download?${paths}`)
 		// create a temporary anchor element to download the files
 		const anchor = document.createElement('a')
 		anchor.href = url

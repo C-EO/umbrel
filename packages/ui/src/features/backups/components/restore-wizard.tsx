@@ -148,7 +148,7 @@ export function BackupsRestoreWizard() {
 	// Start restore mutation
 	const {restoreBackup} = useBackupsRestore()
 	const {connectToRepository, isPending: isConnecting} = useBackupsConnect()
-	const verifyPasswordMutation = trpcReact.user.login.useMutation()
+	const verifyPasswordMutation = trpcReact.user.verifyPassword.useMutation()
 
 	// Step-scoped validation before next
 	const next = async () => {
