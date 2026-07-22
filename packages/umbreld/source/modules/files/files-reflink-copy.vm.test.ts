@@ -58,7 +58,9 @@ describe('Reflink copy on ZFS', () => {
 
 		// Create a 100MB test file on the ZFS filesystem
 		await umbreld.vm.ssh(`dd if=/dev/urandom of=~/umbrel/home/test-file.bin bs=1M count=${testFileSizeMb} 2>/dev/null`)
-		await umbreld.vm.ssh('sync')
+		// BRT clone accounting is applied during a pool sync, so force a txg
+		// boundary before reading bclonesaved.
+		await umbreld.vm.ssh('zpool sync')
 
 		// Get block clone savings before copy
 		const savedBefore = Number((await umbreld.vm.ssh('zpool get -Hp -o value bclonesaved')).trim())
@@ -69,7 +71,7 @@ describe('Reflink copy on ZFS', () => {
 			toDirectory: '/Home',
 			collision: 'keep-both',
 		})
-		await umbreld.vm.ssh('sync')
+		await umbreld.vm.ssh('zpool sync')
 
 		// Verify the copy exists and has the correct content
 		const listing = await umbreld.client.files.list.query({path: '/Home'})
