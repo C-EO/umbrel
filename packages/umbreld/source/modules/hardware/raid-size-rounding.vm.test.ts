@@ -18,6 +18,20 @@ describe('RAID transition with real 4TB drive sizes', () => {
 	const EXACT_4TB_SIZE = '4000000000000' // Exactly 4TB
 	const SMALL_SIMULATED_4TB_SIZE = '4000000010000' // Just over 4TB - tests rounding edge case
 
+	async function waitForApiToGoDown() {
+		await pWaitFor(
+			async () => {
+				try {
+					await umbreld.unauthenticatedClient.system.status.query()
+					return false
+				} catch {
+					return true
+				}
+			},
+			{interval: 100, timeout: 60_000},
+		)
+	}
+
 	beforeAll(async () => {
 		umbreld = await createTestVm()
 	})
@@ -137,6 +151,10 @@ describe('RAID transition with real 4TB drive sizes', () => {
 			newDeviceId: smallerSamsungDeviceId,
 		})
 		expect(result).toBe(true)
+	})
+
+	test('waits for API to go down after transition', async () => {
+		await waitForApiToGoDown()
 	})
 
 	test('waits for VM to come back up after transition', async () => {
