@@ -224,6 +224,9 @@ export default class Thumbnails {
 		// This flag is ignored for regular images, so we always include it for simplicity
 		await queue.add(async () => {
 			this.logger.verbose(`Generating thumbnail for ${systemPath}`)
+			// The API can become available while modules are still starting, so make
+			// sure the output directory exists at the point where we write to it.
+			await fse.ensureDir(this.thumbnailDirectory)
 			await $`convert ${systemPath}[0] -resize ${this.width}x${this.height} -quality ${this.quality} -auto-orient ${thumbnailSystemPath}`
 		})
 

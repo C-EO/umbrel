@@ -75,6 +75,22 @@ async function pollUntil(
 	throw new Error(errorMessage)
 }
 
+describe('Thumbnail generation', () => {
+	test('recreates a missing thumbnail directory on demand', async () => {
+		const testDir = `${umbreld.instance.dataDirectory}/external/thumbnail-missing-directory-test`
+		const thumbnailDir = `${umbreld.instance.dataDirectory}/thumbnails`
+		await copyFixtureFile(testDir)
+
+		await fse.remove(thumbnailDir)
+		const thumbnailUrl = await umbreld.client.files.getThumbnail.mutate({
+			path: '/External/thumbnail-missing-directory-test/master-lossless-image.png',
+		})
+
+		const thumbnailName = thumbnailUrl.split('/').pop()!
+		await expect(fse.pathExists(nodePath.join(thumbnailDir, thumbnailName))).resolves.toBe(true)
+	})
+})
+
 describe('Thumbnail housekeeping', () => {
 	test('removes oldest thumbnails when exceeding cleanup threshold', {retry: 5}, async () => {
 		// Set a lower maxThumbnailCount and pruningThreshold for testing
