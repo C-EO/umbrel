@@ -67,7 +67,16 @@ export const SORT_BY_OPTIONS = [
 ] as const
 
 // ENSURE THESE 2 SETS MATCH THE ONES IN umbreld/source/modules/files/thumbnails.ts
-export const IMAGE_EXTENSIONS_WITH_IMAGE_THUMBNAILS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif'])
+export const IMAGE_EXTENSIONS_WITH_IMAGE_THUMBNAILS = new Set([
+	'.jpg',
+	'.jpeg',
+	'.png',
+	'.gif',
+	'.webp',
+	'.avif',
+	'.heic',
+	'.heif',
+])
 export const VIDEO_EXTENSIONS_WITH_IMAGE_THUMBNAILS = new Set(['.mov', '.mp4', '.3gp', '.mkv', '.avi'])
 
 export const FILE_TYPE_MAP = {
@@ -157,6 +166,7 @@ export const FILE_TYPE_MAP = {
 	'image/avif': {nameTKey: 'files-type.avif', thumbnail: ImageThumbnail, viewer: ImageViewer},
 	'image/webp': {nameTKey: 'files-type.webp', thumbnail: ImageThumbnail, viewer: ImageViewer},
 	'image/heic': {nameTKey: 'files-type.heic', thumbnail: ImageThumbnail, viewer: null},
+	'image/heif': {nameTKey: 'files-type.heif', thumbnail: ImageThumbnail, viewer: null},
 	'image/jpeg': {nameTKey: 'files-type.jpeg', thumbnail: ImageThumbnail, viewer: ImageViewer},
 	'image/png': {nameTKey: 'files-type.png', thumbnail: ImageThumbnail, viewer: ImageViewer},
 	'image/gif': {nameTKey: 'files-type.gif', thumbnail: ImageThumbnail, viewer: ImageViewer},

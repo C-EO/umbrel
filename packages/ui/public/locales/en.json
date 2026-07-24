@@ -651,6 +651,7 @@
   "files-type.gif": "GIF Image",
   "files-type.gzip": "GZIP Archive",
   "files-type.heic": "HEIC Image",
+  "files-type.heif": "HEIF Image",
   "files-type.html": "HTML Document",
   "files-type.ico": "ICO Image",
   "files-type.iso": "ISO Image",

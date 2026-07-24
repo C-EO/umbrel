@@ -168,7 +168,7 @@ describe('getThumbnail', () => {
 		await expect(listThumbnails()).resolves.toContain(thumbnailFilename)
 	})
 
-	const imageTypes = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif']
+	const imageTypes = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.heic', '.heif']
 
 	for (const imageType of imageTypes) {
 		test(`returns a thumbnail for a ${imageType} file`, async () => {
@@ -191,7 +191,21 @@ describe('getThumbnail', () => {
 		})
 	}
 
-	test.todo('returns a thumbnail for a heic file once we support it')
+	// Apple devices produce tiled grid heic files (unlike simple ImageMagick-encoded
+	// ones) which older ImageMagick/libheif versions failed to decode, so also test
+	// a genuine Apple-encoded fixture
+	test('returns a thumbnail for an Apple-encoded .heic file', async () => {
+		// Upload the Apple-encoded heic fixture
+		const virtualPath = '/Home/thumb-heic-test/apple-encoded-image.heic'
+		await uploadFixtureFile(virtualPath, 'apple-encoded-image.heic')
+
+		// Get api endpoint URL for thumbnail
+		const thumbnailUrl = await umbreld.client.files.getThumbnail.mutate({path: virtualPath})
+
+		// Verify thumbnail file was created
+		const thumbnailFilename = thumbnailUrl.split('/').pop()!
+		await expect(listThumbnails()).resolves.toContain(thumbnailFilename)
+	})
 
 	const videoTypes = ['.mkv', '.mov', '.mp4', '.3gp', '.avi']
 
