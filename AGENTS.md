@@ -19,3 +19,10 @@
   ```sh
   git worktree remove worktrees/<branch>
   ```
+
+## Pull requests
+
+- Open the PR against the same repository as `git origin`, never another remote. This checkout has around twenty remotes including the public `getumbrel/umbrel`, and `gh` infers a target when `--repo` is omitted — so check `origin` and pass `--repo` explicitly.
+- Push regularly rather than saving everything for one commit at the end. Each commit should be atomic: one self-contained change that leaves the tree working on its own.
+- Write the PR title and description as an overview of the overall change and its implications — what it does and what it means for the rest of the system, not a replay of the commits. **The title and description become the commit message when the PR is squash-merged**, so they are what everyone reads in `git log` later.
+- Keep the description current as the implementation changes. When it's merged it must describe what the PR actually does, not what it originally set out to do.
