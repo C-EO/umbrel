@@ -39,6 +39,12 @@ tor/*
 app-data/*
 data/
 
+# Git worktrees (see AGENTS.md). Git creates this on demand and does not
+# ignore nested worktrees on its own, so it only needs ignoring, not tracking.
+# Anchored so a worktrees/ directory elsewhere in the tree isn't caught.
+
+/worktrees/
+
 # Commit these files
 
 !statuses/update-status.json
