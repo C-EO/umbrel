@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repository_root="$(git rev-parse --show-toplevel)"
+cd "${repository_root}"
+
+# Keep this in sync with the clean script in packages/os/package.json.
+os_build_paths=(
+    "packages/os/build"
+    "packages/os/rugix/build"
+    "packages/os/rugix/.rugix"
+)
+
+get_size_in_kib() {
+    local path="${1}"
+    local size
+
+    size="$(du -sk "${path}" 2> /dev/null | awk 'NR == 1 { print $1 }' || true)"
+    echo "${size:-0}"
+}
+
+format_size_from_kib() {
+    local size_in_kib="${1}"
+
+    if [[ "${size_in_kib}" -eq 0 ]]
+    then
+        echo "0 B"
+        return
+    fi
+
+    awk -v size="${size_in_kib}" 'BEGIN {
+        split("KiB MiB GiB TiB PiB", units, " ")
+        unit = 1
+        while (size >= 1024 && unit < 5) {
+            size /= 1024
+            unit++
+        }
+        if (unit == 1 || size >= 100) {
+            printf "%.0f %s\n", size, units[unit]
+        } else {
+            printf "%.1f %s\n", size, units[unit]
+        }
+    }'
+}
+
+cleaned_worktrees=0
+cleanup_failed=0
+size_before_cleanup_in_kib=0
+size_after_cleanup_in_kib=0
+
+while IFS= read -r -d '' worktree_entry
+do
+    if [[ "${worktree_entry}" != worktree\ * ]]
+    then
+        continue
+    fi
+
+    worktree="${worktree_entry#worktree }"
+    if [[ ! -d "${worktree}" ]]
+    then
+        continue
+    fi
+
+    paths_to_remove=()
+    for relative_path in "${os_build_paths[@]}"
+    do
+        path="${worktree}/${relative_path}"
+        if [[ -e "${path}" ]] || [[ -L "${path}" ]]
+        then
+            paths_to_remove+=("${path}")
+            size_before_cleanup_in_kib=$((size_before_cleanup_in_kib + $(get_size_in_kib "${path}")))
+        fi
+    done
+
+    node_modules_paths=(
+        "${worktree}/node_modules"
+        "${worktree}"/packages/*/node_modules
+    )
+    for path in "${node_modules_paths[@]}"
+    do
+        if [[ -e "${path}" ]] || [[ -L "${path}" ]]
+        then
+            paths_to_remove+=("${path}")
+            size_before_cleanup_in_kib=$((size_before_cleanup_in_kib + $(get_size_in_kib "${path}")))
+        fi
+    done
+
+    if [[ "${#paths_to_remove[@]}" -eq 0 ]]
+    then
+        continue
+    fi
+
+    echo "Cleaning build artifacts and dependencies from ${worktree}..."
+    if ! rm -rf -- "${paths_to_remove[@]}"
+    then
+        cleanup_failed=1
+    fi
+    for path in "${paths_to_remove[@]}"
+    do
+        if [[ -e "${path}" ]] || [[ -L "${path}" ]]
+        then
+            size_after_cleanup_in_kib=$((size_after_cleanup_in_kib + $(get_size_in_kib "${path}")))
+        fi
+    done
+    cleaned_worktrees=$((cleaned_worktrees + 1))
+done < <(git worktree list --porcelain -z)
+
+if [[ "${cleaned_worktrees}" -eq 0 ]]
+then
+    echo "No OS build artifacts or node_modules found in any worktree."
+else
+    echo "Cleaned build artifacts and dependencies from ${cleaned_worktrees} worktree(s)."
+fi
+
+freed_size_in_kib=$((size_before_cleanup_in_kib - size_after_cleanup_in_kib))
+if [[ "${freed_size_in_kib}" -lt 0 ]]
+then
+    freed_size_in_kib=0
+fi
+echo "Freed $(format_size_from_kib "${freed_size_in_kib}") of disk space."
+
+exit "${cleanup_failed}"

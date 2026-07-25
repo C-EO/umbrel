@@ -198,6 +198,34 @@ remove_volume() {
   docker volume rm "${INSTANCE_ID}"
 }
 
+get_instance_image_id() {
+  local image_id
+
+  # Prefer the image used by the existing container. During a rebuild the tag is
+  # moved to the new image before the old container is removed.
+  if image_id="$(docker container inspect --format '{{.Image}}' "${INSTANCE_ID}" 2> /dev/null)"
+  then
+    echo "${image_id}"
+    return
+  fi
+
+  docker image inspect --format '{{.Id}}' "${INSTANCE_ID}" 2> /dev/null
+}
+
+remove_superseded_image() {
+  local previous_image_id="${1}"
+  local current_image_id
+
+  current_image_id="$(docker image inspect --format '{{.Id}}' "${INSTANCE_ID}" 2> /dev/null || true)"
+  if [[ -n "${previous_image_id}" ]] && [[ "${previous_image_id}" != "${current_image_id}" ]]
+  then
+    echo "Removing superseded operating system image..."
+    # Do not force removal: if another container or tag still uses this image,
+    # preserving it is safer than interrupting that instance.
+    docker image rm "${previous_image_id}" > /dev/null || true
+  fi
+}
+
 get_instance_ip() {
   if [[ "$(docker inspect --format '{{ .HostConfig.NetworkMode }}' "${INSTANCE_ID}")" = "host" ]]
   then
@@ -315,12 +343,14 @@ fi
 
 if [[ "${command}" = "rebuild" ]]
 then
+    previous_image_id="$(get_instance_image_id || true)"
     echo "Rebuilding the operating system image from source..."
     build_os_image
     echo "Restarting the dev environment with the new image..."
     stop_instance || true
     remove_instance || true
     create_instance
+    remove_superseded_image "${previous_image_id}"
 
     exit
 fi

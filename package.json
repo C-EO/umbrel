@@ -3,6 +3,7 @@
   "scripts": {
     "dev": "./scripts/umbrel-dev",
     "dev:help": "npm run dev help",
+    "clean:worktrees": "./scripts/clean-worktrees",
     "test:vm": "npm --prefix packages/os run build:amd64:rugix && rm -rf packages/os/rugix/build && npm --prefix packages/umbreld run test:vm --",
     "build:remote": "./scripts/remote-builder build",
     "test:remote": "./scripts/remote-builder test"

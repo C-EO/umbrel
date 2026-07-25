@@ -9,6 +9,7 @@ export RUGIX_BAKERY_IMAGE="ghcr.io/rugix/rugix-bakery@sha256:41fbea6785fccec14e4
 
 # Allow running from anywhere
 cd "$(dirname $(readlink -f "${BASH_SOURCE[0]}"))"
+OS_BUILD_DIR="$(pwd)"
 
 docker_buildx() {
     docker buildx build --load $@
@@ -29,12 +30,51 @@ maybe_sudo() {
     fi
 }
 
+cleanup_os_build_intermediates() {
+    local cleanup_failed=0
+
+    echo "Cleaning OS build intermediates..."
+    maybe_sudo rm -rf \
+        "${OS_BUILD_DIR}/rugix/.rugix" \
+        "${OS_BUILD_DIR}/rugix/build" \
+        || cleanup_failed=1
+    maybe_sudo rm -f \
+        "${OS_BUILD_DIR}"/build/umbrelos-root-*.tar \
+        || cleanup_failed=1
+
+    return "${cleanup_failed}"
+}
+
+os_build_cleanup_enabled() {
+    # CI checkouts are ephemeral, and release builds run concurrently in the same
+    # checkout, so cleaning their shared Rugix state is unnecessary and unsafe.
+    [ "${GITHUB_ACTIONS:-false}" != "true" ] \
+        && [ "${SKIP_OS_BUILD_CLEANUP:-false}" != "true" ]
+}
+
+cleanup_os_build_intermediates_on_exit() {
+    local build_exit_code=$?
+    local cleanup_exit_code=0
+
+    trap - EXIT
+    if os_build_cleanup_enabled; then
+        cleanup_os_build_intermediates || cleanup_exit_code=$?
+    fi
+
+    if [ "${build_exit_code}" -ne 0 ]; then
+        exit "${build_exit_code}"
+    fi
+    exit "${cleanup_exit_code}"
+}
+
 SKIP_PI4="${SKIP_PI4-true}"
 SKIP_MENDER_ARTIFACTS="${SKIP_MENDER_ARTIFACTS-true}"
 SKIP_PI_MBR="${SKIP_PI_MBR-${SKIP_MENDER_ARTIFACTS}}"
 
 # Main entrypoint.
 function main() {
+    trap cleanup_os_build_intermediates_on_exit EXIT
+
     release="${1:-}"
     dev="false"
     if [[ "${release}" == "" ]]
@@ -124,19 +164,14 @@ function build_root_fs() {
     fi
     # Note that we run the build context in ../../ so the build process has access to the
     # entire repo to copy in umbreld stuff.
-    docker_buildx \
+    docker buildx build \
         --cache-from type=gha,scope=umbrelos-${arch} \
         ${cache_to} \
         --platform "linux/${platform_arch}" \
         --build-arg BASE_VARIANT="${base_variant}" \
         --file umbrelos.Dockerfile \
-        --tag "umbrelos-${arch}" \
+        --output "type=tar,dest=build/umbrelos-root-${arch}.tar" \
         ../../
-
-    echo "Dumping Umbrel OS Docker image filesystem into a tar archive..."
-    umbrel_os_container_id=$(docker run --platform "linux/${platform_arch}" --detach "umbrelos-${arch}" /bin/true)
-    docker export --output "build/umbrelos-root-${arch}.tar" "${umbrel_os_container_id}"
-    docker rm "${umbrel_os_container_id}"
 }
 
 # Build the Rugix artifacts.
@@ -160,7 +195,12 @@ function build_rugix_artifacts() {
 
     pushd rugix
     # Clean Rugix cache to force a clean build.
-    rm -rf .rugix || true
+    # Rugix keys imported files by their path rather than their contents, so reusing
+    # this cache across OS builds could silently use a stale root filesystem.
+    # CI starts with a fresh checkout and may run parallel builds in this directory.
+    if os_build_cleanup_enabled; then
+        rm -rf .rugix || true
+    fi
 
     if [ -z "${SKIP_PI:-}" ] && [ -z "${SKIP_PI4:-}" ]; then
         build_rugix_system "umbrelos-pi4" "$release" "$dev"
