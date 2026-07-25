@@ -1,3 +1,6 @@
+import {constants} from 'node:fs'
+import {open} from 'node:fs/promises'
+
 import archiver from 'archiver'
 import compressible from 'compressible'
 import fse from 'fs-extra'
@@ -8,6 +11,7 @@ import {pipeline} from 'node:stream/promises'
 import {$} from 'execa'
 
 import type Umbreld from '../../index.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 type ZipEntryData = archiver.EntryData & {store?: boolean}
 
@@ -78,31 +82,59 @@ export default class Archive {
 	}
 
 	// Creates a zip archive
-	// TODO: There's probably a race condition where creating the same archive twice at the same time
-	// will cause the second to overwrite the first. Think of a better way to handle this.
-	async createZipFile(virtualPaths: string[]) {
-		// Convert virtual paths to system paths
+	async createZipFile(virtualPaths: string[], userId: string = OWNER_USER_ID) {
+		virtualPaths = virtualPaths.map((virtualPath) => this.#umbreld.files.normalizeVirtualPath(virtualPath))
+
+		// Convert virtual paths to system paths (authorized against the requesting account)
 		const systemPaths = await Promise.all(
-			virtualPaths.map((virtualPath) => this.#umbreld.files.virtualToSystemPath(virtualPath)),
+			virtualPaths.map((virtualPath) => this.#umbreld.files.virtualToSystemPath(virtualPath, userId)),
 		)
 
-		// Calculate the zip path
-		let zipPath = nodePath.join(nodePath.dirname(systemPaths[0]), this.zipName(systemPaths))
-		zipPath = await this.#umbreld.files.getUniqueName(zipPath)
+		// Reserve a unique authorized output without following links. The initial
+		// lstat-based name selection handles existing dangling symlinks; O_EXCL
+		// closes the race between selecting and opening the path.
+		const baseZipPath = nodePath.join(nodePath.dirname(systemPaths[0]), this.zipName(systemPaths))
+		let zipPath = ''
+		let zipFile: Awaited<ReturnType<typeof open>> | undefined
+		for (let attempt = 0; attempt < 100; attempt++) {
+			const uniqueZipPath = await this.#umbreld.files.getUniqueName(baseZipPath)
+			const authorizedZipPath = await this.#umbreld.files.authorizeWritableDestinationSystemPath(uniqueZipPath, userId)
+			try {
+				zipFile = await open(
+					authorizedZipPath,
+					constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+					0o600,
+				)
+				zipPath = authorizedZipPath
+				break
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+			}
+		}
+		if (!zipFile) throw new Error('[unique-name-index-exceeded]')
 
-		// Create a zip stream
-		// TODO: Add progress reporting
-		const zipStream = await this.createZipStream(systemPaths)
-		const writeStream = fse.createWriteStream(zipPath)
-		await pipeline(zipStream, writeStream)
+		let complete = false
+		try {
+			// Create a zip stream
+			// TODO: Add progress reporting
+			const zipStream = await this.createZipStream(systemPaths)
+			const writeStream = zipFile.createWriteStream()
+			zipFile = undefined
+			await pipeline(zipStream, writeStream)
+			complete = true
+			await this.#umbreld.files.chownSystemPath(zipPath).catch(() => {})
+		} finally {
+			await zipFile?.close().catch(() => {})
+			if (!complete) await fse.remove(zipPath).catch(() => {})
+		}
 
 		// Return virtual path of the zip archive
 		return this.#umbreld.files.systemToVirtualPath(zipPath)
 	}
 
 	// Creates an archive (alias for createZipFile)
-	async archive(virtualPaths: string[]) {
-		return this.createZipFile(virtualPaths)
+	async archive(virtualPaths: string[], userId: string = OWNER_USER_ID) {
+		return this.createZipFile(virtualPaths, userId)
 	}
 
 	// Check if the archive format is supported
@@ -112,18 +144,22 @@ export default class Archive {
 	}
 
 	// Unarchives an archive
-	async unarchive(virtualPath: string) {
+	async unarchive(virtualPath: string, userId: string = OWNER_USER_ID) {
 		// Check if operation is allowed
-		const allowedOperations = await this.#umbreld.files.getAllowedOperations(virtualPath)
+		const allowedOperations = await this.#umbreld.files.getAllowedOperations(virtualPath, userId)
 		if (!allowedOperations.includes('unarchive')) throw new Error('[operation-not-allowed]')
 
-		// Get system path
-		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath)
+		// Get system path (authorized against the requesting account)
+		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, userId)
+
+		// The archive is extracted next to itself, so authorize the containing directory.
+		await this.#umbreld.files.virtualToSystemPath(nodePath.posix.dirname(virtualPath), userId)
 
 		// Calculate target directory
 		const {name} = this.#umbreld.files.splitExtension(systemPath)
 		let targetDirectory = nodePath.join(nodePath.dirname(systemPath), name)
 		targetDirectory = await this.#umbreld.files.getUniqueName(targetDirectory)
+		targetDirectory = await this.#umbreld.files.authorizeWritableDestinationSystemPath(targetDirectory, userId)
 
 		// Unarchive
 		// TODO: Add progress reporting

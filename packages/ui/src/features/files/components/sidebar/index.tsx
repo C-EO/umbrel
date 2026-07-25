@@ -13,14 +13,18 @@ import {SidebarFavorites} from '@/features/files/components/sidebar/sidebar-favo
 import {SidebarHome} from '@/features/files/components/sidebar/sidebar-home'
 import {SidebarNetworkStorage} from '@/features/files/components/sidebar/sidebar-network-storage'
 import {SidebarRecents} from '@/features/files/components/sidebar/sidebar-recents'
+import {SidebarOwnersUmbrel, SidebarSharedStorage} from '@/features/files/components/sidebar/sidebar-shared-with-me'
 import {SidebarShares} from '@/features/files/components/sidebar/sidebar-shares'
 import {SidebarTrash} from '@/features/files/components/sidebar/sidebar-trash'
 import {HOME_PATH} from '@/features/files/constants'
 import {useExternalStorage} from '@/features/files/hooks/use-external-storage'
 import {useFavorites} from '@/features/files/hooks/use-favorites'
+import {useIsMember} from '@/features/files/hooks/use-home-path'
+import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useShares} from '@/features/files/hooks/use-shares'
 import {useFilesCapabilities} from '@/features/files/providers/files-capabilities-context'
 import {cn} from '@/lib/utils'
+import {firstNameFromFullName} from '@/utils/misc'
 
 export function Sidebar({className}: {className?: string}) {
 	const {t} = useTranslation()
@@ -33,13 +37,30 @@ export function Sidebar({className}: {className?: string}) {
 
 	// Visibility flags
 	const hidden = capabilities.hiddenSidebarItems || {}
-	const showFavorites = !isLoadingFavorites && !!favorites && favorites.length > 0
-	const showShares = !isLoadingShares && !!displayShares && displayShares.length > 0
-	const showNetwork = !hidden.network
+	// Members only have their own home + trash; hide everything else
+	const isMember = useIsMember()
+
+	// Paths the owner has shared with this member
+	const {sharedWithMe} = useMemberShares()
+	const homeShares = sharedWithMe?.shares.filter((share) => share.base === 'home') ?? []
+	const hasExternalStorage = sharedWithMe?.shares.some((share) => share.path === '/External') ?? false
+	const hasNetworkStorage = sharedWithMe?.shares.some((share) => share.path === '/Network') ?? false
+	const hasSharedApps = sharedWithMe?.shares.some((share) => share.base === 'apps') ?? false
+	const sharedWithMeLabel = sharedWithMe?.ownerName
+		? t('files-sidebar.owners-umbrel', {name: firstNameFromFullName(sharedWithMe.ownerName)})
+		: ''
+	const showFavorites = !isMember && !isLoadingFavorites && !!favorites && favorites.length > 0
+	const showShares = !isMember && !isLoadingShares && !!displayShares && displayShares.length > 0
+	const showNetwork = !hidden.network && !isMember
 	const showExternal =
-		isExternalStorageSupported && !hidden.external && !isLoadingExternalStorage && !!disks && disks.length > 0
+		isExternalStorageSupported &&
+		!hidden.external &&
+		!isMember &&
+		!isLoadingExternalStorage &&
+		!!disks &&
+		disks.length > 0
 	const showTrash = !hidden.trash
-	const showRewind = !hidden.rewind
+	const showRewind = !hidden.rewind && !isMember
 
 	return (
 		<nav className={cn('flex flex-col', className)} aria-label={t('files-sidebar.navigation')}>
@@ -47,8 +68,9 @@ export function Sidebar({className}: {className?: string}) {
 				{/* Hardcoded home link */}
 				<SidebarSection>
 					<SidebarHome />
-					<SidebarRecents />
-					<SidebarApps />
+					{isMember && homeShares.length > 0 && <SidebarOwnersUmbrel name={sharedWithMeLabel} />}
+					{!isMember && <SidebarRecents />}
+					{(!isMember || hasSharedApps) && <SidebarApps />}
 				</SidebarSection>
 				{/* Favorites */}
 				<AnimatePresence initial={!isLoadingFavorites}>
@@ -66,6 +88,16 @@ export function Sidebar({className}: {className?: string}) {
 						</motion.div>
 					)}
 				</AnimatePresence>
+
+				{/* Storage categories shared with this member */}
+				{isMember && (hasExternalStorage || hasNetworkStorage) && (
+					<>
+						<SidebarDivider />
+						<SidebarSection label={t('files-sidebar.devices')}>
+							<SidebarSharedStorage external={hasExternalStorage} network={hasNetworkStorage} />
+						</SidebarSection>
+					</>
+				)}
 
 				{/* Shared folders */}
 				<AnimatePresence initial={!isLoadingShares}>

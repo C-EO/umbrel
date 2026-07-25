@@ -36,6 +36,11 @@ async function guestPathExists(guestPath: string) {
 	return output.trim() === 'exists'
 }
 
+async function guestUploadTemporaryFiles(directory: string, fileName: string) {
+	const output = await umbreld.vm.ssh(`find '${directory}' -maxdepth 1 -name '.${fileName}.*.umbrel-upload' -print`)
+	return output.trim() ? output.trim().split('\n') : []
+}
+
 test('POST /api/files/upload throws unauthorized error without a bearer credential', async () => {
 	const error = await umbreld.unauthenticatedApi
 		.post('files/upload?path=/Home/test-file.txt', {body: 'test content'})
@@ -235,85 +240,112 @@ test('POST /api/files/upload correctly handles streaming data in chunks', async 
 	// Test file path
 	const filePath = '/Home/streaming-test.txt'
 	const systemPath = `${guestHome}/streaming-test.txt`
-	const temporarySystemPath = `${guestHome}/.streaming-test.txt.umbrel-upload`
 
 	// Get a stream for the request
 	const uploadStream = umbreld.api.stream.post(`files/upload?path=${filePath}`)
 
-	// Check file doesn't yet exist
-	await expect(guestPathExists(systemPath)).resolves.toBe(false)
-	await expect(guestPathExists(temporarySystemPath)).resolves.toBe(false)
-
-	// Chunks of data to pipe to the upload stream
-	const chunks = [
-		Buffer.from('First chunk of data - '),
-		Buffer.from('Second chunk of data - '),
-		Buffer.from('Third chunk of data - '),
-	]
-
-	for (const chunk of chunks) {
-		// Write the chunk to the upload stream
-		uploadStream.write(chunk)
-
-		// Wait for the chunk to land in the temporary file. Single ssh command
-		// per poll since each ssh call is a fresh connection with real latency.
-		let lastContent = ''
-		await pWaitFor(
-			async () => {
-				lastContent = await umbreld.vm.ssh(`cat '${temporarySystemPath}' 2>/dev/null || true`)
-				return lastContent.includes(chunk.toString())
-			},
-			{interval: 500, timeout: 60_000},
-		).catch((error) => {
-			throw new Error(`Timed out waiting for chunk '${chunk}' in temporary file, last content: '${lastContent}'`, {
-				cause: error,
-			})
-		})
-
-		// Check the final file still doesn't exist while the upload is in progress
+	try {
+		// Check file doesn't yet exist
 		await expect(guestPathExists(systemPath)).resolves.toBe(false)
+		await expect(guestUploadTemporaryFiles(guestHome, 'streaming-test.txt')).resolves.toStrictEqual([])
+
+		// Chunks of data to pipe to the upload stream
+		const chunks = [
+			Buffer.from('First chunk of data - '),
+			Buffer.from('Second chunk of data - '),
+			Buffer.from('Third chunk of data - '),
+		]
+		let temporarySystemPath = ''
+
+		for (const [index, chunk] of chunks.entries()) {
+			// Write the chunk to the upload stream
+			uploadStream.write(chunk)
+
+			// Discover the randomized staging path. Its contents are deliberately
+			// root-only, so inspect them with one privileged command rather than
+			// putting a potentially slow SSH handshake inside a short poll timeout.
+			if (!temporarySystemPath) {
+				await pWaitFor(
+					async () => {
+						const temporaryFiles = await guestUploadTemporaryFiles(guestHome, 'streaming-test.txt')
+						if (temporaryFiles.length !== 1) return false
+						temporarySystemPath = temporaryFiles[0]!
+						return true
+					},
+					{interval: 500, timeout: 60_000},
+				)
+			}
+
+			const expectedContent = Buffer.concat(chunks.slice(0, index + 1)).toString()
+			const stagedContentBase64 = await umbreld.vm.sshAsRoot(`
+for attempt in $(seq 1 100); do
+	if [ "$(stat --format '%s' '${temporarySystemPath}')" -ge ${Buffer.byteLength(expectedContent)} ]; then
+		base64 -w0 '${temporarySystemPath}'
+		exit 0
+	fi
+	sleep 0.1
+done
+exit 1
+`)
+			expect(Buffer.from(stagedContentBase64, 'base64').toString()).toBe(expectedContent)
+
+			if (index === 0) {
+				const mode = await umbreld.vm.sshAsRoot(`stat --format '%a' '${temporarySystemPath}'`)
+				expect(mode).toBe('600')
+			}
+
+			// Check the final file still doesn't exist while the upload is in progress
+			await expect(guestPathExists(systemPath)).resolves.toBe(false)
+		}
+
+		// End the stream
+		uploadStream.end()
+
+		// Check response is ok
+		const [response] = await once(uploadStream, 'response')
+		expect(response.statusCode).toBe(200)
+
+		// Check if the file was moved to the final path
+		await pWaitFor(async () => guestPathExists(systemPath), {interval: 500, timeout: 60_000})
+		await expect(guestUploadTemporaryFiles(guestHome, 'streaming-test.txt')).resolves.toStrictEqual([])
+
+		// Check the content of the final file
+		await expect(readGuestFile(systemPath)).resolves.toBe(chunks.join(''))
+	} finally {
+		if (!uploadStream.destroyed) uploadStream.destroy()
 	}
-
-	// End the stream
-	uploadStream.end()
-
-	// Check response is ok
-	const [response] = await once(uploadStream, 'response')
-	expect(response.statusCode).toBe(200)
-
-	// Check if the file was moved to the final path
-	await pWaitFor(async () => guestPathExists(systemPath), {interval: 500, timeout: 60_000})
-	await expect(guestPathExists(temporarySystemPath)).resolves.toBe(false)
-
-	// Check the content of the final file
-	await expect(readGuestFile(systemPath)).resolves.toBe(chunks.join(''))
 })
 
 test('POST /api/files/upload cleans up temporary files when client aborts partially uploaded file', async () => {
 	// Test file path
 	const filePath = '/Home/aborted-upload.txt'
 	const systemPath = `${guestHome}/aborted-upload.txt`
-	const temporarySystemPath = `${guestHome}/.aborted-upload.txt.umbrel-upload`
 
 	// Get a stream for the request
 	const uploadStream = umbreld.api.stream.post(`files/upload?path=${filePath}`)
 
 	// Check files don't exist yet
 	await expect(guestPathExists(systemPath)).resolves.toBe(false)
-	await expect(guestPathExists(temporarySystemPath)).resolves.toBe(false)
+	await expect(guestUploadTemporaryFiles(guestHome, 'aborted-upload.txt')).resolves.toStrictEqual([])
 
 	// Write the chunk to the upload stream
 	uploadStream.write(Buffer.from('First chunk'))
 
 	// Wait for the temporary file to be created
-	await pWaitFor(async () => guestPathExists(temporarySystemPath), {interval: 500, timeout: 60_000})
+	await pWaitFor(async () => (await guestUploadTemporaryFiles(guestHome, 'aborted-upload.txt')).length === 1, {
+		interval: 500,
+		timeout: 60_000,
+	})
 	await expect(guestPathExists(systemPath)).resolves.toBe(false)
 
 	// Now abort the request
 	uploadStream.destroy()
 
 	// Wait for the backend to clean up the partially uploaded temporary file
-	await pWaitFor(async () => !(await guestPathExists(temporarySystemPath)), {interval: 500, timeout: 60_000})
+	await pWaitFor(async () => (await guestUploadTemporaryFiles(guestHome, 'aborted-upload.txt')).length === 0, {
+		interval: 500,
+		timeout: 60_000,
+	})
 	await expect(guestPathExists(systemPath)).resolves.toBe(false)
 })
 
@@ -337,7 +369,7 @@ test('POST /api/files/upload handles disk full write errors correctly', {retry: 
 
 		// Verify the partially written temporary file was cleaned up and the
 		// final file was never created
-		await pWaitFor(async () => !(await guestPathExists(`${guestDirectory}/.should-fail.bin.umbrel-upload`)), {
+		await pWaitFor(async () => (await guestUploadTemporaryFiles(guestDirectory, 'should-fail.bin')).length === 0, {
 			interval: 500,
 			timeout: 60_000,
 		})

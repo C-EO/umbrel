@@ -104,7 +104,7 @@ describe('app gateway upstream recovery', () => {
 		const logger = {error: vi.fn()}
 		return {
 			gateway: new AppGateway(
-				{logger} as never,
+				{logger, auth: {appAccessRevision: 0}} as never,
 				{
 					appId: 'files',
 					appName: 'Files',

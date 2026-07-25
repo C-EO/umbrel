@@ -7,6 +7,7 @@ import got from 'got'
 import {afterAll, beforeAll, describe, expect, test} from 'vitest'
 
 import type Umbreld from '../../index.js'
+import {OWNER_ACCOUNT_ID} from '../auth/auth.js'
 import temporaryDirectory from '../utilities/temporary-directory.js'
 import fileApi from './api.js'
 
@@ -18,7 +19,7 @@ describe('file API authentication boundaries', () => {
 	beforeAll(async () => {
 		await directory.createRoot()
 		const thumbnailDirectory = await directory.create()
-		const systemPrincipal = {sessionId: 'system', accountId: 'owner', actor: 'system'} as const
+		const systemPrincipal = {sessionId: 'system', accountId: OWNER_ACCOUNT_ID, actor: 'system'} as const
 		const umbreld = {
 			auth: {
 				authenticateDashboardCredentials: async (token: string) => {

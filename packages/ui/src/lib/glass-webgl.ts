@@ -8,11 +8,17 @@
 export type GlassLensParams = {
 	scale: number
 	chroma: number
-	/** Rim width as a fraction of the half min-dimension. */
-	bevel: number
+	/** Rim width: fraction of the half min-dimension, or absolute '12px'. */
+	bevel: number | string
 	saturate: number
 	brightness: number
 	blur: number
+}
+
+/** Resolves a bevel prop to px for a w×h element (min 2px, like the map). */
+export function resolveBevelPx(bevel: number | string, w: number, h: number): number {
+	const px = typeof bevel === 'string' ? parseFloat(bevel) || 0 : bevel * (Math.min(w, h) / 2)
+	return Math.max(2, px)
 }
 
 type LensSource = HTMLImageElement | HTMLVideoElement
@@ -241,7 +247,7 @@ export function attachBackdropLens(
 
 		gl!.uniform2f(uSize, cw, ch)
 		gl!.uniform1f(uRadius, radius)
-		gl!.uniform1f(uBevel, Math.max(2, params.bevel * (Math.min(cw, ch) / 2)))
+		gl!.uniform1f(uBevel, resolveBevelPx(params.bevel, cw, ch))
 		gl!.uniform1f(uScale, params.scale)
 		gl!.uniform1f(uChroma, params.chroma)
 		gl!.uniform1f(uSaturate, params.saturate)

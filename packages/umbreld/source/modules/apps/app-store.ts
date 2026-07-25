@@ -4,6 +4,71 @@ import type Umbreld from '../../index.js'
 import runEvery from '../utilities/run-every.js'
 import AppRepository from './app-repository.js'
 
+type RepositoryRegistry = Awaited<ReturnType<AppRepository['readRegistry']>>
+type RegistryApp = RepositoryRegistry['apps'][number]
+
+// Only app-store presentation and install-planning fields cross the API
+// boundary. Repository manifests are untrusted extensible YAML, so spreading a
+// parsed manifest here would expose arbitrary fields to every member account.
+export function sanitizeRegistryApp(app: RegistryApp) {
+	const {
+		appStoreId,
+		manifestVersion,
+		id,
+		name,
+		tagline,
+		icon,
+		category,
+		version,
+		description,
+		website,
+		developer,
+		submitter,
+		submission,
+		repo,
+		support,
+		gallery,
+		releaseNotes,
+		dependencies,
+		optimizedForUmbrelHome,
+		installSize,
+		implements: implements_,
+		requiresHttps,
+	} = app
+
+	return {
+		appStoreId,
+		manifestVersion,
+		id,
+		name,
+		tagline,
+		icon,
+		category,
+		version,
+		description,
+		website,
+		developer,
+		submitter,
+		submission,
+		repo,
+		support,
+		gallery,
+		releaseNotes,
+		dependencies,
+		optimizedForUmbrelHome,
+		installSize,
+		implements: implements_,
+		requiresHttps,
+	}
+}
+
+export function sanitizeRegistry(registry: RepositoryRegistry[]) {
+	return registry.map(({meta, apps}) => ({
+		meta: {id: meta.id, name: meta.name},
+		apps: apps.map(sanitizeRegistryApp),
+	}))
+}
+
 export default class AppStore {
 	#umbreld: Umbreld
 	#stopUpdating?: () => void
@@ -98,6 +163,20 @@ export default class AppStore {
 
 		// Remove failed reads and fix type definition to not be maybe null
 		return registry.filter(Boolean) as Array<Awaited<ReturnType<typeof AppRepository.prototype.readRegistry>>>
+	}
+
+	// Public app-store data shared with both owner and member dashboards. Keep
+	// repository locations and arbitrary manifest extensions out of this DTO.
+	async publicRegistry() {
+		return sanitizeRegistry(await this.registry())
+	}
+
+	// Repository URLs are management data and remain owner-only.
+	async listRepositories() {
+		return (await this.registry()).map(({url, meta}) => ({
+			url,
+			meta: {id: meta.id, name: meta.name},
+		}))
 	}
 
 	async addRepository(url: string) {

@@ -7,6 +7,7 @@ import {debounce} from 'es-toolkit'
 import type Umbreld from '../../index.js'
 
 import type {FileChangeEvent} from './watcher.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 export default class Recents {
 	#umbreld: Umbreld
@@ -52,7 +53,7 @@ export default class Recents {
 	async get() {
 		const recents = await Promise.all(
 			this.recentFiles.map(async (virtualPath) => {
-				const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath)
+				const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, OWNER_USER_ID)
 				return this.#umbreld.files.status(systemPath).catch(() => undefined)
 			}),
 		)

@@ -11,10 +11,15 @@ type MissingInEvents = Exclude<keyof EventTypes, (typeof events)[number]>
 type _AssertEveryKeyIsListed = MissingInEvents extends never ? true : [`✘ Add these to events →`, MissingInEvents]
 const _eventsIncludesAllKeys: _AssertEveryKeyIsListed = true
 
+// The accounts a member share change affects ('all' covers every member)
+export type MemberSharesChangeEvent = {sharedWith: 'all' | string[]}
+
 // Statically define event names for use in rpc argument validation
 export const events = [
 	'files:watcher:change',
 	'files:operation-progress',
+	'files:member-shares:change',
+	'apps:member-shares:change',
 	'backups:backup-progress',
 	'backups:restore-progress',
 	'system:disk:change',
@@ -32,6 +37,12 @@ export type EventTypes = {
 	// Fires repeatedly while file operations (copy/move) are in progress
 	// with the current progress of each operation
 	'files:operation-progress': OperationsInProgress
+	// Fires when the paths shared with members change, with the accounts the
+	// affected share was or is now shared with
+	'files:member-shares:change': MemberSharesChangeEvent
+	// Fires when the apps shared with members change, with the accounts the
+	// affected share was or is now shared with
+	'apps:member-shares:change': MemberSharesChangeEvent
 	// Fires repeatedly while backup operations are in progress
 	// with the current progress of each backup
 	'backups:backup-progress': BackupsInProgress

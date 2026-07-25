@@ -247,9 +247,10 @@ describe('addShare()', () => {
 		await fse.ensureDir(`${umbreld.instance.dataDirectory}/home`)
 		await fse.symlink('/', `${umbreld.instance.dataDirectory}/home/symlink-to-root`)
 
-		// Attempt to share directory through symlink
+		// Attempt to share directory through symlink. The path resolves outside its
+		// base so it's rejected before anything is persisted.
 		await expect(umbreld.client.files.addShare.mutate({path: '/Home/symlink-to-root/etc'})).rejects.toThrow(
-			'[operation-not-allowed]',
+			'[escapes-base]',
 		)
 	})
 

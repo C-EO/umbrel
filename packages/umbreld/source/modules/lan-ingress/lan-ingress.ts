@@ -732,7 +732,7 @@ export default class LanIngress {
 		}
 		if (this.#appAuthMuxServer) return
 		// App auth is still browser-facing during app login redirects
-		// (`<app-port>` -> `:2000` -> `<app-port>/umbrel_/api/v1/auth/token`),
+		// (`<app-port>` -> `:2000` -> `<app-port>/umbrel_/api/v1/auth/handoff`),
 		// so it needs the same HTTP/HTTPS muxing as app ports. Unlike app
 		// ports, `:2000` is Umbrel-owned infrastructure, so Node can bind it
 		// directly instead of relying on nftables redirection.

@@ -6,6 +6,7 @@ import fse from 'fs-extra'
 import {$} from 'execa'
 
 import type Umbreld from '../../index.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 export type FileChangeEvent = watcher.Event
 
@@ -41,6 +42,8 @@ export default class Watcher {
 	logger: Umbreld['logger']
 	subscriptions: Map<string, watcher.AsyncSubscription> = new Map()
 	pathsToWatch: Set<string>
+	#pendingSubscriptions = new Map<string, Promise<void>>()
+	#started = false
 	#healthCheckInterval?: ReturnType<typeof setInterval>
 
 	constructor(umbreld: Umbreld, {paths}: {paths: string[]}) {
@@ -53,6 +56,7 @@ export default class Watcher {
 	// Setup inotify settings and start watchers
 	async start() {
 		this.logger.log('Starting files watcher')
+		this.#started = true
 
 		// Set system inotify limits
 		// https://facebook.github.io/watchman/docs/install#linux-inotify-limits
@@ -75,28 +79,66 @@ export default class Watcher {
 		// Start periodic health checks if we have active subscriptions
 		if (this.subscriptions.size > 0) {
 			this.#healthCheckInterval = setInterval(() => this.#healthCheck(), HEALTH_CHECK_INTERVAL_MS)
+
+			// Also verify the pipeline right away instead of waiting for the first
+			// interval. The first subscription after the Watchman daemon cold-starts
+			// can be silently dead from the beginning (reproducible on first boot in
+			// a VM), so catch that within one sentinel timeout and recover.
+			this.#healthCheck().catch((error) => this.logger.error('Startup health check failed', error))
 		}
 	}
 
 	// Subscribe to file changes for a virtual path
 	async #watch(virtualPath: string) {
-		try {
-			const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath)
-			// Use the Watchman backend explicitly (always installed in umbrelOS). It avoids bugs in
-			// @parcel/watcher's inotify backend — https://github.com/getumbrel/umbrel/issues/2158
-			const subscription = await watcher.subscribe(
-				systemPath,
-				(error, events) => {
-					if (error) return this.logger.error(`Failed to watch directory '${virtualPath}'`, error)
-					for (const event of events) this.#umbreld.eventBus.emit('files:watcher:change', event)
-				},
-				{backend: 'watchman'},
-			)
-			this.subscriptions.set(virtualPath, subscription)
-			this.logger.log(`Started watching directory '${virtualPath}'`)
-		} catch (error) {
-			this.logger.error(`Failed to watch directory '${virtualPath}'`, error)
-		}
+		if (this.subscriptions.has(virtualPath)) return
+		const pending = this.#pendingSubscriptions.get(virtualPath)
+		if (pending) return pending
+
+		const subscriptionJob = (async () => {
+			try {
+				// Watch paths are internal, prevalidated roots. Resolve them
+				// without pretending the owner is authorized for member homes.
+				const systemPath = this.#umbreld.files.virtualToSystemPathUnsafe(virtualPath)
+				// Use the Watchman backend explicitly (always installed in umbrelOS). It avoids bugs in
+				// @parcel/watcher's inotify backend — https://github.com/getumbrel/umbrel/issues/2158
+				const subscription = await watcher.subscribe(
+					systemPath,
+					(error, events) => {
+						if (error) return this.logger.error(`Failed to watch directory '${virtualPath}'`, error)
+						for (const event of events) this.#umbreld.eventBus.emit('files:watcher:change', event)
+					},
+					{backend: 'watchman'},
+				)
+				// The account may have been deleted while subscribe() was pending.
+				if (!this.#started || !this.pathsToWatch.has(virtualPath)) {
+					await subscription.unsubscribe()
+					return
+				}
+				this.subscriptions.set(virtualPath, subscription)
+				this.logger.log(`Started watching directory '${virtualPath}'`)
+			} catch (error) {
+				this.logger.error(`Failed to watch directory '${virtualPath}'`, error)
+			}
+		})()
+		this.#pendingSubscriptions.set(virtualPath, subscriptionJob)
+		await subscriptionJob.finally(() => this.#pendingSubscriptions.delete(virtualPath))
+	}
+
+	async addPath(virtualPath: string) {
+		if (this.pathsToWatch.has(virtualPath)) return
+		this.pathsToWatch.add(virtualPath)
+		if (this.#started) await this.#watch(virtualPath)
+	}
+
+	async removePath(virtualPath: string) {
+		this.pathsToWatch.delete(virtualPath)
+		await this.#pendingSubscriptions.get(virtualPath)
+		const subscription = this.subscriptions.get(virtualPath)
+		if (!subscription) return
+		await subscription.unsubscribe().catch((error) => {
+			this.logger.error(`Failed to unsubscribe from '${virtualPath}'`, error)
+		})
+		this.subscriptions.delete(virtualPath)
 	}
 
 	// Subscribe to file changes for all watched paths
@@ -116,7 +158,7 @@ export default class Watcher {
 
 	// Write a sentinel file and verify the event arrives through the full pipeline
 	async #healthCheck() {
-		const systemPath = await this.#umbreld.files.virtualToSystemPath(HEALTH_CHECK_PATH)
+		const systemPath = await this.#umbreld.files.virtualToSystemPath(HEALTH_CHECK_PATH, OWNER_USER_ID)
 		const sentinelPath = nodePath.join(systemPath, SENTINEL_FILENAME)
 
 		try {
@@ -168,7 +210,9 @@ export default class Watcher {
 
 	// Stop watchers and health check
 	async stop() {
+		this.#started = false
 		if (this.#healthCheckInterval) clearInterval(this.#healthCheckInterval)
+		await Promise.all(this.#pendingSubscriptions.values())
 		await this.#teardownListeners()
 
 		// @parcel/watcher spawns the Watchman daemon but never stops it (it's designed to persist), so

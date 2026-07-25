@@ -10,6 +10,7 @@
 		"dev": "vite --port 3000",
 		"build": "vite build",
 		"lint": "eslint .",
+		"test": "vitest run --exclude '**/*.unit.test.ts'",
 		"test:unit": "node --experimental-strip-types --test src/modules/auth/*.unit.test.ts src/routes/settings/terminal/*.unit.test.ts",
 		"typecheck": "tsc --noEmit",
 		"preview": "vite preview",
@@ -133,6 +134,7 @@
 		"eslint-plugin-react-refresh": "^0.4.19",
 		"fast-glob": "^3.3.2",
 		"globals": "^15.0.0",
+		"jsdom": "^29.1.1",
 		"openai": "^6.0.0",
 		"prettier": "3.8.1",
 		"prettier-plugin-css-order": "2.2.0",
@@ -144,6 +146,7 @@
 		"typescript-eslint": "^8.0.0",
 		"vite": "^6.0.0",
 		"vite-bundle-visualizer": "^1.2.0",
-		"vite-imagetools": "^9.0.0"
+		"vite-imagetools": "^9.0.0",
+		"vitest": "^4.1.10"
 	}
 }

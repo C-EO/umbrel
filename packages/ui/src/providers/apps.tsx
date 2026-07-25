@@ -42,7 +42,7 @@ export const systemApps = [
 		name: 'Files',
 		icon: '/assets/dock/dock-files.png',
 		systemApp: true,
-		systemAppTo: '/files/Home',
+		systemAppTo: '/files',
 	},
 	{
 		id: 'UMBREL_settings',
@@ -84,7 +84,26 @@ type AppsContextT = {
 const AppsContext = createContext<AppsContextT | null>(null)
 
 export function AppsProvider({children}: {children: React.ReactNode}) {
+	const utils = trpcReact.useUtils()
 	const appsQ = trpcReact.apps.list.useQuery()
+
+	// Refresh the apps a member can see the moment the owner shares or unshares
+	// an app with them (the server only streams changes affecting this account).
+	// The owner's own UI already refreshes via its mutations' onSuccess.
+	const userQ = trpcReact.user.get.useQuery()
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'apps:member-shares:change'},
+		{
+			enabled: userQ.data?.role === 'member',
+			onData() {
+				utils.apps.list.invalidate()
+				utils.appStore.registry.invalidate()
+			},
+			onError(err) {
+				console.error('eventBus.listen(apps:member-shares:change) subscription error', err)
+			},
+		},
+	)
 
 	// Remove apps that have an error
 	// TODO: consider passing these down in some places (like the desktop)

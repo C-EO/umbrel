@@ -385,7 +385,7 @@ async function expectBrowserLoginFlow(browser: Browser, protocol: 'http' | 'http
 
 		const appUrl = `${protocol}://127.0.0.1:9094/private`
 		const authNavigation = await page.goto(appUrl)
-		await page.getByRole('heading', {name: 'Log in with Umbrel'}).waitFor()
+		await page.getByRole('heading', {name: 'Welcome back, satoshi 👋'}).waitFor()
 
 		const authUrl = new URL(page.url())
 		expect(authUrl.protocol).toBe(`${protocol}:`)
@@ -410,7 +410,7 @@ async function expectBrowserLoginFlow(browser: Browser, protocol: 'http' | 'http
 				(response) =>
 					new URL(response.url()).pathname === '/v1/account/login' && response.request().method() === 'POST',
 			),
-			page.getByRole('button', {name: 'Log in'}).click(),
+			page.getByRole('button', {name: 'Open LAN Ingress Auth'}).click(),
 		])
 		if (loginResponse.status() !== 200) {
 			throw new Error(`App login returned ${loginResponse.status()}: ${await loginResponse.text()}`)

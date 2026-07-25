@@ -10,3 +10,27 @@ services:
     image: getumbrel/community-app-store-hello-world:latest
     user: '1000:1000'
     init: true
+    # Keep this fixture self-contained while exercising both HTTP and persistent
+    # WebSocket proxying in VM tests.
+    command:
+      - node
+      - -e
+      - |
+        const crypto = require('crypto')
+        const http = require('http')
+        const server = http.createServer((_request, response) => response.end('Hello world'))
+        server.on('upgrade', (request, socket) => {
+          const key = request.headers['sec-websocket-key']
+          if (!key) return socket.destroy()
+          const accept = crypto
+            .createHash('sha1')
+            .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+            .digest('base64')
+          socket.write(
+            'HTTP/1.1 101 Switching Protocols\r\n' +
+              'Upgrade: websocket\r\n' +
+              'Connection: Upgrade\r\n' +
+              'Sec-WebSocket-Accept: ' + accept + '\r\n\r\n',
+          )
+        })
+        server.listen(3000)

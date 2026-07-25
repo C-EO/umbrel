@@ -37,8 +37,10 @@ import Samba from './samba.js'
 import ExternalStorage from './external-storage.js'
 import NetworkStorage from './network-storage.js'
 import Search from './search.js'
+import MemberShares from './member-shares.js'
 
 import type Umbreld from '../../index.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 const ALL_OPERATIONS = [
 	'copy',
@@ -76,7 +78,7 @@ type Trashmeta = {
 
 type BaseDirectory = '/Home' | '/Trash' | '/Apps' | '/External' | '/Backups' | '/Network'
 
-type ViewPreferences = {
+export type ViewPreferences = {
 	view: 'icons' | 'list'
 	sortBy: 'name' | 'type' | 'modified' | 'size'
 	sortOrder: 'ascending' | 'descending'
@@ -90,6 +92,8 @@ const DEFAULT_VIEW_PREFERENCES: ViewPreferences = {
 
 type OperationProgress = {
 	type: 'copy' | 'move'
+	// The account that started the operation, so progress is only reported back to them
+	userId: string
 	file: File
 	destinationPath: string
 	percent: number
@@ -119,6 +123,7 @@ export default class Files {
 	externalStorage: ExternalStorage
 	networkStorage: NetworkStorage
 	search: Search
+	memberShares: MemberShares
 
 	constructor(umbreld: Umbreld) {
 		this.#umbreld = umbreld
@@ -143,6 +148,7 @@ export default class Files {
 		this.externalStorage = new ExternalStorage(umbreld)
 		this.networkStorage = new NetworkStorage(umbreld)
 		this.search = new Search(umbreld)
+		this.memberShares = new MemberShares(umbreld)
 
 		// TODO: This should really be in a proper DB, refactor this once we've moved to SQLite
 		this.trashMetaDirectory = `${umbreld.dataDirectory}/trash-meta`
@@ -169,9 +175,16 @@ export default class Files {
 		// Do any required one time setup tasks.
 		await this.firstRun()
 
+		// Member homes and trash live outside the owner's base directories, so
+		// register each active account's roots before starting the watcher.
+		for (const member of await this.#umbreld.user.listMembers()) {
+			await this.#addMemberWatchPaths(member.id)
+		}
+
 		// Start submodules
 		await this.watcher.start().catch((error) => this.logger.error(`Failed to start watcher`, error))
 		await this.samba.start().catch((error) => this.logger.error(`Failed to start samba`, error))
+		await this.memberShares.start().catch((error) => this.logger.error(`Failed to start member shares`, error))
 		await this.externalStorage.start().catch((error) => this.logger.error(`Failed to start external storage`, error))
 		await this.networkStorage.start().catch((error) => this.logger.error(`Failed to start network storage`, error))
 		await this.recents.start().catch((error) => this.logger.error(`Failed to start recents`, error))
@@ -205,11 +218,55 @@ export default class Files {
 		await this.thumbnails.stop().catch((error) => this.logger.error(`Failed to stop thumbnails`, error))
 		await this.externalStorage.stop().catch((error) => this.logger.error(`Failed to stop external storage`, error))
 		await this.networkStorage.stop().catch((error) => this.logger.error(`Failed to stop network storage`, error))
+		await this.memberShares.stop().catch((error) => this.logger.error(`Failed to stop member shares`, error))
 		await this.samba.stop().catch((error) => this.logger.error(`Failed to stop samba`, error))
 		await this.watcher.stop().catch((error) => this.logger.error(`Failed to stop watcher`, error))
 	}
 
-	// Typesafe wrapper to get the system path of a base directory
+	// The trash metadata directory for a given user
+	trashMetaDirectoryForUser(userId: string): string {
+		if (userId === OWNER_USER_ID) return this.trashMetaDirectory
+		return `${this.#umbreld.dataDirectory}/members/${userId}/trash-meta`
+	}
+
+	// The virtual trash root for a given user (owner: /Trash, member: /Users/<slug>/Trash)
+	trashRootForUser(userId: string): string {
+		return userId === OWNER_USER_ID ? '/Trash' : `/Users/${userId}/Trash`
+	}
+
+	// Create a member's home + trash directories with the default skeleton.
+	// Operates on physical paths directly since this is trusted setup code.
+	async createMemberDirectories(slug: string) {
+		if (slug === OWNER_USER_ID) throw new Error('Refusing to create member directories for the owner')
+		const home = this.#memberHomeDirectory(slug)
+		const trash = this.#memberTrashDirectory(slug)
+		const trashMeta = this.trashMetaDirectoryForUser(slug)
+		const skeleton = ['Downloads', 'Documents', 'Photos', 'Videos'].map((folder) => nodePath.join(home, folder))
+		for (const directory of [home, trash, trashMeta, ...skeleton]) {
+			await fse.ensureDir(directory)
+			await this.chownSystemPath(directory).catch(() => {})
+		}
+		await this.#addMemberWatchPaths(slug)
+	}
+
+	// Delete a member's entire directory tree (called on user deletion)
+	async deleteMemberDirectories(slug: string) {
+		if (slug === OWNER_USER_ID) throw new Error('Refusing to delete member directories for the owner')
+		await this.#removeMemberWatchPaths(slug)
+		await fse.remove(`${this.#umbreld.dataDirectory}/members/${slug}`)
+	}
+
+	async #addMemberWatchPaths(slug: string) {
+		await this.watcher.addPath(`/Users/${slug}`)
+		await this.watcher.addPath(`/Users/${slug}/Trash`)
+	}
+
+	async #removeMemberWatchPaths(slug: string) {
+		await this.watcher.removePath(`/Users/${slug}`)
+		await this.watcher.removePath(`/Users/${slug}/Trash`)
+	}
+
+	// Typesafe wrapper to get the system path of an owner base directory
 	getBaseDirectory(virtualPath: BaseDirectory) {
 		const path = this.baseDirectories.get(virtualPath)
 		if (!path) throw new Error(`[base-directory-not-found] ${virtualPath}`)
@@ -218,14 +275,16 @@ export default class Files {
 
 	// Creates a new directory at the given virtual path.
 	// Returns true if the directory already exists.
-	async createDirectory(virtualPath: string) {
+	async createDirectory(virtualPath: string, userId: string = OWNER_USER_ID) {
+		virtualPath = normalizePath(virtualPath)
+
 		// Check if operation is allowed
 		const containingDirectory = nodePath.dirname(virtualPath)
-		const containingDirectoryAllowedOperations = await this.getAllowedOperations(containingDirectory)
+		const containingDirectoryAllowedOperations = await this.getAllowedOperations(containingDirectory, userId)
 		if (!containingDirectoryAllowedOperations.includes('writable')) throw new Error('[operation-not-allowed]')
 
 		// Get system path
-		const path = await this.virtualToSystemPath(virtualPath)
+		const path = await this.virtualToSystemPath(virtualPath, userId)
 
 		// Check if the directory already exists
 		if (await fse.pathExists(path)) return true
@@ -257,7 +316,7 @@ export default class Files {
 	// return value is cheap but converting a virtual path into a
 	// system path is expensive and we call this on every file in
 	// a directory.
-	async status(systemPath: string): Promise<File> {
+	async status(systemPath: string, userId: string = OWNER_USER_ID): Promise<File> {
 		// Get the path and filename
 		const path = this.systemToVirtualPath(systemPath)
 		const name = nodePath.basename(path)
@@ -268,8 +327,8 @@ export default class Files {
 			// We use lstat to ensure we don't follow symlinks
 			fse.lstat(systemPath),
 
-			// Get the allowed operations
-			this.getAllowedOperations(path),
+			// Get the allowed operations for the requesting user
+			this.getAllowedOperations(path, userId),
 
 			// Get the thumbnail for supported file types only if the thumbnail already exists (does not generate a missing thumbnail)
 			this.thumbnails.getExistingThumbnail(systemPath).catch(() => undefined),
@@ -330,15 +389,31 @@ export default class Files {
 	// Lists the contents of a directory given a virtual path.
 	// Will return all files in the directory up to this.maxDirectoryListing
 	// We safely stream the directory to avoid blowing up Node.js if the directory is large.
-	async list(virtualPath: string): Promise<DirectoryListing> {
+	async list(virtualPath: string, userId: string = OWNER_USER_ID): Promise<DirectoryListing> {
 		virtualPath = normalizePath(virtualPath)
 
-		// Special handling for the root directory since it doesn't map to a system parth
-		if (virtualPath === '/') return this.#listRoot()
+		// Special handling for the root directory since it doesn't map to a system path.
+		// Only the owner has a root listing (their base directories); members browse
+		// from their own /Users/<slug> home.
+		if (virtualPath === '/') {
+			if (userId !== OWNER_USER_ID) throw new Error('[forbidden] /')
+			return this.#listRoot()
+		}
+
+		// Members may traverse the ancestors of paths shared with them, seeing
+		// only the whitelisted entries leading down to their shares
+		if (userId !== OWNER_USER_ID && this.ownerOfPath(virtualPath) !== userId) {
+			const share = await this.memberShares.shareGrantFor(virtualPath, userId)
+			if (!share) {
+				const visibleChildren = await this.memberShares.visibleChildrenFor(virtualPath, userId)
+				if (!visibleChildren) throw new Error(`[forbidden] '${virtualPath}'`)
+				return this.#listSharedAncestor(virtualPath, visibleChildren, userId)
+			}
+		}
 
 		// Get the system path and directory details
-		const systemPath = await this.virtualToSystemPath(virtualPath)
-		const directoryDetails = await this.status(systemPath).catch((error) => {
+		const systemPath = await this.virtualToSystemPath(virtualPath, userId)
+		const directoryDetails = await this.status(systemPath, userId).catch((error) => {
 			if (error?.message?.includes('ENOENT')) throw new Error('[does-not-exist]')
 			throw error
 		})
@@ -356,7 +431,7 @@ export default class Files {
 
 			// Push the file details job to the queue to limit concurrency
 			fileJobs.push(
-				this.status(fileSystemPath).catch((error) => {
+				this.status(fileSystemPath, userId).catch((error) => {
 					this.logger.error(`Failed to get status for '${fileSystemPath}'`, error)
 					return undefined
 				}),
@@ -380,15 +455,43 @@ export default class Files {
 		}
 	}
 
+	// A filtered listing of a directory a member may only traverse on the way
+	// down to paths shared with them: just the whitelisted entries, and no
+	// operations on entries that aren't themselves covered by a grant.
+	async #listSharedAncestor(virtualPath: string, childNames: string[], userId: string): Promise<DirectoryListing> {
+		const systemPath = this.virtualToSystemPathUnsafe(virtualPath)
+		const directoryDetails = await this.status(systemPath, userId).catch((error) => {
+			if (error?.message?.includes('ENOENT')) throw new Error('[does-not-exist]')
+			throw error
+		})
+
+		const files: File[] = []
+		for (const childName of childNames) {
+			const file = await this.status(nodePath.join(systemPath, childName), userId).catch(() => undefined)
+			if (file) files.push(file)
+		}
+
+		return {
+			...directoryDetails,
+			files,
+			truncatedAt: undefined,
+		}
+	}
+
 	// Recursively stream the contents of a virtual directory
-	async *streamContents(virtualPath: string) {
-		const systemPath = await this.virtualToSystemPath(virtualPath)
+	async *streamContents(virtualPath: string, userId: string = OWNER_USER_ID) {
+		virtualPath = normalizePath(virtualPath)
+		const systemPath = await this.virtualToSystemPath(virtualPath, userId)
 		const directoryStream = getDirectoryStream(systemPath, {recursive: true})
 		for await (const systemPath of directoryStream) yield systemPath
 	}
 
 	// Internal utility to copy (or copy and delete (psuedo-move)) a file or directory using rsync and report progress
-	async #copyWithProgress(sourceSystemPath: string, destinationSystemPath: string, {move = false} = {}) {
+	async #copyWithProgress(
+		sourceSystemPath: string,
+		destinationSystemPath: string,
+		{move = false, userId = OWNER_USER_ID}: {move?: boolean; userId?: string} = {},
+	) {
 		// Error handling consistent with fse.copy and move
 		const destinationExists = await fse.exists(destinationSystemPath)
 		if (destinationExists) throw new Error('[destination-already-exists]')
@@ -397,6 +500,7 @@ export default class Files {
 		// Create initial progress tracker and emit operation progress event
 		const operationProgress: OperationProgress = {
 			type: move ? 'move' : 'copy',
+			userId,
 			file: await this.status(sourceSystemPath),
 			destinationPath: this.systemToVirtualPath(destinationSystemPath),
 			percent: 0,
@@ -434,14 +538,21 @@ export default class Files {
 		if (move) await fse.remove(sourceSystemPath)
 	}
 	// Copies a file or directory from one virtual path to another.
-	async copy(sourceVirtualPath: string, destinationVirtualDirectory: string, {collision = 'error'} = {}) {
+	async copy(
+		sourceVirtualPath: string,
+		destinationVirtualDirectory: string,
+		{collision = 'error', userId = OWNER_USER_ID}: {collision?: string; userId?: string} = {},
+	) {
+		sourceVirtualPath = normalizePath(sourceVirtualPath)
+		destinationVirtualDirectory = normalizePath(destinationVirtualDirectory)
+
 		// Check if operation is allowed
-		const allowedOperations = await this.getAllowedOperations(destinationVirtualDirectory)
+		const allowedOperations = await this.getAllowedOperations(destinationVirtualDirectory, userId)
 		if (!allowedOperations.includes('writable')) throw new Error('[operation-not-allowed]')
 
 		// Get the system paths
-		let sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath)
-		const destinationSystemDirectory = await this.virtualToSystemPath(destinationVirtualDirectory)
+		let sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath, userId)
+		const destinationSystemDirectory = await this.virtualToSystemPath(destinationVirtualDirectory, userId)
 
 		// Error if the source doesn't exist
 		const sourceExists = await fse.exists(sourceSystemPath)
@@ -474,36 +585,51 @@ export default class Files {
 			if (destinationExists) throw new Error('[destination-already-exists]')
 		} else if (collision === 'keep-both') {
 			destinationSystemPath = await this.getUniqueName(destinationSystemPath)
-		} else if (collision === 'replace') {
+		}
+
+		// Collision handling can change the target path. Authorize the final path,
+		// and require permission to remove it before replacing existing content.
+		destinationSystemPath = await this.authorizeDestinationSystemPath(destinationSystemPath, userId, {
+			replace: collision === 'replace',
+		})
+
+		if (collision === 'replace') {
 			// Remove the destination file/directory so that in the case of a directory, the contents are fully replaced
 			// This entire fse.remove and subsequent fse.copy action is not atomic. If the copy fails, the original destination content will not be restored.
 			await fse.remove(destinationSystemPath)
 		}
 
 		// Perform the copy operation
-		await this.#copyWithProgress(sourceSystemPath, destinationSystemPath)
+		await this.#copyWithProgress(sourceSystemPath, destinationSystemPath, {userId})
 
 		// Return the virtual path of the new copy
 		return this.systemToVirtualPath(destinationSystemPath)
 	}
 
 	// Moves a file or directory from one virtual path to another.
-	async move(sourceVirtualPath: string, destinationVirtualDirectory: string, {collision = 'error'} = {}) {
+	async move(
+		sourceVirtualPath: string,
+		destinationVirtualDirectory: string,
+		{collision = 'error', userId = OWNER_USER_ID}: {collision?: string; userId?: string} = {},
+	) {
+		sourceVirtualPath = normalizePath(sourceVirtualPath)
+		destinationVirtualDirectory = normalizePath(destinationVirtualDirectory)
+
 		// If the destination is the current containing folder then the file is already in the correct location
 		// so we don't need to do anything.
 		if (nodePath.dirname(sourceVirtualPath) === destinationVirtualDirectory) return sourceVirtualPath
 
 		// Check if operation is allowed on source
-		const allowedSourceOperations = await this.getAllowedOperations(sourceVirtualPath)
+		const allowedSourceOperations = await this.getAllowedOperations(sourceVirtualPath, userId)
 		if (!allowedSourceOperations.includes('move')) throw new Error('[operation-not-allowed]')
 
 		// Check if operation is allowed on destination
-		const allowedDestinationOperations = await this.getAllowedOperations(destinationVirtualDirectory)
+		const allowedDestinationOperations = await this.getAllowedOperations(destinationVirtualDirectory, userId)
 		if (!allowedDestinationOperations.includes('writable')) throw new Error('[operation-not-allowed]')
 
 		// Get the system paths
-		let sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath)
-		const destinationSystemDirectory = await this.virtualToSystemPath(destinationVirtualDirectory)
+		let sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath, userId)
+		const destinationSystemDirectory = await this.virtualToSystemPath(destinationVirtualDirectory, userId)
 
 		// Error if the source doesn't exist
 		const sourceStats = await fse.stat(sourceSystemPath).catch(() => {
@@ -523,6 +649,13 @@ export default class Files {
 
 		// Handle name collisions
 		if (collision === 'keep-both') destinationSystemPath = await this.getUniqueName(destinationSystemPath)
+
+		// Collision handling can change the target path. Authorize the final path,
+		// and require permission to remove it before replacing existing content.
+		destinationSystemPath = await this.authorizeDestinationSystemPath(destinationSystemPath, userId, {
+			replace: collision === 'replace',
+		})
+
 		if (collision === 'replace') await fse.remove(destinationSystemPath)
 
 		// Toggle move operation based on for cross fs moves.
@@ -532,27 +665,30 @@ export default class Files {
 		if (isMovingAcrossFilesystems || forceSlowMoveWithProgress) {
 			// If we're moving across filesystems there will be a slow copy and delete so
 			// we'll use our own implementation that reports progress.
-			await this.#copyWithProgress(sourceSystemPath, destinationSystemPath, {move: true})
+			await this.#copyWithProgress(sourceSystemPath, destinationSystemPath, {move: true, userId})
 		} else {
 			// Otherwise we can use native system move for instant atomic move on the same filesystem.
 			await move(sourceSystemPath, destinationSystemPath)
 		}
+		await this.memberShares.removeWithin(sourceVirtualPath)
 
 		// Return the virtual path of the new location
 		return this.systemToVirtualPath(destinationSystemPath)
 	}
 
 	// Rename a file or directory
-	async rename(sourceVirtualPath: string, newName: string): Promise<string> {
+	async rename(sourceVirtualPath: string, newName: string, userId: string = OWNER_USER_ID): Promise<string> {
+		sourceVirtualPath = normalizePath(sourceVirtualPath)
+
 		// Check if operation is allowed.
-		const allowedOperations = await this.getAllowedOperations(sourceVirtualPath)
+		const allowedOperations = await this.getAllowedOperations(sourceVirtualPath, userId)
 		if (!allowedOperations.includes('rename')) throw new Error(`[operation-not-allowed]`)
 
 		// Ensure that a new name is valid.
 		if (!isValidFilename(newName)) throw new Error(`[invalid-filename] Invalid filename: '${newName}'`)
 
 		// Convert the source virtual path into a system path.
-		const sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath)
+		const sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath, userId)
 
 		// If the new name is identical to the current base name, do nothing.
 		const currentName = nodePath.basename(sourceSystemPath)
@@ -560,27 +696,30 @@ export default class Files {
 
 		// Determine the parent directory (system path) and compute the new candidate system path.
 		const parentDirectory = nodePath.dirname(sourceSystemPath)
-		const targetSystemPath = nodePath.join(parentDirectory, newName)
+		const targetSystemPath = await this.authorizeDestinationSystemPath(nodePath.join(parentDirectory, newName), userId)
 
 		// Perform the renaming operation by moving the file/directory.
 		await move(sourceSystemPath, targetSystemPath)
+		await this.memberShares.removeWithin(sourceVirtualPath)
 
 		// Convert the target system path back into a virtual path and return it.
 		return this.systemToVirtualPath(targetSystemPath)
 	}
 
 	// Trash a file or directory
-	async trash(virtualPath: string) {
+	async trash(virtualPath: string, userId: string = OWNER_USER_ID) {
+		virtualPath = normalizePath(virtualPath)
+
 		// Check if operation is allowed
-		const allowedOperations = await this.getAllowedOperations(virtualPath)
+		const allowedOperations = await this.getAllowedOperations(virtualPath, userId)
 		if (!allowedOperations.includes('trash')) throw new Error('[operation-not-allowed]')
 
 		// Get the system path
 		// This is important to piggy back on for validation logic
-		const systemPath = await this.virtualToSystemPath(virtualPath)
+		const systemPath = await this.virtualToSystemPath(virtualPath, userId)
 
-		// Calculate the target trash system path
-		const trashSystemRoot = await this.virtualToSystemPath('/Trash')
+		// Calculate the target trash system path (the user's own trash)
+		const trashSystemRoot = await this.virtualToSystemPath(this.trashRootForUser(userId), userId)
 		const trashSystemPath = await nodePath.join(trashSystemRoot, nodePath.basename(systemPath))
 
 		// Retry on error to work around collision race condition
@@ -601,13 +740,13 @@ export default class Files {
 				shouldRetry: (error) => error.message === '[destination-already-exists]',
 			},
 		)
+		await this.memberShares.removeWithin(virtualPath)
 
 		// Write the meta data for the trashed file or directory
 		// TODO: Migrate this to SQLite
-		const trashMetaSystemPath = nodePath.join(
-			this.trashMetaDirectory,
-			`${nodePath.basename(uniqueTrashSystemPath)}.json`,
-		)
+		const trashMetaDirectory = this.trashMetaDirectoryForUser(userId)
+		await fse.ensureDir(trashMetaDirectory).catch(() => {})
+		const trashMetaSystemPath = nodePath.join(trashMetaDirectory, `${nodePath.basename(uniqueTrashSystemPath)}.json`)
 		await fse.writeFile(trashMetaSystemPath, JSON.stringify({path: virtualPath} satisfies Trashmeta))
 
 		// Return the virtual path of the trashed file or directory
@@ -615,26 +754,34 @@ export default class Files {
 	}
 
 	// Restore a file or directory from the trash
-	async restore(trashVirtualPath: string, {collision = 'error'} = {}) {
+	async restore(
+		trashVirtualPath: string,
+		{collision = 'error', userId = OWNER_USER_ID}: {collision?: string; userId?: string} = {},
+	) {
+		trashVirtualPath = normalizePath(trashVirtualPath)
+
 		// Check if operation is allowed
-		const allowedOperations = await this.getAllowedOperations(trashVirtualPath)
+		const allowedOperations = await this.getAllowedOperations(trashVirtualPath, userId)
 		if (!allowedOperations.includes('restore')) throw new Error('[operation-not-allowed]')
 
 		// Get the system path
-		const trashSystemPath = await this.virtualToSystemPath(trashVirtualPath)
+		const trashSystemPath = await this.virtualToSystemPath(trashVirtualPath, userId)
 		if (!(await fse.pathExists(trashSystemPath))) throw new Error('[source-not-exists]')
 
-		// Read the meta data for the trashed file or directory
+		// Read the meta data for the trashed file or directory. The trashed item's
+		// name is the segment right after the user's trash root (which is 1 segment
+		// deep for the owner, 3 for a member: /Users/<slug>/Trash).
+		const trashRootDepth = this.trashRootForUser(userId).split('/').filter(Boolean).length
 		const pathSegments = trashVirtualPath.split('/').filter(Boolean)
-		const isChild = pathSegments.length > 2
-		// Always use the second path segment so we can recover child files and directories
-		const trashMetaSystemPath = nodePath.join(this.trashMetaDirectory, `${pathSegments[1]}.json`)
+		const itemName = pathSegments[trashRootDepth]
+		const isChild = pathSegments.length > trashRootDepth + 1
+		const trashMetaSystemPath = nodePath.join(this.trashMetaDirectoryForUser(userId), `${itemName}.json`)
 		let targetSystemPath: string
 		try {
 			const trashMeta = (await fse.readJson(trashMetaSystemPath)) as Trashmeta
-			targetSystemPath = await this.virtualToSystemPath(trashMeta.path)
+			targetSystemPath = await this.virtualToSystemPath(trashMeta.path, userId)
 			// Calculate full path if we're recovering a child file or directory
-			if (isChild) targetSystemPath = nodePath.join(targetSystemPath, pathSegments.slice(2).join('/'))
+			if (isChild) targetSystemPath = nodePath.join(targetSystemPath, pathSegments.slice(trashRootDepth + 1).join('/'))
 		} catch (error) {
 			if ((error as Error)?.message?.includes('ENOENT')) throw new Error('[trash-meta-not-exists]')
 			throw error
@@ -642,6 +789,9 @@ export default class Files {
 
 		// Handle name conflicts
 		if (collision === 'keep-both') targetSystemPath = await this.getUniqueName(targetSystemPath)
+		targetSystemPath = await this.authorizeDestinationSystemPath(targetSystemPath, userId, {
+			replace: collision === 'replace',
+		})
 		const moveOptions = collision === 'replace' ? {overwrite: true} : {}
 
 		// Move the file or directory to the new location
@@ -655,11 +805,11 @@ export default class Files {
 	}
 
 	// Empty the trash
-	async emptyTrash() {
+	async emptyTrash(userId: string = OWNER_USER_ID) {
 		let success = true
 
-		// Get the system path for the trash directory
-		const trashDirectory = await this.virtualToSystemPath('/Trash')
+		// Get the system path for the trash directory (the user's own trash)
+		const trashDirectory = await this.virtualToSystemPath(this.trashRootForUser(userId), userId)
 
 		// Stream the trash directory contents
 		for await (const systemPath of getDirectoryStream(trashDirectory)) {
@@ -668,24 +818,29 @@ export default class Files {
 				success = false
 			})
 		}
-		for await (const systemPath of getDirectoryStream(this.trashMetaDirectory)) {
-			await fse.remove(systemPath).catch((error) => {
-				this.logger.error(`Failed to remove '${nodePath.basename(systemPath)}' from trash meta`, error)
-				success = false
-			})
+		const trashMetaDirectory = this.trashMetaDirectoryForUser(userId)
+		if (await fse.pathExists(trashMetaDirectory)) {
+			for await (const systemPath of getDirectoryStream(trashMetaDirectory)) {
+				await fse.remove(systemPath).catch((error) => {
+					this.logger.error(`Failed to remove '${nodePath.basename(systemPath)}' from trash meta`, error)
+					success = false
+				})
+			}
 		}
 
 		return success
 	}
 
 	// Permanently delete a file or directory
-	async delete(virtualPath: string) {
+	async delete(virtualPath: string, userId: string = OWNER_USER_ID) {
+		virtualPath = normalizePath(virtualPath)
+
 		// Check if operation is allowed
-		const allowedOperations = await this.getAllowedOperations(virtualPath)
+		const allowedOperations = await this.getAllowedOperations(virtualPath, userId)
 		if (!allowedOperations.includes('delete')) throw new Error('[operation-not-allowed]')
 
 		// Get the system path
-		const systemPath = await this.virtualToSystemPath(virtualPath)
+		const systemPath = await this.virtualToSystemPath(virtualPath, userId)
 
 		// If deleting from /External, remove any shares for this path or its children
 		// (External paths aren't covered by the file watcher, so we handle it here)
@@ -699,6 +854,7 @@ export default class Files {
 		// Delete the file or directory
 		try {
 			await fse.remove(systemPath)
+			await this.memberShares.removeWithin(virtualPath)
 			return true
 		} catch (error) {
 			this.logger.error(`Failed to delete '${systemPath}'`, error)
@@ -706,13 +862,18 @@ export default class Files {
 		}
 	}
 
-	// Get allowed operations for a given path
-	async getAllowedOperations(virtualPath: string): Promise<FileOperation[]> {
-		// Get file status
+	// Get allowed operations for a given path. Advisory (the actual operations
+	// authorize via virtualToSystemPath), pass the requesting user so member
+	// share grants are reflected in the advertised operations.
+	async getAllowedOperations(virtualPath: string, userId: string = OWNER_USER_ID): Promise<FileOperation[]> {
+		virtualPath = normalizePath(virtualPath)
+
+		// Get file status. Uses the unsafe resolver since this is advisory and the
+		// caller authorizes the actual operation via virtualToSystemPath.
 		let isFile = false
 		let isDirectory = false
 		try {
-			const file = await fse.lstat(await this.virtualToSystemPath(virtualPath))
+			const file = await fse.lstat(this.virtualToSystemPathUnsafe(virtualPath))
 			isFile = file.isFile()
 			isDirectory = file.isDirectory()
 		} catch {}
@@ -738,19 +899,24 @@ export default class Files {
 			operations.add('share')
 		}
 
+		// Apply the operation rules against the owner-namespace form of the path so
+		// members get the same protections (a member's /Users/<slug>/Trash behaves
+		// like the owner's /Trash, their home like /Home).
+		const rulePath = this.#operationRulePath(virtualPath)
+
 		// Disable creating files in readonly directories
 		const isReadonly =
-			virtualPath === '/External' ||
-			match(virtualPath, ['/Network', '/Network/*']) ||
-			virtualPath === '/Backups' ||
-			virtualPath.startsWith('/Backups/')
+			rulePath === '/External' ||
+			match(rulePath, ['/Network', '/Network/*']) ||
+			rulePath === '/Backups' ||
+			rulePath.startsWith('/Backups/')
 		if (isReadonly) operations.delete('writable')
 
 		// Remove destructive operations if the path is protected
 		// Note only the exact paths are protected, not necessarily the children.
 		// e.g /Home/Downloads is protected but /Home/Downloads/file.txt is not.
 		// Children could be protected with /Home/Downloads/**
-		let isProtected = match(virtualPath, [
+		let isProtected = match(rulePath, [
 			'/*',
 			'/Home/Downloads',
 			'/External/*',
@@ -761,8 +927,8 @@ export default class Files {
 		])
 
 		// For /Apps/* paths, only protect if the app id is installed
-		if (match(virtualPath, ['/Apps/*'])) {
-			const appId = nodePath.basename(virtualPath)
+		if (match(rulePath, ['/Apps/*'])) {
+			const appId = nodePath.basename(rulePath)
 			isProtected = await this.#umbreld.apps.isInstalled(appId)
 		}
 
@@ -774,7 +940,7 @@ export default class Files {
 		}
 
 		// Unshareable paths
-		const isUnshareable = match(virtualPath, [
+		const isUnshareable = match(rulePath, [
 			'/Apps',
 			'/Apps/*',
 			'/External',
@@ -786,8 +952,8 @@ export default class Files {
 		if (isUnshareable) operations.delete('share')
 
 		// External files (not external root or top level mount points)
-		const isExternal = match(virtualPath, ['/External/*/**'])
-		const isNetwork = match(virtualPath, ['/Network/*/*/**'])
+		const isExternal = match(rulePath, ['/External/*/**'])
+		const isNetwork = match(rulePath, ['/Network/*/*/**'])
 		if (isExternal || isNetwork) {
 			// Only allow hard delete so we don't copy to internal storage
 			operations.delete('trash')
@@ -795,7 +961,7 @@ export default class Files {
 		}
 
 		// Add trash specific operations
-		const isTrash = match(virtualPath, ['/Trash/**'])
+		const isTrash = match(rulePath, ['/Trash/**'])
 		if (isTrash) {
 			operations.delete('unarchive')
 			operations.delete('share')
@@ -803,6 +969,34 @@ export default class Files {
 			operations.delete('trash')
 			operations.add('restore')
 			operations.add('delete')
+		}
+
+		// Sharing and favorites are owner-only features for now, so don't
+		// advertise them on member paths (the endpoints would reject anyway)
+		if (this.ownerOfPath(virtualPath) !== OWNER_USER_ID) {
+			operations.delete('share')
+			operations.delete('favorite')
+		}
+
+		// Paths a member doesn't own are governed by the owner's share grants
+		if (userId !== OWNER_USER_ID && this.ownerOfPath(virtualPath) !== userId) {
+			const share = await this.memberShares.shareGrantFor(virtualPath, userId)
+
+			// No grant covering this path: nothing is allowed. (Ancestors of shared
+			// paths are traversable via list() but their entries expose no operations.)
+			if (!share) return []
+
+			// The same rules as the owner apply (protected and read-only paths
+			// stay protected), minus the owner-only features
+			// (network sharing, favorites) and trashing, which would strand the
+			// owner's files in the member's private trash, so members hard delete
+			// from shares instead
+			operations.delete('share')
+			operations.delete('favorite')
+			if (operations.has('trash')) {
+				operations.delete('trash')
+				operations.add('delete')
+			}
 		}
 
 		return Array.from(operations)
@@ -841,7 +1035,7 @@ export default class Files {
 
 		let index = 2
 		let uniquePath = systemPath
-		while (await fse.pathExists(uniquePath)) {
+		while (await pathEntryExists(uniquePath)) {
 			if (index > maxIndex) throw new Error(`[unique-name-index-exceeded]`)
 			uniquePath = nodePath.join(path, `${name} (${index})${extension ? extension : ''}`)
 			index++
@@ -850,100 +1044,216 @@ export default class Files {
 		return uniquePath
 	}
 
-	// We expose an unsafe conversion method that's only suitable to be used on trusted paths.
-	// This method is sync and doesn't touch the fs for validation which is important for some use cases
-	// for internal code where we just need to convert between path types but don't want to validate anything.
-	virtualToSystemPathUnsafe(virtualPath: string) {
-		// Normalize virtual path before lookup so directory traversal attacks cannot be resolved.
-		// e.g: /Home/../../../../etc/passwd normalizes to /etc/passwd which won't get a match in the base directories lookup.
-		virtualPath = normalizePath(virtualPath)
+	// Re-authorize a computed destination after collision handling. A member's
+	// grant may cover the requested path but not a keep-both sibling, and replacing
+	// existing content must respect protected-path delete rules.
+	async authorizeDestinationSystemPath(
+		systemPath: string,
+		userId: string,
+		{replace = false}: {replace?: boolean} = {},
+	) {
+		const virtualPath = this.systemToVirtualPath(systemPath)
+		const authorizedSystemPath = await this.virtualToSystemPath(virtualPath, userId)
 
-		// Ensure the path is absolute, we can't resolve relative paths.
-		// e.g /Home/file.pdf can be resolved but Home/file.pdf can't.
+		if (replace && (await fse.pathExists(authorizedSystemPath))) {
+			const operations = await this.getAllowedOperations(virtualPath, userId)
+			if (!operations.includes('trash') && !operations.includes('delete')) {
+				throw new Error('[operation-not-allowed]')
+			}
+		}
+
+		return authorizedSystemPath
+	}
+
+	// Authorize a computed destination and require its nearest existing parent
+	// to be a writable directory. Uploads may create missing parent directories,
+	// so checking only the immediate parent would let paths such as
+	// /External/fake-drive/file.txt bypass the read-only /External root.
+	async authorizeWritableDestinationSystemPath(
+		systemPath: string,
+		userId: string,
+		{replace = false}: {replace?: boolean} = {},
+	) {
+		const authorizedSystemPath = await this.authorizeDestinationSystemPath(systemPath, userId, {replace})
+
+		let existingParentSystemPath = nodePath.dirname(authorizedSystemPath)
+		while (!(await pathEntryExists(existingParentSystemPath))) {
+			const parentSystemPath = nodePath.dirname(existingParentSystemPath)
+			if (parentSystemPath === existingParentSystemPath) throw new Error('[operation-not-allowed]')
+			existingParentSystemPath = parentSystemPath
+		}
+
+		const parentStatus = await fse.stat(existingParentSystemPath)
+		if (!parentStatus.isDirectory()) throw new Error('[operation-not-allowed]')
+
+		const existingParentVirtualPath = this.systemToVirtualPath(existingParentSystemPath)
+		const operations = await this.getAllowedOperations(existingParentVirtualPath, userId)
+		if (!operations.includes('writable')) throw new Error('[operation-not-allowed]')
+
+		return authorizedSystemPath
+	}
+
+	// Virtual paths are globally unique and self-contained: the owner's live under
+	// the top level base directories (/Home, /Trash, /Apps, ...) and each member's
+	// live under /Users/<slug> (home) and /Users/<slug>/Trash. Because the path
+	// fully determines its physical location, resolution needs no ambient user id
+	// and a stored path can never be orphaned from its owner. Authorization (who
+	// may touch a path) is a separate concern, see ownerOfPath / virtualToSystemPath.
+
+	// The physical directory holding a member's home / trash
+	#memberHomeDirectory(slug: string) {
+		return `${this.#umbreld.dataDirectory}/members/${slug}/home`
+	}
+
+	#memberTrashDirectory(slug: string) {
+		return `${this.#umbreld.dataDirectory}/members/${slug}/trash`
+	}
+
+	// The physical base directory a virtual path resolves under (for containment checks)
+	#physicalBaseOf(virtualPath: string): string {
+		const segments = normalizePath(virtualPath).split('/').filter(Boolean)
+		if (segments[0] === 'Users') {
+			const slug = segments[1]
+			if (!slug || !isValidSlug(slug)) throw new Error(`[invalid-base] ${virtualPath}`)
+			return segments[2] === 'Trash' ? this.#memberTrashDirectory(slug) : this.#memberHomeDirectory(slug)
+		}
+		const basePath = this.baseDirectories.get(`/${segments[0]}`)
+		if (!basePath) throw new Error(`[invalid-base] No valid base directory found for path: ${virtualPath}`)
+		return basePath
+	}
+
+	// Which user owns a virtual path. Pure: /Users/<slug>/... belongs to <slug>,
+	// everything else (the top level bases) belongs to the owner.
+	ownerOfPath(virtualPath: string): string {
+		const segments = normalizePath(virtualPath).split('/').filter(Boolean)
+		if (segments[0] === 'Users' && segments[1]) return segments[1]
+		return OWNER_USER_ID
+	}
+
+	// Normalize a virtual path (resolve traversal, trim trailing slash) without
+	// resolving it. For modules that need to compare virtual paths safely.
+	normalizeVirtualPath(virtualPath: string): string {
+		return normalizePath(virtualPath)
+	}
+
+	// Map a virtual path onto the owner namespace so the same operation rules
+	// (protected/readonly/trash detection) apply to members. A member's home
+	// /Users/<slug> behaves like the owner's /Home and /Users/<slug>/Trash like
+	// /Trash.
+	#operationRulePath(virtualPath: string): string {
+		const path = normalizePath(virtualPath)
+		const segments = path.split('/').filter(Boolean)
+		if (segments[0] !== 'Users') return path
+		const rest = segments.slice(2) // drop 'Users' and the slug
+		if (rest[0] === 'Trash') return `/${rest.join('/')}`
+		return rest.length ? `/Home/${rest.join('/')}` : '/Home'
+	}
+
+	// Resolve a virtual path to a system path without any authorization or fs
+	// validation. Sync and pure. Only for trusted internal callers (system
+	// services, migrations) that operate on known paths, never on request input.
+	virtualToSystemPathUnsafe(virtualPath: string) {
+		// Normalize first so directory traversal can't sneak through
+		// e.g: /Home/../../../../etc/passwd normalizes to /etc/passwd which has no valid base.
+		virtualPath = normalizePath(virtualPath)
 		if (!nodePath.posix.isAbsolute(virtualPath)) throw new Error(`[path-not-absolute]`)
 
-		// Split the path into segments and lookup the system path for the base directory
 		const segments = virtualPath.split('/').filter(Boolean)
+
+		// Member paths: /Users/<slug>[/Trash]/...
+		if (segments[0] === 'Users') {
+			const slug = segments[1]
+			if (!slug || !isValidSlug(slug)) throw new Error(`[invalid-base] ${virtualPath}`)
+			if (segments[2] === 'Trash') return nodePath.join(this.#memberTrashDirectory(slug), ...segments.slice(3))
+			return nodePath.join(this.#memberHomeDirectory(slug), ...segments.slice(2))
+		}
+
+		// Owner base directories
 		const basePath = this.baseDirectories.get(`/${segments[0]}`)
-
-		// Error if we don't find a matching base directory
 		if (!basePath) throw new Error(`[invalid-base] No valid base directory found for path: ${virtualPath}`)
-
-		// Swap out the base directory with it's system path and resolve any symlinks
-		// or directory traversals to get the real path.
-		segments[0] = basePath
-		const systemPath = segments.join('/')
-
-		return systemPath
+		return nodePath.join(basePath, ...segments.slice(1))
 	}
 
-	// Converts a virtual path to a system path.
-	// Ensures that the path is safe and does not escape the expected base directory.
-	// If the full path doesn't exist it validates symlinks up to the deepest existing path.
-	async virtualToSystemPath(virtualPath: string) {
-		// Split the path into segments and lookup the system path for the base directory
-		const segments = virtualPath.split('/').filter(Boolean)
-		const basePath = this.baseDirectories.get(`/${segments[0]}`)!
-
+	// Resolve a virtual path to a system path for a request made by `userId`.
+	// Enforces authorization (the user owns the path, or the owner shared it
+	// with them) and that the resolved path doesn't escape its containment base
+	// via symlinks. `userId` is required so a request handler can't accidentally
+	// skip the authorization check.
+	async virtualToSystemPath(virtualPath: string, userId: string) {
+		virtualPath = normalizePath(virtualPath)
 		const systemPath = this.virtualToSystemPathUnsafe(virtualPath)
 
-		// Ensure the deepest existing real path doesn't resolve to a directory outside
-		// of the expected base path. We use realpath to resolve symlinks. This prevents
-		// escaping the base directory if a symlink is in the path.
-		// e.g:
-		// /Home/symlink-to-root/etc/passwd
-		const deepestExistingPath = await getDeepestExistingPath(systemPath)
-		const deepestExistingRealPath = await fse.realpath(deepestExistingPath)
-		const realPath = systemPath.replace(deepestExistingPath, deepestExistingRealPath)
-		if (!realPath.startsWith(basePath)) throw new Error(`[escapes-base] '${virtualPath}' escapes '${basePath}'`)
+		let basePath: string
+		if (this.ownerOfPath(virtualPath) === userId) {
+			// The user's own path: contained to its base directory
+			basePath = this.#physicalBaseOf(virtualPath)
+		} else {
+			// Not their path: members may access paths the owner shared with them
+			const share = await this.memberShares.shareGrantFor(virtualPath, userId)
+			if (!share) throw new Error(`[forbidden] '${virtualPath}'`)
 
-		// We return the system path not the real path because at this point we know
-		// the path is safe and we want to return the path as it was passed in.
-		// Otherwise we'd resolve symlinks in the path and weird stuff would happen
-		// like copying a symlink to a file resulting in copying the file instead of the symlink.
-		// e.g:
-		// /Home/symlink-to-documents
-		// would resolve to system path for /Home/Documents not the actual symlink path.
+			// Contain to the physical shared subtree so a symlink inside the
+			// share can't lead outside of it. Re-validate the share root first
+			// because the filesystem may have changed since the share was saved.
+			try {
+				const shareSystemPath = this.virtualToSystemPathUnsafe(share.path)
+				await assertSystemPathInsideBase(shareSystemPath, this.#physicalBaseOf(share.path), {
+					virtualPath: share.path,
+					baseLabel: this.#physicalBaseOf(share.path),
+				})
+				basePath = await fse.realpath(shareSystemPath)
+			} catch {
+				throw new Error(`[forbidden] '${virtualPath}'`)
+			}
+		}
+
+		await assertSystemPathInsideBase(systemPath, basePath, {virtualPath, baseLabel: basePath})
+
+		// Return the system path as-passed (not the realpath) so we don't resolve
+		// symlinks in the path itself, which would change copy/move semantics.
 		return systemPath
 	}
 
-	// Converts a system path to a virtual path.
-	// Ensures that the path is safe and does not escape the expected base directory.
+	// Convert a system path back to its virtual path. Pure and self-contained.
 	systemToVirtualPath(systemPath: string) {
-		// Normalize the system path to handle any directory traversals
 		systemPath = normalizePath(systemPath)
 
-		// Find the base directory this path belongs to by checking if it starts with any of the base paths
+		// Member paths: <data>/members/<slug>/home|trash/...
+		const membersRoot = `${this.#umbreld.dataDirectory}/members/`
+		if (systemPath.startsWith(membersRoot)) {
+			const [slug, kind, ...tail] = systemPath.slice(membersRoot.length).split('/')
+			const rest = tail.join('/')
+			if (kind === 'trash') return normalizePath(`/Users/${slug}/Trash/${rest}`)
+			if (kind === 'home') return normalizePath(`/Users/${slug}/${rest}`)
+		}
+
+		// Owner base directories
 		for (const [baseDirectory, basePath] of this.baseDirectories) {
-			if (systemPath.startsWith(basePath)) {
-				// Replace the system base path with the virtual base directory name
-				const virtualPath = systemPath.replace(basePath, baseDirectory)
-				// Normalize to handle any remaining path oddities
-				return normalizePath(virtualPath)
+			if (isPathInsideOrEqual(basePath, systemPath)) {
+				const relativePath = nodePath.relative(basePath, systemPath).split(nodePath.sep).join('/')
+				return normalizePath(nodePath.posix.join(baseDirectory, relativePath))
 			}
 		}
 
 		throw new Error(`[invalid-path] Path '${systemPath}' is not within any base directory`)
 	}
 
-	// Get view preferences
-	async getViewPreferences(): Promise<ViewPreferences> {
-		const viewPreferences = await this.#umbreld.store.get('files.preferences')
-		return viewPreferences || DEFAULT_VIEW_PREFERENCES
+	// Get view preferences. Scoped per account so a member changing their sort
+	// order or view doesn't affect the owner (or other members).
+	async getViewPreferences(userId: string = OWNER_USER_ID): Promise<ViewPreferences> {
+		const viewPreferences = await this.#umbreld.user.getAccountViewPreferences(userId)
+		return {...DEFAULT_VIEW_PREFERENCES, ...viewPreferences}
 	}
 
-	// Update view preferences
-	async updateViewPreferences(newViewPreferences: Partial<ViewPreferences>): Promise<ViewPreferences> {
-		let updatedViewPreferences: ViewPreferences
-
-		// Save the new preferences to the store
-		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
-			const currentViewPreferences = await this.getViewPreferences()
-			updatedViewPreferences = {...currentViewPreferences, ...newViewPreferences}
-			await set('files.preferences', updatedViewPreferences)
-		})
-
-		return updatedViewPreferences!
+	// Update view preferences for an account
+	async updateViewPreferences(
+		newViewPreferences: Partial<ViewPreferences>,
+		userId: string = OWNER_USER_ID,
+	): Promise<ViewPreferences> {
+		const currentViewPreferences = await this.getViewPreferences(userId)
+		const updatedViewPreferences = {...currentViewPreferences, ...newViewPreferences}
+		await this.#umbreld.user.setAccountViewPreferences(userId, updatedViewPreferences)
+		return updatedViewPreferences
 	}
 }
 
@@ -954,6 +1264,40 @@ function match(path: string, patterns: string[]) {
 }
 
 // Resolve traversals and always trim trailing trash
+// Member user id slugs are safe single path segments: start with a letter, then
+// letters/digits/dashes. Usable as a directory name and can't contain traversal.
+export function isValidSlug(slug: string): boolean {
+	return /^[A-Za-z][A-Za-z0-9-]*$/.test(slug)
+}
+
+export function isPathInsideOrEqual(basePath: string, candidatePath: string): boolean {
+	const relativePath = nodePath.relative(basePath, candidatePath)
+	return relativePath === '' || (!relativePath.startsWith('..') && !nodePath.isAbsolute(relativePath))
+}
+
+export async function resolveRealPathForValidation(systemPath: string): Promise<string> {
+	const absolutePath = nodePath.resolve(systemPath)
+	const deepestExistingPath = await getDeepestExistingPath(absolutePath)
+	const deepestExistingRealPath = await fse.realpath(deepestExistingPath)
+	const missingTail = nodePath.relative(deepestExistingPath, absolutePath)
+	return nodePath.resolve(deepestExistingRealPath, missingTail)
+}
+
+export async function assertSystemPathInsideBase(
+	systemPath: string,
+	basePath: string,
+	{virtualPath = systemPath, baseLabel = basePath}: {virtualPath?: string; baseLabel?: string} = {},
+) {
+	const [baseRealPath, candidateRealPath] = await Promise.all([
+		resolveRealPathForValidation(basePath),
+		resolveRealPathForValidation(systemPath),
+	])
+	if (!isPathInsideOrEqual(baseRealPath, candidateRealPath)) {
+		throw new Error(`[escapes-base] '${virtualPath}' escapes '${baseLabel}'`)
+	}
+	return {baseRealPath, candidateRealPath}
+}
+
 function normalizePath(path: string) {
 	// Reduce `.`, `..` and multiple slashes to their canonical form
 	const normalized = nodePath.posix.normalize(path)
@@ -961,6 +1305,19 @@ function normalizePath(path: string) {
 	// Trim trailing slash, except for the root directory
 	if (normalized === '/') return normalized
 	return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized
+}
+
+// Unlike fs-extra's pathExists(), lstat sees dangling symlinks. A dangling
+// symlink still occupies its directory entry and must never be offered as a
+// unique destination that a later write could follow.
+async function pathEntryExists(path: string) {
+	try {
+		await fse.lstat(path)
+		return true
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false
+		throw error
+	}
 }
 
 // Given a file path will return the deepest existing path.

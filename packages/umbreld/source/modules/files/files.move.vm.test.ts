@@ -103,7 +103,7 @@ for (const forceSlowMoveWithProgress of forceSlowMoveWithProgressValues) {
 					path: '/Home/../../../../etc',
 					toDirectory: '/Home',
 				}),
-			).rejects.toThrow('[invalid-base]')
+			).rejects.toThrow('[operation-not-allowed]')
 		})
 
 		test('move() throws on directory traversal attempt in destination path', async () => {

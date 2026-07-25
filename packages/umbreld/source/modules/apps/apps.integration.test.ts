@@ -10,6 +10,7 @@ import pRetry from 'p-retry'
 
 import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
 import {BACKUP_RESTORE_FIRST_START_FLAG} from '../../constants.js'
+import {OWNER_ACCOUNT_ID} from '../auth/auth.js'
 import runGitServer from '../test-utilities/run-git-server.js'
 import type {AppManifest} from './schema.js'
 
@@ -197,7 +198,7 @@ test.sequential('app auth exchanges its cookie for an app-bound one-time handoff
 
 	await expect(
 		umbreld.instance.auth.consumeAppHandoff('sparkles-hello-world', handoff.params.handoff),
-	).resolves.toMatchObject({principal: {accountId: 'owner'}})
+	).resolves.toMatchObject({principal: {accountId: OWNER_ACCOUNT_ID}})
 	await expect(umbreld.instance.auth.consumeAppHandoff('sparkles-hello-world', handoff.params.handoff)).rejects.toThrow(
 		'Invalid app handoff',
 	)
@@ -435,8 +436,15 @@ test.sequential('setTorEnabled() toggles the Tor setting', async () => {
 })
 
 test.sequential('uninstall() uninstalls an app', async () => {
+	const member = await umbreld.client.user.createUser.mutate({name: 'app-share-member', password: 'passwordpassword'})
+	await umbreld.client.apps.addMemberShare.mutate({appId: 'sparkles-hello-world', sharedWith: [member.userId]})
+	await umbreld.client.apps.addMemberShare.mutate({appId: '*', sharedWith: 'all'})
+
 	await expect(umbreld.client.apps.uninstall.mutate({appId: 'sparkles-hello-world'})).resolves.toStrictEqual(true)
-	const installedApps = await umbreld.client.apps.list.query()
+
+	// Direct grants belong to this installation and must not silently return on
+	// reinstall. The explicit wildcard grant intentionally covers future apps.
+	await expect(umbreld.client.apps.memberShares.query()).resolves.toStrictEqual([{appId: '*', sharedWith: 'all'}])
 })
 
 test.sequential('list() lists no apps after uninstall', async () => {

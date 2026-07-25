@@ -3,6 +3,7 @@ import {useTranslation} from 'react-i18next'
 
 import {toast} from '@/components/ui/toast'
 import {HOME_PATH} from '@/features/files/constants'
+import {useIsMember} from '@/features/files/hooks/use-home-path'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
@@ -16,6 +17,11 @@ import type {RouterError} from '@/trpc/trpc'
 export function useExternalStorage() {
 	const {t} = useTranslation()
 	const utils = trpcReact.useUtils()
+	// External storage is an owner-only feature, don't run its queries for
+	// member accounts. Note this must key off 'not a member' rather than 'is the
+	// owner' because this hook is also used during onboarding before any user
+	// (or token) exists, e.g. the backup restore flow.
+	const isMember = useIsMember()
 	const isExternalStorageSupported = true
 
 	// Subscribe to files:external-storage:change events that fire when devices are mounted/unmounted
@@ -23,6 +29,7 @@ export function useExternalStorage() {
 	trpcReact.eventBus.listen.useSubscription(
 		{event: 'files:external-storage:change'},
 		{
+			enabled: !isMember,
 			onData() {
 				utils.files.externalDevices.invalidate()
 			},
@@ -37,8 +44,8 @@ export function useExternalStorage() {
 		placeholderData: keepPreviousData,
 		refetchInterval: 5000, // Poll because the change event cannot fire after a device has already been physically removed
 		staleTime: 0, // Don't cache the data
+		enabled: !isMember,
 	})
-
 	const {currentPath, navigateToDirectory} = useNavigate()
 
 	// Eject disk mutation

@@ -274,6 +274,113 @@ export default class Apps {
 		return this.instances.some((app) => app.id === appId)
 	}
 
+	// ── Member shares ───────────────────────────────────────────────────────
+	// Apps the owner has shared with member accounts. Shared apps show on the
+	// member's desktop and are allowed through the app proxy. They do not grant
+	// raw app data access under /Apps. 'all' also covers members created in the
+	// future, mirroring file shares.
+
+	// List all app shares (owner management view)
+	async listMemberShares(): Promise<{appId: string; sharedWith: 'all' | string[]}[]> {
+		return (await this.#umbreld.store.get('appMemberShares')) ?? []
+	}
+
+	// List the app shares that apply to a given member
+	async memberSharesForUser(userId: string): Promise<{appId: string; sharedWith: 'all' | string[]}[]> {
+		const shares = await this.listMemberShares()
+		return shares.filter((share) => share.sharedWith === 'all' || share.sharedWith.includes(userId))
+	}
+
+	// The app ids shared with a given member. The '*' sentinel shares every
+	// installed app, including apps installed in the future.
+	async sharedAppIdsForUser(userId: string): Promise<string[]> {
+		const shares = await this.memberSharesForUser(userId)
+		if (shares.some((share) => share.appId === '*')) return this.instances.map((app) => app.id)
+		return shares.map((share) => share.appId)
+	}
+
+	// Share an app with all members or a specific list of members. Upserts, so
+	// sharing an already shared app updates who it's shared with.
+	async addMemberShare(appId: string, sharedWith: 'all' | string[]) {
+		// '*' shares all apps, including apps installed in the future
+		if (appId !== '*' && !(await this.isInstalled(appId))) throw new Error('[app-not-installed]')
+
+		// Validate the member ids exist
+		if (sharedWith !== 'all') {
+			const members = await this.#umbreld.user.listMembers()
+			const memberIds = new Set(members.map((member) => member.id))
+			const uniqueIds = [...new Set(sharedWith)]
+			if (uniqueIds.length === 0) throw new Error('[no-users] Share with all users or at least one user')
+			for (const id of uniqueIds) {
+				if (!memberIds.has(id)) throw new Error(`[unknown-user] '${id}'`)
+			}
+			sharedWith = uniqueIds
+		}
+
+		const share = {appId, sharedWith}
+		let previousSharedWith: 'all' | string[] = []
+		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
+			const shares = (await get('appMemberShares')) ?? []
+			previousSharedWith = shares.find((existingShare) => existingShare.appId === appId)?.sharedWith ?? []
+			const otherShares = shares.filter((existingShare) => existingShare.appId !== appId)
+			await set('appMemberShares', [...otherShares, share])
+		})
+		this.#emitMemberSharesChange(previousSharedWith, sharedWith)
+		await this.#umbreld.auth.appAccessChanged(appId)
+
+		this.logger.log(`Shared app ${appId} with ${sharedWith === 'all' ? 'all users' : sharedWith.join(', ')}`)
+		return share
+	}
+
+	// Stop sharing an app
+	async removeMemberShare(appId: string): Promise<boolean> {
+		let removed = false
+		let removedSharedWith: 'all' | string[] = []
+		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
+			const shares = (await get('appMemberShares')) ?? []
+			removedSharedWith = shares.find((share) => share.appId === appId)?.sharedWith ?? []
+			const remainingShares = shares.filter((share) => share.appId !== appId)
+			removed = remainingShares.length !== shares.length
+			if (removed) await set('appMemberShares', remainingShares)
+		})
+		if (removed) {
+			this.#emitMemberSharesChange(removedSharedWith)
+			await this.#umbreld.auth.appAccessChanged(appId)
+			this.logger.log(`Stopped sharing app ${appId}`)
+		}
+		return removed
+	}
+
+	// Remove a deleted member from any explicit app share lists. Shares left
+	// with nobody are removed entirely, including 'all' shares once no members
+	// remain — otherwise they'd linger invisibly and silently grant access to
+	// the next member created.
+	async removeUserFromMemberShares(userId: string) {
+		const hasMembers = (await this.#umbreld.user.listMembers()).length > 0
+		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
+			const shares = (await get('appMemberShares')) ?? []
+			const updatedShares = shares
+				.map((share) => {
+					if (share.sharedWith === 'all') return share
+					return {...share, sharedWith: share.sharedWith.filter((id) => id !== userId)}
+				})
+				.filter((share) => (share.sharedWith === 'all' ? hasMembers : share.sharedWith.length > 0))
+			await set('appMemberShares', updatedShares)
+		})
+		this.#emitMemberSharesChange([userId])
+		await this.#umbreld.auth.appAccessChanged('*')
+	}
+
+	// Notify listeners (e.g. member UIs) which accounts an app share change
+	// affects. Pass every sharedWith list the change touched (e.g. old and new
+	// grantees of an upsert) so nobody who lost access misses the event.
+	#emitMemberSharesChange(...sharedWithLists: ('all' | string[])[]) {
+		const sharedWith = sharedWithLists.includes('all')
+			? 'all'
+			: [...new Set(sharedWithLists.filter((list): list is string[] => list !== 'all').flat())]
+		this.#umbreld.eventBus.emit('apps:member-shares:change', {sharedWith})
+	}
+
 	getApp(appId: string) {
 		const app = this.instances.find((app) => app.id === appId)
 		if (!app) throw new Error(`App ${appId} not found`)
@@ -355,10 +462,19 @@ export default class Apps {
 
 		const app = this.getApp(appId)
 
+		// Revoke any direct share before uninstalling so access closes immediately
+		// and a crash partway through uninstall cannot leave a stale grant. The '*'
+		// share is intentionally retained because it covers future installations.
+		await this.removeMemberShare(appId)
+
 		const uninstalled = await app.uninstall()
 		if (uninstalled) {
 			// Remove app instance
 			this.instances = this.instances.filter((app) => app.id !== appId)
+
+			// Close a concurrent share added while uninstall was in progress. Once the
+			// instance is removed, addMemberShare() will reject further direct shares.
+			await this.removeMemberShare(appId)
 		}
 		return uninstalled
 	}

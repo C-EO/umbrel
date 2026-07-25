@@ -3,7 +3,7 @@ import {readFile} from 'node:fs/promises'
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 
 import type Umbreld from '../../../index.js'
-import Auth, {type Principal} from '../../auth/auth.js'
+import Auth, {OWNER_ACCOUNT_ID, type Principal} from '../../auth/auth.js'
 import {BROWSER_SESSION_HTTP_COOKIE_NAME} from '../../auth/browser-session-cookie.js'
 import temporaryDirectory from '../../utilities/temporary-directory.js'
 
@@ -114,6 +114,9 @@ describe('tRPC HTTP authentication', () => {
 			dangerouslyBypassAuthentication: true,
 		} as unknown as Context
 		await expect(isAuthenticated({ctx: bypassContext, next})).resolves.toMatchObject({actor: 'system'})
-		await expect(isOwner({ctx: bypassContext, next})).resolves.toMatchObject({accountId: 'owner', actor: 'system'})
+		await expect(isOwner({ctx: bypassContext, next})).resolves.toMatchObject({
+			accountId: OWNER_ACCOUNT_ID,
+			actor: 'system',
+		})
 	})
 })

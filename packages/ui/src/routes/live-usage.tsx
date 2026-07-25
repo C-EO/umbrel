@@ -341,6 +341,11 @@ function AppList({apps, formatValue}: {apps?: {id: string; used: number}[]; form
 					icon = systemAppsKeyed.UMBREL_files.icon
 					title = systemAppsKeyed.UMBREL_files.name
 				}
+				// Apps a member can't see are folded into a single entry server-side
+				if (id === 'other') {
+					icon = systemAppsKeyed.UMBREL_system.icon
+					title = t('other')
+				}
 				return <AppListRow key={id} icon={icon} title={title} value={formatValue(used)} />
 			})}
 		</div>

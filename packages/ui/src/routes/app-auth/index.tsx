@@ -1,25 +1,121 @@
-import {ReactNode, useEffect, useState} from 'react'
+import {AnimatePresence, motion} from 'motion/react'
+import {useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {arrayIncludes} from 'ts-extras'
 
 import {AppIcon} from '@/components/app-icon'
-import {Button} from '@/components/ui/button'
 import {FadeInImg} from '@/components/ui/fade-in-img'
-import {PasswordInput} from '@/components/ui/input'
 import {PinInput} from '@/components/ui/pin-input'
-import {toast} from '@/components/ui/toast'
 import {useQueryParams} from '@/hooks/use-query-params'
+import {SubTitle, Title} from '@/layouts/bare/shared'
 import {cn} from '@/lib/utils'
+import {AccountDock} from '@/modules/auth/account-dock'
+import {OWNER_USER_ID} from '@/modules/auth/constants'
+import {LoginForm} from '@/modules/auth/login-form'
+import {useAccountPicker, type Account} from '@/modules/auth/use-account-picker'
 import {useWallpaperCssVars, WallpaperId, wallpaperIds} from '@/providers/wallpaper'
+import {firstNameFromFullName} from '@/utils/misc'
 
-type Step = 'password' | '2fa'
+type Step = 'account' | 'password' | '2fa'
+type LoginAttempt = {userId: string}
+type LoginResponse = HandoffResponse | {error?: {code: number; message: string}}
 
+function useAccounts() {
+	// isLoaded flips once the request settles (success or failure) — the page
+	// holds on the bare wallpaper until then so the single-account form never
+	// flashes before the dock
+	const [state, setState] = useState<{accounts: Account[]; isLoaded: boolean}>({accounts: [], isLoaded: false})
+
+	useEffect(() => {
+		fetch('/v1/account/accounts')
+			.then(async (res) => {
+				const data = (await res.json()) as unknown
+				setState({accounts: Array.isArray(data) ? (data as Account[]) : [], isLoaded: true})
+			})
+			.catch(() => setState({accounts: [], isLoaded: true}))
+	}, [])
+
+	return state
+}
+
+// The same lock-screen experience as routes/login.tsx, reframed for the app
+// proxy: the app is the hero while picking an account (that step carries no
+// password to confuse), then the password step pivots to Umbrel identity —
+// avatar, greeting, and an explicit "Umbrel password" label — so nobody types
+// the app's own password here.
 export default function LoginWithUmbrel() {
 	const {t} = useTranslation()
 	const [password, setPassword] = useState('')
-	const [step, setStep] = useState<Step>('password')
+	const [error, setError] = useState<string>()
+	const [isPending, setIsPending] = useState(false)
+	const [step, setStep] = useState<Step>('account')
+
+	// Owner centered, members alternating outwards — same dock as the lock screen
+	const {accounts: rawAccounts, isLoaded: accountsLoaded} = useAccounts()
+	const {
+		accounts,
+		hasMultipleAccounts,
+		selectedIndex,
+		hoveredIndex,
+		selectedAccount: account,
+		activeAccount,
+		selectAccount,
+		setHoveredIndex,
+	} = useAccountPicker(rawAccounts)
+	const userId = account?.userId ?? OWNER_USER_ID
+	const selectedUserIdRef = useRef(userId)
+	selectedUserIdRef.current = userId
+	const activeLoginAttemptRef = useRef<LoginAttempt | undefined>(undefined)
+
+	// Only show the account picker when there's more than one account
+	const effectiveStep: Step = step === 'account' && !hasMultipleAccounts ? 'password' : step
+	const chosen = effectiveStep === 'password'
+
+	const params = useQueryParams<{app: string; path: string; host: string}>()
+	const app = useApp(params.object.app)
+	const fallbackWallpaperId = useWallpaperId()
+	const activeWallpaperId = activeAccount?.wallpaper
+	const wallpaperId =
+		activeWallpaperId && arrayIncludes(wallpaperIds, activeWallpaperId) ? activeWallpaperId : fallbackWallpaperId
+	useWallpaperCssVars(wallpaperId)
 
 	const login = useLogin()
+	const loginIsPending = isPending || activeLoginAttemptRef.current !== undefined
+
+	const beginLoginAttempt = () => {
+		if (activeLoginAttemptRef.current) return
+		const attempt = {userId}
+		activeLoginAttemptRef.current = attempt
+		setIsPending(true)
+		return attempt
+	}
+
+	const isCurrentLoginAttempt = (attempt: LoginAttempt) =>
+		activeLoginAttemptRef.current === attempt && selectedUserIdRef.current === attempt.userId
+
+	const finishLoginAttempt = (attempt: LoginAttempt) => {
+		if (activeLoginAttemptRef.current !== attempt) return
+		activeLoginAttemptRef.current = undefined
+		setIsPending(false)
+	}
+
+	const resetEntry = () => {
+		setPassword('')
+		setError(undefined)
+	}
+
+	const handleBrowseAccount = (index: number) => {
+		if (activeLoginAttemptRef.current || isPending) return
+		selectAccount(index)
+		resetEntry()
+	}
+
+	const handleSelectAccount = (index: number) => {
+		if (activeLoginAttemptRef.current || isPending) return
+		selectAccount(index)
+		resetEntry()
+		setStep('password')
+	}
 
 	useEffect(() => {
 		fetch('/v1/account/session' + document.location.search)
@@ -31,79 +127,238 @@ export default function LoginWithUmbrel() {
 
 	const handleSubmitPassword = async (e: React.FormEvent<HTMLFormElement>) => {
 		e.preventDefault()
-		// alert('submit')
+		const attempt = beginLoginAttempt()
+		if (!attempt) return
+		setError(undefined)
 		try {
-			const data = await login({password, totpToken: ''})
+			const data = await login({userId: attempt.userId, password, totpToken: ''}, () => isCurrentLoginAttempt(attempt))
+			if (!isCurrentLoginAttempt(attempt)) {
+				finishLoginAttempt(attempt)
+				return
+			}
+			if ('url' in data) {
+				return
+			}
 			if ('error' in data && data.error) {
 				if (data.error.message === 'Missing 2FA code') {
 					setStep('2fa')
 				} else {
-					toast.error(data.error.message)
+					setError(data.error.message)
+					setPassword('')
 				}
 			}
-		} catch (error: any) {
-			if (error.message === 'Missing 2FA code') {
+			finishLoginAttempt(attempt)
+			// On success the login helper posts the token form and the page
+			// navigates away — stay pending so the button doesn't flash back
+		} catch (error: unknown) {
+			if (!isCurrentLoginAttempt(attempt)) {
+				finishLoginAttempt(attempt)
+				return
+			}
+			const message = error instanceof Error ? error.message : String(error)
+			if (message === 'Missing 2FA code') {
 				setStep('2fa')
 			} else {
-				toast.error(error?.message)
+				setError(message)
+				setPassword('')
 			}
+			finishLoginAttempt(attempt)
 		}
 	}
 
 	// Specifying return because we want to ensure that the return type is a boolean for the `onCodeCheck` prop
 	const handleSubmit2fa = async (totpToken: string): Promise<boolean> => {
-		const data = await login({password, totpToken})
+		const attempt = beginLoginAttempt()
+		if (!attempt) return false
+		try {
+			const data = await login({userId: attempt.userId, password, totpToken}, () => isCurrentLoginAttempt(attempt))
+			if (!isCurrentLoginAttempt(attempt)) {
+				finishLoginAttempt(attempt)
+				return false
+			}
 
-		return 'error' in data
+			// Success responses carry the redirect url; an error means the code failed
+			if ('url' in data) {
+				return true
+			}
+			finishLoginAttempt(attempt)
+			return false
+		} catch (error) {
+			const isCurrent = isCurrentLoginAttempt(attempt)
+			finishLoginAttempt(attempt)
+			if (!isCurrent) return false
+			throw error
+		}
 	}
 
-	switch (step) {
-		case 'password': {
-			return (
-				<LoginWithLayout>
-					<form className='contents' onSubmit={handleSubmitPassword}>
-						{/* <JSONTree data={params.object} /> */}
-						<PasswordInput
-							label={t('login.password-label')}
-							autoFocus
-							value={password}
-							onValueChange={setPassword}
-							// error={loginMut.error?.message}
-						/>
-						<div>
-							<Button type='submit' variant={'primary'} size='lg' className='text-13'>
-								{t('login.password.submit')}
-							</Button>
+	const captionAccount = activeAccount
+
+	return (
+		<>
+			<FadeInImg
+				src={`/assets/wallpapers/generated-thumbs/${wallpaperId}.jpg`}
+				className='pointer-events-none fixed inset-0 h-full w-full scale-125 object-cover object-center blur-[var(--wallpaper-blur)] duration-1000'
+			/>
+			<div className='fixed inset-0 bg-black/50 contrast-more:bg-black' />
+			{/* Hold on the bare wallpaper until we know single vs multi account */}
+			{!accountsLoaded ? null : (
+				// No overflow clip here: any clip boundary slices the plucked lens
+				// and the dock's w-screen strip mid-screen. The dock clamps the
+				// lens inside the viewport itself, which keeps scrollbars away.
+				<div className='relative z-10 flex min-h-[100dvh] w-full animate-in flex-col items-center justify-center duration-300 fade-in'>
+					{effectiveStep === '2fa' ? (
+						<div className='flex w-full animate-in flex-col items-center gap-5 duration-300 fade-in'>
+							<div className='flex flex-col items-center gap-1.5'>
+								<Title>{t('login-2fa.title')}</Title>
+								<SubTitle>{t('login-2fa.subtitle')}</SubTitle>
+							</div>
+							<PinInput autoFocus length={6} onCodeCheck={handleSubmit2fa} />
 						</div>
-					</form>
-				</LoginWithLayout>
-			)
-		}
-		case '2fa': {
-			return (
-				<LoginWithLayout>
-					<form className='contents' onSubmit={handleSubmitPassword}>
-						<PinInput autoFocus length={6} onCodeCheck={handleSubmit2fa} />
-					</form>
-				</LoginWithLayout>
-			)
-		}
-	}
+					) : (
+						<div
+							className={cn(
+								'flex w-full flex-col items-center justify-center transition-transform duration-500',
+								!chosen && '-translate-y-10',
+							)}
+						>
+							{/* umbrelOS + app icons fanned like a card stack (each rotated
+						    about its bottom center, app on top), with the identity-first
+						    title; exits like the lock screen's logo once chosen */}
+							<AnimatePresence initial={false}>
+								{/* With one account there's no picker step, so the header
+								    stays put as the page's identity (no avatar to show) */}
+								{(!chosen || !hasMultipleAccounts) && (
+									<motion.div
+										key='app-header'
+										className='mb-10 flex flex-col items-center gap-5 overflow-visible'
+										exit={{opacity: 0, y: -28, height: 0, marginBottom: 0}}
+										transition={{duration: 0.2}}
+									>
+										<div className='relative h-[92px] w-[160px]'>
+											<div
+												className='absolute top-1 left-1/2'
+												style={{
+													transform: 'translateX(-50%) translateX(-22px) rotate(-9deg)',
+													transformOrigin: 'bottom center',
+												}}
+											>
+												<AppIcon src='/assets/umbrel-ios.png' size={84} className='rounded-24 shadow-xl' />
+											</div>
+											<div
+												className='absolute top-0 left-1/2'
+												style={{
+													transform: 'translateX(-50%) translateX(22px) rotate(9deg)',
+													transformOrigin: 'bottom center',
+												}}
+											>
+												{app.icon && <AppIcon src={app.icon} size={88} className='rounded-24 shadow-xl' />}
+											</div>
+										</div>
+										{/* With one account the greeting follows immediately — the
+										    icons alone carry the identity, skip the title */}
+										{!chosen && (
+											<Title>
+												<span style={{fontFamily: "'SF Pro Rounded', ui-rounded, 'Inter', system-ui, sans-serif"}}>
+													{t('login-with-umbrel.title')}
+												</span>
+											</Title>
+										)}
+									</motion.div>
+								)}
+							</AnimatePresence>
+
+							{hasMultipleAccounts && (
+								<>
+									<AccountDock
+										accounts={accounts}
+										selectedIndex={selectedIndex}
+										hoveredIndex={hoveredIndex}
+										chosen={chosen}
+										disabled={loginIsPending}
+										onSelect={handleSelectAccount}
+										onBrowse={handleBrowseAccount}
+										onHover={setHoveredIndex}
+									/>
+									{/* Desktop hands the name to the greeting once chosen; mobile
+									    keeps it here so the greeting stays a fixed, unwrappable
+									    line. Hidden at the container so it reserves no space. */}
+									<div className={cn('relative mt-3 h-6 w-full text-center', chosen && 'md:hidden')}>
+										<AnimatePresence>
+											{captionAccount && (
+												<motion.span
+													key={captionAccount.userId}
+													className='absolute inset-x-0 text-17 font-semibold -tracking-2 text-white/90'
+													style={{textShadow: '0 1px 3px rgba(0, 0, 0, 0.4)'}}
+													initial={{opacity: 0}}
+													animate={{opacity: 1}}
+													exit={{opacity: 0}}
+													transition={{duration: 0.15}}
+												>
+													{firstNameFromFullName(captionAccount.name)}
+												</motion.span>
+											)}
+										</AnimatePresence>
+									</div>
+								</>
+							)}
+
+							<AnimatePresence initial={false}>
+								{chosen && (
+									<motion.div
+										key='password-form'
+										className='w-full overflow-hidden'
+										initial={{height: 0, opacity: 0}}
+										animate={{height: 'auto', opacity: 1}}
+										exit={{height: 0, opacity: 0}}
+										transition={{duration: 0.25}}
+									>
+										<div className='flex flex-col items-center gap-5 pt-2'>
+											<LoginForm
+												account={account}
+												password={password}
+												onPasswordChange={setPassword}
+												error={error}
+												isPending={loginIsPending}
+												onSubmit={handleSubmitPassword}
+												subtitle={app.name ? t('login-with-umbrel.description', {app: app.name}) : undefined}
+												submitLabel={app.name ? t('login-with-umbrel.open-app', {app: app.name}) : undefined}
+											/>
+										</div>
+									</motion.div>
+								)}
+							</AnimatePresence>
+						</div>
+					)}
+				</div>
+			)}
+		</>
+	)
 }
 
 function useLogin() {
 	// /v1/account/login
 
-	const login = ({password, totpToken}: {password: string; totpToken: string}) => {
+	const login = (
+		{userId, password, totpToken}: {userId: string; password: string; totpToken: string},
+		shouldSubmit: () => boolean,
+	) => {
 		// Forward the query params to the login endpoint
 		return fetch('/v1/account/login' + document.location.search, {
 			method: 'POST',
 			headers: {'Content-Type': 'application/json'},
-			body: JSON.stringify({password, totpToken}),
+			body: JSON.stringify({userId, password, totpToken}),
 		}).then(async (res) => {
-			const data = (await res.json()) as HandoffResponse | {error?: {code: number; message: string}}
+			const parsed = (await res.json()) as LoginResponse | string
+			// The server responds with a bare string for request validation
+			// failures — normalize so `'url' in data` checks can't throw
+			const data: LoginResponse =
+				typeof parsed === 'object' && parsed !== null ? parsed : {error: {code: 0, message: String(parsed)}}
 
-			if ('url' in data) submitHandoff(data)
+			// Form submission is the irreversible login side effect, so evaluate the
+			// caller's request-identity guard immediately before doing it.
+			if ('url' in data && shouldSubmit()) {
+				submitHandoff(data)
+			}
 
 			return data
 		})
@@ -142,8 +397,6 @@ type App = {
 function useApp(appId: string) {
 	const [app, setApp] = useState<App>({id: '', icon: '', name: ''})
 
-	// const [searchParams, setSearchParams] = useSearchParams()
-
 	useEffect(() => {
 		fetch(`/v1/apps?app=${appId}`).then(async (res) => {
 			const data = await res.json()
@@ -171,48 +424,4 @@ function useWallpaperId() {
 	}, [])
 
 	return wallpaper
-}
-
-function LoginWithLayout({children}: {children: ReactNode}) {
-	const {t} = useTranslation()
-	const params = useQueryParams<{app: string; path: string; host: string}>()
-	const app = useApp(params.object.app)
-	const wallpaperId = useWallpaperId()
-
-	useWallpaperCssVars(wallpaperId)
-
-	return (
-		<>
-			<FadeInImg
-				src={`/assets/wallpapers/generated-thumbs/${wallpaperId}.jpg`}
-				className='pointer-events-none fixed inset-0 h-full w-full scale-125 object-cover object-center blur-[var(--wallpaper-blur)] duration-1000'
-			/>
-			<div className='fixed inset-0 bg-black/50 contrast-more:bg-black' />
-			<div className='relative flex min-h-[100dvh] flex-col items-center justify-between p-5'>
-				<div className='flex h-full w-full flex-grow items-center justify-center'>
-					<div
-						className={cn(
-							'w-full rounded-20 bg-dialog-content/70 p-8 shadow-dialog sm:max-w-[480px]',
-							'flex flex-col gap-5',
-							'animate-in duration-200 ease-out zoom-in-90 fade-in',
-						)}
-					>
-						<div className='flex h-0 -translate-y-[56px] gap-5'>
-							<AppIcon src='/assets/umbrel-ios.png' size={56} className='rounded-12' />
-							<AppIcon src={app.icon} size={56} className='rounded-12 bg-neutral-600' />
-						</div>
-						<div className='flex flex-col gap-1'>
-							<h1 className='truncate text-17 leading-tight font-semibold -tracking-2'>
-								{t('login-with-umbrel.title')}
-							</h1>
-							<p className='text-13 leading-tight -tracking-2 text-white/40'>
-								{t('login-with-umbrel.description', {app: app.name})}
-							</p>
-						</div>
-						{children}
-					</div>
-				</div>
-			</div>
-		</>
-	)
 }

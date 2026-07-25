@@ -2,7 +2,6 @@ import {Fragment} from 'react'
 import {useTranslation} from 'react-i18next'
 
 import {LOADING_DASH, UNKNOWN} from '@/constants'
-import {useDeviceInfo} from '@/hooks/use-device-info'
 import {useLanguage} from '@/hooks/use-language'
 import {trpcReact} from '@/trpc/trpc'
 import {duration} from '@/utils/date-time'
@@ -10,7 +9,7 @@ import {duration} from '@/utils/date-time'
 export function SettingsSummary() {
 	const {t} = useTranslation()
 	const [languageCode] = useLanguage()
-	const deviceInfo = useDeviceInfo()
+	const deviceNameQ = trpcReact.system.deviceName.useQuery()
 	const osVersionQ = trpcReact.system.version.useQuery()
 	const uptimeQ = trpcReact.system.uptime.useQuery()
 	const ipAddresses = trpcReact.system.getIpAddresses.useQuery()
@@ -24,7 +23,7 @@ export function SettingsSummary() {
 			}}
 		>
 			<dt className='opacity-40'>{t('device')}</dt>
-			<dd>{deviceInfo.data?.device || LOADING_DASH}</dd>
+			<dd>{deviceNameQ.data || LOADING_DASH}</dd>
 			<dt className='opacity-40'>{t('umbrelos')}</dt>
 			<dd>{osVersionQ.isLoading ? LOADING_DASH : (osVersionQ.data?.name ?? UNKNOWN())}</dd>
 			<dt className='opacity-40'>{t('local-ip')}</dt>

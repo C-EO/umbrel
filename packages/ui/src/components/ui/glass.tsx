@@ -1,14 +1,14 @@
 import React, {Fragment, useEffect, useId, useRef, useState, useSyncExternalStore} from 'react'
 
-import {attachBackdropLens, type GlassLensParams} from '@/lib/glass-webgl'
+import {attachBackdropLens, resolveBevelPx, type GlassLensParams} from '@/lib/glass-webgl'
 import {cn} from '@/lib/utils'
 
 // Glass surface:
 // A canvas-generated displacement map (R = bend-x, G = bend-y, 128 = neutral;
-// computed for the top-left quadrant and mirrored) feeds an SVG
-// feDisplacementMap that bends the page behind the element, displaced per
-// color channel for a faint chromatic fringe at the rim. The falloff is
-// Snell's law through a convex dome profile.
+// B = rim-proximity mask; computed for the top-left quadrant and mirrored)
+// feeds an SVG feDisplacementMap that bends the page behind the element,
+// displaced per color channel for a faint chromatic fringe at the rim. The
+// falloff is Snell's law through a convex dome profile.
 // Chromium renders the lens via backdrop-filter: url(); Safari/Firefox parse
 // that but paint nothing, so they get frosted blur instead.
 
@@ -31,7 +31,12 @@ const FROSTED =
 	!REDUCED &&
 	!CONTRAST_QUERY.matches
 
-const REFRACT =
+/**
+ * True where the lens refracts the real backdrop (Chromium). Elsewhere a
+ * refractionTarget lens only sees the wallpaper's pixels — fine while glass
+ * sits over bare wallpaper, but it would paint over any other content.
+ */
+export const REFRACT =
 	FROSTED &&
 	/Chrom(e|ium)/.test(navigator.userAgent) &&
 	!/iP(hone|ad|od)/.test(navigator.userAgent) &&
@@ -43,7 +48,7 @@ function buildLensMap(
 	w: number,
 	h: number,
 	radius: number,
-	bevelFrac: number,
+	bevelPx: number,
 	onReady: (href: string | null) => void,
 ): void {
 	const q = 2 // supersample for a smooth rim
@@ -59,13 +64,13 @@ function buildLensMap(
 	const d = img.data
 	const cx = W / 2
 	const cy = H / 2
-	const bevel = Math.max(2, bevelFrac * Math.min(cx, cy))
+	const bevel = bevelPx * q
 
-	function put(x: number, y: number, dx: number, dy: number) {
+	function put(x: number, y: number, dx: number, dy: number, mask: number) {
 		const i = (y * W + x) * 4
 		d[i] = 128 + dx * 127
 		d[i + 1] = 128 + dy * 127
-		d[i + 2] = 128
+		d[i + 2] = mask * 255
 		d[i + 3] = 255
 	}
 
@@ -80,8 +85,10 @@ function buildLensMap(
 			const sdf = Math.hypot(ox, oy) + Math.min(Math.max(qx, qy), 0) - R
 			let dx = 0
 			let dy = 0
+			let mask = 0
 			if (sdf < 0 && sdf > -bevel) {
 				const u = -sdf / bevel // 0 at the rim → 1 where the dome flattens
+				mask = 1 - u
 				const slope = Math.pow(1 - u, 3) / Math.pow(1 - Math.pow(1 - u, 4), 0.75)
 				const thetaI = Math.atan(slope)
 				const t = Math.sin(thetaI - Math.asin(Math.sin(thetaI) / IOR)) / MAX_BEND
@@ -98,10 +105,10 @@ function buildLensMap(
 			}
 			const xm = W - 1 - x
 			const ym = H - 1 - y
-			put(x, y, dx, dy)
-			put(xm, y, -dx, dy)
-			put(x, ym, dx, -dy)
-			put(xm, ym, -dx, -dy)
+			put(x, y, dx, dy, mask)
+			put(xm, y, -dx, dy, mask)
+			put(x, ym, dx, -dy, mask)
+			put(xm, ym, -dx, -dy, mask)
 		}
 	}
 	ctx.putImageData(img, 0, 0)
@@ -128,8 +135,15 @@ type GlassProps = {
 	scale?: number
 	/** Per-channel displacement spread → chromatic fringe. 0 disables. */
 	chroma?: number
-	/** Rim width as a fraction of the half min-dimension. */
-	bevel?: number
+	/** Rim width: fraction of the half min-dimension, or absolute '12px'. */
+	bevel?: number | `${number}px`
+	/**
+	 * Extra blur at the rim (px), fading to none where the dome flattens —
+	 * the scattering of steep glass curvature. Chromium blurs inside the lens
+	 * filter; elsewhere a backdrop-blur overlay masked to the bevel band does
+	 * it (over the WebGL lens or the frosted fallback alike).
+	 */
+	edgeBlur?: number
 	/** CSS background layered over the refracted backdrop. */
 	tint?: string
 	/** Gradient top-shine border (the dock treatment). */
@@ -152,6 +166,7 @@ export function Glass({
 	scale = 66,
 	chroma = 0.2,
 	bevel = 0.5,
+	edgeBlur = 0,
 	tint,
 	shine = true,
 	refractionTarget,
@@ -178,11 +193,12 @@ export function Glass({
 			const h = host!.offsetHeight
 			if (w < 2 || h < 2) return
 			const radius = resolveRadius(getComputedStyle(host!).borderRadius, w, h)
+			const bevelPx = resolveBevelPx(bevel, w, h)
 			const built = builtRef.current
-			if (built && built.w === w && built.h === h && built.radius === radius && built.bevel === bevel) return
-			builtRef.current = {w, h, radius, bevel}
+			if (built && built.w === w && built.h === h && built.radius === radius && built.bevel === bevelPx) return
+			builtRef.current = {w, h, radius, bevel: bevelPx}
 			const ver = ++verRef.current
-			buildLensMap(w, h, radius, bevel, (href) => {
+			buildLensMap(w, h, radius, bevelPx, (href) => {
 				// A newer build superseded this one while the blob was encoding
 				if (ver !== verRef.current) {
 					if (href) URL.revokeObjectURL(href)
@@ -204,7 +220,7 @@ export function Glass({
 					}
 					if (hrefRef.current) URL.revokeObjectURL(hrefRef.current)
 					hrefRef.current = href
-					setLens({href, w, h, radius, bevel, ver})
+					setLens({href, w, h, radius, bevel: bevelPx, ver})
 				}
 				img.onerror = () => {
 					URL.revokeObjectURL(href)
@@ -276,8 +292,33 @@ export function Glass({
 		}
 	}, [refractionTarget, contrast])
 
-	// Fresh id per rebuild — Chromium caches filter output by id.
-	const id = lens ? `${filterId}-${lens.ver}` : filterId
+	// Non-Chromium edge blur: a backdrop-blur overlay masked to the bevel band
+	// (four per-edge gradients fading over the bevel width — their union is a
+	// soft ring). The mask is written imperatively from a ResizeObserver so
+	// fraction bevels track the element size without re-rendering per frame.
+	const edgeRef = useRef<HTMLDivElement>(null)
+	useEffect(() => {
+		if (REFRACT || contrast || edgeBlur <= 0) return
+		const el = edgeRef.current
+		const host = hostRef.current
+		if (!el || !host) return
+		function apply() {
+			const b = resolveBevelPx(bevel, host!.offsetWidth, host!.offsetHeight)
+			const mask = ['top', 'bottom', 'left', 'right']
+				.map((side) => `linear-gradient(to ${side}, black, transparent ${b}px)`)
+				.join(', ')
+			el!.style.setProperty('-webkit-mask-image', mask)
+			el!.style.setProperty('mask-image', mask)
+		}
+		apply()
+		const ro = new ResizeObserver(apply)
+		ro.observe(host)
+		return () => ro.disconnect()
+	}, [bevel, edgeBlur, contrast])
+
+	// Fresh id per rebuild (and per edgeBlur — it lives inside the filter as
+	// stdDeviation) — Chromium caches filter output by id.
+	const id = lens ? `${filterId}-${lens.ver}-${edgeBlur}` : filterId
 	const backdropFilter =
 		contrast || canvasLens
 			? undefined
@@ -317,6 +358,17 @@ export function Glass({
 					background: tint,
 				}}
 			/>
+			{!REFRACT && !contrast && edgeBlur > 0 && (
+				<div
+					ref={edgeRef}
+					aria-hidden
+					className='pointer-events-none absolute inset-0 -z-10 rounded-[inherit]'
+					style={{
+						WebkitBackdropFilter: `blur(${edgeBlur}px)`,
+						backdropFilter: `blur(${edgeBlur}px)`,
+					}}
+				/>
+			)}
 			{shine && (
 				<div
 					aria-hidden
@@ -358,7 +410,20 @@ export function Glass({
 							</Fragment>
 						))}
 						<feBlend in='cr' in2='cg' mode='screen' result='crg' />
-						<feBlend in='crg' in2='cb' mode='screen' />
+						<feBlend in='crg' in2='cb' mode='screen' result='refr' />
+						{edgeBlur > 0 && (
+							<Fragment>
+								{/* Rim scattering: blur the refracted result and lay it back
+								    over the sharp one through the map's B-channel mask */}
+								<feGaussianBlur in='refr' stdDeviation={edgeBlur} result='soft' />
+								<feColorMatrix in='map' type='matrix' values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0' result='rim' />
+								<feComposite in='soft' in2='rim' operator='in' result='rimSoft' />
+								<feMerge>
+									<feMergeNode in='refr' />
+									<feMergeNode in='rimSoft' />
+								</feMerge>
+							</Fragment>
+						)}
 					</filter>
 				</svg>
 			)}

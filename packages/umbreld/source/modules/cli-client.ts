@@ -37,7 +37,8 @@ const trpc = createTRPCClient<AppRouter>({
 			}),
 			false: wsLink({
 				client: createWSClient({
-					url: async () => `${trpcEndpoint}?ticket=${await ticketClient.user.createWebSocketTicket.mutate()}`,
+					url: async () =>
+						`${trpcEndpoint}?ticket=${await ticketClient.user.createWebSocketTicket.mutate({target: 'trpc'})}`,
 				}),
 			}),
 		}),

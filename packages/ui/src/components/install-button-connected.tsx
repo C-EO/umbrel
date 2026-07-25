@@ -1,8 +1,10 @@
 import prettyBytes from 'pretty-bytes'
 import {useImperativeHandle, useState} from 'react'
+import {useTranslation} from 'react-i18next'
 import semver from 'semver'
 import {arrayIncludes} from 'ts-extras'
 
+import {toast} from '@/components/ui/toast'
 import {useAppInstall} from '@/hooks/use-app-install'
 import {useLaunchApp} from '@/hooks/use-launch-app'
 import {useVersion} from '@/hooks/use-version'
@@ -10,12 +12,15 @@ import {OSUpdateRequiredDialog} from '@/modules/app-store/os-update-required'
 import {SelectDependenciesDialog} from '@/modules/app-store/select-dependencies-dialog'
 import {useApps} from '@/providers/apps'
 import {useAllAvailableApps} from '@/providers/available-apps'
-import {installedStates, RegistryApp} from '@/trpc/trpc'
+import {installedStates, RegistryApp, trpcReact} from '@/trpc/trpc'
 
 import {InstallButton} from './install-button'
 
 export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: React.Ref<unknown>}) {
+	const {t} = useTranslation()
 	const appInstall = useAppInstall(app.id)
+	// Members browse the app store read-only, only the owner can install
+	const isMember = trpcReact.user.get.useQuery().data?.role === 'member'
 	const {apps} = useAllAvailableApps()
 	const [showDepsDialog, setShowDepsDialog] = useState(false)
 	const [showOSUpdateRequiredDialog, setShowOSUpdateRequiredDialog] = useState(false)
@@ -97,6 +102,10 @@ export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: Reac
 	const compatible = semver.lte(app.manifestVersion, os.version)
 
 	const install = () => {
+		if (isMember) {
+			toast(t('app-store.ask-owner-to-install'))
+			return
+		}
 		if (!compatible) {
 			setShowOSUpdateRequiredDialog(true)
 			return

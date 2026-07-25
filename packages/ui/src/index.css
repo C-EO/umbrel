@@ -349,3 +349,11 @@ html {
 	font-family: 'Permanent Marker';
 	font-display: swap;
 }
+
+@font-face {
+	font-style: normal;
+	font-weight: 400;
+	src: url('/fonts/instrument-serif.woff2') format('woff2');
+	font-family: 'Instrument Serif';
+	font-display: swap;
+}

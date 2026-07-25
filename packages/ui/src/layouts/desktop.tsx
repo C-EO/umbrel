@@ -4,20 +4,29 @@ import {useCmdkOpen} from '@/components/cmdk'
 import {AppRequiresHttpsDialog} from '@/modules/app-store/app-page/app-requires-https-dialog'
 import {AppSettingsDialog} from '@/modules/app-store/app-page/app-settings-dialog'
 import {DefaultCredentialsDialog} from '@/modules/app-store/app-page/default-credentials-dialog'
+import {AppShareUsersDialog} from '@/modules/desktop/app-share-users-dialog'
 import {DesktopContent} from '@/modules/desktop/desktop-content'
 import {InstallFirstApp} from '@/modules/desktop/install-first-app'
 import {DesktopWifiButtonConnected} from '@/modules/wifi/desktop-wifi-button-connected'
 import {useApps} from '@/providers/apps'
+import {trpcReact} from '@/trpc/trpc'
 import {tw} from '@/utils/tw'
 
 export function Desktop() {
 	const {userApps, isLoading} = useApps()
 
-	if (isLoading) {
+	// Members can't install apps, so they get the normal (empty) desktop rather
+	// than the "install your first app" promo, which references app-store apps a
+	// member's empty registry doesn't have. Wait for the role to be known before
+	// deciding so a member never briefly renders the promo.
+	const userQ = trpcReact.user.get.useQuery()
+	const isMember = userQ.data?.role === 'member'
+
+	if (isLoading || userQ.isLoading) {
 		return null
 	}
 
-	if (userApps?.length === 0) {
+	if (userApps?.length === 0 && !isMember) {
 		return <InstallFirstAppPage />
 	}
 
@@ -78,6 +87,7 @@ function DesktopPage() {
 			</div>
 			<DefaultCredentialsDialog />
 			<AppSettingsDialog />
+			<AppShareUsersDialog />
 			<AppRequiresHttpsDialog />
 		</>
 	)

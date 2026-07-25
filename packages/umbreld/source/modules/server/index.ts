@@ -156,7 +156,8 @@ class Server {
 				// We can't set custom headers because that not allowed by the WebSocket browser spec.
 				const ticket = searchParams.get('ticket')
 				if (!ticket) throw new Error('Missing WebSocket ticket')
-				const principal = await this.umbreld.auth.consumeWebSocketTicket(ticket)
+				const target = pathname === '/terminal' ? 'terminal' : 'trpc'
+				const principal = await this.umbreld.auth.consumeWebSocketTicket(ticket, target)
 				;(request as AuthenticatedWebSocketRequest).authPrincipal = principal
 
 				this.logger.verbose(`WS upgrade for ${pathname}`)

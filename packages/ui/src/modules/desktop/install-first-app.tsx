@@ -48,7 +48,9 @@ function Cards() {
 	const {t} = useTranslation()
 	const {appsKeyed, isLoading} = useAvailableApps()
 
-	if (isLoading) {
+	// appsKeyed can be undefined when the registry is empty (e.g. no app store
+	// repo synced). Fall back to skeletons rather than crashing on lookups.
+	if (isLoading || !appsKeyed) {
 		return <CardsSkeleton />
 	}
 

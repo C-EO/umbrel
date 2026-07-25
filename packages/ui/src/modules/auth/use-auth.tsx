@@ -46,12 +46,7 @@ export function useAuth() {
 		},
 		loginWithToken(token: string) {
 			setToken(token)
-
-			// Ensure we only treat the redirect path as a relative URL
-			const safeUrl = new URL(window.location.href)
-			safeUrl.hash = ''
-			safeUrl.search = ''
-			safeUrl.pathname = redirect.getRedirectPath()
+			const safeUrl = redirect.getRedirectUrl()
 
 			// Hard navigate to force all parent layouts to re-render
 			window.location.href = safeUrl.toString()

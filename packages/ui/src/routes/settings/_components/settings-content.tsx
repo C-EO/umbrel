@@ -3,6 +3,7 @@ import {useEffect, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {FaRegSave} from 'react-icons/fa'
 import {
+	RiComputerLine,
 	RiExpandRightFill,
 	RiKeyLine,
 	RiLogoutCircleRLine,
@@ -11,7 +12,17 @@ import {
 	RiShutDownLine,
 	RiUserLine,
 } from 'react-icons/ri'
-import {TbColumns3, TbHistory, TbServer, TbSettings, TbSettingsMinus, TbShare, TbTool, TbWifi} from 'react-icons/tb'
+import {
+	TbColumns3,
+	TbHistory,
+	TbServer,
+	TbSettings,
+	TbSettingsMinus,
+	TbShare,
+	TbTool,
+	TbUsers,
+	TbWifi,
+} from 'react-icons/tb'
 import {useNavigate, useParams} from 'react-router-dom'
 
 import {ChevronDown} from '@/components/chevron-down'
@@ -146,6 +157,9 @@ export function SettingsContent() {
 							<IconButtonLink to={'account/change-password'} icon={RiKeyLine}>
 								{t('change-password')}
 							</IconButtonLink>
+							<IconButtonLink to={'sessions'} icon={RiComputerLine}>
+								{t('sessions.title')}
+							</IconButtonLink>
 						</div>
 					</ListRow>
 					<ListRow
@@ -169,6 +183,13 @@ export function SettingsContent() {
 					<ListRow title={t('2fa')} description={t('2fa-description')} disabled={is2faEnabledQ.isLoading}>
 						<Switch checked={is2faEnabledQ.data} onCheckedChange={() => navigate('2fa')} />
 					</ListRow>
+					{userQ.data?.role === 'owner' && (
+						<ListRow title={t('users')} description={t('users.description')}>
+							<IconButton icon={TbUsers} onClick={() => navigate('users')}>
+								{t('users.manage')}
+							</IconButton>
+						</ListRow>
+					)}
 					{/* Storage Manager - Umbrel Pro only */}
 					{isUmbrelPro && (
 						<ListRow title={t('storage-manager')} description={t('storage-manager.description')}>

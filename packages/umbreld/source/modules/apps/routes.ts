@@ -1,10 +1,16 @@
 import z from 'zod'
 
-import {router, privateProcedure} from '../server/trpc/trpc.js'
+import {router, privateProcedure, privateProcedureWithMembers} from '../server/trpc/trpc.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 export const appStore = router({
-	// Returns the app store registry
-	registry: privateProcedure.query(async ({ctx}) => ctx.appStore.registry()),
+	// Returns the app store registry.
+	// Members get the sanitized public registry too so they can browse the app
+	// store read-only; repository management data remains owner-only.
+	registry: privateProcedureWithMembers.query(async ({ctx}) => ctx.appStore.publicRegistry()),
+
+	// Repository locations can contain credentials or private hostnames.
+	repositories: privateProcedure.query(async ({ctx}) => ctx.appStore.listRepositories()),
 
 	// Add a repository to the app store
 	addRepository: privateProcedure
@@ -26,9 +32,36 @@ export const appStore = router({
 })
 
 export const apps = router({
-	// List all apps
-	list: privateProcedure.query(async ({ctx}) => {
-		const apps = ctx.apps.instances
+	// ── Member shares (owner only) ──────────────────────────────────────────
+	// List all app shares
+	memberShares: privateProcedure.query(async ({ctx}) => ctx.umbreld.apps.listMemberShares()),
+
+	// Share an app with all members or specific members (upserts)
+	addMemberShare: privateProcedure
+		.input(
+			z.object({
+				appId: z.string(),
+				sharedWith: z.union([z.literal('all'), z.array(z.string()).min(1)]),
+			}),
+		)
+		.mutation(async ({ctx, input}) => ctx.umbreld.apps.addMemberShare(input.appId, input.sharedWith)),
+
+	// Stop sharing an app
+	removeMemberShare: privateProcedure
+		.input(z.object({appId: z.string()}))
+		.mutation(async ({ctx, input}) => ctx.umbreld.apps.removeMemberShare(input.appId)),
+
+	// List all apps.
+	// Members only get the apps that have been shared with them (empty when
+	// nothing is shared, letting the desktop render for them).
+	list: privateProcedureWithMembers.query(async ({ctx}) => {
+		const userId = ctx.principal?.accountId ?? OWNER_USER_ID
+		let apps = ctx.apps.instances
+		if (userId !== OWNER_USER_ID) {
+			const sharedAppIds = await ctx.umbreld.apps.sharedAppIdsForUser(userId)
+			apps = apps.filter((app) => sharedAppIds.includes(app.id))
+			if (apps.length === 0) return []
+		}
 		const torEnabled = await ctx.umbreld.store.get('torEnabled')
 
 		const appData = await Promise.all(
@@ -104,13 +137,27 @@ export const apps = router({
 
 	// Get state
 	// Temporarily used for polling the state of app mutations until we implement subscriptions
-	state: privateProcedure
+	// App state. Members may query it for apps shared with them (their desktop
+	// icons need it to become launchable). Apps not shared with them always
+	// read as not installed so the app store renders read-only without leaking
+	// what the owner has installed.
+	state: privateProcedureWithMembers
 		.input(
 			z.object({
 				appId: z.string(),
 			}),
 		)
 		.query(async ({ctx, input}) => {
+			const userId = ctx.principal?.accountId ?? OWNER_USER_ID
+			if (userId !== OWNER_USER_ID) {
+				const sharedAppIds = await ctx.umbreld.apps.sharedAppIdsForUser(userId)
+				if (!sharedAppIds.includes(input.appId)) {
+					return {
+						state: 'not-installed' as const,
+						progress: 0,
+					}
+				}
+			}
 			if (!(await ctx.apps.isInstalled(input.appId))) {
 				return {
 					state: 'not-installed' as const,
@@ -188,7 +235,12 @@ export const apps = router({
 		)
 		.mutation(async ({ctx, input}) => ctx.apps.trackOpen(input.appId)),
 
-	recentlyOpened: privateProcedure.query(({ctx}) => ctx.apps.recentlyOpened()),
+	// Recently opened apps power cmd-k suggestions. Only tracked for the owner,
+	// members get an empty list.
+	recentlyOpened: privateProcedureWithMembers.query(({ctx}) => {
+		if (ctx.principal?.accountId !== OWNER_USER_ID) return []
+		return ctx.apps.recentlyOpened()
+	}),
 
 	setTorEnabled: privateProcedure.input(z.boolean()).mutation(({ctx, input}) => ctx.apps.setTorEnabled(input)),
 	getTorEnabled: privateProcedure.query(({ctx}) => ctx.apps.getTorEnabled()),

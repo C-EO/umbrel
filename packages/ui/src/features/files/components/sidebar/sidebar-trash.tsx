@@ -6,8 +6,8 @@ import {Button} from '@/components/ui/button'
 import {FlameIcon} from '@/features/files/assets/flame-icon'
 import {Droppable} from '@/features/files/components/shared/drag-and-drop'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
-import {TRASH_PATH} from '@/features/files/constants'
 import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
+import {useTrashPath} from '@/features/files/hooks/use-home-path'
 import {useListDirectory} from '@/features/files/hooks/use-list-directory'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {useIsMobile} from '@/hooks/use-is-mobile'
@@ -16,9 +16,10 @@ import {useConfirmation} from '@/providers/confirmation'
 export function SidebarTrash() {
 	const {t} = useTranslation()
 	const {navigateToDirectory, currentPath} = useNavigate()
-	const isTrash = currentPath === TRASH_PATH
+	const trashPath = useTrashPath()
+	const isTrash = currentPath === trashPath
 	const [isHovering, setIsHovering] = useState(false)
-	const {listing} = useListDirectory(TRASH_PATH, {
+	const {listing} = useListDirectory(trashPath, {
 		itemsOnScrollEnd: 3,
 		initialItems: 3,
 	})
@@ -52,7 +53,7 @@ export function SidebarTrash() {
 				className='mr-4 flex flex-col rounded-xl'
 				dropOverClassName='border border-brand'
 				id='sidebar-trash'
-				path={TRASH_PATH}
+				path={trashPath}
 				disabled={isTrash}
 				navigateToPath={false}
 				onMouseEnter={(e: React.MouseEvent) => {
@@ -76,7 +77,7 @@ export function SidebarTrash() {
 							initial={false}
 							onClick={() => {
 								if (isMobile) {
-									navigateToDirectory(TRASH_PATH)
+									navigateToDirectory(trashPath)
 								}
 							}}
 						>
@@ -278,7 +279,7 @@ export function SidebarTrash() {
 									<motion.div className='mt-4 flex gap-2' initial={{y: 10, opacity: 0}} animate={{y: 0, opacity: 1}}>
 										{isHovering && (
 											<>
-												<Button variant='default' onClick={() => navigateToDirectory(TRASH_PATH)}>
+												<Button variant='default' onClick={() => navigateToDirectory(trashPath)}>
 													{t('files-sidebar.trash.open')}
 												</Button>
 												<Button

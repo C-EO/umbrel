@@ -48,7 +48,7 @@ const webSocketTicketClient = createTRPCClient<AppRouter>({
 const wsClient = createWSClient({
 	url: async () => {
 		try {
-			const ticket = await webSocketTicketClient.user.createWebSocketTicket.mutate()
+			const ticket = await webSocketTicketClient.user.createWebSocketTicket.mutate({target: 'trpc'})
 			return `${trpcWsUrl}?ticket=${ticket}`
 		} catch (error) {
 			// A server-side revocation closes the live socket. If reconnecting then

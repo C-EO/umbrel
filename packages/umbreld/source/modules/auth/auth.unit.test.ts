@@ -37,6 +37,8 @@ describe('Auth', () => {
 	let directory: ReturnType<typeof temporaryDirectory>
 	let dataDirectory: string
 	let userExists: boolean
+	let memberIds: Set<string>
+	let sharedAppIds: Map<string, string[]>
 	let umbreld: Umbreld
 	let auth: Auth
 
@@ -45,10 +47,16 @@ describe('Auth', () => {
 		await directory.createRoot()
 		dataDirectory = await directory.create()
 		userExists = true
+		memberIds = new Set()
+		sharedAppIds = new Map()
 		umbreld = {
 			dataDirectory,
 			isBackupRestoreFirstStart: false,
-			user: {exists: async () => userExists},
+			user: {
+				exists: async () => userExists,
+				getMember: async (accountId: string) => (memberIds.has(accountId) ? {id: accountId} : undefined),
+			},
+			apps: {sharedAppIdsForUser: async (accountId: string) => sharedAppIds.get(accountId) ?? []},
 		} as Umbreld
 		auth = new Auth(umbreld)
 		await auth.start()
@@ -92,6 +100,99 @@ describe('Auth', () => {
 		expect(stored).not.toContain(httpApiToken)
 	})
 
+	test('creates account-scoped member sessions and rejects deleted accounts', async () => {
+		memberIds.add('Alice')
+		const memberSession = await auth.createSession({accountId: 'Alice'})
+
+		expect(memberSession.principal).toMatchObject({accountId: 'Alice', actor: 'account'})
+		await expect(auth.authenticate(memberSession.dashboardToken, 'dashboard')).resolves.toEqual(memberSession.principal)
+		await expect(auth.createSession({accountId: 'Unknown'})).rejects.toThrow('Account does not exist')
+
+		memberIds.delete('Alice')
+		await expect(auth.authenticate(memberSession.dashboardToken, 'dashboard')).rejects.toThrow('Invalid credential')
+		await expect(auth.validatePrincipal(memberSession.principal)).rejects.toThrow('Invalid session')
+	})
+
+	test('authorizes member apps from current shares while the owner retains full access', async () => {
+		memberIds.add('Alice')
+		sharedAppIds.set('Alice', ['transmission'])
+		const memberSession = await auth.createSession({accountId: 'Alice'})
+		const ownerSession = await auth.createSession()
+
+		await expect(auth.authorizeApp(memberSession.principal, 'transmission')).resolves.toEqual(memberSession.principal)
+		await expect(auth.authorizeApp(memberSession.principal, 'bitcoin')).rejects.toThrow('App access denied')
+		await expect(auth.authorizeApp(ownerSession.principal, 'bitcoin')).resolves.toEqual(ownerSession.principal)
+
+		sharedAppIds.set('Alice', [])
+		await expect(auth.authorizeApp(memberSession.principal, 'transmission')).rejects.toThrow('App access denied')
+	})
+
+	test('closes only the app WebSockets that lose access when a share changes', async () => {
+		memberIds.add('Alice')
+		sharedAppIds.set('Alice', ['transmission', 'bitcoin'])
+		const member = await auth.createSession({accountId: 'Alice'})
+		const owner = await auth.createSession()
+		const memberTransmission = new TestAppSocket()
+		const memberBitcoin = new TestAppSocket()
+		const ownerTransmission = new TestAppSocket()
+
+		auth.registerAppSocket(
+			member.principal,
+			'transmission',
+			memberTransmission as unknown as Socket,
+			auth.appAccessRevision,
+		)
+		auth.registerAppSocket(member.principal, 'bitcoin', memberBitcoin as unknown as Socket, auth.appAccessRevision)
+		auth.registerAppSocket(
+			owner.principal,
+			'transmission',
+			ownerTransmission as unknown as Socket,
+			auth.appAccessRevision,
+		)
+
+		sharedAppIds.set('Alice', ['bitcoin'])
+		await auth.appAccessChanged('transmission')
+
+		expect(memberTransmission.destroyed).toBe(true)
+		expect(memberBitcoin.destroyed).toBe(false)
+		expect(ownerTransmission.destroyed).toBe(false)
+		await expect(auth.validatePrincipal(member.principal)).resolves.toEqual(member.principal)
+	})
+
+	test('rejects an app WebSocket authenticated against stale share state', async () => {
+		memberIds.add('Alice')
+		sharedAppIds.set('Alice', ['transmission'])
+		const member = await auth.createSession({accountId: 'Alice'})
+		const staleRevision = auth.appAccessRevision
+
+		sharedAppIds.set('Alice', [])
+		const reconciliation = auth.appAccessChanged('transmission')
+		const lateSocket = new TestAppSocket()
+
+		expect(
+			auth.registerAppSocket(member.principal, 'transmission', lateSocket as unknown as Socket, staleRevision),
+		).toBe(false)
+		expect(lateSocket.destroyed).toBe(true)
+		await reconciliation
+	})
+
+	test('allows member file URLs but keeps device-wide HTTP APIs owner-only', async () => {
+		memberIds.add('Alice')
+		const memberSession = await auth.createSession({accountId: 'Alice'})
+		const ownerSession = await auth.createSession()
+
+		await expect(auth.authorizeHttpApi(memberSession.principal, 'file-download', '/Home/file.txt')).resolves.toEqual(
+			memberSession.principal,
+		)
+		await expect(auth.authorizeHttpApi(memberSession.principal, 'logs-download')).rejects.toThrow(
+			'Owner access required',
+		)
+		await expect(auth.authorizeHttpApi(memberSession.principal, 'ca-download')).rejects.toThrow('Owner access required')
+		await expect(auth.authorizeHttpApi(ownerSession.principal, 'logs-download')).resolves.toEqual(
+			ownerSession.principal,
+		)
+	})
+
 	test('protects auth state on disk and serializes concurrent session creation', async () => {
 		const sessions = await Promise.all(Array.from({length: 8}, () => auth.createSession()))
 
@@ -109,6 +210,37 @@ describe('Auth', () => {
 
 		const stored = await fs.readFile(`${dataDirectory}/secrets/auth/sessions.yaml`, 'utf8')
 		for (const session of sessions) expect(stored).toContain(session.principal.sessionId)
+	})
+
+	test('rejects session issuance authenticated against stale credentials', async () => {
+		const staleRevision = auth.sessionIssuanceRevision(OWNER_ACCOUNT_ID)
+		const finishCredentialChange = auth.beginAccountCredentialChange(OWNER_ACCOUNT_ID)
+
+		await expect(auth.createSession({expectedSessionIssuanceRevision: staleRevision})).rejects.toThrow(
+			'Login credentials changed',
+		)
+
+		const duringChangeRevision = auth.sessionIssuanceRevision(OWNER_ACCOUNT_ID)
+		finishCredentialChange()
+
+		await expect(auth.createSession({expectedSessionIssuanceRevision: staleRevision})).rejects.toThrow(
+			'Login credentials changed',
+		)
+		await expect(auth.createSession({expectedSessionIssuanceRevision: duringChangeRevision})).rejects.toThrow(
+			'Login credentials changed',
+		)
+
+		const currentRevision = auth.sessionIssuanceRevision(OWNER_ACCOUNT_ID)
+		await expect(auth.createSession({expectedSessionIssuanceRevision: currentRevision})).resolves.toBeDefined()
+	})
+
+	test('revoking all sessions invalidates in-flight session issuance', async () => {
+		const staleRevision = auth.sessionIssuanceRevision(OWNER_ACCOUNT_ID)
+		await auth.revokeAllForAccount(OWNER_ACCOUNT_ID)
+
+		await expect(auth.createSession({expectedSessionIssuanceRevision: staleRevision})).rejects.toThrow(
+			'Login credentials changed',
+		)
 	})
 
 	test('extends the session without rotating any credentials', async () => {
@@ -177,7 +309,7 @@ describe('Auth', () => {
 		const webSocket = new TestSocket()
 		const appSocket = new TestAppSocket()
 		auth.registerWebSocket(session.principal, webSocket as unknown as WebSocket)
-		auth.registerAppSocket(session.principal, appSocket as unknown as Socket)
+		auth.registerAppSocket(session.principal, 'files', appSocket as unknown as Socket, auth.appAccessRevision)
 		const closed = new Promise<void>((resolve) => webSocket.once('close', () => resolve()))
 
 		expect(vi.getTimerCount()).toBe(1)
@@ -265,7 +397,7 @@ describe('Auth', () => {
 		const targetSocket = new TestSocket()
 		const targetAppSocket = new TestAppSocket()
 		auth.registerWebSocket(target.principal, targetSocket as unknown as WebSocket)
-		auth.registerAppSocket(target.principal, targetAppSocket as unknown as Socket)
+		auth.registerAppSocket(target.principal, 'files', targetAppSocket as unknown as Socket, auth.appAccessRevision)
 
 		await expect(auth.revokeSessionForAccount(current.principal, target.principal.sessionId)).resolves.toEqual({
 			revoked: true,
@@ -333,6 +465,39 @@ describe('Auth', () => {
 		await expect(auth.authenticate(session.dashboardToken, 'dashboard')).resolves.toEqual(session.principal)
 	})
 
+	test('allows only the owner to inspect and revoke another account sessions', async () => {
+		memberIds.add('Alice')
+		const owner = await auth.createSession()
+		const memberCurrent = await auth.createSession({accountId: 'Alice', userAgent: 'Member browser'})
+		const memberOther = await auth.createSession({accountId: 'Alice', userAgent: 'Member phone'})
+
+		await expect(auth.listSessionsForOwner(owner.principal, 'Alice')).resolves.toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({id: memberCurrent.principal.sessionId, current: false}),
+				expect.objectContaining({id: memberOther.principal.sessionId, current: false}),
+			]),
+		)
+		await expect(auth.listSessionsForOwner(memberCurrent.principal, OWNER_ACCOUNT_ID)).rejects.toThrow(
+			'Owner session required',
+		)
+		await expect(
+			auth.revokeSessionForOwner(memberCurrent.principal, OWNER_ACCOUNT_ID, owner.principal.sessionId),
+		).rejects.toThrow('Owner session required')
+
+		await expect(
+			auth.revokeSessionForOwner(owner.principal, 'Alice', memberOther.principal.sessionId),
+		).resolves.toEqual({revoked: true, revokedCurrent: false})
+		await expect(auth.authenticate(memberOther.dashboardToken, 'dashboard')).rejects.toThrow('Invalid credential')
+		await expect(auth.authenticate(memberCurrent.dashboardToken, 'dashboard')).resolves.toEqual(memberCurrent.principal)
+
+		await expect(auth.revokeAllSessionsForOwner(owner.principal, 'Alice')).resolves.toEqual({
+			revokedCount: 1,
+			revokedCurrent: false,
+		})
+		await expect(auth.authenticate(memberCurrent.dashboardToken, 'dashboard')).rejects.toThrow('Invalid credential')
+		await expect(auth.authenticate(owner.dashboardToken, 'dashboard')).resolves.toEqual(owner.principal)
+	})
+
 	test('revokes one session without affecting another session for the account', async () => {
 		const first = await auth.createSession()
 		const second = await auth.createSession()
@@ -351,7 +516,7 @@ describe('Auth', () => {
 		const socket = new TestSocket()
 		const appSocket = new TestAppSocket()
 		auth.registerWebSocket(first.principal, socket as unknown as WebSocket)
-		auth.registerAppSocket(first.principal, appSocket as unknown as Socket)
+		auth.registerAppSocket(first.principal, 'files', appSocket as unknown as Socket, auth.appAccessRevision)
 
 		await expect(auth.revokeAllForAccount(OWNER_ACCOUNT_ID)).resolves.toBe(2)
 		for (const session of [first, second]) {
@@ -456,7 +621,7 @@ describe('Auth', () => {
 
 			const authentication =
 				connection === 'WebSocket'
-					? auth.consumeWebSocketTicket(auth.issueWebSocketTicket(session.principal))
+					? auth.consumeWebSocketTicket(auth.issueWebSocketTicket(session.principal, 'trpc'), 'trpc')
 					: auth.authenticate(session.appGatewayToken, 'app-gateway')
 			await accountCheckStarted
 			if (invalidatedBy === 'revoked') await auth.revokeSession(session.principal.sessionId)
@@ -473,7 +638,9 @@ describe('Auth', () => {
 				expect(socket.terminated).toBe(true)
 			} else {
 				const socket = new TestAppSocket()
-				expect(auth.registerAppSocket(stalePrincipal, socket as unknown as Socket)).toBe(false)
+				expect(
+					auth.registerAppSocket(stalePrincipal, 'files', socket as unknown as Socket, auth.appAccessRevision),
+				).toBe(false)
 				expect(socket.destroyed).toBe(true)
 			}
 		},
@@ -482,19 +649,27 @@ describe('Auth', () => {
 	test('WebSocket tickets are short-lived and single-use', async () => {
 		vi.useFakeTimers()
 		const session = await auth.createSession()
-		const ticket = auth.issueWebSocketTicket(session.principal)
+		const ticket = auth.issueWebSocketTicket(session.principal, 'trpc')
 
-		await expect(auth.consumeWebSocketTicket(ticket)).resolves.toEqual(session.principal)
-		await expect(auth.consumeWebSocketTicket(ticket)).rejects.toThrow('Invalid WebSocket ticket')
+		await expect(auth.consumeWebSocketTicket(ticket, 'trpc')).resolves.toEqual(session.principal)
+		await expect(auth.consumeWebSocketTicket(ticket, 'trpc')).rejects.toThrow('Invalid WebSocket ticket')
 
-		const expiredTicket = auth.issueWebSocketTicket(session.principal)
+		const expiredTicket = auth.issueWebSocketTicket(session.principal, 'trpc')
 		vi.advanceTimersByTime(30_000)
-		await expect(auth.consumeWebSocketTicket(expiredTicket)).rejects.toThrow('Invalid WebSocket ticket')
+		await expect(auth.consumeWebSocketTicket(expiredTicket, 'trpc')).rejects.toThrow('Invalid WebSocket ticket')
 
 		const revokedSession = await auth.createSession()
-		const revokedTicket = auth.issueWebSocketTicket(revokedSession.principal)
+		const revokedTicket = auth.issueWebSocketTicket(revokedSession.principal, 'trpc')
 		await auth.revokeSession(revokedSession.principal.sessionId)
-		await expect(auth.consumeWebSocketTicket(revokedTicket)).rejects.toThrow('Invalid WebSocket ticket')
+		await expect(auth.consumeWebSocketTicket(revokedTicket, 'trpc')).rejects.toThrow('Invalid WebSocket ticket')
+	})
+
+	test('WebSocket tickets can only be redeemed for their intended endpoint', async () => {
+		const session = await auth.createSession()
+		const ticket = auth.issueWebSocketTicket(session.principal, 'trpc')
+
+		await expect(auth.consumeWebSocketTicket(ticket, 'terminal')).rejects.toThrow('Invalid WebSocket ticket')
+		await expect(auth.consumeWebSocketTicket(ticket, 'trpc')).rejects.toThrow('Invalid WebSocket ticket')
 	})
 
 	test('app handoffs are short-lived, app-bound, single-use, and revocable', async () => {

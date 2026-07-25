@@ -15,6 +15,7 @@ import {useQueryParams} from '@/hooks/use-query-params'
 import {TwoFactorDialog} from '@/routes/settings/2fa'
 import AdvancedSettingsDrawerOrDialog from '@/routes/settings/advanced'
 import {SoftwareUpdateConfirmDialog} from '@/routes/settings/software-update-confirm'
+import {trpcReact} from '@/trpc/trpc'
 import {IS_ANDROID} from '@/utils/misc'
 
 // Routes that should bypass the Sheet and render fullscreen with their own backdrop
@@ -33,11 +34,16 @@ const SettingsContent = React.lazy(() =>
 const SettingsContentMobile = React.lazy(() =>
 	import('./_components/settings-content-mobile').then((m) => ({default: m.SettingsContentMobile})),
 )
+const MemberSettingsContent = React.lazy(() =>
+	import('./_components/member-settings-content').then((m) => ({default: m.MemberSettingsContent})),
+)
 
 const FileSharingDrawerOrDialog = React.lazy(() => import('@/routes/settings/file-sharing'))
 const AppStorePreferencesDialog = React.lazy(() => import('@/routes/settings/app-store-preferences'))
 const ChangeNameDialog = React.lazy(() => import('@/routes/settings/change-name'))
 const ChangePasswordDialog = React.lazy(() => import('@/routes/settings/change-password'))
+const UsersDialog = React.lazy(() => import('@/routes/settings/users'))
+const SessionsDialog = React.lazy(() => import('@/routes/settings/sessions'))
 const RestartDialog = React.lazy(() => import('@/routes/settings/restart'))
 const ShutdownDialog = React.lazy(() => import('@/routes/settings/shutdown'))
 const TroubleshootDialog = React.lazy(() => import('@/routes/settings/troubleshoot/index'))
@@ -115,6 +121,12 @@ export function Settings() {
 	const location = useLocation()
 	const isMobile = useIsMobile() && !IS_ANDROID
 
+	// Members get a minimal settings pane instead of the owner's device
+	// dashboard (which is built from owner-only queries). Wait for the role to
+	// be known so the owner dashboard never mounts for a member.
+	const userQ = trpcReact.user.get.useQuery()
+	const isMember = userQ.data?.role === 'member'
+
 	// When on a fullscreen route, Sheet is bypassed so we can't use Sheet components
 	if (isFullscreenSettingsPath(location.pathname)) {
 		return (
@@ -132,14 +144,21 @@ export function Settings() {
 				<SheetTitle className='leading-none'>{title}</SheetTitle>
 			</SheetHeader>
 			<ErrorBoundary FallbackComponent={ErrorBoundaryCardFallback}>
-				{isMobile && <SettingsContentMobile />}
-				{!isMobile && <SettingsContent />}
+				{userQ.isLoading ? null : isMember ? (
+					<MemberSettingsContent />
+				) : isMobile ? (
+					<SettingsContentMobile />
+				) : (
+					<SettingsContent />
+				)}
 				<Suspense>
 					<Routes>
 						<Route path='/2fa' Component={TwoFactorDialog} />
 						<Route path='/device-info' Component={isMobile ? DeviceInfoDrawer : DeviceInfoDialog} />
 						{!isMobile && <Route path='/account/change-name' Component={ChangeNameDialog} />}
 						{!isMobile && <Route path='/account/change-password' Component={ChangePasswordDialog} />}
+						<Route path='/users' Component={UsersDialog} />
+						<Route path='/sessions' Component={SessionsDialog} />
 						{/* Fall-through `/account` to here. If going to account, always show drawer, even if on desktop */}
 						{<Route path='/account/:accountTab' Component={AccountDrawer} />}
 						{isMobile && <Route path='/wallpaper' Component={WallpaperDrawer} />}

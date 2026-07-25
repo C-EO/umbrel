@@ -1,10 +1,18 @@
 import z from 'zod'
 
-import {router, privateProcedure, publicProcedureWhenNoUserExists} from '../server/trpc/trpc.js'
+import {OWNER_USER_ID} from '../user/constants.js'
+
+import {
+	router,
+	privateProcedure,
+	privateProcedureWithMembers,
+	publicProcedureWhenNoUserExists,
+	publicProcedureWhenNoUserExistsWithMembers,
+} from '../server/trpc/trpc.js'
 
 export default router({
 	// List a directory
-	list: publicProcedureWhenNoUserExists
+	list: publicProcedureWhenNoUserExistsWithMembers
 		.input(
 			z.object({
 				path: z.string(),
@@ -15,7 +23,7 @@ export default router({
 			}),
 		)
 		.query(async ({ctx, input}) => {
-			const directoryListing = await ctx.umbreld.files.list(input.path)
+			const directoryListing = await ctx.umbreld.files.list(input.path, ctx.principal?.accountId)
 			const totalFiles = directoryListing.files.length
 
 			// Sort the files
@@ -61,12 +69,12 @@ export default router({
 		}),
 
 	// Create a directory
-	createDirectory: privateProcedure
+	createDirectory: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.createDirectory(input.path)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.createDirectory(input.path, ctx.principal?.accountId)),
 
 	// Copy a file or directory
-	copy: privateProcedure
+	copy: privateProcedureWithMembers
 		.input(
 			z.object({
 				path: z.string(),
@@ -75,11 +83,14 @@ export default router({
 			}),
 		)
 		.mutation(async ({ctx, input}) =>
-			ctx.umbreld.files.copy(input.path, input.toDirectory, {collision: input.collision}),
+			ctx.umbreld.files.copy(input.path, input.toDirectory, {
+				collision: input.collision,
+				userId: ctx.principal?.accountId,
+			}),
 		),
 
 	// Move a file or directory
-	move: privateProcedure
+	move: privateProcedureWithMembers
 		.input(
 			z.object({
 				path: z.string(),
@@ -88,34 +99,44 @@ export default router({
 			}),
 		)
 		.mutation(async ({ctx, input}) =>
-			ctx.umbreld.files.move(input.path, input.toDirectory, {collision: input.collision}),
+			ctx.umbreld.files.move(input.path, input.toDirectory, {
+				collision: input.collision,
+				userId: ctx.principal?.accountId,
+			}),
 		),
 
-	// Get progress of file operations
-	operationProgress: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.operationsInProgress),
+	// Get progress of the current account's file operations
+	operationProgress: privateProcedureWithMembers.query(async ({ctx}) => {
+		const userId = ctx.principal?.accountId ?? OWNER_USER_ID
+		return ctx.umbreld.files.operationsInProgress.filter((operation) => operation.userId === userId)
+	}),
 
 	// Rename a file or directory
-	rename: privateProcedure
+	rename: privateProcedureWithMembers
 		.input(z.object({path: z.string(), newName: z.string().nonempty()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.rename(input.path, input.newName)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.rename(input.path, input.newName, ctx.principal?.accountId)),
 
 	// Trash a file or directory
-	trash: privateProcedure
+	trash: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.trash(input.path)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.trash(input.path, ctx.principal?.accountId)),
 
 	// Restore a file or directory from the trash
-	restore: privateProcedure
+	restore: privateProcedureWithMembers
 		.input(z.object({path: z.string(), collision: z.enum(['error', 'keep-both', 'replace']).default('error')}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.restore(input.path, {collision: input.collision})),
+		.mutation(async ({ctx, input}) =>
+			ctx.umbreld.files.restore(input.path, {collision: input.collision, userId: ctx.principal?.accountId}),
+		),
 
 	// Empty the trash
-	emptyTrash: privateProcedure.mutation(async ({ctx}) => ctx.umbreld.files.emptyTrash()),
+	emptyTrash: privateProcedureWithMembers.mutation(async ({ctx}) =>
+		ctx.umbreld.files.emptyTrash(ctx.principal?.accountId),
+	),
 
 	// Permanently delete a file or directory
-	delete: privateProcedure
+	delete: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.delete(input.path)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.delete(input.path, ctx.principal?.accountId)),
 
 	// Get favorites
 	favorites: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.favorites.listFavorites()),
@@ -133,12 +154,14 @@ export default router({
 	// Get recent files
 	recents: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.recents.get()),
 
-	// Get view preferences
+	// Get the current account's view preferences
 	// Public only when no user exists for onboarding restore flow (returns defaults); private once a user exists
-	viewPreferences: publicProcedureWhenNoUserExists.query(async ({ctx}) => ctx.umbreld.files.getViewPreferences()),
+	viewPreferences: publicProcedureWhenNoUserExistsWithMembers.query(async ({ctx}) =>
+		ctx.umbreld.files.getViewPreferences(ctx.principal?.accountId),
+	),
 
-	// Update view preferences
-	updateViewPreferences: privateProcedure
+	// Update the current account's view preferences
+	updateViewPreferences: privateProcedureWithMembers
 		.input(
 			z.object({
 				view: z.enum(['icons', 'list']).optional(),
@@ -146,22 +169,73 @@ export default router({
 				sortOrder: z.enum(['ascending', 'descending']).optional(),
 			}),
 		)
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.updateViewPreferences(input)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.updateViewPreferences(input, ctx.principal?.accountId)),
 
 	// Create a zip archive
-	archive: privateProcedure
+	archive: privateProcedureWithMembers
 		.input(z.object({paths: z.array(z.string()).min(1)}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.archive.archive(input.paths)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.archive.archive(input.paths, ctx.principal?.accountId)),
 
 	// Unarchive a file
-	unarchive: privateProcedure
+	unarchive: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.archive.unarchive(input.path)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.archive.unarchive(input.path, ctx.principal?.accountId)),
 
 	// Get/generate a thumbnail for a file on demand
-	getThumbnail: privateProcedure
+	getThumbnail: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.thumbnails.getThumbnailOnDemand(input.path)),
+		.mutation(async ({ctx, input}) =>
+			ctx.umbreld.files.thumbnails.getThumbnailOnDemand(input.path, ctx.principal?.accountId),
+		),
+
+	// ── Member shares ───────────────────────────────────────────────────────
+	// Owner paths shared with member accounts, distinct from samba network
+	// shares below. External and network storage are granted by category root.
+
+	// List all member shares (owner management view)
+	memberShares: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.memberShares.list()),
+
+	// Share a path with all members or specific members. Upserts, so sharing an
+	// already shared path updates who it's shared with.
+	addMemberShare: privateProcedure
+		.input(
+			z.object({
+				path: z.string(),
+				sharedWith: z.union([z.literal('all'), z.array(z.string()).min(1)]),
+			}),
+		)
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.memberShares.add(input.path, input.sharedWith)),
+
+	// Stop sharing a path
+	removeMemberShare: privateProcedure
+		.input(z.object({path: z.string()}))
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.memberShares.remove(input.path)),
+
+	// The paths shared with the current member account (drives their sidebar)
+	sharedWithMe: privateProcedureWithMembers.query(async ({ctx}) => {
+		const userId = ctx.principal?.accountId ?? OWNER_USER_ID
+		const owner = await ctx.umbreld.user.get()
+		const shares = await ctx.umbreld.files.memberShares.listForUser(userId)
+		return {
+			ownerName: owner?.name ?? '',
+			shares: shares.map((share) => {
+				const segments = share.path.split('/').filter(Boolean)
+				const base =
+					segments[0] === 'External'
+						? 'external'
+						: segments[0] === 'Network'
+							? 'network'
+							: segments[0] === 'Apps'
+								? 'apps'
+								: 'home'
+				return {
+					path: share.path,
+					name: share.path === '/Home' ? 'Home' : segments[segments.length - 1],
+					base: base as 'home' | 'external' | 'network' | 'apps',
+				}
+			}),
+		}
+	}),
 
 	// Get the share password
 	sharePassword: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.samba.getSharePassword()),
@@ -202,15 +276,17 @@ export default router({
 			ctx.umbreld.files.externalStorage.unmountExternalDevice(input.deviceId, {remove: true}),
 		),
 
-	// Search for a file
-	search: privateProcedure
+	// Search for a file in the current account's home directory
+	search: privateProcedureWithMembers
 		.input(
 			z.object({
 				query: z.string(),
 				maxResults: z.number().positive().max(1000).default(250).optional(),
 			}),
 		)
-		.query(async ({ctx, input}) => ctx.umbreld.files.search.search(input.query, input.maxResults)),
+		.query(async ({ctx, input}) =>
+			ctx.umbreld.files.search.search(input.query, input.maxResults, ctx.principal?.accountId),
+		),
 
 	// List network shares
 	listNetworkShares: publicProcedureWhenNoUserExists.query(async ({ctx}) =>

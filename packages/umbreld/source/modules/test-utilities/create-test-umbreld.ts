@@ -33,6 +33,11 @@ function createTestHelpers(port: number) {
 	const setAuthToken = (token: string) => {
 		authToken = token
 	}
+	const setBrowserSession = async (token: string, cookies: string[]) => {
+		authToken = token
+		await cookieJar.removeAllCookies()
+		for (const cookie of cookies) await cookieJar.setCookie(cookie, `http://127.0.0.1:${port}/`)
+	}
 
 	// Node's fetch doesn't retry when a kept-alive connection is closed by the
 	// server between requests (e.g. umbreld's HTTP keep-alive timeout racing
@@ -77,7 +82,7 @@ function createTestHelpers(port: number) {
 	// default, and localhost can resolve to ::1 first.
 	const wsClient = createWSClient({
 		url: async () => {
-			const ticket = await ticketClient.user.createWebSocketTicket.mutate()
+			const ticket = await ticketClient.user.createWebSocketTicket.mutate({target: 'trpc'})
 			return `ws://127.0.0.1:${port}/trpc?ticket=${ticket}`
 		},
 		retryDelayMs: () => 100,
@@ -222,6 +227,7 @@ function createTestHelpers(port: number) {
 		browserApi,
 		unauthenticatedApi,
 		setAuthToken,
+		setBrowserSession,
 		signup,
 		login,
 		registerAndLogin,
@@ -252,6 +258,7 @@ export default async function createTestUmbreld({autoLogin = false, autoStart = 
 		browserApi,
 		unauthenticatedApi,
 		setAuthToken,
+		setBrowserSession,
 		signup,
 		login,
 		registerAndLogin,
@@ -278,6 +285,7 @@ export default async function createTestUmbreld({autoLogin = false, autoStart = 
 		browserApi,
 		unauthenticatedApi,
 		setAuthToken,
+		setBrowserSession,
 		signup,
 		login,
 		registerAndLogin,
@@ -315,6 +323,7 @@ export async function createTestVm({
 		browserApi,
 		unauthenticatedApi,
 		setAuthToken,
+		setBrowserSession,
 		signup,
 		login,
 		registerAndLogin,
@@ -639,7 +648,8 @@ printf '\\n${authFailureMarker}\\n'
 	}
 
 	const vm = {
-		dataDirectory: '/data/umbrel',
+		// Matches --data-directory in the OS image's umbrel.service
+		dataDirectory: '/home/umbrel/umbrel',
 		stateDir,
 		sshPort,
 		httpPort,
@@ -673,6 +683,7 @@ printf '\\n${authFailureMarker}\\n'
 		browserApi,
 		unauthenticatedApi,
 		setAuthToken,
+		setBrowserSession,
 		signup,
 		login,
 		registerAndLogin,

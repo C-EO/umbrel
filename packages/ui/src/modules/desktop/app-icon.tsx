@@ -13,6 +13,7 @@ import {useAppInstall} from '@/hooks/use-app-install'
 import {useLaunchApp} from '@/hooks/use-launch-app'
 import {cn} from '@/lib/utils'
 import {UMBREL_APP_STORE_ID} from '@/modules/app-store/constants'
+import {useHasMembers} from '@/modules/user-sharing'
 import {useUserApp} from '@/providers/apps'
 import {AppStateOrLoading, progressBarStates, progressStates, trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
@@ -157,6 +158,11 @@ export function AppIconConnected({appId}: {appId: string}) {
 	const [showUninstallDialog, setShowUninstallDialog] = useState(false)
 	const launchApp = useLaunchApp()
 	const linkToDialog = useLinkToDialog()
+	const hasMembers = useHasMembers()
+
+	// Members see shared apps but can't manage them
+	const userQ = trpcReact.user.get.useQuery()
+	const isMember = userQ.data?.role === 'member'
 
 	const uninstall = async () => {
 		const res = await appInstall.uninstall()
@@ -207,6 +213,19 @@ export function AppIconConnected({appId}: {appId: string}) {
 		if (state === 'unknown') {
 			return appInstall.restart()
 		}
+	}
+
+	// Members only get the app icon, the context menu is device management
+	if (isMember) {
+		return (
+			<AppIcon
+				label={userApp.app.name}
+				src={userApp.app.icon}
+				onClick={handleAppClick}
+				state={state}
+				progress={appInstall.progress}
+			/>
+		)
 	}
 
 	return (
@@ -263,6 +282,15 @@ export function AppIconConnected({appId}: {appId: string}) {
 					>
 						{t('troubleshoot')}
 					</ContextMenuItem>
+
+					{/* Share with users */}
+					{hasMembers && (
+						<ContextMenuItem asChild>
+							<Link to={linkToDialog('app-share-users', {for: appId})}>
+								{t('desktop.app.context.share-with-users')}
+							</Link>
+						</ContextMenuItem>
+					)}
 
 					{/* Go to app store page */}
 					<ContextMenuItemLinkToAppStore appId={appId} />

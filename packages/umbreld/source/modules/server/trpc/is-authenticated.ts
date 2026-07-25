@@ -1,8 +1,8 @@
 import {TRPCError} from '@trpc/server'
 
-import {type Context} from './context.js'
 import {OWNER_ACCOUNT_ID, type Principal} from '../../auth/auth.js'
 import {browserSessionTokenFromRequest} from '../../auth/browser-session-cookie.js'
+import {type Context} from './context.js'
 
 type MiddlewareOptions = {
 	ctx: Context
@@ -20,6 +20,8 @@ const authenticate = async (ctx: Context) => {
 	}
 }
 
+// Any authenticated account (the owner or a member). This is the explicit
+// opt-in for endpoints members may use.
 export const isAuthenticated = async ({ctx, next}: MiddlewareOptions) => {
 	if (ctx.dangerouslyBypassAuthentication === true) {
 		return next({ctx: {principal: {sessionId: 'system', accountId: OWNER_ACCOUNT_ID, actor: 'system'}}})
@@ -36,6 +38,7 @@ export const isAuthenticated = async ({ctx, next}: MiddlewareOptions) => {
 	return next({ctx: {principal: await authenticate(ctx)}})
 }
 
+// Device-management procedures are owner-only by default.
 export const isOwner = async ({ctx, next}: MiddlewareOptions) => {
 	let principal: Principal
 	if (ctx.dangerouslyBypassAuthentication === true) {
@@ -57,12 +60,13 @@ export const isOwner = async ({ctx, next}: MiddlewareOptions) => {
 }
 
 export const isAuthenticatedIfUserExists = async ({ctx, next}: MiddlewareOptions) => {
-	// Allow request through if user has not yet been registered
-	const userExists = await ctx.user.exists()
-	if (!userExists) {
-		return next()
-	}
-
-	// If a user exists, follow usual authentication flow
+	if (!(await ctx.user.exists())) return next()
 	return isOwner({ctx, next})
+}
+
+// Used by account-scoped file procedures that must also work before the owner
+// exists, such as restore during onboarding.
+export const isAuthenticatedIfUserExistsAllowingMembers = async ({ctx, next}: MiddlewareOptions) => {
+	if (!(await ctx.user.exists())) return next()
+	return isAuthenticated({ctx, next})
 }

@@ -1,3 +1,4 @@
+import {useIsMember} from '@/features/files/hooks/use-home-path'
 import {trpcReact} from '@/trpc/trpc'
 
 /**
@@ -27,6 +28,7 @@ const extractHostnameFromPath = (path: string): string | null => {
  */
 export function useNetworkDeviceType(path: string) {
 	const hostname = extractHostnameFromPath(path)
+	const isMember = useIsMember()
 
 	// Optimistically determine device type based on hostname
 	const optimisticDeviceType: NetworkDeviceType = hostname?.toLowerCase().includes('umbrel') ? 'umbrel' : 'nas'
@@ -41,7 +43,9 @@ export function useNetworkDeviceType(path: string) {
 			// Don't retry on failure - fail fast for better UX
 			retry: false,
 			// Only run if we have a valid hostname
-			enabled: !!hostname,
+			// Members do not need access to the owner-only network management
+			// endpoint. The hostname-based optimistic icon is sufficient.
+			enabled: !!hostname && !isMember,
 			// Refetch when window regains focus
 			refetchOnWindowFocus: true,
 		},

@@ -19,6 +19,7 @@ import {useFilesStore} from '@/features/files/store/use-files-store'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 
 const ShareInfoDialog = lazy(() => import('@/features/files/components/dialogs/share-info-dialog'))
+const ShareUsersDialog = lazy(() => import('@/features/files/components/dialogs/share-users-dialog'))
 const PermanentlyDeleteConfirmationDialog = lazy(
 	() => import('@/features/files/components/dialogs/permanently-delete-confirmation-dialog'),
 )
@@ -100,6 +101,9 @@ export default function FilesLayout() {
 						<>
 							<Suspense>
 								<ShareInfoDialog />
+							</Suspense>
+							<Suspense>
+								<ShareUsersDialog />
 							</Suspense>
 							<Suspense>
 								<PermanentlyDeleteConfirmationDialog />

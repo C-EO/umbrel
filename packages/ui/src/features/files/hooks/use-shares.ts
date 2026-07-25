@@ -3,6 +3,7 @@ import {useTranslation} from 'react-i18next'
 
 import {toast} from '@/components/ui/toast'
 import {HOME_PATH} from '@/features/files/constants'
+import {useIsMember} from '@/features/files/hooks/use-home-path'
 import type {Share} from '@/features/files/types'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
 import {trpcReact} from '@/trpc/trpc'
@@ -16,10 +17,14 @@ export function useShares() {
 	const {t} = useTranslation()
 	const utils = trpcReact.useUtils()
 
+	// Sharing is an owner-only feature, don't run its queries for member accounts
+	const isMember = useIsMember()
+
 	// Invalidate shares when external storage changes (e.g., drive ejected/mounted)
 	trpcReact.eventBus.listen.useSubscription(
 		{event: 'files:external-storage:change'},
 		{
+			enabled: !isMember,
 			onData() {
 				utils.files.shares.invalidate()
 			},
@@ -33,6 +38,7 @@ export function useShares() {
 	const {data: shares, isLoading: isLoadingShares} = trpcReact.files.shares.useQuery(undefined, {
 		placeholderData: keepPreviousData,
 		staleTime: 60_000, // Cache for 1 minute
+		enabled: !isMember,
 	})
 
 	// Check if item is shared
@@ -44,6 +50,7 @@ export function useShares() {
 	// Query to get share password
 	const {data: sharePassword, isLoading: isLoadingSharesPassword} = trpcReact.files.sharePassword.useQuery(undefined, {
 		staleTime: Infinity, // Cache indefinitely until browser refresh
+		enabled: !isMember,
 	})
 
 	// Add share mutation

@@ -10,6 +10,7 @@ import {debounce, type DebouncedFunction} from 'es-toolkit'
 import type Umbreld from '../../index.js'
 import type {FileChangeEvent} from './watcher.js'
 import {getDirectoryStream} from './files.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 const SUPPORTED_THUMBNAIL_EXTENSIONS = [
 	// Image formats
@@ -206,6 +207,30 @@ export default class Thumbnails {
 		return systemPath
 	}
 
+	// Include the source path in the URL so the HTTP endpoint can re-authorize
+	// every request. The content hash remains the versioned cache key.
+	thumbnailUrl(hash: string, systemPath: string): string {
+		const virtualPath = this.#umbreld.files.systemToVirtualPath(systemPath)
+		return `/api/files/thumbnail/${hash}.${this.format}?path=${encodeURIComponent(virtualPath)}`
+	}
+
+	// Resolve a thumbnail request only when the requesting account can still
+	// access the source path and the requested hash matches its current metadata.
+	async resolveThumbnailRequest(filename: string, virtualPath: string, userId: string): Promise<string> {
+		if (!new RegExp(`^[a-f0-9]{64}\\.${this.format}$`, 'i').test(filename)) throw new Error('[thumbnail-not-found]')
+
+		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, userId)
+		if (!(await this.#isValidFileForThumbnail(systemPath))) throw new Error('[thumbnail-not-found]')
+
+		const hash = await this.getThumbnailHash(systemPath)
+		if (filename !== `${hash}.${this.format}`) throw new Error('[thumbnail-not-found]')
+
+		const thumbnailSystemPath = this.hashToThumbnailSystemPath(hash)
+		if (!(await fse.pathExists(thumbnailSystemPath))) throw new Error('[thumbnail-not-found]')
+
+		return thumbnailSystemPath
+	}
+
 	// TODO: Look into using sharp instead of ImageMagick for performance gains at the possible cost of simplicity
 	// Generate a thumbnail for a file
 	async #generateThumbnail(systemPath: string, {background = true}: {background?: boolean} = {}): Promise<string> {
@@ -243,9 +268,9 @@ export default class Thumbnails {
 
 	// Gets a thumbnail hash for a file on demand (generating a thumbnail if needed)
 	// This is used by the files.getThumbnail() trpc endpoint
-	async getThumbnailOnDemand(virtualPath: string): Promise<string> {
+	async getThumbnailOnDemand(virtualPath: string, userId?: string): Promise<string> {
 		// First validate the path and check if thumbnail type is supported
-		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath)
+		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, userId ?? OWNER_USER_ID)
 		if (!(await this.#isValidFileForThumbnail(systemPath))) {
 			throw new Error(`Unsupported file type for thumbnail: ${nodePath.extname(virtualPath).toLowerCase()}`)
 		}
@@ -254,7 +279,7 @@ export default class Thumbnails {
 		const hash = await this.#generateThumbnail(systemPath, {background: false})
 
 		// Return the relative api endpoint URL of the thumbnail
-		return `/api/files/thumbnail/${hash}.${this.format}`
+		return this.thumbnailUrl(hash, systemPath)
 	}
 
 	// Get an existing thumbnail if it exists, without generating a new one
@@ -278,7 +303,7 @@ export default class Thumbnails {
 		})
 
 		// Return the relative api endpoint URL of the thumbnail
-		return `/api/files/thumbnail/${hash}.${this.format}`
+		return this.thumbnailUrl(hash, systemPath)
 	}
 
 	// Delete oldest thumbnails if we exceed the maxThumbnailCount

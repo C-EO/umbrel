@@ -167,7 +167,8 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 	// -- 3. Operations-in-progress state (copy and move currently)
 	const [operations, setOperations] = useState<OperationsInProgress>([])
 
-	// Subscribe to "files:operation-progress" events that stream progress of copy/move operations
+	// Subscribe to "files:operation-progress" events that stream progress of copy/move
+	// operations. The server scopes the stream to the current account's operations.
 	trpcReact.eventBus.listen.useSubscription(
 		{event: 'files:operation-progress'},
 		{
@@ -177,6 +178,24 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 			},
 			onError(err) {
 				console.error('eventBus.listen(files:operation-progress) subscription error', err)
+			},
+		},
+	)
+
+	// Refresh a member's shared paths the moment the owner shares or unshares a
+	// path with them (the server only streams changes affecting this account).
+	// The owner's own UI already refreshes via its mutations' onSuccess.
+	const userQ = trpcReact.user.get.useQuery()
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'files:member-shares:change'},
+		{
+			enabled: userQ.data?.role === 'member',
+			onData() {
+				utils.files.sharedWithMe.invalidate()
+				utils.files.list.invalidate()
+			},
+			onError(err) {
+				console.error('eventBus.listen(files:member-shares:change) subscription error', err)
 			},
 		},
 	)

@@ -117,6 +117,10 @@ async function pollUntil(
 // We use a slightly longer period (1500ms) to account for FS event propagation, potential reset-triggering events, and CI variability before polling starts.
 const waitForThumbnailDebounce = () => delay(1500)
 
+function thumbnailFilename(url: string) {
+	return nodePath.basename(new URL(url, 'http://localhost').pathname)
+}
+
 describe('getThumbnail', () => {
 	test('throws invalid error without auth token', async () => {
 		await expect(umbreld.unauthenticatedClient.files.getThumbnail.mutate({path: '/Home/test.jpg'})).rejects.toThrow(
@@ -134,9 +138,12 @@ describe('getThumbnail', () => {
 		// Get api endpoint URL for thumbnail
 		const thumbnailUrl = await umbreld.client.files.getThumbnail.mutate({path: virtualPath})
 
-		// Verify URL matches expected format (api endpoint of /api/files/thumbnail/:hash.webp where :hash is a valid hash)
+		// The content hash versions the cache, while the source path lets the HTTP
+		// endpoint re-authorize each request.
 		expect(thumbnailUrl).toBeTruthy()
-		expect(thumbnailUrl).toMatch(/^\/api\/files\/thumbnail\/[a-f0-9]+\.webp$/i)
+		expect(thumbnailUrl).toMatch(
+			/^\/api\/files\/thumbnail\/[a-f0-9]{64}\.webp\?path=%2FHome%2Fthumb-url-test%2Fmaster-lossless-image.png$/i,
+		)
 	})
 
 	// This test specifically checks that getThumbnail triggers thumbnail generation when one does not exist
@@ -164,8 +171,7 @@ describe('getThumbnail', () => {
 		const thumbnailUrl = await umbreld.client.files.getThumbnail.mutate({path: virtualPath})
 
 		// Verify thumbnail was generated
-		const thumbnailFilename = thumbnailUrl.split('/').pop()!
-		await expect(listThumbnails()).resolves.toContain(thumbnailFilename)
+		await expect(listThumbnails()).resolves.toContain(thumbnailFilename(thumbnailUrl))
 	})
 
 	const imageTypes = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.heic', '.heif']
@@ -186,8 +192,7 @@ describe('getThumbnail', () => {
 			const thumbnailUrl = await umbreld.client.files.getThumbnail.mutate({path: virtualPath})
 
 			// Verify thumbnail file was created
-			const thumbnailFilename = thumbnailUrl.split('/').pop()!
-			await expect(listThumbnails()).resolves.toContain(thumbnailFilename)
+			await expect(listThumbnails()).resolves.toContain(thumbnailFilename(thumbnailUrl))
 		})
 	}
 
@@ -225,14 +230,13 @@ describe('getThumbnail', () => {
 			const thumbnailUrl = await umbreld.client.files.getThumbnail.mutate({path: virtualPath})
 
 			// Verify thumbnail file was created
-			const thumbnailFilename = thumbnailUrl.split('/').pop()!
-			await expect(listThumbnails()).resolves.toContain(thumbnailFilename)
+			await expect(listThumbnails()).resolves.toContain(thumbnailFilename(thumbnailUrl))
 		})
 	}
 
 	test.todo('returns a thumbnail for a pdf file')
 
-	test('returns same thumbnail for renamed files', async () => {
+	test('reuses the same thumbnail content hash for renamed files', async () => {
 		// Create test directory and image
 		const virtualPath = '/Home/thumb-rename-test/master-lossless-image.png'
 		await uploadFixtureFile(virtualPath)
@@ -244,15 +248,18 @@ describe('getThumbnail', () => {
 		await umbreld.client.files.rename.mutate({path: virtualPath, newName: 'renamed.png'})
 
 		// Get thumbnail's api endpoint URL for renamed file
-		const renamedThumbnailUrl = await umbreld.client.files.getThumbnail.mutate({
-			path: '/Home/thumb-rename-test/renamed.png',
-		})
+		const renamedVirtualPath = '/Home/thumb-rename-test/renamed.png'
+		const renamedThumbnailUrl = await umbreld.client.files.getThumbnail.mutate({path: renamedVirtualPath})
 
-		// The thumbnail's api endpoint URL should be the same since filesystem UUID, inode, and date modified are the same
-		expect(renamedThumbnailUrl).toBe(originalThumbnailUrl)
+		// The underlying content hash is stable because filesystem UUID, inode and
+		// modification time are unchanged. Only the authorization path changes.
+		expect(new URL(renamedThumbnailUrl, 'http://localhost').pathname).toBe(
+			new URL(originalThumbnailUrl, 'http://localhost').pathname,
+		)
+		expect(new URL(renamedThumbnailUrl, 'http://localhost').searchParams.get('path')).toBe(renamedVirtualPath)
 	})
 
-	test('returns same thumbnail for moved files', async () => {
+	test('reuses the same thumbnail content hash for moved files', async () => {
 		// Create test directories and image
 		const virtualPath = '/Home/thumb-move-test/source/master-lossless-image.png'
 		await umbreld.client.files.createDirectory.mutate({path: '/Home/thumb-move-test'})
@@ -267,12 +274,15 @@ describe('getThumbnail', () => {
 		await umbreld.client.files.move.mutate({path: virtualPath, toDirectory: '/Home/thumb-move-test/destination'})
 
 		// Get thumbnail's api endpoint URL for moved file
-		const movedThumbnailUrl = await umbreld.client.files.getThumbnail.mutate({
-			path: '/Home/thumb-move-test/destination/master-lossless-image.png',
-		})
+		const movedVirtualPath = '/Home/thumb-move-test/destination/master-lossless-image.png'
+		const movedThumbnailUrl = await umbreld.client.files.getThumbnail.mutate({path: movedVirtualPath})
 
-		// The thumbnail's api endpoint URL should be the same since filesystem UUID, inode, and date modified are the same
-		expect(movedThumbnailUrl).toBe(originalThumbnailUrl)
+		// The underlying content hash is stable because filesystem UUID, inode and
+		// modification time are unchanged. Only the authorization path changes.
+		expect(new URL(movedThumbnailUrl, 'http://localhost').pathname).toBe(
+			new URL(originalThumbnailUrl, 'http://localhost').pathname,
+		)
+		expect(new URL(movedThumbnailUrl, 'http://localhost').searchParams.get('path')).toBe(movedVirtualPath)
 	})
 
 	test('generates a new thumbnail when source file is modified', async () => {
@@ -284,8 +294,7 @@ describe('getThumbnail', () => {
 		const originalThumbnailUrl = await umbreld.client.files.getThumbnail.mutate({path: virtualPath})
 
 		// Verify original thumbnail was created
-		const originalThumbnailFilename = originalThumbnailUrl.split('/').pop()!
-		await expect(listThumbnails()).resolves.toContain(originalThumbnailFilename)
+		await expect(listThumbnails()).resolves.toContain(thumbnailFilename(originalThumbnailUrl))
 
 		// Modify the file timestamp without changing content
 		await umbreld.vm.ssh(`touch '/home/umbrel/umbrel/home/thumb-modify-test/master-lossless-image.png'`)
@@ -295,8 +304,7 @@ describe('getThumbnail', () => {
 		expect(modifiedThumbnailUrl).not.toBe(originalThumbnailUrl)
 
 		// Verify new thumbnail was created
-		const newThumbnailFilename = modifiedThumbnailUrl.split('/').pop()!
-		await expect(listThumbnails()).resolves.toContain(newThumbnailFilename)
+		await expect(listThumbnails()).resolves.toContain(thumbnailFilename(modifiedThumbnailUrl))
 	})
 
 	test('returns existing thumbnails when they exist without generating a new one', async () => {
@@ -308,8 +316,8 @@ describe('getThumbnail', () => {
 		const thumbnailUrl1 = await umbreld.client.files.getThumbnail.mutate({path: virtualPath})
 
 		// Get the thumbnail file's modified time
-		const thumbnailFilename = thumbnailUrl1.split('/').pop()!
-		const mtime = await umbreld.vm.sshAsRoot(`stat --format %y '${guestThumbnailDir}/${thumbnailFilename}'`)
+		const filename = thumbnailFilename(thumbnailUrl1)
+		const mtime = await umbreld.vm.sshAsRoot(`stat --format %y '${guestThumbnailDir}/${filename}'`)
 
 		// Wait a moment
 		await delay(100)
@@ -321,7 +329,7 @@ describe('getThumbnail', () => {
 		expect(thumbnailUrl2).toBe(thumbnailUrl1)
 
 		// Verify the thumbnail file was not re-generated
-		const mtime2 = await umbreld.vm.sshAsRoot(`stat --format %y '${guestThumbnailDir}/${thumbnailFilename}'`)
+		const mtime2 = await umbreld.vm.sshAsRoot(`stat --format %y '${guestThumbnailDir}/${filename}'`)
 		expect(mtime2).toBe(mtime)
 	})
 })
@@ -500,9 +508,8 @@ describe('files.list() [thumbnail specific]', () => {
 		// Verify the thumbnail included in the listed file is the same as the one generated above
 		const [thumbnail] = await listThumbnails()
 
-		// Add api endpoint details for proper comparison
-		// We expect the thumbnail in the listed file to be of the format `/api/files/thumbnail/{hash}.webp`
-		expect(files.files[0].thumbnail).toBe(`/api/files/thumbnail/${thumbnail}`)
+		const sourcePath = '/Home/thumb-list-test/master-lossless-image.png'
+		expect(files.files[0].thumbnail).toBe(`/api/files/thumbnail/${thumbnail}?path=${encodeURIComponent(sourcePath)}`)
 	})
 
 	test('does not include thumbnail for files without an existing thumbnail', async () => {
@@ -564,7 +571,8 @@ describe('recents() [thumbnail specific]', () => {
 
 		// Verify the thumbnail included is the same as the one generated above
 		const [thumbnail] = await listThumbnails()
-		expect(recentImage?.thumbnail).toBe(`/api/files/thumbnail/${thumbnail}`)
+		const sourcePath = '/Home/thumb-recents-test/recent-image.png'
+		expect(recentImage?.thumbnail).toBe(`/api/files/thumbnail/${thumbnail}?path=${encodeURIComponent(sourcePath)}`)
 	})
 
 	test('does not include thumbnail for a recent file without an existing thumbnail', async () => {

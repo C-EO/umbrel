@@ -2,6 +2,7 @@ import {keepPreviousData} from '@tanstack/react-query'
 import {useTranslation} from 'react-i18next'
 
 import {toast} from '@/components/ui/toast'
+import {useIsMember} from '@/features/files/hooks/use-home-path'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
 import {trpcReact} from '@/trpc/trpc'
 import type {RouterError} from '@/trpc/trpc'
@@ -14,10 +15,14 @@ export function useFavorites() {
 	const {t} = useTranslation()
 	const utils = trpcReact.useUtils()
 
+	// Favorites are an owner-only feature, don't run the query for member accounts
+	const isMember = useIsMember()
+
 	// Query to fetch favorites (an array of virtual path strings)
 	const {data: favorites, isLoading: isLoadingFavorites} = trpcReact.files.favorites.useQuery(undefined, {
 		placeholderData: keepPreviousData,
 		staleTime: 15_000,
+		enabled: !isMember,
 	})
 
 	// Check if item is favorited

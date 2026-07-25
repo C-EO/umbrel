@@ -316,10 +316,14 @@ export default class AppGateway {
 	}
 
 	private async handleUpgrade(request: http.IncomingMessage, socket: net.Socket, head: Buffer) {
+		const appAccessRevision = this.#umbreld.auth.appAccessRevision
 		const principal = await this.isAuthorized(request)
 		// Re-check and register synchronously after asynchronous authentication so
-		// revocation cannot race a late app WebSocket into the upstream proxy.
-		if (principal && !this.#umbreld.auth.registerAppSocket(principal, socket)) return
+		// session or app-share revocation cannot race a late app WebSocket into
+		// the upstream proxy.
+		if (principal && !this.#umbreld.auth.registerAppSocket(principal, this.#config.appId, socket, appAccessRevision)) {
+			return
+		}
 		this.#proxy.upgrade?.(request as express.Request, socket, head)
 	}
 }

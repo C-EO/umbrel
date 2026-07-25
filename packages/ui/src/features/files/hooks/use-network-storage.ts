@@ -3,6 +3,7 @@ import {useTranslation} from 'react-i18next'
 
 import {toast} from '@/components/ui/toast'
 import {NETWORK_STORAGE_PATH} from '@/features/files/constants'
+import {useIsMember} from '@/features/files/hooks/use-home-path'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
@@ -16,6 +17,7 @@ import type {RouterError} from '@/trpc/trpc'
 // We use `suppressNavigateOnAdd` to prevent navigating after adding a share from the backup/restore wizards.
 export function useNetworkStorage(options?: {suppressNavigateOnAdd?: boolean}) {
 	const {t} = useTranslation()
+	const isMember = useIsMember()
 	const utils = trpcReact.useUtils()
 	const invalidateShares = () => utils.files.listNetworkShares.invalidate()
 	const invalidateNetworkShares = () => utils.files.list.invalidate({path: NETWORK_STORAGE_PATH})
@@ -28,6 +30,7 @@ export function useNetworkStorage(options?: {suppressNavigateOnAdd?: boolean}) {
 		isLoading: isLoadingShares,
 		refetch: refetchShares,
 	} = trpcReact.files.listNetworkShares.useQuery(undefined, {
+		enabled: !isMember,
 		placeholderData: keepPreviousData,
 		staleTime: 15_000,
 	})
@@ -37,6 +40,9 @@ export function useNetworkStorage(options?: {suppressNavigateOnAdd?: boolean}) {
 
 	// Check if any shares on this host are currently mounted
 	const doesHostHaveMountedShares = (rootPath: string) => {
+		// Members only discover hosts through an authorized /Network listing,
+		// and cannot query the owner-only mount-management endpoint.
+		if (isMember) return true
 		if (!shares) return false
 		// rootPath = /Network/<host>
 		return shares.some((s) => s.isMounted && s.mountPath.startsWith(rootPath + '/'))

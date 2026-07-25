@@ -370,7 +370,10 @@ describe('unarchive()', () => {
 				const archiveFile = `${fixtureDirectory}/archive-test${type.extension}`
 				await fse.ensureDir(sourceDir)
 				await fse.writeFile(`${sourceDir}/test-file.txt`, 'archive test content')
-				await $({cwd: sourceDir})`${type.command.split(' ')} ${archiveFile} .`
+				await $({
+					cwd: sourceDir,
+					env: {COPYFILE_DISABLE: '1'},
+				})`${type.command.split(' ')} ${archiveFile} .`
 				archiveBuffer = await fse.readFile(archiveFile)
 			}
 

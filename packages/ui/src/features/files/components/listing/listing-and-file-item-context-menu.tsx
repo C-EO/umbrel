@@ -18,8 +18,10 @@ import {contextMenuClasses} from '@/components/ui/shared/menu'
 import {SORT_BY_OPTIONS, SUPPORTED_ARCHIVE_EXTRACT_EXTENSIONS} from '@/features/files/constants'
 import {useFavorites} from '@/features/files/hooks/use-favorites'
 import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
+import {useIsMember} from '@/features/files/hooks/use-home-path'
 import {useIsTouchDevice} from '@/features/files/hooks/use-is-touch-device'
 import {useItemClick} from '@/features/files/hooks/use-item-click'
+import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useNavigate as useFilesNavigate} from '@/features/files/hooks/use-navigate'
 import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
 import {usePreferences} from '@/features/files/hooks/use-preferences'
@@ -33,6 +35,7 @@ import {
 } from '@/features/files/utils/is-directory-a-network-device-or-share'
 import {isDirectoryAnUmbrelBackup} from '@/features/files/utils/is-directory-an-umbrel-backup'
 import {useQueryParams} from '@/hooks/use-query-params'
+import {useHasMembers} from '@/modules/user-sharing'
 import {useLinkToDialog} from '@/utils/dialog'
 
 interface ListingAndFileItemContextMenuProps {
@@ -43,6 +46,7 @@ interface ListingAndFileItemContextMenuProps {
 export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndFileItemContextMenuProps) {
 	const {t} = useTranslation()
 	const isReadOnly = useIsFilesReadOnly()
+	const isMember = useIsMember()
 	const {preferences, setView, setSortBy} = usePreferences()
 
 	// Files related state
@@ -84,6 +88,8 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 	} = useFilesNavigate()
 
 	const {isPathShared, isAddingShare, isRemovingShare} = useShares()
+	const {memberShares, shareForPath} = useMemberShares()
+	const hasMembers = useHasMembers()
 	const {isPathFavorite, addFavorite, removeFavorite, isAddingFavorite, isRemovingFavorite} = useFavorites()
 	const {removeHostOrShare, isRemovingShare: isRemovingNetworkShare, doesHostHaveMountedShares} = useNetworkStorage()
 	const isTouchDevice = useIsTouchDevice()
@@ -153,6 +159,18 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 				item.operations.includes('share') &&
 				!isDirectoryAnUmbrelBackup(item.name)
 			const canRemoveShare = hasOneSelectedItem && isPathShared(item.path) && !isRemovingShare
+
+			// Share a directory with member accounts (owner only, memberShares is
+			// undefined for members so the item never renders for them)
+			const isShareableWithUsersPath =
+				item.path === '/Home' || item.path.startsWith('/Home/') || item.path.startsWith('/Apps/')
+			const canShareWithUsers =
+				hasOneSelectedItem &&
+				hasMembers &&
+				memberShares !== undefined &&
+				item.type === 'directory' &&
+				isShareableWithUsersPath &&
+				!isDirectoryAnUmbrelBackup(item.name)
 			const canFavorite =
 				hasOneSelectedItem &&
 				!isPathFavorite(item.path) &&
@@ -165,7 +183,7 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 			// Network eject logic
 			const isNetworkHost = isDirectoryANetworkDevice(item.path) // /Network/hostname
 			const isNetworkShare = isDirectoryANetworkShare(item.path) // /Network/hostname/share
-			const canEjectNetwork = (isNetworkHost || isNetworkShare) && !isRemovingNetworkShare
+			const canEjectNetwork = !isMember && (isNetworkHost || isNetworkShare) && !isRemovingNetworkShare
 
 			const openShareInfoDialog = () => {
 				navigate({
@@ -173,6 +191,16 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 						dialog: 'files-share-info',
 						'files-share-info-name': item.name,
 						'files-share-info-path': item.path,
+					}),
+				})
+			}
+
+			const openShareUsersDialog = () => {
+				navigate({
+					search: addLinkSearchParams({
+						dialog: 'files-share-users',
+						'files-share-users-name': item.name,
+						'files-share-users-path': item.path,
 					}),
 				})
 			}
@@ -255,6 +283,11 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 					) : (
 						<ContextMenuItem disabled={!canShare} onClick={openShareInfoDialog}>
 							{t('files-action.share')}
+						</ContextMenuItem>
+					)}
+					{canShareWithUsers && (
+						<ContextMenuItem onClick={openShareUsersDialog}>
+							{shareForPath(item.path) ? t('files-action.sharing-with-users') : t('files-action.share-with-users')}
 						</ContextMenuItem>
 					)}
 					{isPathFavorite(item.path) ? (

@@ -6,19 +6,43 @@ import {DirectoryListing} from '@/features/files/components/listing/directory-li
 import {RecentsListing} from '@/features/files/components/listing/recents-listing'
 import {SearchListing} from '@/features/files/components/listing/search-listing'
 import {TrashListing} from '@/features/files/components/listing/trash-listing'
-import {BASE_ROUTE_PATH, HOME_PATH} from '@/features/files/constants'
+import {BASE_ROUTE_PATH, HOME_PATH, TRASH_PATH} from '@/features/files/constants'
+import {useTrashPath} from '@/features/files/hooks/use-home-path'
+import {useNavigate} from '@/features/files/hooks/use-navigate'
+import {trpcReact} from '@/trpc/trpc'
 
 const Files = lazy(() => import('@/features/files'))
+
+// Redirect /files to the current account's home (owner: /Home, member: /Users/<slug>).
+// Wait for user.get before redirecting — the redirect unmounts immediately, so
+// navigating on the '/Home' loading fallback would strand members in the
+// owner's namespace.
+function FilesIndexRedirect() {
+	const {data, isLoading} = trpcReact.user.get.useQuery()
+	if (isLoading) return null
+	return <Navigate to={`${BASE_ROUTE_PATH}${data?.homePath ?? HOME_PATH}`} replace />
+}
+
+// A member's trash lives under their home (/Users/<slug>/Trash) so it can't be
+// matched by the static Trash/* route, detect it here instead
+function DirectoryOrTrashListing() {
+	const trashPath = useTrashPath()
+	const {currentPath} = useNavigate()
+	const isMemberTrash =
+		trashPath !== TRASH_PATH && (currentPath === trashPath || currentPath.startsWith(`${trashPath}/`))
+	if (isMemberTrash) return <TrashListing />
+	return <DirectoryListing />
+}
 
 export const filesRoutes: RouteObject[] = [
 	{
 		path: 'files',
 		element: <Files />,
 		children: [
-			// if the user navigates to /files, redirect to /files/<HOME_PATH>
+			// if the user navigates to /files, redirect to their home
 			{
 				index: true,
-				element: <Navigate to={`${BASE_ROUTE_PATH}${HOME_PATH}`} replace />,
+				element: <FilesIndexRedirect />,
 			},
 			// "Recents" and not "Recents/*" because folders aren't tracked in the recents by the server
 			{
@@ -44,7 +68,7 @@ export const filesRoutes: RouteObject[] = [
 			},
 			{
 				path: '*',
-				element: <DirectoryListing />,
+				element: <DirectoryOrTrashListing />,
 			},
 		],
 	},

@@ -11,6 +11,7 @@ import {useSettingsNotificationCount} from '@/hooks/use-settings-notification-co
 import {cn} from '@/lib/utils'
 import {systemAppsKeyed} from '@/providers/apps'
 import {useWallpaper} from '@/providers/wallpaper'
+import {trpcReact} from '@/trpc/trpc'
 import {tw} from '@/utils/tw'
 
 import {DockItem} from './dock-item'
@@ -70,6 +71,10 @@ export function Dock() {
 	const {iconSize, iconSizeZoomed, padding, dockHeight} = useDockDimensions()
 	const {wallpaperImgRef} = useWallpaper()
 
+	// Members browse the app store read-only, updates are owner-only
+	const {data: user} = trpcReact.user.get.useQuery()
+	const isMember = user?.role === 'member'
+
 	const appUpdateCount = appsWithUpdates.length
 
 	// Read sessionStorage at click time, not render time, because React Compiler
@@ -115,7 +120,7 @@ export function Dock() {
 						to={systemAppsKeyed['UMBREL_app-store'].systemAppTo}
 						open={pathname.startsWith(systemAppsKeyed['UMBREL_app-store'].systemAppTo)}
 						bg={systemAppsKeyed['UMBREL_app-store'].icon}
-						notificationCount={appUpdateCount}
+						notificationCount={isMember ? undefined : appUpdateCount}
 						mouseX={mouseX}
 					/>
 					<DockItem

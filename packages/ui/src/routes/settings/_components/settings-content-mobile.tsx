@@ -12,6 +12,7 @@ import {
 	TbShare,
 	TbTool,
 	TbUser,
+	TbUsers,
 	TbWifi,
 } from 'react-icons/tb'
 import {Link, useNavigate} from 'react-router-dom'
@@ -179,6 +180,12 @@ export function SettingsContentMobile() {
 					title={t('2fa')}
 					description={t('2fa-description')}
 					onClick={() => navigate('2fa')}
+				/>
+				<ListRowMobile
+					icon={TbUsers}
+					title={t('users')}
+					description={t('users.description')}
+					onClick={() => navigate('users')}
 				/>
 				<ListRowMobile
 					icon={TbShare}

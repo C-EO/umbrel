@@ -1,34 +1,85 @@
 import z from 'zod'
+import {TRPCError} from '@trpc/server'
 import {cloneDeep} from 'es-toolkit'
 
-import {router, privateProcedure} from '../server/trpc/trpc.js'
+import {router, privateProcedureWithMembers} from '../server/trpc/trpc.js'
+import {OWNER_USER_ID} from '../user/constants.js'
+import type {OperationsInProgress} from '../files/files.js'
 
 import {type EventTypes, events} from './event-bus.js'
 
+// The only events member accounts may listen to. Each one is filtered down to
+// what belongs to the member before it's streamed, everything else is
+// owner-only, so nothing is ever streamed to members without an explicit,
+// scoped opt-in below.
+const memberAllowedEvents = new Set<(typeof events)[number]>([
+	'files:operation-progress',
+	'files:watcher:change',
+	'files:member-shares:change',
+	'apps:member-shares:change',
+])
+
 export default router({
 	// Listen for events
-	listen: privateProcedure
+	listen: privateProcedureWithMembers
 		.input(
 			z.object({
 				event: z.enum(events),
 			}),
 		)
-		.subscription(async function* ({ctx, input, signal}) {
+		.subscription(({ctx, input, signal}) => {
+			const userId = ctx.principal?.accountId ?? OWNER_USER_ID
+			const isMember = userId !== OWNER_USER_ID
+
+			// Members may only listen to explicitly whitelisted, per-account filtered
+			// events. Checked here (not inside the generator) so the subscription is
+			// rejected at creation, a generator body only runs once it's first pulled
+			// which is after the client has already been told it started.
+			if (isMember && !memberAllowedEvents.has(input.event)) {
+				throw new TRPCError({code: 'FORBIDDEN', message: 'This action can only be performed by the owner'})
+			}
+
 			// Stream the events
 			// We pass in the AbortSignal so the stream can be immediately cleaned up
 			// when the client disconnects to avoid memory leaks.
-			for await (let event of ctx.umbreld.eventBus.stream(input.event, {signal})) {
-				// Reformat the files:watcher:change event so it's suitable to be consumed by the client
-				if (input.event === 'files:watcher:change') {
-					// Clone event to avoid mutating the original event object
-					event = cloneDeep(event) as EventTypes['files:watcher:change']
+			return (async function* () {
+				for await (let event of ctx.umbreld.eventBus.stream(input.event, {signal})) {
+					// Reformat the files:watcher:change event so it's suitable to be consumed by the client
+					if (input.event === 'files:watcher:change') {
+						// Clone event to avoid mutating the original event object
+						event = cloneDeep(event) as EventTypes['files:watcher:change']
 
-					// Convert the system path to a virtual path
-					event.path = ctx.umbreld.files.systemToVirtualPath(event.path)
+						// Convert the system path to a virtual path
+						event.path = ctx.umbreld.files.systemToVirtualPath(event.path)
+
+						// Members only receive changes to paths their account owns or
+						// paths the owner shared with them
+						if (isMember && ctx.umbreld.files.ownerOfPath(event.path) !== userId) {
+							const share = await ctx.umbreld.files.memberShares.shareGrantFor(event.path, userId)
+							if (!share) continue
+						}
+					}
+
+					// Members only receive progress of their own file operations
+					if (isMember && input.event === 'files:operation-progress') {
+						const operations = event as OperationsInProgress
+						event = operations.filter((operation) => operation.userId === userId)
+					}
+
+					// Members only receive share changes that affect their own account,
+					// and only learn about their own involvement (not the other grantees)
+					if (
+						isMember &&
+						(input.event === 'files:member-shares:change' || input.event === 'apps:member-shares:change')
+					) {
+						const change = event as EventTypes['files:member-shares:change']
+						if (change.sharedWith !== 'all' && !change.sharedWith.includes(userId)) continue
+						event = {sharedWith: [userId]} as EventTypes['files:member-shares:change']
+					}
+
+					// Stream the event to the client
+					yield event
 				}
-
-				// Stream the event to the client
-				yield event
-			}
+			})()
 		}),
 })

@@ -20,6 +20,10 @@ test.sequential('registry() throws invalid error when no user is registered', as
 	await expect(umbreld.client.appStore.registry.query()).rejects.toThrow('Invalid token')
 })
 
+test.sequential('repositories() throws invalid error when no user is registered', async () => {
+	await expect(umbreld.client.appStore.repositories.query()).rejects.toThrow('Invalid token')
+})
+
 test.sequential('addRepository() throws invalid error when no user is registered', async () => {
 	await expect(umbreld.client.appStore.addRepository.mutate({url: communityAppStoreGitServer.url})).rejects.toThrow(
 		'Invalid token',
@@ -39,7 +43,6 @@ test.sequential('login', async () => {
 test.sequential('registry() returns app registry', async () => {
 	await expect(umbreld.client.appStore.registry.query()).resolves.toStrictEqual([
 		{
-			url: umbreld.instance.appStore.defaultAppStoreRepo,
 			meta: {
 				id: 'sparkles',
 				name: 'Sparkles',
@@ -54,7 +57,6 @@ test.sequential('registry() returns app registry', async () => {
 					icon: 'https://svgur.com/i/mvA.svg',
 					category: 'Development',
 					version: '1.0.0',
-					port: 4000,
 					description: "Add your app's description here.\n\nYou can also add newlines!",
 					developer: 'Umbrel',
 					website: 'https://umbrel.com',
@@ -69,12 +71,17 @@ test.sequential('registry() returns app registry', async () => {
 					],
 					releaseNotes: "Add what's new in the latest version of your app here.",
 					dependencies: [],
-					path: '',
-					defaultUsername: '',
-					defaultPassword: '',
-					backupIgnore: ['data', 'logs', 'cache'],
 				},
 			],
+		},
+	])
+})
+
+test.sequential('repositories() returns owner-only repository management data', async () => {
+	await expect(umbreld.client.appStore.repositories.query()).resolves.toStrictEqual([
+		{
+			url: umbreld.instance.appStore.defaultAppStoreRepo,
+			meta: {id: 'sparkles', name: 'Sparkles'},
 		},
 	])
 })
@@ -86,7 +93,6 @@ test.sequential('addRepository() adds a second repository', async () => {
 test.sequential('registry() returns both app repositories in registry', async () => {
 	await expect(umbreld.client.appStore.registry.query()).resolves.toStrictEqual([
 		{
-			url: umbreld.instance.appStore.defaultAppStoreRepo,
 			meta: {
 				id: 'sparkles',
 				name: 'Sparkles',
@@ -101,7 +107,6 @@ test.sequential('registry() returns both app repositories in registry', async ()
 					icon: 'https://svgur.com/i/mvA.svg',
 					category: 'Development',
 					version: '1.0.0',
-					port: 4000,
 					description: "Add your app's description here.\n\nYou can also add newlines!",
 					developer: 'Umbrel',
 					website: 'https://umbrel.com',
@@ -116,15 +121,10 @@ test.sequential('registry() returns both app repositories in registry', async ()
 					],
 					releaseNotes: "Add what's new in the latest version of your app here.",
 					dependencies: [],
-					path: '',
-					defaultUsername: '',
-					defaultPassword: '',
-					backupIgnore: ['data', 'logs', 'cache'],
 				},
 			],
 		},
 		{
-			url: communityAppStoreGitServer.url,
 			meta: {
 				id: 'sparkles',
 				name: 'Sparkles',
@@ -139,7 +139,6 @@ test.sequential('registry() returns both app repositories in registry', async ()
 					icon: 'https://svgur.com/i/mvA.svg',
 					category: 'Development',
 					version: '1.0.0',
-					port: 4000,
 					description: "Add your app's description here.\n\nYou can also add newlines!",
 					developer: 'Umbrel',
 					website: 'https://umbrel.com',
@@ -154,10 +153,6 @@ test.sequential('registry() returns both app repositories in registry', async ()
 					],
 					releaseNotes: "Add what's new in the latest version of your app here.",
 					dependencies: [],
-					path: '',
-					defaultUsername: '',
-					defaultPassword: '',
-					backupIgnore: ['data', 'logs', 'cache'],
 				},
 			],
 		},
@@ -179,7 +174,6 @@ test.sequential('removeRepository() removes a reposoitory', async () => {
 test.sequential('registry() no longer returns an app repository that has been removed', async () => {
 	await expect(umbreld.client.appStore.registry.query()).resolves.toStrictEqual([
 		{
-			url: umbreld.instance.appStore.defaultAppStoreRepo,
 			meta: {
 				id: 'sparkles',
 				name: 'Sparkles',
@@ -194,7 +188,6 @@ test.sequential('registry() no longer returns an app repository that has been re
 					icon: 'https://svgur.com/i/mvA.svg',
 					category: 'Development',
 					version: '1.0.0',
-					port: 4000,
 					description: "Add your app's description here.\n\nYou can also add newlines!",
 					developer: 'Umbrel',
 					website: 'https://umbrel.com',
@@ -209,10 +202,6 @@ test.sequential('registry() no longer returns an app repository that has been re
 					],
 					releaseNotes: "Add what's new in the latest version of your app here.",
 					dependencies: [],
-					path: '',
-					defaultUsername: '',
-					defaultPassword: '',
-					backupIgnore: ['data', 'logs', 'cache'],
 				},
 			],
 		},

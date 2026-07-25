@@ -19,12 +19,17 @@ import {
 } from '@/modules/app-store/shared'
 import {UpdatesButton} from '@/modules/app-store/updates-button'
 import {useAvailableApps} from '@/providers/available-apps'
+import {trpcReact} from '@/trpc/trpc'
 import {t} from '@/utils/i18n'
 import {createSearch} from '@/utils/search'
 
 export function AppStoreLayout() {
 	const {t} = useTranslation()
 	const title = t('app-store.title')
+
+	// Members browse the app store read-only, updating apps and managing
+	// community app stores are owner features
+	const isOwner = trpcReact.user.get.useQuery().data?.role === 'owner'
 
 	const [searchParams, setSearchParams] = useSearchParams()
 	const [searchQuery, setSearchQuery] = useState(searchParams.get('q') ?? '')
@@ -58,8 +63,8 @@ export function AppStoreLayout() {
 			title={title}
 			titleRightChildren={
 				<motion.div layout className='flex max-w-full flex-1 flex-row-reverse items-center gap-3'>
-					<CommunityAppsDropdown />
-					<UpdatesButton />
+					{isOwner && <CommunityAppsDropdown />}
+					{isOwner && <UpdatesButton />}
 					<div className='flex-1 md:hidden' />
 					<SearchInput inputRef={inputRef} value={searchQuery} onValueChange={setSearchQuery} />
 				</motion.div>

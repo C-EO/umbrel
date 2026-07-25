@@ -33,7 +33,8 @@ export function CommunityAppStoreDialog() {
 
 	// queries
 
-	const appStoresQ = trpcReact.appStore.registry.useQuery()
+	const appStoresQ = trpcReact.appStore.repositories.useQuery()
+	const utils = trpcReact.useUtils()
 
 	// mutations
 
@@ -42,6 +43,7 @@ export function CommunityAppStoreDialog() {
 			setUrl('')
 			setLocalError('')
 			appStoresQ.refetch()
+			utils.appStore.registry.invalidate()
 		},
 		onError: (err) => {
 			toast.error(t('community-app-store.add-error', {message: err.message}))
@@ -51,6 +53,7 @@ export function CommunityAppStoreDialog() {
 	const removeAppStoreMut = trpcReact.appStore.removeRepository.useMutation({
 		onSuccess: () => {
 			appStoresQ.refetch()
+			utils.appStore.registry.invalidate()
 		},
 		onError: (err) => {
 			toast.error(t('community-app-store.remove-error', {message: err.message}))

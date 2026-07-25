@@ -9,7 +9,7 @@ import createLogger, {type LogLevel} from './modules/utilities/logger.js'
 import FileStore from './modules/utilities/file-store.js'
 import Migration from './modules/startup-migrations/index.js'
 import Server from './modules/server/index.js'
-import User from './modules/user/user.js'
+import User, {type MemberRecord} from './modules/user/user.js'
 import AppStore from './modules/apps/app-store.js'
 import Apps from './modules/apps/apps.js'
 import Files from './modules/files/files.js'
@@ -37,6 +37,12 @@ type StoreSchema = {
 	version: string
 	previousVersion?: string
 	apps: string[]
+	// Apps the owner has shared with member accounts. 'all' also covers
+	// members created in the future.
+	appMemberShares?: {
+		appId: string
+		sharedWith: 'all' | string[]
+	}[]
 	appRepositories: string[]
 	widgets: string[]
 	shortcuts: {
@@ -45,6 +51,7 @@ type StoreSchema = {
 		icon?: string
 	}[]
 	torEnabled?: boolean
+	// The owner account, always user id '0'
 	user: {
 		name: string
 		hashedPassword: string
@@ -53,6 +60,10 @@ type StoreSchema = {
 		language?: string
 		temperatureUnit?: string
 	}
+	// Active members and permanent tombstones for deleted member ids. Member ids
+	// are security identities used by sessions, paths, and shares, so they must
+	// never be assigned to a different account after deletion.
+	members?: MemberRecord[]
 	settings: {
 		releaseChannel: 'stable' | 'beta'
 		wifi?: {
@@ -83,6 +94,13 @@ type StoreSchema = {
 		shares: {
 			name: string
 			path: string
+		}[]
+		// Owner paths shared with member accounts. 'all' also covers members
+		// created in the future. Shares still respect the usual system rules
+		// such as protected and read-only paths.
+		memberShares?: {
+			path: string
+			sharedWith: 'all' | string[]
 		}[]
 		networkStorage: {
 			host: string
@@ -245,6 +263,10 @@ export default class Umbreld {
 			this.server.start(),
 			this.systemNg.start(),
 		])
+
+		// Account deletion spans several modules. Retry any cleanup that was
+		// interrupted after the member was durably marked as deleted.
+		await this.user.finishPendingDeletions()
 
 		// Start backups last because it depends on files
 		this.backups.start()

@@ -17,6 +17,7 @@ import {reboot} from '../system/system.js'
 import {BACKUP_RESTORE_FIRST_START_FLAG} from '../../constants.js'
 import type Umbreld from '../../index.js'
 import type {ProgressStatus} from '../apps/schema.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 type Backup = {
 	// Our internal id in the format: <repositoryId>:<snapshotId>
@@ -230,7 +231,7 @@ export default class Backups {
 		virtualPath = nodePath.join(virtualPath, this.backupDirectoryName)
 
 		// Check we have either a network share or external drive
-		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath).catch(() => '')
+		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, OWNER_USER_ID).catch(() => '')
 		const isNetworkPath = systemPath.startsWith(this.#umbreld.files.getBaseDirectory('/Network'))
 		const isExternalPath = systemPath.startsWith(this.#umbreld.files.getBaseDirectory('/External'))
 		if (!isNetworkPath && !isExternalPath) throw new Error(`Invalid path ${virtualPath}`)

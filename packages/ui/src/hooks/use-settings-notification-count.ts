@@ -23,10 +23,14 @@ export function useSettingsNotificationCount() {
 	const mounted = useMounted()
 	const [count, setCount] = useState(0)
 
+	// System notifications are owner territory, member accounts skip the checks
+	const userQ = trpcReact.user.get.useQuery()
+	const isOwner = userQ.data?.role === 'owner'
+
 	useEffect(() => {
 		// Checking against `mounted` because of this issue:
 		// https://github.com/emilkowalski/sonner/issues/322
-		if (!mounted) return
+		if (!mounted || !isOwner) return
 
 		const res = Promise.allSettled([
 			utils.system.checkUpdate.fetch(),
@@ -178,7 +182,7 @@ export function useSettingsNotificationCount() {
 		return () => {
 			toastIds.map(toast.dismiss)
 		}
-	}, [mounted, navigate])
+	}, [mounted, isOwner, navigate])
 
 	return count
 }

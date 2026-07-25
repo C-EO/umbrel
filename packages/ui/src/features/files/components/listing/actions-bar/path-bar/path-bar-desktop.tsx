@@ -5,17 +5,13 @@ import {FadeScroller} from '@/components/fade-scroller'
 import {CaretRightIcon} from '@/features/files/assets/caret-right'
 import {Droppable} from '@/features/files/components/shared/drag-and-drop'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
-import {
-	APPS_PATH,
-	EXTERNAL_STORAGE_PATH,
-	HOME_PATH,
-	NETWORK_STORAGE_PATH,
-	RECENTS_PATH,
-	TRASH_PATH,
-} from '@/features/files/constants'
+import {APPS_PATH, EXTERNAL_STORAGE_PATH, NETWORK_STORAGE_PATH, RECENTS_PATH} from '@/features/files/constants'
+import {useHomePath, useIsMember, useTrashPath} from '@/features/files/hooks/use-home-path'
+import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {formatItemName} from '@/features/files/utils/format-filesystem-name'
 import {cn} from '@/lib/utils'
+import {firstNameFromFullName} from '@/utils/misc'
 
 type PathSegment = {
 	id: number
@@ -34,12 +30,26 @@ export function PathBarDesktop({path}: {path: string}) {
 
 	const {navigateToDirectory, isBrowsingExternalStorage, isBrowsingNetworkStorage, uiPath} = useNavigate()
 
+	// The current account's home and trash roots (owner: /Home and /Trash,
+	// member: /Users/<slug> and /Users/<slug>/Trash) so a member's breadcrumb
+	// roots at their own home rather than rendering unnavigable segments
+	const homePath = useHomePath()
+	const trashPath = useTrashPath()
+
+	// For members browsing the owner's files (via paths shared with them), the
+	// breadcrumb roots at "{Owner}'s Umbrel" (/Home), mirroring their sidebar
+	const isMember = useIsMember()
+	const {sharedWithMe} = useMemberShares()
+	const ownersUmbrelName = sharedWithMe?.ownerName
+		? t('files-sidebar.owners-umbrel', {name: firstNameFromFullName(sharedWithMe.ownerName)})
+		: ''
+
 	const segments = useMemo(() => {
 		// Display path: derive from UI path to hide backups/snapshot segments
 		const displayPath = uiPath
 
 		// Determine root type and path from UI path
-		const isUiTrash = displayPath.startsWith(TRASH_PATH)
+		const isUiTrash = displayPath.startsWith(trashPath)
 		const isUiRecents = displayPath.startsWith(RECENTS_PATH)
 		const isUiApps = displayPath.startsWith(APPS_PATH)
 		const isUiNetwork = displayPath.startsWith(NETWORK_STORAGE_PATH)
@@ -47,25 +57,34 @@ export function PathBarDesktop({path}: {path: string}) {
 
 		const displaySegments = displayPath.split('/').filter(Boolean)
 
-		const rootInfo = isUiTrash
-			? {segment: t('files-sidebar.trash'), type: 'trash' as const, path: TRASH_PATH}
-			: isUiRecents
-				? {segment: t('files-sidebar.recents'), type: 'recents' as const, path: RECENTS_PATH}
-				: isUiApps
-					? {segment: t('files-sidebar.apps'), type: 'apps' as const, path: APPS_PATH}
-					: isUiExternal
-						? {
-								segment: displaySegments[1] || t('files-sidebar.external-storage'),
-								type: 'external-storage' as const,
-								path: `${EXTERNAL_STORAGE_PATH}/${displaySegments[1] || ''}`,
-							}
-						: isUiNetwork
+		// Members browsing the owner's home root at "{Owner}'s Umbrel"
+		const isOwnersUmbrel = isMember && (displayPath === '/Home' || displayPath.startsWith('/Home/'))
+
+		const rootInfo = isOwnersUmbrel
+			? {
+					segment: ownersUmbrelName,
+					type: 'home' as const,
+					path: '/Home',
+				}
+			: isUiTrash
+				? {segment: t('files-sidebar.trash'), type: 'trash' as const, path: trashPath}
+				: isUiRecents
+					? {segment: t('files-sidebar.recents'), type: 'recents' as const, path: RECENTS_PATH}
+					: isUiApps
+						? {segment: t('files-sidebar.apps'), type: 'apps' as const, path: APPS_PATH}
+						: isUiExternal
 							? {
-									segment: displayPath === NETWORK_STORAGE_PATH ? t('files-sidebar.network-pathbar') : '',
-									type: 'network-root' as const,
-									path: NETWORK_STORAGE_PATH,
+									segment: displaySegments[1] || t('files-sidebar.external-storage'),
+									type: 'external-storage' as const,
+									path: `${EXTERNAL_STORAGE_PATH}/${displaySegments[1] || ''}`,
 								}
-							: {segment: t('files-sidebar.home'), type: 'home' as const, path: HOME_PATH}
+							: isUiNetwork
+								? {
+										segment: displayPath === NETWORK_STORAGE_PATH ? t('files-sidebar.network-pathbar') : '',
+										type: 'network-root' as const,
+										path: NETWORK_STORAGE_PATH,
+									}
+								: {segment: t('files-sidebar.home'), type: 'home' as const, path: homePath}
 
 		// Start with the root segment
 		const items: PathSegment[] = [
@@ -100,7 +119,7 @@ export function PathBarDesktop({path}: {path: string}) {
 		})
 
 		return items
-	}, [uiPath, isBrowsingExternalStorage, isBrowsingNetworkStorage])
+	}, [uiPath, homePath, trashPath, isMember, ownersUmbrelName, isBrowsingExternalStorage, isBrowsingNetworkStorage])
 
 	const deriveIsOverflow = useCallback(() => {
 		if (!breadcrumbsRef.current) return

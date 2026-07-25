@@ -3,6 +3,7 @@ import nodePath from 'node:path'
 import {fuzzy} from 'fast-fuzzy'
 
 import type Umbreld from '../../index.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 export default class Search {
 	#umbreld: Umbreld
@@ -20,17 +21,20 @@ export default class Search {
 	async start() {}
 	async stop() {}
 
-	// Search for fuzzy matches against all files in the home directory
+	// Search for fuzzy matches against all files in the requesting account's
+	// home directory (owner: /Home, member: /Users/<slug>), so results can never
+	// leak across accounts.
 	// TODO: We should index the entire filesystem and search against a real database
 	// but for now this should work well enough.
-	async search(query: string, maxResults = 250) {
+	async search(query: string, maxResults = 250, userId: string = OWNER_USER_ID) {
 		let results: {score: number; systemPath: string}[] = []
 
 		// Helper to order the results by score and return the top results
 		const getBestResults = () => results.sort((a, b) => b.score - a.score).slice(0, maxResults)
 
-		// Iterate over all files in the home directory
-		for await (const systemPath of this.#umbreld.files.streamContents('/Home')) {
+		// Iterate over all files in the account's home directory
+		const homeDirectory = userId === OWNER_USER_ID ? '/Home' : `/Users/${userId}`
+		for await (const systemPath of this.#umbreld.files.streamContents(homeDirectory, userId)) {
 			// Grab the filename
 			const filename = nodePath.basename(systemPath)
 

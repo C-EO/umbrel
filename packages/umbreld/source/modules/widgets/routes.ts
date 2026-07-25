@@ -1,7 +1,8 @@
 import z from 'zod'
 import ms from 'ms'
 
-import {router, privateProcedure} from '../server/trpc/trpc.js'
+import {router, privateProcedure, privateProcedureWithMembers} from '../server/trpc/trpc.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 import {systemWidgets} from '../system/system-widgets.js'
 import {filesWidgets} from '../files/widgets.js'
 
@@ -18,8 +19,11 @@ function splitWidgetId(widgetId: string) {
 }
 
 export default router({
-	// List enabled widgets
-	enabled: privateProcedure.query(async ({ctx}) => {
+	// List enabled widgets.
+	// Members don't have widgets yet so they get an empty list rather than a
+	// permission error, letting the desktop render for them.
+	enabled: privateProcedureWithMembers.query(async ({ctx}) => {
+		if (ctx.principal?.accountId !== OWNER_USER_ID) return []
 		const widgetIds = (await ctx.umbreld.store.get('widgets')) || []
 
 		return widgetIds

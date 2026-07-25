@@ -17,6 +17,7 @@ import {SegmentedControl} from '@/components/ui/segmented-control'
 import {usePassword} from '@/hooks/use-password'
 import {useUserName} from '@/hooks/use-user-name'
 import {ChangePasswordWarning, useSettingsDialogProps} from '@/routes/settings/_components/shared'
+import {SessionsPanel} from '@/routes/settings/sessions'
 
 export function AccountDrawer() {
 	const {t} = useTranslation()
@@ -28,6 +29,7 @@ export function AccountDrawer() {
 	const tabs = [
 		{id: 'change-name', label: t('name')},
 		{id: 'change-password', label: t('password')},
+		{id: 'sessions', label: t('sessions.title')},
 	] as const
 	type TabId = (typeof tabs)[number]['id']
 
@@ -45,6 +47,7 @@ export function AccountDrawer() {
 					<SegmentedControl size='lg' tabs={tabs} value={activeTab} onValueChange={setActiveTab} />
 					{activeTab === 'change-name' && <ChangeName closeDialog={closeDialog} />}
 					{activeTab === 'change-password' && <ChangePassword closeDialog={closeDialog} />}
+					{activeTab === 'sessions' && <SessionsPanel />}
 				</DrawerScroller>
 			</DrawerContent>
 		</Drawer>

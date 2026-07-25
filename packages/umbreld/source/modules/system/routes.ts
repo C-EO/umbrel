@@ -8,6 +8,8 @@ import fse from 'fs-extra'
 import stripAnsi from 'strip-ansi'
 
 import {performReset} from './factory-reset.js'
+import {OWNER_USER_ID} from '../user/constants.js'
+import type Umbreld from '../../index.js'
 import {getUpdateStatus, performUpdate, getLatestRelease} from './update.js'
 import {
 	getCpuTemperature,
@@ -29,7 +31,13 @@ import {
 	syncDns,
 } from './system.js'
 
-import {privateProcedure, publicProcedure, publicProcedureWhenNoUserExists, router} from '../server/trpc/trpc.js'
+import {
+	privateProcedure,
+	publicProcedure,
+	publicProcedureWhenNoUserExists,
+	router,
+	privateProcedureWithMembers,
+} from '../server/trpc/trpc.js'
 
 type SystemStatus = 'running' | 'updating' | 'shutting-down' | 'restarting' | 'migrating' | 'resetting' | 'restoring'
 let systemStatus: SystemStatus = 'running'
@@ -37,6 +45,23 @@ let systemStatus: SystemStatus = 'running'
 // Quick hack so we can set system status from migration module until we refactor this
 export function setSystemStatus(status: SystemStatus) {
 	systemStatus = status
+}
+
+// Fold the per-app usage of apps a member can't see into a single 'other'
+// entry. The full breakdown is computed as normal first, this only
+// post-processes the result for member accounts.
+async function scopeUsageAppsForMember<T extends {apps: {id: string; used: number}[]}>(
+	umbreld: Umbreld,
+	usage: T,
+	userId: string,
+): Promise<T> {
+	if (userId === OWNER_USER_ID) return usage
+	const sharedAppIds = await umbreld.apps.sharedAppIdsForUser(userId)
+	const visibleApps = usage.apps.filter((app) => sharedAppIds.includes(app.id))
+	const hiddenApps = usage.apps.filter((app) => !sharedAppIds.includes(app.id))
+	const otherUsed = hiddenApps.reduce((total, app) => total + app.used, 0)
+	const apps = otherUsed > 0 ? [...visibleApps, {id: 'other', used: otherUsed}] : visibleApps
+	return {...usage, apps}
 }
 
 export default router({
@@ -50,7 +75,7 @@ export default router({
 	}),
 	status: publicProcedure.query(() => systemStatus),
 	updateStatus: privateProcedure.query(() => getUpdateStatus()),
-	uptime: privateProcedure.query(() => os.uptime()),
+	uptime: privateProcedureWithMembers.query(() => os.uptime()),
 	checkUpdate: privateProcedure.query(async ({ctx}) => {
 		let {version, name, releaseNotes} = await getLatestRelease(ctx.umbreld)
 		// v prefix is needed in the tag name for legacy reasons, remove it before comparing to local version
@@ -110,13 +135,25 @@ export default router({
 	}),
 	// Public during onboarding to show device-specific UI (Pro/Home images, video background)
 	device: publicProcedureWhenNoUserExists.query(() => detectDevice()),
-	cpuTemperature: privateProcedure.query(() => getCpuTemperature()),
-	systemDiskUsage: privateProcedure.query(({ctx}) => getSystemDiskUsage(ctx.umbreld)),
-	diskUsage: privateProcedure.query(({ctx}) => getDiskUsage(ctx.umbreld)),
-	systemMemoryUsage: privateProcedure.query(({ctx}) => getSystemMemoryUsage()),
-	memoryUsage: privateProcedure.query(({ctx}) => getMemoryUsage(ctx.umbreld)),
-	cpuUsage: privateProcedure.query(({ctx}) => getCpuUsage(ctx.umbreld)),
-	getIpAddresses: privateProcedure.query(() => getIpAddresses()),
+	// Read-only device metadata shown in every account's settings summary.
+	deviceName: privateProcedureWithMembers.query(async () => (await detectDevice()).device),
+	// Usage stats are visible to members so they get the normal settings and
+	// live usage experience. The per-app breakdowns compute the full result as
+	// normal and are then post-processed to fold apps the member can't see into
+	// a single 'other' entry.
+	cpuTemperature: privateProcedureWithMembers.query(() => getCpuTemperature()),
+	systemDiskUsage: privateProcedureWithMembers.query(({ctx}) => getSystemDiskUsage(ctx.umbreld)),
+	diskUsage: privateProcedureWithMembers.query(async ({ctx}) =>
+		scopeUsageAppsForMember(ctx.umbreld, await getDiskUsage(ctx.umbreld), ctx.principal?.accountId ?? OWNER_USER_ID),
+	),
+	systemMemoryUsage: privateProcedureWithMembers.query(({ctx}) => getSystemMemoryUsage()),
+	memoryUsage: privateProcedureWithMembers.query(async ({ctx}) =>
+		scopeUsageAppsForMember(ctx.umbreld, await getMemoryUsage(ctx.umbreld), ctx.principal?.accountId ?? OWNER_USER_ID),
+	),
+	cpuUsage: privateProcedureWithMembers.query(async ({ctx}) =>
+		scopeUsageAppsForMember(ctx.umbreld, await getCpuUsage(ctx.umbreld), ctx.principal?.accountId ?? OWNER_USER_ID),
+	),
+	getIpAddresses: privateProcedureWithMembers.query(() => getIpAddresses()),
 	getHostname: privateProcedure.query(() => getHostname()),
 	getNetworkInterfaces: privateProcedure.query(({ctx}) => getNetworkInterfaces(ctx.umbreld)),
 	setHostname: privateProcedure

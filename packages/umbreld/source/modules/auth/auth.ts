@@ -6,11 +6,12 @@ import fse from 'fs-extra'
 import type {WebSocket} from 'ws'
 
 import type Umbreld from '../../index.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 import FileStore from '../utilities/file-store.js'
 import getOrCreateFile from '../utilities/get-or-create-file.js'
 import randomToken from '../utilities/random-token.js'
 
-export const OWNER_ACCOUNT_ID = 'owner'
+export const OWNER_ACCOUNT_ID = OWNER_USER_ID
 
 const ONE_SECOND = 1000
 const ONE_MINUTE = 60 * ONE_SECOND
@@ -22,6 +23,7 @@ const APP_HANDOFF_DURATION = 30 * ONE_SECOND
 
 export type CredentialAudience = 'dashboard' | 'app-gateway' | 'browser-session' | 'http-api-token'
 export type HttpApiScope = 'file-download' | 'file-view' | 'file-thumbnail' | 'logs-download' | 'ca-download'
+export type WebSocketTarget = 'trpc' | 'terminal'
 
 export type Principal = {
 	sessionId: string
@@ -59,6 +61,7 @@ type AuthStore = {
 
 type WebSocketTicket = {
 	principal: Principal
+	target: WebSocketTarget
 	expiresAt: number
 }
 
@@ -66,6 +69,23 @@ type AppHandoff = {
 	appId: string
 	appGatewayToken: string
 	expiresAt: number
+}
+
+type AppSocket = {
+	principal: Principal
+	appId: string
+	socket: Socket
+}
+
+type SessionIssuanceState = {
+	revision: number
+	credentialChanges: number
+}
+
+export class SessionIssuanceInvalidatedError extends Error {
+	constructor() {
+		super('Login credentials changed, try again')
+	}
 }
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
@@ -100,8 +120,10 @@ export default class Auth {
 	#webSocketTickets = new Map<string, WebSocketTicket>()
 	#appHandoffs = new Map<string, AppHandoff>()
 	#webSockets = new Map<string, Set<WebSocket>>()
-	#appSockets = new Map<string, Set<Socket>>()
+	#appSockets = new Map<string, Set<AppSocket>>()
+	#appAccessRevision = 0
 	#sessionExpiryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+	#sessionIssuanceStates = new Map<string, SessionIssuanceState>()
 
 	constructor(umbreld: Umbreld) {
 		this.#umbreld = umbreld
@@ -130,7 +152,7 @@ export default class Auth {
 			for (const socket of sockets) socket.terminate()
 		}
 		for (const sockets of this.#appSockets.values()) {
-			for (const socket of sockets) socket.destroy()
+			for (const {socket} of sockets) socket.destroy()
 		}
 		this.#webSockets.clear()
 		this.#appSockets.clear()
@@ -139,9 +161,18 @@ export default class Auth {
 		this.#sessions = []
 		this.#webSocketTickets.clear()
 		this.#appHandoffs.clear()
+		this.#sessionIssuanceStates.clear()
 	}
 
-	async createSession({accountId = OWNER_ACCOUNT_ID, userAgent}: {accountId?: string; userAgent?: string} = {}) {
+	async createSession({
+		accountId = OWNER_ACCOUNT_ID,
+		userAgent,
+		expectedSessionIssuanceRevision,
+	}: {
+		accountId?: string
+		userAgent?: string
+		expectedSessionIssuanceRevision?: number
+	} = {}) {
 		if (!(await this.#accountExists(accountId))) throw new Error('Account does not exist')
 
 		const now = Date.now()
@@ -162,6 +193,13 @@ export default class Auth {
 
 		let expiredSessionIds: string[] = []
 		await this.#store.getWriteLock(async ({set}) => {
+			if (expectedSessionIssuanceRevision !== undefined) {
+				const state = this.#sessionIssuanceState(accountId)
+				if (state.credentialChanges > 0 || state.revision !== expectedSessionIssuanceRevision) {
+					throw new SessionIssuanceInvalidatedError()
+				}
+			}
+
 			const activeSessions = this.#sessions.filter((candidate) => candidate.expiresAt > now)
 			expiredSessionIds = this.#sessions
 				.filter((candidate) => !activeSessions.includes(candidate))
@@ -179,6 +217,29 @@ export default class Auth {
 			dashboardToken: dashboard.token,
 			appGatewayToken: appGateway.token,
 			browserSessionToken: browserSession.token,
+		}
+	}
+
+	// Login captures this before checking the account's password and MFA. The
+	// same revision must still be current when its session is committed.
+	sessionIssuanceRevision(accountId: string) {
+		return this.#sessionIssuanceState(accountId).revision
+	}
+
+	// Credential writes bracket their full operation with this guard. A login
+	// that overlaps any part of the write cannot commit a session authenticated
+	// against stale password or MFA state.
+	beginAccountCredentialChange(accountId: string) {
+		const state = this.#sessionIssuanceState(accountId)
+		state.revision++
+		state.credentialChanges++
+		let finished = false
+
+		return () => {
+			if (finished) return
+			finished = true
+			state.credentialChanges--
+			state.revision++
 		}
 	}
 
@@ -254,11 +315,15 @@ export default class Auth {
 		return principal
 	}
 
-	// This is deliberately an explicit authorization boundary even though Umbrel
-	// currently has one owner account with access to every app. Multi-user app
-	// permissions can be added here without changing gateway credentials or flows.
-	async authorizeApp(principal: Principal, _appId: string) {
-		return this.validatePrincipal(principal)
+	// The owner and local system credential can reach every installed app.
+	// Members can only reach apps explicitly shared with their account.
+	async authorizeApp(principal: Principal, appId: string) {
+		await this.validatePrincipal(principal)
+		if (principal.actor === 'system' || principal.accountId === OWNER_ACCOUNT_ID) return principal
+
+		const sharedAppIds = await this.#umbreld.apps.sharedAppIdsForUser(principal.accountId)
+		if (!sharedAppIds.includes(appId)) throw new Error('App access denied')
+		return principal
 	}
 
 	async listSessions(principal: Principal): Promise<ActiveSession[]> {
@@ -266,14 +331,29 @@ export default class Auth {
 		await this.#removeExpiredSessions()
 		await this.#validateAccountPrincipal(principal)
 
+		return this.#activeSessionsForAccount(principal.accountId, principal.sessionId)
+	}
+
+	// Owner-only account administration. These methods still validate the
+	// caller here instead of relying solely on the route middleware so future
+	// call sites cannot accidentally expose cross-account session management.
+	async listSessionsForOwner(principal: Principal, accountId: string): Promise<ActiveSession[]> {
+		await this.#validateOwnerPrincipal(principal)
+		await this.#removeExpiredSessions()
+		await this.#validateOwnerPrincipal(principal)
+		if (!(await this.#accountExists(accountId))) throw new Error('Account does not exist')
+		return this.#activeSessionsForAccount(accountId, principal.sessionId)
+	}
+
+	#activeSessionsForAccount(accountId: string, currentSessionId?: string): ActiveSession[] {
 		return this.#sessions
-			.filter((session) => session.accountId === principal.accountId)
+			.filter((session) => session.accountId === accountId)
 			.map((session) => ({
 				id: session.id,
 				createdAt: session.createdAt,
 				lastSeenAt: session.lastSeenAt,
 				userAgent: session.userAgent,
-				current: session.id === principal.sessionId,
+				current: session.id === currentSessionId,
 			}))
 			.sort((first, second) => Number(second.current) - Number(first.current) || second.createdAt - first.createdAt)
 	}
@@ -292,6 +372,7 @@ export default class Auth {
 
 	async revokeOtherSessionsForAccount(principal: Principal) {
 		await this.#validateAccountPrincipal(principal)
+		this.#invalidatePendingSessionIssuance(principal.accountId)
 		const revokedSessionIds = await this.#revokeSessions(
 			(session) => session.accountId === principal.accountId && session.id !== principal.sessionId,
 			principal,
@@ -301,11 +382,34 @@ export default class Auth {
 
 	async revokeAllSessionsForAccount(principal: Principal) {
 		await this.#validateAccountPrincipal(principal)
+		this.#invalidatePendingSessionIssuance(principal.accountId)
 		const revokedSessionIds = await this.#revokeSessions(
 			(session) => session.accountId === principal.accountId,
 			principal,
 		)
 		return revokedSessionIds.length
+	}
+
+	async revokeSessionForOwner(principal: Principal, accountId: string, sessionId: string) {
+		await this.#validateOwnerPrincipal(principal)
+		const revokedSessionIds = await this.#revokeSessions(
+			(session) => session.accountId === accountId && session.id === sessionId,
+			principal,
+		)
+		return {
+			revoked: revokedSessionIds.length === 1,
+			revokedCurrent: revokedSessionIds.includes(principal.sessionId),
+		}
+	}
+
+	async revokeAllSessionsForOwner(principal: Principal, accountId: string) {
+		await this.#validateOwnerPrincipal(principal)
+		this.#invalidatePendingSessionIssuance(accountId)
+		const revokedSessionIds = await this.#revokeSessions((session) => session.accountId === accountId, principal)
+		return {
+			revokedCount: revokedSessionIds.length,
+			revokedCurrent: revokedSessionIds.includes(principal.sessionId),
+		}
 	}
 
 	async revokeSession(sessionId: string) {
@@ -314,21 +418,24 @@ export default class Auth {
 	}
 
 	async revokeAllForAccount(accountId: string) {
+		this.#invalidatePendingSessionIssuance(accountId)
 		return (await this.#revokeSessions((session) => session.accountId === accountId)).length
 	}
 
-	issueWebSocketTicket(principal: Principal) {
+	issueWebSocketTicket(principal: Principal, target: WebSocketTarget) {
 		this.#removeExpiredTickets()
 		const token = randomToken(256)
-		this.#webSocketTickets.set(hash(token), {principal, expiresAt: Date.now() + WEBSOCKET_TICKET_DURATION})
+		this.#webSocketTickets.set(hash(token), {principal, target, expiresAt: Date.now() + WEBSOCKET_TICKET_DURATION})
 		return token
 	}
 
-	async consumeWebSocketTicket(token: string) {
+	async consumeWebSocketTicket(token: string, target: WebSocketTarget) {
 		const tokenHash = hash(token)
 		const ticket = this.#webSocketTickets.get(tokenHash)
 		this.#webSocketTickets.delete(tokenHash)
-		if (!ticket || ticket.expiresAt <= Date.now()) throw new Error('Invalid WebSocket ticket')
+		if (!ticket || ticket.target !== target || ticket.expiresAt <= Date.now()) {
+			throw new Error('Invalid WebSocket ticket')
+		}
 		return this.validatePrincipal(ticket.principal).catch(() => {
 			throw new Error('Invalid WebSocket ticket')
 		})
@@ -396,11 +503,19 @@ export default class Auth {
 	}
 
 	// The URL token is deliberately session-wide rather than bound to a path so
-	// browser URLs stay stable for the full sliding session lifetime. Keep route
-	// authorization explicit here so account/file permissions can be enforced
-	// centrally when multi-user access is introduced.
-	async authorizeHttpApi(principal: Principal, _scope: HttpApiScope, _resource?: string) {
-		return this.validatePrincipal(principal)
+	// browser URLs stay stable for the full sliding session lifetime. File routes
+	// resolve their resource using this principal's account id. Device-wide logs
+	// and the local CA remain owner-only.
+	async authorizeHttpApi(principal: Principal, scope: HttpApiScope, _resource?: string) {
+		await this.validatePrincipal(principal)
+		if (
+			(scope === 'logs-download' || scope === 'ca-download') &&
+			principal.actor !== 'system' &&
+			principal.accountId !== OWNER_ACCOUNT_ID
+		) {
+			throw new Error('Owner access required')
+		}
+		return principal
 	}
 
 	registerWebSocket(principal: Principal, socket: WebSocket) {
@@ -419,20 +534,43 @@ export default class Auth {
 		return true
 	}
 
-	registerAppSocket(principal: Principal, socket: Socket) {
-		if (!this.#isPrincipalActive(principal)) {
+	get appAccessRevision() {
+		return this.#appAccessRevision
+	}
+
+	registerAppSocket(principal: Principal, appId: string, socket: Socket, accessRevision: number) {
+		if (accessRevision !== this.#appAccessRevision || !this.#isPrincipalActive(principal)) {
 			socket.destroy()
 			return false
 		}
 		if (principal.actor === 'system') return true
-		const sockets = this.#appSockets.get(principal.sessionId) ?? new Set<Socket>()
-		sockets.add(socket)
+		const sockets = this.#appSockets.get(principal.sessionId) ?? new Set<AppSocket>()
+		const registration = {principal, appId, socket}
+		sockets.add(registration)
 		this.#appSockets.set(principal.sessionId, sockets)
 		socket.once('close', () => {
-			sockets.delete(socket)
+			sockets.delete(registration)
 			if (sockets.size === 0) this.#appSockets.delete(principal.sessionId)
 		})
 		return true
+	}
+
+	// Called after an app share changes. Incrementing the revision synchronously
+	// prevents an upgrade authorized against the old share state from
+	// registering after this sweep. Existing opaque app streams are rechecked
+	// and closed if their account no longer has access.
+	async appAccessChanged(appId: string) {
+		this.#appAccessRevision++
+		const registrations = [...this.#appSockets.values()]
+			.flatMap((sockets) => [...sockets])
+			.filter((registration) => appId === '*' || registration.appId === appId)
+
+		await Promise.all(
+			registrations.map(async (registration) => {
+				if (registration.socket.destroyed) return
+				await this.authorizeApp(registration.principal, registration.appId).catch(() => registration.socket.destroy())
+			}),
+		)
 	}
 
 	get systemTokenPath() {
@@ -492,13 +630,33 @@ export default class Auth {
 		return timingSafeEqual(Buffer.from(token), Buffer.from(this.#systemToken))
 	}
 
+	#sessionIssuanceState(accountId: string) {
+		let state = this.#sessionIssuanceStates.get(accountId)
+		if (!state) {
+			state = {revision: 0, credentialChanges: 0}
+			this.#sessionIssuanceStates.set(accountId, state)
+		}
+		return state
+	}
+
+	#invalidatePendingSessionIssuance(accountId: string) {
+		this.#sessionIssuanceState(accountId).revision++
+	}
+
 	async #accountExists(accountId: string) {
-		return accountId === OWNER_ACCOUNT_ID && (await this.#umbreld.user.exists())
+		if (accountId === OWNER_ACCOUNT_ID) return this.#umbreld.user.exists()
+		return Boolean(await this.#umbreld.user.getMember(accountId))
 	}
 
 	async #validateAccountPrincipal(principal: Principal) {
 		await this.validatePrincipal(principal)
 		if (principal.actor !== 'account') throw new Error('Invalid session')
+		return principal
+	}
+
+	async #validateOwnerPrincipal(principal: Principal) {
+		await this.#validateAccountPrincipal(principal)
+		if (principal.accountId !== OWNER_ACCOUNT_ID) throw new Error('Owner session required')
 		return principal
 	}
 
@@ -586,7 +744,7 @@ export default class Auth {
 		this.#webSockets.delete(sessionId)
 
 		const appSockets = this.#appSockets.get(sessionId)
-		for (const socket of appSockets ?? []) socket.destroy()
+		for (const {socket} of appSockets ?? []) socket.destroy()
 		this.#appSockets.delete(sessionId)
 	}
 

@@ -1,6 +1,7 @@
 import type Umbreld from '../../index.js'
 
 import type {FileChangeEvent} from './watcher.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 export default class Favorites {
 	#umbreld: Umbreld
@@ -47,10 +48,12 @@ export default class Favorites {
 		// Get favorites from the store
 		const favorites = await this.#get()
 
-		// Strip out any favorites that aren't existing directories
+		// Strip out any favorites that aren't existing directories (or no longer
+		// resolve, e.g. the directory was replaced with an escaping symlink)
 		const mappedFavorites = await Promise.all(
 			favorites.map(async (favorite) => {
-				const systemPath = await this.#umbreld.files.virtualToSystemPath(favorite)
+				const systemPath = await this.#umbreld.files.virtualToSystemPath(favorite, OWNER_USER_ID).catch(() => undefined)
+				if (!systemPath) return undefined
 				const file = await this.#umbreld.files.status(systemPath).catch(() => undefined)
 				if (file?.type !== 'directory') return undefined
 				return favorite
@@ -66,6 +69,11 @@ export default class Favorites {
 		// Check operation is allowed
 		const allowedOperations = await this.#umbreld.files.getAllowedOperations(virtualPath)
 		if (!allowedOperations.includes('favorite')) throw new Error('[operation-not-allowed]')
+
+		// Resolve and validate the path (owner authorization + symlink containment)
+		// before persisting anything, so an escaping path can't be written to the
+		// store. Favorites live in the owner namespace.
+		await this.#umbreld.files.virtualToSystemPath(virtualPath, OWNER_USER_ID)
 
 		// Save entry in the store
 		await this.#umbreld.store.getWriteLock(async ({get, set}) => {

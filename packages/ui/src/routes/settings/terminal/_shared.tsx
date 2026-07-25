@@ -104,7 +104,7 @@ export const XTermTerminal = ({appId}: {appId?: string}) => {
 			const rows = terminal.rows
 
 			const socket = await createAuthenticatedTerminalSocket({
-				getTicket: () => trpcClient.user.createWebSocketTicket.mutate(),
+				getTicket: () => trpcClient.user.createWebSocketTicket.mutate({target: 'terminal'}),
 				createSocket: (ticket) => {
 					const path = `/terminal?appId=${appId ?? ''}&rows=${rows}&cols=${cols}&ticket=${ticket}`
 					const wsProtocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://'

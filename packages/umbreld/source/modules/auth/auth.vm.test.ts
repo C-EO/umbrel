@@ -289,24 +289,28 @@ describe.sequential('Browser authentication', () => {
 		const tokenOnlyTicket = await trpc('user.createWebSocketTicket', {
 			method: 'POST',
 			session: {...primary, browserCookie: ''},
+			input: {target: 'trpc'},
 			throwHttpErrors: false,
 		})
 		expect(tokenOnlyTicket.statusCode).toBe(401)
 		const mismatchedTicket = await trpc('user.createWebSocketTicket', {
 			method: 'POST',
 			session: {...primary, browserCookie: secondary.browserCookie},
+			input: {target: 'trpc'},
 			throwHttpErrors: false,
 		})
 		expect(mismatchedTicket.statusCode).toBe(401)
 
-		const trpcTicket = trpcData<string>(await trpc('user.createWebSocketTicket', {method: 'POST', session: primary}))
+		const trpcTicket = trpcData<string>(
+			await trpc('user.createWebSocketTicket', {method: 'POST', session: primary, input: {target: 'trpc'}}),
+		)
 		trpcSocket = await openWebSocket(`/trpc?ticket=${encodeURIComponent(trpcTicket)}`)
 		await expectWebSocketRejected(`/trpc?ticket=${encodeURIComponent(trpcTicket)}`)
 		await expectWebSocketRejected('/trpc')
 		await expectWebSocketRejected('/trpc?ticket=invalid')
 
 		const terminalTicket = trpcData<string>(
-			await trpc('user.createWebSocketTicket', {method: 'POST', session: primary}),
+			await trpc('user.createWebSocketTicket', {method: 'POST', session: primary, input: {target: 'terminal'}}),
 		)
 		terminalSocket = await openWebSocket(
 			`/terminal?rows=24&cols=80&appId=&ticket=${encodeURIComponent(terminalTicket)}`,
@@ -315,7 +319,7 @@ describe.sequential('Browser authentication', () => {
 
 	test('individual revocation closes the target session while preserving the caller', async () => {
 		const secondaryTicket = trpcData<string>(
-			await trpc('user.createWebSocketTicket', {method: 'POST', session: secondary}),
+			await trpc('user.createWebSocketTicket', {method: 'POST', session: secondary, input: {target: 'trpc'}}),
 		)
 		secondarySocket = await openWebSocket(`/trpc?ticket=${encodeURIComponent(secondaryTicket)}`)
 		const secondaryClosed = once(secondarySocket, 'close')
@@ -344,7 +348,7 @@ describe.sequential('Browser authentication', () => {
 		secondary = await login('UmbrelSecondaryAgain/3.0')
 		const third = await login('UmbrelThird/4.0')
 		const secondaryTicket = trpcData<string>(
-			await trpc('user.createWebSocketTicket', {method: 'POST', session: secondary}),
+			await trpc('user.createWebSocketTicket', {method: 'POST', session: secondary, input: {target: 'trpc'}}),
 		)
 		secondarySocket = await openWebSocket(`/trpc?ticket=${encodeURIComponent(secondaryTicket)}`)
 		const secondaryClosed = once(secondarySocket, 'close')

@@ -3,8 +3,37 @@ import fse from 'fs-extra'
 import {$} from 'execa'
 
 import type Umbreld from '../../index.js'
+import type {ViewPreferences} from '../files/files.js'
 
 import * as totp from '../utilities/totp.js'
+import {OWNER_USER_ID} from './constants.js'
+
+export type Member = {
+	id: string
+	name: string
+	hashedPassword: string
+	// Per-member profile settings, mirroring the owner's user object
+	totpUri?: string
+	wallpaper?: string
+	language?: string
+	temperatureUnit?: string
+	viewPreferences?: Partial<ViewPreferences>
+}
+
+export type DeletedMember = {
+	id: string
+	deleted: true
+	cleanupComplete?: true
+}
+
+export type MemberRecord = Member | DeletedMember
+
+export type AccountLoginValidation =
+	| {valid: true; sessionIssuanceRevision: number}
+	| {valid: false; reason: 'incorrect-password' | 'missing-totp' | 'incorrect-totp'}
+
+const isActiveMember = (member: MemberRecord): member is Member => !('deleted' in member)
+const isDeletedMember = (member: MemberRecord): member is DeletedMember => 'deleted' in member
 
 export default class User {
 	#store: Umbreld['store']
@@ -49,22 +78,29 @@ export default class User {
 		return this.#store.set('user.wallpaper', wallpaper)
 	}
 
-	// Set the users password
-	async setPassword(password: string) {
+	// Hash a password for storage
+	async #hashPassword(password: string) {
 		// Hash the password with the current recommended default
 		// As of 2023: https://wiki.php.net/rfc/bcrypt_cost_2023
 		const saltRounds = 12
 		// For historical reasons, bcrypt.js@2 produces $2a$ hashes unaffected
 		// by the OpenBSD bug that led to incrementing the version to $2b$. When
 		// verifying, it handles $2a$, $2b$ and $2y$ like OpenBSD $2b$.
-		const hashedPassword = (await bcrypt.hash(password, saltRounds)).replace(/^\$2a\$/, '$2b$')
-		const success = await this.setHashedPassword(hashedPassword)
-		if (success) {
-			// Also synchronize Linux system password
-			// It's async but we don't need to wait for it to complete
-			this.syncSystemPassword()
-		}
-		return success
+		return (await bcrypt.hash(password, saltRounds)).replace(/^\$2a\$/, '$2b$')
+	}
+
+	// Set the users password
+	async setPassword(password: string) {
+		return this.#withAccountCredentialChange(OWNER_USER_ID, async () => {
+			const hashedPassword = await this.#hashPassword(password)
+			const success = await this.#setOwnerHashedPassword(hashedPassword)
+			if (success) {
+				// Also synchronize Linux system password
+				// It's async but we don't need to wait for it to complete
+				this.syncSystemPassword()
+			}
+			return success
+		})
 	}
 
 	async syncSystemPassword() {
@@ -101,10 +137,23 @@ export default class User {
 
 	// Directly sets the hashed password value (only exposed for data migration)
 	async setHashedPassword(hashedPassword: string) {
+		return this.#withAccountCredentialChange(OWNER_USER_ID, () => this.#setOwnerHashedPassword(hashedPassword))
+	}
+
+	async #setOwnerHashedPassword(hashedPassword: string) {
 		if (await this.#umbreld.hardware.raid.hasConfigStore()) {
 			await this.#umbreld.hardware.raid.configStore.set('user.hashedPassword', hashedPassword)
 		}
 		return this.#store.set('user.hashedPassword', hashedPassword)
+	}
+
+	async #withAccountCredentialChange<T>(accountId: string, operation: () => Promise<T>) {
+		const finish = this.#umbreld.auth.beginAccountCredentialChange(accountId)
+		try {
+			return await operation()
+		} finally {
+			finish()
+		}
 	}
 
 	// Register a new user
@@ -144,22 +193,14 @@ export default class User {
 		return totp.verify(totpUri!, token)
 	}
 
-	async validateLogin(password: string, totpToken?: string) {
-		if (!(await this.validatePassword(password))) return 'Incorrect password'
-		if (!(await this.is2faEnabled())) return null
-		if (!totpToken) return 'Missing 2FA code'
-		if (!(await this.validate2faToken(totpToken))) return 'Incorrect 2FA code'
-		return null
-	}
-
 	// Enable 2FA
 	async enable2fa(totpUri: string) {
-		return this.#store.set('user.totpUri', totpUri)
+		return this.#withAccountCredentialChange(OWNER_USER_ID, () => this.#store.set('user.totpUri', totpUri))
 	}
 
 	// Disable 2FA
 	async disable2fa() {
-		return this.#store.delete('user.totpUri')
+		return this.#withAccountCredentialChange(OWNER_USER_ID, () => this.#store.delete('user.totpUri'))
 	}
 
 	// Set language preference
@@ -173,5 +214,309 @@ export default class User {
 	// Set temperature unit preference
 	async setTemperatureUnit(temperatureUnit: string) {
 		return this.#store.set('user.temperatureUnit', temperatureUnit)
+	}
+
+	// ── Members ─────────────────────────────────────────────────────────────
+	// Member accounts are additional users created by the owner. The owner is
+	// always user id '0' and lives in the top level 'user' store key, members
+	// get a slug id derived from their name and live in the 'members' array.
+
+	// List all member accounts
+	async listMembers(): Promise<Member[]> {
+		return ((await this.#store.get('members')) ?? []).filter(isActiveMember)
+	}
+
+	// Get a member account by user id
+	async getMember(userId: string): Promise<Member | undefined> {
+		const members = await this.listMembers()
+		return members.find((member) => member.id === userId)
+	}
+
+	// List all accounts on this device (no password hashes)
+	async listAccounts(): Promise<{userId: string; name: string; wallpaper?: string}[]> {
+		const owner = await this.get()
+		const members = await this.listMembers()
+		return [
+			{userId: OWNER_USER_ID, name: owner?.name ?? '', wallpaper: owner?.wallpaper},
+			...members.map((member) => ({userId: member.id, name: member.name, wallpaper: member.wallpaper})),
+		]
+	}
+
+	// Create a new member account with its own home directory
+	async createUser(name: string, password: string): Promise<{userId: string; name: string}> {
+		if (!(await this.exists())) throw new Error('Cannot create users before the owner is registered')
+
+		const hashedPassword = await this.#hashPassword(password)
+
+		// Check the name and derive the id inside the write lock so concurrent
+		// creates can't both pass the checks and claim the same slug
+		let member: Member | undefined
+		await this.#store.getWriteLock(async ({get, set}) => {
+			// Check the name isn't already taken by the owner or another member
+			const owner = await get('user')
+			const memberRecords = (await get('members')) ?? []
+			const members = memberRecords.filter(isActiveMember)
+			const nameTaken = owner?.name === name || members.some((member) => member.name === name)
+			if (nameTaken) throw new Error('A user with this name already exists')
+
+			// Derive a human-readable, immutable user id slug from the name. It becomes
+			// the member's path component (/Users/<id>), so it must be a safe, stable,
+			// unique directory name. The display name stays separate and can change; the
+			// slug never does. Lowercase, strip to a-z, append -n on collision, then
+			// capitalise the first letter. e.g. "Alice" -> "Alice", a second -> "Alice-2".
+			const base = name.toLowerCase().replace(/[^a-z]/g, '') || 'user'
+			const takenIds = new Set([OWNER_USER_ID, ...memberRecords.map((member) => member.id)])
+			const capitalise = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
+			let id = capitalise(base)
+			for (let suffix = 2; takenIds.has(id); suffix++) id = capitalise(`${base}-${suffix}`)
+
+			member = {id, name, hashedPassword}
+			await set('members', [...memberRecords, member])
+		})
+		if (!member) throw new Error('User creation failed')
+
+		// Create the user's home directory with the default skeleton
+		await this.#umbreld.files.createMemberDirectories(member.id)
+
+		this.logger.log(`Created user ${name} (${member.id})`)
+		return {userId: member.id, name: member.name}
+	}
+
+	// Delete a member account. Marking it deleted is a single durable state
+	// transition: authentication stops accepting it immediately, its id remains
+	// permanently reserved, and cleanup can safely resume after any failure.
+	async deleteUser(userId: string): Promise<boolean> {
+		if (userId === OWNER_USER_ID) throw new Error('The owner account cannot be deleted')
+
+		let found = false
+		await this.#store.getWriteLock(async ({get, set}) => {
+			const memberRecords = (await get('members')) ?? []
+			const record = memberRecords.find((member) => member.id === userId)
+			if (!record) return
+			found = true
+			if (isDeletedMember(record)) return
+			await set(
+				'members',
+				memberRecords.map((member) => (member.id === userId ? {id: userId, deleted: true as const} : member)),
+			)
+		})
+		if (!found) throw new Error('User not found')
+
+		await this.#finishDeletion(userId)
+		return true
+	}
+
+	// Resume deletion side effects left incomplete by a crash or I/O failure.
+	// Called once all dependent modules have started.
+	async finishPendingDeletions() {
+		const pending = ((await this.#store.get('members')) ?? []).filter(
+			(member): member is DeletedMember => isDeletedMember(member) && !member.cleanupComplete,
+		)
+		for (const member of pending) {
+			await this.#finishDeletion(member.id).catch((error) => {
+				this.logger.error(`Failed to finish deleting user ${member.id}; will retry on next start`, error)
+			})
+		}
+	}
+
+	async #finishDeletion(userId: string) {
+		await this.#umbreld.auth.revokeAllForAccount(userId)
+
+		// Delete the user's files
+		await this.#umbreld.files.deleteMemberDirectories(userId)
+
+		// Remove them from any share lists
+		await this.#umbreld.files.memberShares.removeUserFromShares(userId)
+		await this.#umbreld.apps.removeUserFromMemberShares(userId)
+
+		await this.#store.getWriteLock(async ({get, set}) => {
+			const memberRecords = (await get('members')) ?? []
+			const record = memberRecords.find((member) => member.id === userId)
+			if (!record || !isDeletedMember(record)) return
+			await set(
+				'members',
+				memberRecords.map((member) =>
+					member.id === userId ? {id: userId, deleted: true as const, cleanupComplete: true as const} : member,
+				),
+			)
+		})
+
+		this.logger.log(`Deleted user ${userId}`)
+	}
+
+	// Validate a password against any account's stored hash
+	async validateAccountPassword(userId: string, password: string): Promise<boolean> {
+		let hashedPassword: string | undefined
+		if (userId === OWNER_USER_ID) {
+			hashedPassword = await this.#store.get('user.hashedPassword')
+		} else {
+			const member = await this.getMember(userId)
+			hashedPassword = member?.hashedPassword
+		}
+		return Boolean(hashedPassword && (await bcrypt.compare(password, hashedPassword)))
+	}
+
+	// Validate one coherent password/MFA snapshot and bind the result to the
+	// current session-issuance revision. Auth rechecks that revision immediately
+	// before committing the session, so a concurrent credential change cannot
+	// turn a stale verification into a new login.
+	async validateAccountLogin(userId: string, password: string, totpToken?: string): Promise<AccountLoginValidation> {
+		const sessionIssuanceRevision = this.#umbreld.auth.sessionIssuanceRevision(userId)
+		const account = userId === OWNER_USER_ID ? await this.get() : await this.getMember(userId)
+
+		if (!account?.hashedPassword || !(await bcrypt.compare(password, account.hashedPassword))) {
+			return {valid: false, reason: 'incorrect-password'}
+		}
+		if (account.totpUri) {
+			if (!totpToken) return {valid: false, reason: 'missing-totp'}
+			if (!totp.verify(account.totpUri, totpToken)) return {valid: false, reason: 'incorrect-totp'}
+		}
+
+		return {valid: true, sessionIssuanceRevision}
+	}
+
+	// ── Account scoped settings ─────────────────────────────────────────────
+	// These operate on either the owner (user id '0', stored in the top level
+	// 'user' object) or a member (stored in the 'members' array), so endpoints
+	// members are allowed to use can always be scoped to their own account.
+
+	// Update a member's record in the store. Throws if the member doesn't exist.
+	async #updateMember(userId: string, updates: Partial<Omit<Member, 'id'>>) {
+		let found = false
+		await this.#store.getWriteLock(async ({get, set}) => {
+			const memberRecords = (await get('members')) ?? []
+			const updatedMembers = memberRecords.map((member) => {
+				if (member.id !== userId || !isActiveMember(member)) return member
+				found = true
+				return {...member, ...updates}
+			})
+			if (found) await set('members', updatedMembers)
+		})
+		if (!found) throw new Error('User not found')
+		return true
+	}
+
+	// Set any account's password
+	async setAccountPassword(userId: string, password: string) {
+		if (userId === OWNER_USER_ID) return this.setPassword(password)
+		return this.#withAccountCredentialChange(userId, async () =>
+			this.#updateMember(userId, {hashedPassword: await this.#hashPassword(password)}),
+		)
+	}
+
+	// Owner initiated recovery for a member who lost their credentials. Also
+	// clears the member's 2FA, otherwise a lost authenticator would still lock
+	// them out and the owner's only remaining recovery would be deleting the
+	// account (and its files).
+	async resetMemberPassword(userId: string, password: string) {
+		if (userId === OWNER_USER_ID) throw new Error("The owner's password cannot be reset, use changePassword")
+		return this.#withAccountCredentialChange(userId, async () =>
+			this.#updateMember(userId, {
+				hashedPassword: await this.#hashPassword(password),
+				totpUri: undefined,
+			}),
+		)
+	}
+
+	// Set any account's display name. Member names must stay unique across all
+	// accounts since the login screen identifies accounts by name. The id (and
+	// their /Users/<id> path) is immutable and unaffected.
+	async setAccountName(userId: string, name: string) {
+		let found = userId === OWNER_USER_ID
+		await this.#store.getWriteLock(async ({get, set}) => {
+			const owner = await get('user')
+			const memberRecords = (await get('members')) ?? []
+			const members = memberRecords.filter(isActiveMember)
+			const nameTaken =
+				userId === OWNER_USER_ID
+					? members.some((member) => member.name === name)
+					: owner?.name === name || members.some((member) => member.id !== userId && member.name === name)
+			if (nameTaken) throw new Error('A user with this name already exists')
+
+			if (userId === OWNER_USER_ID) {
+				await set('user.name', name)
+				return
+			}
+
+			await set(
+				'members',
+				memberRecords.map((member) => {
+					if (member.id !== userId || !isActiveMember(member)) return member
+					found = true
+					return {...member, name}
+				}),
+			)
+		})
+		if (!found) throw new Error('User not found')
+
+		// The RAID config store mirrors owner settings for recovery, but isn't
+		// involved in login-name uniqueness.
+		if (userId === OWNER_USER_ID && (await this.#umbreld.hardware.raid.hasConfigStore())) {
+			await this.#umbreld.hardware.raid.configStore.set('user.name', name)
+		}
+		return true
+	}
+
+	// Set any account's wallpaper
+	async setAccountWallpaper(userId: string, wallpaper: string) {
+		if (userId === OWNER_USER_ID) return this.setWallpaper(wallpaper)
+		return this.#updateMember(userId, {wallpaper})
+	}
+
+	// Set any account's language preference
+	async setAccountLanguage(userId: string, language: string) {
+		if (userId === OWNER_USER_ID) return this.setLanguage(language)
+		return this.#updateMember(userId, {language})
+	}
+
+	// Set any account's temperature unit preference
+	async setAccountTemperatureUnit(userId: string, temperatureUnit: string) {
+		if (userId === OWNER_USER_ID) return this.setTemperatureUnit(temperatureUnit)
+		return this.#updateMember(userId, {temperatureUnit})
+	}
+
+	// Get any account's file browser view preferences
+	async getAccountViewPreferences(userId: string): Promise<Partial<ViewPreferences> | undefined> {
+		if (userId === OWNER_USER_ID) return this.#store.get('files.preferences')
+		const member = await this.getMember(userId)
+		return member?.viewPreferences
+	}
+
+	// Update any account's file browser view preferences
+	async setAccountViewPreferences(userId: string, viewPreferences: Partial<ViewPreferences>) {
+		if (userId === OWNER_USER_ID) return this.#store.set('files.preferences', viewPreferences as ViewPreferences)
+		return this.#updateMember(userId, {viewPreferences})
+	}
+
+	// ── Account scoped 2FA ──────────────────────────────────────────────────
+
+	// Get any account's stored TOTP URI
+	async #getAccountTotpUri(userId: string): Promise<string | undefined> {
+		if (userId === OWNER_USER_ID) return this.#store.get('user.totpUri')
+		const member = await this.getMember(userId)
+		return member?.totpUri
+	}
+
+	// Check if 2FA is enabled for any account
+	async is2faEnabledForAccount(userId: string) {
+		return Boolean(await this.#getAccountTotpUri(userId))
+	}
+
+	// Validate a 2FA token against any account's stored secret
+	async validate2faTokenForAccount(userId: string, token: string) {
+		const totpUri = await this.#getAccountTotpUri(userId)
+		return Boolean(totpUri && totp.verify(totpUri, token))
+	}
+
+	// Enable 2FA for any account
+	async enable2faForAccount(userId: string, totpUri: string) {
+		if (userId === OWNER_USER_ID) return this.enable2fa(totpUri)
+		return this.#withAccountCredentialChange(userId, () => this.#updateMember(userId, {totpUri}))
+	}
+
+	// Disable 2FA for any account
+	async disable2faForAccount(userId: string) {
+		if (userId === OWNER_USER_ID) return this.disable2fa()
+		return this.#withAccountCredentialChange(userId, () => this.#updateMember(userId, {totpUri: undefined}))
 	}
 }

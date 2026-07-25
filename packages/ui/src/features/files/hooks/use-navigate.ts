@@ -8,8 +8,8 @@ import {
 	NETWORK_STORAGE_PATH,
 	RECENTS_PATH,
 	SEARCH_PATH,
-	TRASH_PATH,
 } from '@/features/files/constants'
+import {useHomePath, useTrashPath} from '@/features/files/hooks/use-home-path'
 import {useFilesCapabilities} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
@@ -85,10 +85,16 @@ export const useNavigate = () => {
 		}, 500)
 	}
 
-	const isBrowsingTrash = currentPath.startsWith(TRASH_PATH)
+	// The current account's home and trash roots (owner: /Home and /Trash,
+	// member: /Users/<slug> and /Users/<slug>/Trash)
+	const homePath = useHomePath()
+	const trashPath = useTrashPath()
+	const isBrowsingTrash = currentPath === trashPath || currentPath.startsWith(`${trashPath}/`)
 
-	const isInHome = currentPath === HOME_PATH
+	const isInHome = currentPath === homePath
 
+	// Deliberately the owner's /Home only (not a member's home), this gates
+	// owner-only features like Rewind that operate on the owner home snapshots
 	const isBrowsingHome = currentPath.startsWith(HOME_PATH)
 
 	const isBrowsingRecents = currentPath.startsWith(RECENTS_PATH)

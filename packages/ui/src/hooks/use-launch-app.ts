@@ -38,6 +38,9 @@ export function useLaunchApp() {
 			utils.apps.recentlyOpened.invalidate()
 		},
 	})
+	// Open tracking is owner-only (it powers the owner's cmd-k suggestions)
+	const userQ = trpcReact.user.get.useQuery()
+	const isMember = userQ.data?.role === 'member'
 
 	const handleLaunch = (appId: string, options?: {path?: string; direct?: boolean; protocol?: 'http:' | 'https:'}) => {
 		const app = userApp.userAppsKeyed?.[appId]
@@ -48,7 +51,7 @@ export function useLaunchApp() {
 		}
 
 		const open = (path?: string, protocol = location.protocol) => {
-			trackOpenMut.mutate({appId})
+			if (!isMember) trackOpenMut.mutate({appId})
 			const url = path ? urlJoin(appToUrl(app, protocol), path) : appToUrlWithAppPath(app, protocol)
 			window.open(url, '_blank')?.focus()
 		}

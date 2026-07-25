@@ -7,6 +7,9 @@ import {createProxyMiddleware} from 'http-proxy-middleware'
 
 import type Umbreld from '../../index.js'
 import {appGatewayTokenFromRequest, clearAppGatewayCookies, setAppGatewayCookie} from '../auth/app-gateway-cookie.js'
+import {SessionIssuanceInvalidatedError} from '../auth/auth.js'
+import {OWNER_USER_ID} from '../user/constants.js'
+import {getDefaultWallpaper} from '../user/default-wallpaper.js'
 
 type AppAuthRequest = {
 	appId: string
@@ -128,15 +131,54 @@ export default function createAppAuthRouter(umbreld: Umbreld) {
 		next()
 	})
 
+	router.get('/v1/account/accounts', async (_request, response) => {
+		if (!(await umbreld.user.exists())) return response.json([])
+		const defaultWallpaper = await getDefaultWallpaper()
+		response.json(
+			(await umbreld.user.listAccounts()).map((account) => ({
+				...account,
+				wallpaper: account.wallpaper ?? defaultWallpaper,
+			})),
+		)
+	})
+
 	router.post('/v1/account/login', async (request, response) => {
+		const userId = typeof request.body?.userId === 'string' ? request.body.userId : OWNER_USER_ID
 		const password = typeof request.body?.password === 'string' ? request.body.password : ''
 		const totpToken = typeof request.body?.totpToken === 'string' ? request.body.totpToken : undefined
-		const loginError = await umbreld.user.validateLogin(password, totpToken)
-		if (loginError) return response.status(401).json({error: {code: -32001, message: loginError}})
+		const validation = await umbreld.user.validateAccountLogin(userId, password, totpToken)
+		if (!validation.valid) {
+			const message =
+				validation.reason === 'missing-totp'
+					? 'Missing 2FA code'
+					: validation.reason === 'incorrect-totp'
+						? 'Incorrect 2FA code'
+						: 'Incorrect password'
+			return response.status(401).json({error: {code: -32001, message}})
+		}
 
-		const session = await umbreld.auth.createSession({userAgent: request.get('user-agent')})
-		setAppGatewayCookie(response, request, session.appGatewayToken, new Date(session.expiresAt))
-		response.json(await createHandoffResponse(umbreld, request, session.appGatewayToken))
+		let session
+		try {
+			session = await umbreld.auth.createSession({
+				accountId: userId,
+				userAgent: request.get('user-agent'),
+				expectedSessionIssuanceRevision: validation.sessionIssuanceRevision,
+			})
+		} catch (error) {
+			if (error instanceof SessionIssuanceInvalidatedError) {
+				return response.status(401).json({error: {code: -32001, message: error.message}})
+			}
+			throw error
+		}
+
+		try {
+			const handoff = await createHandoffResponse(umbreld, request, session.appGatewayToken)
+			setAppGatewayCookie(response, request, session.appGatewayToken, new Date(session.expiresAt))
+			response.json(handoff)
+		} catch {
+			await umbreld.auth.revokeSession(session.principal.sessionId)
+			response.status(403).json({error: {code: -32003, message: 'This app has not been shared with this account'}})
+		}
 	})
 
 	router.get('/v1/account/session', async (request, response) => {
@@ -147,12 +189,16 @@ export default function createAppAuthRouter(umbreld: Umbreld) {
 			clearAppGatewayCookies(response)
 			return response.status(401).json({error: {code: -32001, message: 'Unauthorized'}})
 		}
-		response.json(await createHandoffResponse(umbreld, request, token))
+		try {
+			response.json(await createHandoffResponse(umbreld, request, token))
+		} catch {
+			response.status(403).json({error: {code: -32003, message: 'This app has not been shared with this account'}})
+		}
 	})
 
 	router.get('/v1/account/wallpaper', async (_request, response) => {
 		const user = await umbreld.user.get()
-		response.send(user?.wallpaper ?? '18')
+		response.send(user?.wallpaper ?? (await getDefaultWallpaper()))
 	})
 
 	router.get('/v1/apps', async (request, response) => {
