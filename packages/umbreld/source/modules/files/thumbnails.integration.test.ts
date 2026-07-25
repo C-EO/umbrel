@@ -86,7 +86,9 @@ describe('Thumbnail generation', () => {
 			path: '/External/thumbnail-missing-directory-test/master-lossless-image.png',
 		})
 
-		const thumbnailName = thumbnailUrl.split('/').pop()!
+		// The URL carries the source path as a query string, so read the filename
+		// off the pathname rather than splitting the whole URL.
+		const thumbnailName = nodePath.basename(new URL(thumbnailUrl, 'http://localhost').pathname)
 		await expect(fse.pathExists(nodePath.join(thumbnailDir, thumbnailName))).resolves.toBe(true)
 	})
 })

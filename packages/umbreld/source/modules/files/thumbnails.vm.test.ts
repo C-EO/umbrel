@@ -208,8 +208,7 @@ describe('getThumbnail', () => {
 		const thumbnailUrl = await umbreld.client.files.getThumbnail.mutate({path: virtualPath})
 
 		// Verify thumbnail file was created
-		const thumbnailFilename = thumbnailUrl.split('/').pop()!
-		await expect(listThumbnails()).resolves.toContain(thumbnailFilename)
+		await expect(listThumbnails()).resolves.toContain(thumbnailFilename(thumbnailUrl))
 	})
 
 	const videoTypes = ['.mkv', '.mov', '.mp4', '.3gp', '.avi']
