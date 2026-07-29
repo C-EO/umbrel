@@ -76,6 +76,24 @@ type AcceleratorConfig = {
 
 // Types for zpool status --json --json-int --json-flat-vdevs output
 type State = 'ONLINE' | 'DEGRADED' | 'FAULTED' | 'OFFLINE' | 'UNAVAIL' | 'REMOVED' | 'CANT_OPEN'
+
+type FailsafeRebuildPoolStatus = {
+	raidType?: RaidType
+	status?: State
+	devices?: Array<{status: State}>
+	rebuild?: RebuildStatus
+}
+
+export function isFailsafeRebuildComplete(status: FailsafeRebuildPoolStatus): boolean {
+	if (status.rebuild) return status.rebuild.state === 'finished'
+	return (
+		status.raidType === 'failsafe' &&
+		status.status === 'ONLINE' &&
+		status.devices?.length === 2 &&
+		status.devices.every((device) => device.status === 'ONLINE')
+	)
+}
+
 type Vdev = {
 	vdev_type: 'root' | 'raidz' | 'mirror' | 'disk' | 'file'
 	path?: string
@@ -1965,26 +1983,35 @@ export default class Raid {
 			// Monitor rebuild progress until complete
 			this.logger.log('Monitoring rebuild progress...')
 			while (true) {
+				let status: Awaited<ReturnType<Raid['getPoolStatus']>>
 				try {
-					const status = await this.getPoolStatus(pool.name)
-					if (status.rebuild) {
-						// Scale rebuild progress (0-100) to transition progress (51-99)
-						const scaledProgress = 51 + Math.floor((status.rebuild.progress / 100) * 48)
-						const cappedProgress = Math.min(scaledProgress, 99)
-						if (cappedProgress > (this.failsafeTransitionStatus?.progress ?? 0)) {
-							this.failsafeTransitionStatus = {state: 'rebuilding', progress: cappedProgress}
-							this.logger.log(`Rebuild progress: ${cappedProgress}%`)
-							this.#umbreld.eventBus.emit('raid:failsafe-transition-progress', this.failsafeTransitionStatus)
-						}
-						if (status.rebuild.state === 'finished') {
-							this.failsafeTransitionStatus = {state: 'complete', progress: 100}
-							this.logger.log('Rebuild progress: 100%')
-							this.#umbreld.eventBus.emit('raid:failsafe-transition-progress', this.failsafeTransitionStatus)
-							break
-						}
-					}
+					status = await this.getPoolStatus(pool.name)
 				} catch (error) {
 					this.logger.error('Error polling rebuild progress', error)
+					await setTimeout(1000)
+					continue
+				}
+
+				if (status.rebuild?.state === 'canceled') {
+					throw new Error('Failsafe transition rebuild was canceled')
+				}
+
+				if (status.rebuild) {
+					// Scale rebuild progress to 51-99% (second half of transition)
+					const scaledProgress = 51 + Math.floor((status.rebuild.progress / 100) * 48)
+					const cappedProgress = Math.min(scaledProgress, 99)
+					if (cappedProgress > (this.failsafeTransitionStatus?.progress ?? 0)) {
+						this.failsafeTransitionStatus = {state: 'rebuilding', progress: cappedProgress}
+						this.logger.log(`Rebuild progress: ${cappedProgress}%`)
+						this.#umbreld.eventBus.emit('raid:failsafe-transition-progress', this.failsafeTransitionStatus)
+					}
+				}
+
+				if (isFailsafeRebuildComplete(status)) {
+					this.failsafeTransitionStatus = {state: 'complete', progress: 100}
+					this.logger.log(status.rebuild ? 'Rebuild progress: 100%' : 'Rebuild completed before the first status poll')
+					this.#umbreld.eventBus.emit('raid:failsafe-transition-progress', this.failsafeTransitionStatus)
+					break
 				}
 				await setTimeout(1000)
 			}
