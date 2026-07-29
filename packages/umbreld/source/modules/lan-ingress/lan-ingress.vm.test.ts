@@ -134,6 +134,15 @@ describe.sequential('LAN ingress', () => {
 	})
 
 	test('sets up test apps', async () => {
+		// Login becomes available while the rest of Umbreld is still starting.
+		// Wait for the real app environment before attaching fixture containers
+		// to its external Docker network.
+		await pRetry(() => umbreld.vm.sshAsRoot('docker network inspect umbrel_main_network >/dev/null'), {
+			retries: 120,
+			factor: 1,
+			minTimeout: 1000,
+			maxTimeout: 1000,
+		})
 		// setupTestApps only writes app state over SSH; it does not trigger a LAN ingress
 		// refresh. The hostname test below causes the refresh (setHostname awaits it) that
 		// creates the app mux listeners and nftables rules the app-port test depends on.
