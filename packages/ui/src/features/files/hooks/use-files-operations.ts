@@ -38,6 +38,31 @@ export function useFilesOperations() {
 	const addIncomingItems = useFilesStore((s) => s.addIncomingItems)
 	const removeIncomingItems = useFilesStore((s) => s.removeIncomingItems)
 
+	// Every mutating command comes through this hook. Check both the embedding
+	// mode and the backend's per-path capability model here so keyboard and DnD
+	// cannot bypass the guards used by buttons and context menus.
+	const isCommandAllowed = async ({
+		items = [],
+		itemOperation,
+		writablePath,
+	}: {
+		items?: FileSystemItem[]
+		itemOperation?: FileSystemItem['operations'][number]
+		writablePath?: string
+	}) => {
+		if (isReadOnly) return false
+		if (itemOperation && (items.length === 0 || !items.every((item) => item.operations.includes(itemOperation)))) {
+			return false
+		}
+		if (!writablePath) return true
+		try {
+			const operations = await utils.files.pathOperations.fetch({path: writablePath})
+			return operations.includes('writable')
+		} catch {
+			return false
+		}
+	}
+
 	// Internal helper for batch operations (move, copy, restore) with collision handling
 	// ----------------------------------------------------------
 	const _executeBatchOperationWithCollisionHandling = async <TArgs extends object>({
@@ -200,7 +225,7 @@ export function useFilesOperations() {
 	}).mutateAsync
 
 	const renameItem = async ({item, newName}: {item: FileSystemItem; newName: string}) => {
-		if (isReadOnly) return
+		if (!(await isCommandAllowed({items: [item], itemOperation: 'rename'}))) return
 		const currentName = item.path.split('/').pop() || ''
 
 		// do nothing if the name hasn't changed
@@ -241,11 +266,18 @@ export function useFilesOperations() {
 	}).mutateAsync
 
 	const moveItems = async ({sourceItems, toDirectory}: {sourceItems: FileSystemItem[]; toDirectory: string}) => {
-		if (isReadOnly) return
+		if (
+			!(await isCommandAllowed({
+				items: sourceItems,
+				itemOperation: 'move',
+				writablePath: toDirectory,
+			}))
+		)
+			return false
 
 		// Filter out items already in the target directory (no-op moves)
 		const itemsToMove = sourceItems.filter((item) => item.path.substring(0, item.path.lastIndexOf('/')) !== toDirectory)
-		if (itemsToMove.length === 0) return
+		if (itemsToMove.length === 0) return false
 
 		const fromPaths = itemsToMove.map((item) => item.path)
 		addPendingPaths(fromPaths, 'removing')
@@ -271,20 +303,26 @@ export function useFilesOperations() {
 				removeIncomingItems([`${toDirectory}/${name}`])
 			},
 		})
+		return true
 	}
 
 	const moveSelectedItems = async ({toDirectory}: {toDirectory: string}) => {
-		if (isReadOnly) return
 		const items = [...selectedItems]
-		setSelectedItems([])
-		await moveItems({sourceItems: items, toDirectory})
+		if (await moveItems({sourceItems: items, toDirectory})) setSelectedItems([])
 	}
 
 	const moveDraggedItems = async ({toDirectory}: {toDirectory: string}) => {
-		if (isReadOnly) return
 		const items = [...draggedItems]
+		const moved = await moveItems({sourceItems: items, toDirectory})
+		if (!moved) {
+			toast.error(
+				t('files-error.move', {
+					message: getFilesErrorMessage('[operation-not-allowed]'),
+				}),
+			)
+		}
 		clearDraggedItems()
-		await moveItems({sourceItems: items, toDirectory})
+		return moved
 	}
 
 	// Copy item mutation hook
@@ -299,10 +337,17 @@ export function useFilesOperations() {
 	// Copy does not use optimistic incoming items because large copies show progress
 	// via the operations island (WebSocket). Adding placeholders would conflict with
 	// the island by showing the file as "already there" while progress is still updating.
-	const copyItems = async ({fromPaths, toDirectory}: {fromPaths: FileSystemItem['path'][]; toDirectory: string}) => {
-		if (isReadOnly) return
+	const copyItems = async ({sourceItems, toDirectory}: {sourceItems: FileSystemItem[]; toDirectory: string}) => {
+		if (
+			!(await isCommandAllowed({
+				items: sourceItems,
+				itemOperation: 'copy',
+				writablePath: toDirectory,
+			}))
+		)
+			return false
 		await _executeBatchOperationWithCollisionHandling({
-			paths: fromPaths,
+			paths: sourceItems.map(({path}) => path),
 			operationAsyncFn: copyItemMutation,
 			operationType: 'copy',
 			getOperationArgsFn: (path) => ({path, toDirectory}),
@@ -310,18 +355,16 @@ export function useFilesOperations() {
 			onErrorToastFn: (message) => toast.error(t('files-error.copy', {message: getFilesErrorMessage(message)})),
 			onSuccessAll: () => {},
 		})
+		return true
 	}
 
 	// Paste (copy or move) items from clipboard
 	const pasteItemsFromClipboard = async ({toDirectory}: {toDirectory: string}) => {
-		if (isReadOnly) return
 		if (clipboardMode === 'copy') {
-			const paths = clipboardItems.map((item) => item.path)
-			await copyItems({fromPaths: paths, toDirectory})
+			await copyItems({sourceItems: clipboardItems, toDirectory})
 		} else if (clipboardMode === 'cut') {
 			const items = [...clipboardItems]
-			clearClipboard()
-			await moveItems({sourceItems: items, toDirectory})
+			if (await moveItems({sourceItems: items, toDirectory})) clearClipboard()
 		}
 	}
 
@@ -340,11 +383,12 @@ export function useFilesOperations() {
 		},
 	}).mutateAsync
 
-	const extractSelectedItems = () => {
-		if (isReadOnly) return
-		const paths = selectedItems.map((item) => item.path)
+	const extractSelectedItems = async () => {
+		const items = [...selectedItems]
+		if (!(await isCommandAllowed({items, itemOperation: 'unarchive'}))) return
+		const paths = items.map((item) => item.path)
 		addPendingPaths(paths, 'processing')
-		for (const item of selectedItems) {
+		for (const item of items) {
 			extract({path: item.path}).catch(() => {
 				removePendingPaths([item.path])
 			})
@@ -371,9 +415,11 @@ export function useFilesOperations() {
 		},
 	}).mutateAsync
 
-	const archiveSelectedItems = () => {
-		if (isReadOnly) return
-		const paths = selectedItems.map((item) => item.path)
+	const archiveSelectedItems = async () => {
+		const items = [...selectedItems]
+		const writablePath = items[0]?.path.substring(0, items[0].path.lastIndexOf('/')) || '/'
+		if (!(await isCommandAllowed({items, itemOperation: 'copy', writablePath}))) return
+		const paths = items.map((item) => item.path)
 		addPendingPaths(paths, 'processing')
 		archive({paths}).catch(() => {})
 		setSelectedItems([])
@@ -403,11 +449,12 @@ export function useFilesOperations() {
 		},
 	}).mutateAsync
 
-	const trashSelectedItems = () => {
-		if (isReadOnly) return
-		const paths = selectedItems.map((item) => item.path)
+	const trashSelectedItems = async () => {
+		const items = [...selectedItems]
+		if (!(await isCommandAllowed({items, itemOperation: 'trash'}))) return
+		const paths = items.map((item) => item.path)
 		addPendingPaths(paths, 'removing')
-		for (const item of selectedItems) {
+		for (const item of items) {
 			trashItem({path: item.path}).catch(() => {
 				removePendingPaths([item.path])
 			})
@@ -415,11 +462,12 @@ export function useFilesOperations() {
 		setSelectedItems([])
 	}
 
-	const trashDraggedItems = () => {
-		if (isReadOnly) return
-		const paths = draggedItems.map((item) => item.path)
+	const trashDraggedItems = async () => {
+		const items = [...draggedItems]
+		if (!(await isCommandAllowed({items, itemOperation: 'trash'}))) return
+		const paths = items.map((item) => item.path)
 		addPendingPaths(paths, 'removing')
-		for (const item of draggedItems) {
+		for (const item of items) {
 			trashItem({path: item.path}).catch(() => {
 				removePendingPaths([item.path])
 			})
@@ -438,7 +486,6 @@ export function useFilesOperations() {
 
 	// Updated batch restore function
 	const restoreItems = async ({paths}: {paths: string[]}) => {
-		if (isReadOnly) return
 		addPendingPaths(paths, 'removing')
 		await _executeBatchOperationWithCollisionHandling({
 			paths,
@@ -451,21 +498,22 @@ export function useFilesOperations() {
 		})
 	}
 
-	const restoreSelectedItems = () => {
-		if (isReadOnly) return
-		restoreItems({paths: selectedItems.map((item) => item.path)})
+	const restoreSelectedItems = async () => {
+		const items = [...selectedItems]
+		if (!(await isCommandAllowed({items, itemOperation: 'restore'}))) return
+		await restoreItems({paths: items.map((item) => item.path)})
 		setSelectedItems([])
 	}
 
 	// (Permanently) delete item
 	// This is only possible in /Trash, /External, and /Network
-	const deleteItem = trpcReact.files.delete.useMutation({
-		onSuccess: (_data, {path}) => {
-			// If we're permanently deleting from Trash, we can just invalidate the Trash listing.
-			if (path.startsWith(TRASH_PATH)) {
+	const deleteItems = trpcReact.files.deleteMany.useMutation({
+		onSuccess: (_data, {paths}) => {
+			// If we're permanently deleting from Trash, invalidate the Trash listing.
+			if (paths.some((path) => path.startsWith(TRASH_PATH))) {
 				utils.files.list.invalidate({path: TRASH_PATH})
-			} else {
-				// Otherwise invalidate the generic list
+			}
+			if (paths.some((path) => !path.startsWith(TRASH_PATH))) {
 				utils.files.list.invalidate()
 				// Invalidate favorites since they can include External/Network items
 				utils.files.favorites.invalidate()
@@ -478,20 +526,17 @@ export function useFilesOperations() {
 		},
 	}).mutateAsync
 
-	const deleteSelectedItems = () => {
-		if (isReadOnly) return
-		const paths = selectedItems.map((item) => item.path)
+	const deleteSelectedItems = async () => {
+		const items = [...selectedItems]
+		if (!(await isCommandAllowed({items, itemOperation: 'delete'}))) return
+		const paths = items.map((item) => item.path)
 		addPendingPaths(paths, 'removing')
-		for (const item of selectedItems) {
-			deleteItem({path: item.path}).catch(() => {
-				removePendingPaths([item.path])
-			})
-		}
+		deleteItems({paths}).catch(() => removePendingPaths(paths))
 		setSelectedItems([])
 	}
 
 	// Empty trash
-	const emptyTrash = trpcReact.files.emptyTrash.useMutation({
+	const emptyTrashMutation = trpcReact.files.emptyTrash.useMutation({
 		onError: (error) => {
 			toast.error(t('files-error.empty-trash', {message: getFilesErrorMessage(error.message)}))
 		},
@@ -500,6 +545,10 @@ export function useFilesOperations() {
 			utils.files.list.invalidate({path: TRASH_PATH})
 		},
 	}).mutateAsync
+	const emptyTrash = async () => {
+		if (!(await isCommandAllowed({}))) return
+		return emptyTrashMutation()
+	}
 
 	// Download operations
 	// ------------------
@@ -591,13 +640,6 @@ export function useFilesOperations() {
 		return workItems
 	}
 
-	const executeCopyWorkItems = async ({workItems}: {workItems: CopyWorkItem[]}) => {
-		if (isReadOnly) return
-		for (const item of workItems) {
-			await copyItemMutation({path: item.path, toDirectory: item.toDirectory, collision: item.collision})
-		}
-	}
-
 	return {
 		// Basic operations
 		renameItem,
@@ -613,7 +655,6 @@ export function useFilesOperations() {
 		// Trash operations
 		trashDraggedItems,
 		trashSelectedItems,
-		restoreFromTrash,
 		restoreSelectedItems,
 		deleteSelectedItems,
 		emptyTrash,
@@ -621,6 +662,5 @@ export function useFilesOperations() {
 		downloadSelectedItems,
 		// Copy planning helpers for flows that must resolve collisions before starting (e.g. Rewind feature)
 		resolveCopyCollisionsOrAbort,
-		executeCopyWorkItems,
 	}
 }

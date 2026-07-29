@@ -23,6 +23,7 @@ type BlockDevice = {
 		size: number
 		mountpoints: string[]
 		label: string
+		filesystemUuid: string
 	}[]
 }
 
@@ -39,6 +40,7 @@ export async function getBlockDevices() {
 		size?: number
 		children?: LsBlkDevice[]
 		parttypename?: string
+		uuid?: string
 	}
 	const {stdout} = await $`lsblk --output-all --json --bytes`
 	const {blockdevices} = JSON.parse(stdout) as {blockdevices: LsBlkDevice[]}
@@ -70,6 +72,7 @@ export async function getBlockDevices() {
 				id: partition.name,
 				type: partition.parttypename ?? 'unknown',
 				label: partition.label?.trim() ?? 'Untitled',
+				filesystemUuid: partition.uuid?.trim() ?? '',
 				size: partition.size ?? 0,
 				mountpoints: partition.mountpoints?.filter(Boolean) ?? [],
 			})
@@ -150,6 +153,11 @@ export default class ExternalStorage {
 	async #mountExternalDevices() {
 		// Run through single threaded queue so we don't try to mount concurrently
 		return this.#mountQueue.add(async () => {
+			// A physically removed device can leave its filesystem mounted even after
+			// the backing /dev node disappears. Detach it before considering new
+			// devices so a reconnect can reclaim the same mount path safely.
+			await this.#detachDisconnectedMountPoints()
+
 			// Get external devices
 			// Sometimes it takes a while until partition labels and types show up so we wait if we have an
 			// unknown partition type. We check type not partition label since partition label sometimes doesn't
@@ -205,23 +213,33 @@ export default class ExternalStorage {
 
 						systemMountpoint = await this.#umbreld.files.getUniqueName(systemMountpoint)
 
-						// Mount partition
-						await fse.ensureDir(systemMountpoint)
-						await this.#umbreld.files.chownSystemPath(systemMountpoint)
-						await pRetry(() => $`mount /dev/${partition.id} ${systemMountpoint}`, {
-							retries: 10,
-							minTimeout: 500,
-							factor: 1,
-							onFailedAttempt: (error) => {
-								this.logger.log(
-									`Mount attempt ${error.attemptNumber} for ${partition.id} failed, ${error.retriesLeft} retries left`,
-								)
-							},
-						})
-
-						// Log on success
 						const virtualMountPoint = this.#umbreld.files.systemToVirtualPath(systemMountpoint)
-						this.logger.log(`Mounted partition ${device.name} ${partition.label} as ${virtualMountPoint}`)
+						const releaseClouds = await this.#umbreld.files.cloud.blockExternalStorage([
+							{
+								filesystemUuid: partition.filesystemUuid || undefined,
+								mountPaths: [virtualMountPoint],
+							},
+						])
+						try {
+							// Mount partition
+							await fse.ensureDir(systemMountpoint)
+							await this.#umbreld.files.chownSystemPath(systemMountpoint)
+							await pRetry(() => $`mount /dev/${partition.id} ${systemMountpoint}`, {
+								retries: 10,
+								minTimeout: 500,
+								factor: 1,
+								onFailedAttempt: (error) => {
+									this.logger.log(
+										`Mount attempt ${error.attemptNumber} for ${partition.id} failed, ${error.retriesLeft} retries left`,
+									)
+								},
+							})
+
+							// Log on success
+							this.logger.log(`Mounted partition ${device.name} ${partition.label} as ${virtualMountPoint}`)
+						} finally {
+							releaseClouds()
+						}
 					} catch (error) {
 						// Just log the error and continue to the next partition
 						this.logger.error(`Failed to mount partition ${device.name} ${partition.label}`, error)
@@ -239,8 +257,37 @@ export default class ExternalStorage {
 		})
 	}
 
+	async #detachDisconnectedMountPoints() {
+		const externalBaseSystemPath = this.#umbreld.files.getBaseDirectory('/External')
+		for (const mountPoint of await fse.readdir(externalBaseSystemPath)) {
+			const systemMountPoint = nodePath.join(externalBaseSystemPath, mountPoint)
+			const mount = await $({reject: false})`findmnt --noheadings --output SOURCE --mountpoint ${systemMountPoint}`
+			const source = mount.stdout.trim()
+			if (mount.exitCode !== 0 || !source.startsWith('/dev/') || (await fse.pathExists(source))) continue
+
+			const virtualMountPoint = this.#umbreld.files.systemToVirtualPath(systemMountPoint)
+			const releaseClouds = await this.#umbreld.files.cloud.blockExternalStorage([{mountPaths: [virtualMountPoint]}])
+
+			try {
+				this.logger.log(`Detaching disconnected external mount ${virtualMountPoint}`)
+				await this.#umbreld.files.samba.applyShares({excludePaths: [virtualMountPoint]})
+				await pRetry(() => $`umount ${systemMountPoint}`, {
+					retries: 5,
+					minTimeout: 500,
+					factor: 1,
+				})
+				await fse.remove(systemMountPoint)
+				this.#umbreld.eventBus.emit('files:external-storage:change')
+			} catch (error) {
+				this.logger.error(`Failed to detach disconnected external mount ${virtualMountPoint}`, error)
+			} finally {
+				releaseClouds()
+			}
+		}
+	}
+
 	// Unmount partition from external disk
-	async unmountExternalDevice(deviceId: string, {remove = true} = {}) {
+	async unmountExternalDevice(deviceId: string, {remove = true, blockCloud = true} = {}) {
 		// We run this through the mount queue so we don't clean up mount
 		// points that are in the process of being mounted.
 		// This can happen if the user unmounts a device while attaching another.
@@ -257,53 +304,74 @@ export default class ExternalStorage {
 				.flatMap((partition) => partition.mountpoints)
 				.filter((mountpoint) => mountpoint.startsWith(externalBasePath))
 				.map((mountpoint) => this.#umbreld.files.systemToVirtualPath(mountpoint))
+			const releaseClouds = blockCloud
+				? await this.#umbreld.files.cloud.blockExternalStorage(
+						blockDevice.partitions.map((partition) => ({
+							filesystemUuid: partition.filesystemUuid || undefined,
+							mountPaths: partition.mountpoints
+								.filter((mountpoint) => mountpoint.startsWith(externalBasePath))
+								.map((mountpoint) => this.#umbreld.files.systemToVirtualPath(mountpoint)),
+						})),
+					)
+				: () => {}
 
-			// Exclude shares on this device from Samba before unmounting (otherwise Samba keeps the directory busy)
-			if (virtualMountPaths.length > 0) await this.#umbreld.files.samba.applyShares({excludePaths: virtualMountPaths})
+			try {
+				// Exclude shares on this device from Samba before unmounting (otherwise Samba keeps the directory busy)
+				if (virtualMountPaths.length > 0) await this.#umbreld.files.samba.applyShares({excludePaths: virtualMountPaths})
 
-			// Loop over partitions
-			let failedUnmounts = false
-			for (const partition of blockDevice.partitions) {
-				// Skip partitions that aren't mounted
-				if (partition.mountpoints.length == 0) continue
+				// Loop over partitions
+				let failedUnmounts = false
+				for (const partition of blockDevice.partitions) {
+					// Skip partitions that aren't mounted
+					if (partition.mountpoints.length == 0) continue
 
-				// Unmount device
-				// We retry because `smbcontrol close-share` (from applyShares()) is fire-and-forget — it enqueues a
-				// message to smbd which then asynchronously drains in-flight I/O before releasing file handles.
-				// There's no synchronous wait mechanism in Samba (smbstatus polling is possible but adds fragile
-				// JSON parsing for little gain). Retrying umount is simple and also handles non-Samba processes
-				// (e.g. indexers) that may hold handles.
-				this.logger.log(`Unmounting partition ${partition.id}`)
-				await pRetry(() => $`umount --all-targets /dev/${partition.id}`, {
-					retries: 5,
-					minTimeout: 500,
-					factor: 1,
-					onFailedAttempt: (error) => {
-						this.logger.log(
-							`Unmount attempt ${error.attemptNumber} for ${partition.id} failed, ${error.retriesLeft} retries left`,
-						)
-					},
-				}).catch((error) => {
-					// Just log the error and continue to next partition
-					this.logger.error(`Failed to unmount partition ${partition.id}`, error)
-					failedUnmounts = true
-				})
+					// Unmount device
+					// We retry because `smbcontrol close-share` (from applyShares()) is fire-and-forget — it enqueues a
+					// message to smbd which then asynchronously drains in-flight I/O before releasing file handles.
+					// There's no synchronous wait mechanism in Samba (smbstatus polling is possible but adds fragile
+					// JSON parsing for little gain). Retrying umount is simple and also handles non-Samba processes
+					// (e.g. indexers) that may hold handles.
+					this.logger.log(`Unmounting partition ${partition.id}`)
+					await pRetry(() => $`umount --all-targets /dev/${partition.id}`, {
+						retries: 5,
+						minTimeout: 500,
+						factor: 1,
+						onFailedAttempt: (error) => {
+							this.logger.log(
+								`Unmount attempt ${error.attemptNumber} for ${partition.id} failed, ${error.retriesLeft} retries left`,
+							)
+						},
+					}).catch((error) => {
+						// Just log the error and continue to next partition
+						this.logger.error(`Failed to unmount partition ${partition.id}`, error)
+						failedUnmounts = true
+					})
+				}
+
+				// Clean up any left over mount points
+				await this.#cleanLeftOverMountPoints()
+
+				// Keep a device attached if any partition is still mounted. Forcing
+				// removal here could turn a recoverable busy mount into data loss.
+				if (failedUnmounts) {
+					await this.#umbreld.files.samba.applyShares().catch((error) => {
+						this.logger.error(`Failed to restore Samba shares after an external device stayed mounted`, error)
+					})
+					this.#umbreld.eventBus.emit('files:external-storage:change')
+					throw new Error('[failed-unmounts]')
+				}
+
+				// Remove the block device so we don't auto mount it until it's
+				// been removed and re-attached
+				if (remove) await fse.writeFile(`/sys/block/${deviceId}/device/delete`, '1')
+
+				// Broadcast event signalling that the external storage devices have changed
+				this.#umbreld.eventBus.emit('files:external-storage:change')
+
+				return true
+			} finally {
+				releaseClouds()
 			}
-
-			// Clean up any left over mount points
-			await this.#cleanLeftOverMountPoints()
-
-			// Remove the block device so we don't auto mount it until it's
-			// been removed and re-attached
-			if (remove) await fse.writeFile(`/sys/block/${deviceId}/device/delete`, '1')
-
-			// Broadcast event signalling that the external storage devices have changed
-			this.#umbreld.eventBus.emit('files:external-storage:change')
-
-			// Signal that some unmounts failed
-			if (failedUnmounts) throw new Error('[failed-unmounts]')
-
-			return true
 		})
 	}
 
@@ -317,11 +385,10 @@ export default class ExternalStorage {
 		filesystem: 'ext4' | 'exfat'
 		label: string
 	}) {
+		if (this.formatJobs.has(deviceId)) throw new Error('[format-job-already-in-progress]')
+		this.formatJobs.add(deviceId)
+		let releaseClouds = () => {}
 		try {
-			// Check if job is already in progress
-			if (this.formatJobs.has(deviceId)) throw new Error('[format-job-already-in-progress]')
-			this.formatJobs.add(deviceId)
-
 			// Check valid filessytem type
 			if (filesystem !== 'ext4' && filesystem !== 'exfat') throw new Error('[invalid-filesystem]')
 
@@ -333,10 +400,23 @@ export default class ExternalStorage {
 
 			this.logger.log(`Formatting device ${deviceId} as ${filesystem} with label ${label}`)
 
+			const externalBasePath = this.#umbreld.files.getBaseDirectory('/External')
+			const blockDevice = (await this.#getExternalDevices()).find((device) => device.id === deviceId)
+			if (blockDevice) {
+				releaseClouds = await this.#umbreld.files.cloud.blockExternalStorage(
+					blockDevice.partitions.map((partition) => ({
+						filesystemUuid: partition.filesystemUuid || undefined,
+						mountPaths: partition.mountpoints
+							.filter((mountpoint) => mountpoint.startsWith(externalBasePath))
+							.map((mountpoint) => this.#umbreld.files.systemToVirtualPath(mountpoint)),
+					})),
+				)
+			}
+
 			// If the device is currently mounted, unmount it
 			const mountedExternalDevices = await this.getMountedExternalDevices()
 			const isDeviceMounted = mountedExternalDevices.some((device) => device.id === deviceId)
-			if (isDeviceMounted) await this.unmountExternalDevice(deviceId, {remove: false})
+			if (isDeviceMounted) await this.unmountExternalDevice(deviceId, {remove: false, blockCloud: false})
 
 			// Clean partition table
 			this.logger.log(`Cleaning partition table for device ${deviceId}`)
@@ -367,6 +447,7 @@ export default class ExternalStorage {
 			this.logger.log(`Successfully formatted device ${deviceId} as ${filesystem} with label ${label}`)
 			return true
 		} finally {
+			releaseClouds()
 			this.formatJobs.delete(deviceId)
 		}
 	}

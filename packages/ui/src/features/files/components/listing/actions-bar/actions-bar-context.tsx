@@ -19,6 +19,10 @@ export interface ActionsBarConfig {
 	// eg. "New Folder", "Upload", "Empty Trash", etc.
 	desktopActions?: React.ReactNode
 
+	// Replaces the mobile Select toggle for listings where selection is
+	// meaningless (e.g. the cloud account tiles offer "Add cloud" instead)
+	mobilePrimaryAction?: React.ReactNode
+
 	// Additional dropdown items displayed on mobile resolutions (< md breakpoint)
 	mobileActions?: React.ReactNode
 }

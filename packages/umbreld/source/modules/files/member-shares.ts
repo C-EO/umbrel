@@ -80,14 +80,16 @@ export default class MemberShares {
 		this.#removeFileChangeListener?.()
 	}
 
-	// Notify listeners (e.g. member UIs) which accounts a share change affects.
-	// Pass every sharedWith list the change touched (e.g. old and new grantees
-	// of an upsert) so nobody who lost access misses the event.
+	// Notify listeners (e.g. member UIs and Cloud destination guards) which
+	// accounts a share change affects. Pass every sharedWith list the change
+	// touched (e.g. old and new grantees of an upsert) so nobody who lost access
+	// misses the event. Callers await this so revocation does not return while a
+	// Cloud transfer is still using the revoked destination.
 	#emitChange(...sharedWithLists: ('all' | string[])[]) {
 		const sharedWith = sharedWithLists.includes('all')
 			? 'all'
 			: [...new Set(sharedWithLists.filter((list): list is string[] => list !== 'all').flat())]
-		this.#umbreld.eventBus.emit('files:member-shares:change', {sharedWith})
+		return this.#umbreld.eventBus.emit('files:member-shares:change', {sharedWith})
 	}
 
 	// List all shares (owner management view)
@@ -212,7 +214,7 @@ export default class MemberShares {
 			await set('files.memberShares', [...otherShares, share])
 		})
 		this.#listForUserCache.clear()
-		this.#emitChange(previousSharedWith, sharedWith)
+		await this.#emitChange(previousSharedWith, sharedWith)
 
 		this.logger.log(`Shared '${path}' with ${sharedWith === 'all' ? 'all users' : sharedWith.join(', ')}`)
 		return share
@@ -232,7 +234,7 @@ export default class MemberShares {
 		})
 		this.#listForUserCache.clear()
 		if (removed) {
-			this.#emitChange(removedSharedWith)
+			await this.#emitChange(removedSharedWith)
 			this.logger.log(`Stopped sharing '${path}'`)
 		}
 		return removed
@@ -257,7 +259,7 @@ export default class MemberShares {
 		if (removedShares.length === 0) return false
 
 		this.#listForUserCache.clear()
-		this.#emitChange(...removedShares.map((share) => share.sharedWith))
+		await this.#emitChange(...removedShares.map((share) => share.sharedWith))
 		for (const share of removedShares) this.logger.log(`Stopped sharing '${share.path}'`)
 		return true
 	}
@@ -279,6 +281,6 @@ export default class MemberShares {
 			await set('files.memberShares', updatedShares)
 		})
 		this.#listForUserCache.clear()
-		this.#emitChange([userId])
+		await this.#emitChange([userId])
 	}
 }

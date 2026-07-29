@@ -15,23 +15,27 @@ import {
 	DropdownMenuContent,
 	DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import {TooltipProvider} from '@/components/ui/tooltip'
 import {ChevronLeftIcon} from '@/features/files/assets/chevron-left'
 import {ChevronRightIcon} from '@/features/files/assets/chevron-right'
 import {RewindIcon} from '@/features/files/assets/rewind-icon'
+import {CloudBreakDiagram} from '@/features/files/components/cloud-break-diagram'
 import {useRewindOverlay} from '@/features/files/components/rewind/overlay-context'
 import {PreRewindDialog} from '@/features/files/components/rewind/prerewind-dialog'
 import {RestoreProgressDialog} from '@/features/files/components/rewind/restore-progress-dialog'
 import {SnapshotCarousel} from '@/features/files/components/rewind/snapshot-carousel'
 import {getSnapshotDateLabel} from '@/features/files/components/rewind/snapshot-date-label'
 import {TimelineBar as TimelineBarComponent} from '@/features/files/components/rewind/timeline-bar'
-import {TooltipProvider} from '@/features/files/components/rewind/tooltip'
+import {cloudSyncName, useCloudAccounts, useCloudActions, useCloudSyncs} from '@/features/files/hooks/use-cloud'
 import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
 import {useRewind} from '@/features/files/hooks/use-rewind'
 import {useFilesStore} from '@/features/files/store/use-files-store'
+import {cloudAccountBrand, cloudsOverlappingPath} from '@/features/files/utils/cloud'
 import {formatFilesystemDate} from '@/features/files/utils/format-filesystem-date'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useLanguage} from '@/hooks/use-language'
 import {cn} from '@/lib/utils'
+import {useConfirmation} from '@/providers/confirmation'
 import {useWallpaper} from '@/providers/wallpaper'
 
 import {groupRestoreByDestination} from './restore-grouping'
@@ -96,7 +100,11 @@ export function RewindOverlay() {
 		canRecover,
 	} = useRewind({overlayOpen, repoOpen})
 	const [lang] = useLanguage()
-	const {resolveCopyCollisionsOrAbort, executeCopyWorkItems} = useFilesOperations()
+	const {resolveCopyCollisionsOrAbort} = useFilesOperations()
+	const {data: clouds} = useCloudSyncs()
+	const {data: accounts} = useCloudAccounts()
+	const {restoreFiles} = useCloudActions()
+	const confirm = useConfirmation()
 
 	const explorerVisible = view !== 'switching-snapshot'
 	const [restoreModalOpen, setRestoreModalOpen] = useState(false)
@@ -109,7 +117,7 @@ export function RewindOverlay() {
 		try {
 			const groups = groupRestoreByDestination(useFilesStore.getState().selectedItems, mountedDir)
 
-			// Resolve collisions per destination; abort if nothing to do
+			// Complete every collision choice before changing Cloud state.
 			const workItems: {path: string; toDirectory: string; collision: 'error' | 'replace' | 'keep-both'}[] = []
 			for (const [destDir, paths] of groups) {
 				const items = await resolveCopyCollisionsOrAbort({fromPaths: paths, toDirectory: destDir})
@@ -117,13 +125,65 @@ export function RewindOverlay() {
 			}
 			if (workItems.length === 0) return
 
+			// Restoring into an active cloud destination is rejected by the
+			// backend (the mirror is read-only, and the next sync would revert the
+			// restored files anyway). Offer to stop the affected clouds instead:
+			// their local files are kept and the folders become ordinary folders.
+			// Overlap is checked per restored item's target path, not the shared
+			// destination directory: restoring one folder into /Home must not
+			// implicate sibling mirrors that also live under /Home.
+			const targetPaths = workItems.map(
+				({path, toDirectory}) => `${toDirectory}/${path.split('/').filter(Boolean).at(-1)}`,
+			)
+			const affectedClouds = [
+				...new Map(
+					targetPaths
+						.flatMap((targetPath) => cloudsOverlappingPath(clouds, targetPath))
+						.map((cloud) => [cloud.id, cloud] as const),
+				).values(),
+			]
+			if (affectedClouds.length > 0) {
+				// One brand logo when the affected clouds agree, generic cloud otherwise
+				const brands = new Set(
+					affectedClouds.map((cloud) => {
+						const account = accounts?.find(({id}) => id === cloud.accountId)
+						return account ? cloudAccountBrand(account) : 'cloud'
+					}),
+				)
+				const diagramProvider = brands.size === 1 ? [...brands][0] : undefined
+				try {
+					await confirm({
+						title: t('files-cloud.rewind-confirm-title'),
+						message: (
+							<>
+								<CloudBreakDiagram provider={diagramProvider} />
+								{t('files-cloud.rewind-confirm-message', {
+									folders: affectedClouds.map(cloudSyncName).join(', '),
+								})}
+							</>
+						),
+						actions: [
+							{label: t('files-cloud.rewind-confirm-action'), value: 'remove', variant: 'destructive'},
+							{label: t('cancel'), value: 'cancel', variant: 'default'},
+						],
+					})
+				} catch {
+					// User cancelled the restore
+					return
+				}
+			}
+
 			// Show progress modal and yield before executing copies
 			setRestorePhase('running')
 			setRestoreModalOpen(true)
 			await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)))
 
-			// Execute copies according to preflight decisions
-			await executeCopyWorkItems({workItems})
+			// The backend pauses affected mirrors, restores every item, and
+			// removes their definitions only after all copies succeed.
+			await restoreFiles(
+				affectedClouds.map(({id}) => id),
+				workItems,
+			)
 
 			// Immediately show success, then briefly pause before closing and navigating back to "Now"
 			setRestorePhase('success')

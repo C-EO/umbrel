@@ -7,6 +7,7 @@ import {AddFolderIcon} from '@/features/files/assets/add-folder-icon'
 import {EmptyFolderIcon} from '@/features/files/assets/empty-folder-icon'
 import nasIconInactive from '@/features/files/assets/nas-icon-inactive.png'
 import {UploadInput} from '@/features/files/components/shared/upload-input'
+import {useListDirectory} from '@/features/files/hooks/use-list-directory'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
 import {useNewFolder} from '@/features/files/hooks/use-new-folder'
@@ -18,6 +19,11 @@ export function EmptyStateDirectory() {
 	const {doesHostHaveMountedShares} = useNetworkStorage()
 	const {startNewFolder} = useNewFolder()
 	const isReadOnly = useIsFilesReadOnly()
+	// The backend's writable operation on this directory (shares the listing
+	// query with the surrounding view); hides the write actions in places like
+	// cloud mirrors and backup snapshots
+	const {listing} = useListDirectory(currentPath)
+	const isWritable = listing?.operations.includes('writable') ?? false
 	const uploadInputRef = useRef<HTMLInputElement | null>(null)
 
 	const handleUploadClick = () => {
@@ -38,8 +44,8 @@ export function EmptyStateDirectory() {
 					{isOfflineNetworkHost ? t('files-empty.network-host-offline') : t('files-empty.directory')}
 				</div>
 			</div>
-			{/* in read-only mode, we don't render the upload and new folder buttons */}
-			{!isViewingNetworkShares && !isReadOnly && (
+			{/* in read-only mode or non-writable directories, we don't render the upload and new folder buttons */}
+			{!isViewingNetworkShares && !isReadOnly && isWritable && (
 				<div className='flex items-center gap-2'>
 					<IconButton icon={Upload} variant='primary' onClick={handleUploadClick}>
 						{t('files-action.upload')}

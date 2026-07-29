@@ -2,6 +2,8 @@ import {lazy} from 'react'
 import {Navigate, RouteObject} from 'react-router-dom'
 
 import {AppsListing} from '@/features/files/components/listing/apps-listing'
+import {CloudAccountListing} from '@/features/files/components/listing/cloud-account-listing'
+import {CloudAccountsListing} from '@/features/files/components/listing/cloud-accounts-listing'
 import {DirectoryListing} from '@/features/files/components/listing/directory-listing'
 import {RecentsListing} from '@/features/files/components/listing/recents-listing'
 import {SearchListing} from '@/features/files/components/listing/search-listing'
@@ -65,6 +67,16 @@ export const filesRoutes: RouteObject[] = [
 				// in the entire Trash directory and its subdirectories
 				path: 'Trash/*',
 				element: <TrashListing />,
+			},
+			{
+				// Virtual route: connected cloud accounts as tiles
+				path: 'Cloud',
+				element: <CloudAccountsListing />,
+			},
+			{
+				// Virtual route: a connected cloud account's download destination folders
+				path: 'Cloud/:accountId',
+				element: <CloudAccountListing />,
 			},
 			{
 				path: '*',

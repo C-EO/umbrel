@@ -14,6 +14,7 @@ import {type EventTypes, events} from './event-bus.js'
 // scoped opt-in below.
 const memberAllowedEvents = new Set<(typeof events)[number]>([
 	'files:operation-progress',
+	'files:cloud-progress',
 	'files:watcher:change',
 	'files:member-shares:change',
 	'apps:member-shares:change',
@@ -42,43 +43,64 @@ export default router({
 			// Stream the events
 			// We pass in the AbortSignal so the stream can be immediately cleaned up
 			// when the client disconnects to avoid memory leaks.
+			const eventStream = ctx.umbreld.eventBus.stream(input.event, {signal})
 			return (async function* () {
-				for await (let event of ctx.umbreld.eventBus.stream(input.event, {signal})) {
-					// Reformat the files:watcher:change event so it's suitable to be consumed by the client
-					if (input.event === 'files:watcher:change') {
-						// Clone event to avoid mutating the original event object
-						event = cloneDeep(event) as EventTypes['files:watcher:change']
+				try {
+					// Progress events are snapshots rather than deltas. The stream is
+					// already attached before this read, so a concurrent update queues
+					// behind the seed instead of being lost in a subscribe-time gap.
+					if (input.event === 'files:cloud-progress') {
+						yield ctx.umbreld.files.cloud.getActivity(userId)
+					}
 
-						// Convert the system path to a virtual path
-						event.path = ctx.umbreld.files.systemToVirtualPath(event.path)
+					for await (let event of eventStream) {
+						// Reformat the files:watcher:change event so it's suitable to be consumed by the client
+						if (input.event === 'files:watcher:change') {
+							// Clone event to avoid mutating the original event object
+							event = cloneDeep(event) as EventTypes['files:watcher:change']
 
-						// Members only receive changes to paths their account owns or
-						// paths the owner shared with them
-						if (isMember && ctx.umbreld.files.ownerOfPath(event.path) !== userId) {
-							const share = await ctx.umbreld.files.memberShares.shareGrantFor(event.path, userId)
-							if (!share) continue
+							// Convert the system path to a virtual path
+							event.path = ctx.umbreld.files.systemToVirtualPath(event.path)
+
+							// Members only receive changes to paths their account owns or
+							// paths the owner shared with them
+							if (isMember && ctx.umbreld.files.ownerOfPath(event.path) !== userId) {
+								const share = await ctx.umbreld.files.memberShares.shareGrantFor(event.path, userId)
+								if (!share) continue
+							}
 						}
-					}
 
-					// Members only receive progress of their own file operations
-					if (isMember && input.event === 'files:operation-progress') {
-						const operations = event as OperationsInProgress
-						event = operations.filter((operation) => operation.userId === userId)
-					}
+						// Members only receive progress of their own file operations
+						if (isMember && input.event === 'files:operation-progress') {
+							const operations = event as OperationsInProgress
+							event = operations.filter((operation) => operation.userId === userId)
+						}
 
-					// Members only receive share changes that affect their own account,
-					// and only learn about their own involvement (not the other grantees)
-					if (
-						isMember &&
-						(input.event === 'files:member-shares:change' || input.event === 'apps:member-shares:change')
-					) {
-						const change = event as EventTypes['files:member-shares:change']
-						if (change.sharedWith !== 'all' && !change.sharedWith.includes(userId)) continue
-						event = {sharedWith: [userId]} as EventTypes['files:member-shares:change']
-					}
+						// Cloud wake-ups are account-scoped before anything is yielded,
+						// so one account cannot infer another account's transfer timing.
+						if (input.event === 'files:cloud-progress') {
+							const progress = event as EventTypes['files:cloud-progress']
+							if (progress.userId !== userId) continue
+							yield progress.activity
+							continue
+						}
 
-					// Stream the event to the client
-					yield event
+						// Members only receive share changes that affect their own account,
+						// and only learn about their own involvement (not the other grantees)
+						if (
+							isMember &&
+							(input.event === 'files:member-shares:change' || input.event === 'apps:member-shares:change')
+						) {
+							const change = event as EventTypes['files:member-shares:change']
+							if (change.sharedWith !== 'all' && !change.sharedWith.includes(userId)) continue
+							event = {sharedWith: [userId]} as EventTypes['files:member-shares:change']
+						}
+
+						// Stream the event to the client
+						yield event
+					}
+				} finally {
+					await eventStream.return?.()
 				}
 			})()
 		}),

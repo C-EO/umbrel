@@ -452,7 +452,7 @@ jobs:
         with:
           node-version: 22
       - name: Install Umbreld dependencies
-        if: ${{ matrix.task == 'typecheck' }}
+        if: ${{ matrix.task == 'typecheck' || matrix.task == 'test' }}
         run: npm --prefix ../umbreld clean-install
       - name: Install dependencies
         run: npm clean-install

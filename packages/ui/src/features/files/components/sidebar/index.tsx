@@ -8,6 +8,7 @@ import {useTranslation} from 'react-i18next'
 import {ScrollArea} from '@/components/ui/scroll-area'
 import {SidebarRewind} from '@/features/files/components/rewind'
 import {SidebarApps} from '@/features/files/components/sidebar/sidebar-apps'
+import {SidebarCloud} from '@/features/files/components/sidebar/sidebar-cloud'
 import {SidebarExternalStorage} from '@/features/files/components/sidebar/sidebar-external-storage'
 import {SidebarFavorites} from '@/features/files/components/sidebar/sidebar-favorites'
 import {SidebarHome} from '@/features/files/components/sidebar/sidebar-home'
@@ -16,10 +17,9 @@ import {SidebarRecents} from '@/features/files/components/sidebar/sidebar-recent
 import {SidebarOwnersUmbrel, SidebarSharedStorage} from '@/features/files/components/sidebar/sidebar-shared-with-me'
 import {SidebarShares} from '@/features/files/components/sidebar/sidebar-shares'
 import {SidebarTrash} from '@/features/files/components/sidebar/sidebar-trash'
-import {HOME_PATH} from '@/features/files/constants'
 import {useExternalStorage} from '@/features/files/hooks/use-external-storage'
 import {useFavorites} from '@/features/files/hooks/use-favorites'
-import {useIsMember} from '@/features/files/hooks/use-home-path'
+import {useHomePath, useIsMember} from '@/features/files/hooks/use-home-path'
 import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useShares} from '@/features/files/hooks/use-shares'
 import {useFilesCapabilities} from '@/features/files/providers/files-capabilities-context'
@@ -32,8 +32,9 @@ export function Sidebar({className}: {className?: string}) {
 	const {shares, isLoadingShares} = useShares()
 	const {favorites, isLoadingFavorites} = useFavorites()
 	const {disks, isLoadingExternalStorage, isExternalStorageSupported} = useExternalStorage()
+	const homePath = useHomePath()
 
-	const displayShares = shares?.filter((share) => share && share.path !== HOME_PATH)
+	const displayShares = shares?.filter((share) => share && share.path !== homePath)
 
 	// Visibility flags
 	const hidden = capabilities.hiddenSidebarItems || {}
@@ -61,6 +62,7 @@ export function Sidebar({className}: {className?: string}) {
 		disks.length > 0
 	const showTrash = !hidden.trash
 	const showRewind = !hidden.rewind && !isMember
+	const showCloud = !hidden.cloud
 
 	return (
 		<nav className={cn('flex flex-col', className)} aria-label={t('files-sidebar.navigation')}>
@@ -118,9 +120,9 @@ export function Sidebar({className}: {className?: string}) {
 
 				{/* Network storage */}
 				{/* We don't wrap in AnimatePresence because this section is always rendered */}
-				<SidebarDivider />
+				{!isMember && <SidebarDivider />}
 				{showNetwork ? (
-					<SidebarSection label={t('files-sidebar.network')}>
+					<SidebarSection>
 						<SidebarNetworkStorage />
 					</SidebarSection>
 				) : null}
@@ -142,6 +144,19 @@ export function Sidebar({className}: {className?: string}) {
 					)}
 				</AnimatePresence>
 
+				{/* Cloud */}
+				{/* Always rendered for owners and members (unless hidden): this account-private
+				    permanent root row is the feature's ambient entry point. No section label since
+				    the root row itself carries the feature name. */}
+				{showCloud ? (
+					<>
+						<SidebarDivider />
+						<SidebarSection>
+							<SidebarCloud />
+						</SidebarSection>
+					</>
+				) : null}
+
 				{/* Spacer */}
 				<div className='h-6' />
 			</ScrollArea>
@@ -155,7 +170,7 @@ export function Sidebar({className}: {className?: string}) {
 const SidebarSection = ({children, label = ''}: {children: React.ReactNode; label?: string}) => {
 	return (
 		<section className='flex flex-col gap-0.5 pr-4' aria-label={label}>
-			<div className='px-2 py-1 text-[11px] font-medium text-white/40'>{label}</div>
+			{label && <div className='px-2 py-1 text-[11px] font-medium text-white/40'>{label}</div>}
 			{children}
 		</section>
 	)

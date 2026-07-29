@@ -25,6 +25,7 @@ import {Dock, DockBottomPositioner} from './modules/desktop/dock'
 import {FloatingIslandContainer} from './modules/floating-island/container'
 import {AppsProvider} from './providers/apps'
 import {AvailableAppsProvider} from './providers/available-apps'
+import {CloudActivityProvider} from './providers/cloud'
 import {GlobalFilesProvider} from './providers/global-files'
 import {Wallpaper} from './providers/wallpaper'
 import {NotFound} from './routes/not-found'
@@ -56,28 +57,30 @@ export const router = createBrowserRouter([
 		element: (
 			<EnsureNoRaidMountFailure>
 				<EnsureLoggedIn>
-					{/* This provider opens authenticated file-operation subscriptions, so it must not mount on login/onboarding routes. */}
+					{/* These providers open authenticated file-operation and cloud-activity subscriptions, so they must not mount on login/onboarding routes. */}
 					<GlobalFilesProvider>
-						<Wallpaper />
-						{/* Get any notifications from umbreld and render them as alert dialogs */}
-						<Notifications />
-						<AvailableAppsProvider>
-							<AppsProvider>
-								<CmdkProvider>
-									<DesktopContextMenu>
-										<Desktop />
-									</DesktopContextMenu>
-									<CmdkMenu />
-								</CmdkProvider>
-								<Suspense>
-									<Outlet />
-								</Suspense>
-								<FloatingIslandContainer />
-								<DockBottomPositioner>
-									<Dock />
-								</DockBottomPositioner>
-							</AppsProvider>
-						</AvailableAppsProvider>
+						<CloudActivityProvider>
+							<Wallpaper />
+							{/* Get any notifications from umbreld and render them as alert dialogs */}
+							<Notifications />
+							<AvailableAppsProvider>
+								<AppsProvider>
+									<CmdkProvider>
+										<DesktopContextMenu>
+											<Desktop />
+										</DesktopContextMenu>
+										<CmdkMenu />
+									</CmdkProvider>
+									<Suspense>
+										<Outlet />
+									</Suspense>
+									<FloatingIslandContainer />
+									<DockBottomPositioner>
+										<Dock />
+									</DockBottomPositioner>
+								</AppsProvider>
+							</AvailableAppsProvider>
+						</CloudActivityProvider>
 					</GlobalFilesProvider>
 				</EnsureLoggedIn>
 			</EnsureNoRaidMountFailure>

@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/context-menu'
 import {contextMenuClasses} from '@/components/ui/shared/menu'
 import {SORT_BY_OPTIONS, SUPPORTED_ARCHIVE_EXTRACT_EXTENSIONS} from '@/features/files/constants'
+import {cloudSyncForPath, useCloudActions, useCloudSyncs} from '@/features/files/hooks/use-cloud'
 import {useFavorites} from '@/features/files/hooks/use-favorites'
 import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
 import {useIsMember} from '@/features/files/hooks/use-home-path'
@@ -36,6 +37,7 @@ import {
 import {isDirectoryAnUmbrelBackup} from '@/features/files/utils/is-directory-an-umbrel-backup'
 import {useQueryParams} from '@/hooks/use-query-params'
 import {useHasMembers} from '@/modules/user-sharing'
+import {useConfirmation} from '@/providers/confirmation'
 import {useLinkToDialog} from '@/utils/dialog'
 
 interface ListingAndFileItemContextMenuProps {
@@ -93,6 +95,9 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 	const {isPathFavorite, addFavorite, removeFavorite, isAddingFavorite, isRemovingFavorite} = useFavorites()
 	const {removeHostOrShare, isRemovingShare: isRemovingNetworkShare, doesHostHaveMountedShares} = useNetworkStorage()
 	const isTouchDevice = useIsTouchDevice()
+	const {data: clouds} = useCloudSyncs()
+	const {pauseSync, resumeSync, runNow, removeSync} = useCloudActions()
+	const confirm = useConfirmation()
 
 	// If read-only, just render children without wrapping menu
 	if (isReadOnly) return <>{children}</>
@@ -143,7 +148,11 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 			const canCut = selectedItems.every((itm) => itm.operations.includes('move'))
 			const canCopy = selectedItems.every((itm) => itm.operations.includes('copy')) && !isUnmountedNetworkHost
 			const canPaste =
-				hasItemsInClipboard() && hasOneSelectedItem && !isItemInClipboard(item) && item.type === 'directory'
+				hasItemsInClipboard() &&
+				hasOneSelectedItem &&
+				!isItemInClipboard(item) &&
+				item.type === 'directory' &&
+				item.operations.includes('writable')
 			const canTrash = item.operations.includes('trash')
 			const canPermanentlyDelete = item.operations.includes('delete')
 			const canExtract = selectedItems.every(
@@ -153,12 +162,13 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 			)
 
 			const canShare =
+				!isMember &&
 				hasOneSelectedItem &&
 				!isPathShared(item.path) &&
 				!isAddingShare &&
 				item.operations.includes('share') &&
 				!isDirectoryAnUmbrelBackup(item.name)
-			const canRemoveShare = hasOneSelectedItem && isPathShared(item.path) && !isRemovingShare
+			const canRemoveShare = !isMember && hasOneSelectedItem && isPathShared(item.path) && !isRemovingShare
 
 			// Share a directory with member accounts (owner only, memberShares is
 			// undefined for members so the item never renders for them)
@@ -205,6 +215,29 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 				})
 			}
 
+			// Cloud verbs when the selected folder is a download destination.
+			// Mutation safety is enforced server-side; these are conveniences.
+			// Only the current account's Cloud records are returned by the API, so
+			// these controls can never reveal or operate on another member's job.
+			const itemCloud = hasOneSelectedItem ? cloudSyncForPath(clouds, item.path) : undefined
+			const canRunNow = itemCloud && itemCloud.status.state !== 'running' && itemCloud.status.state !== 'queued'
+			const handleRemoveCloud = async () => {
+				if (!itemCloud) return
+				try {
+					await confirm({
+						title: t('files-cloud.remove-confirm-title', {folder: item.name}),
+						message: t('files-cloud.remove-confirm-message'),
+						actions: [
+							{label: t('files-cloud.remove-confirm-action'), value: 'remove', variant: 'destructive'},
+							{label: t('cancel'), value: 'cancel', variant: 'default'},
+						],
+					})
+					removeSync(itemCloud.id).catch(() => {})
+				} catch {
+					// User cancelled
+				}
+			}
+
 			contextMenuContent = (
 				<>
 					{/* if browsing recents or search, show the "show in enclosing folder" option */}
@@ -222,6 +255,26 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 						>
 							{t('files-action.open')}
 						</ContextMenuItem>
+					)}
+					{itemCloud && (
+						<>
+							<ContextMenuItem disabled={!canRunNow} onClick={() => runNow(itemCloud.id).catch(() => {})}>
+								{t('files-cloud.download-now')}
+							</ContextMenuItem>
+							{itemCloud.pauseReasons ? (
+								<ContextMenuItem onClick={() => resumeSync(itemCloud.id).catch(() => {})}>
+									{t('files-cloud.resume')}
+								</ContextMenuItem>
+							) : (
+								<ContextMenuItem onClick={() => pauseSync(itemCloud.id).catch(() => {})}>
+									{t('files-cloud.pause')}
+								</ContextMenuItem>
+							)}
+							<ContextMenuItem className={contextMenuClasses.item.rootDestructive} onClick={handleRemoveCloud}>
+								{t('files-cloud.remove-download')}
+							</ContextMenuItem>
+							<ContextMenuSeparator />
+						</>
 					)}
 					<ContextMenuItem disabled={!canRename} onClick={() => setRenamingItemPath(item.path)}>
 						{t('files-action.rename')}
@@ -276,15 +329,16 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 						{t('files-action.uncompress')}
 					</ContextMenuItem>
 					<ContextMenuSeparator />
-					{isPathShared(item.path) ? (
-						<ContextMenuItem disabled={!canRemoveShare} onClick={openShareInfoDialog}>
-							{t('files-action.sharing')}
-						</ContextMenuItem>
-					) : (
-						<ContextMenuItem disabled={!canShare} onClick={openShareInfoDialog}>
-							{t('files-action.share')}
-						</ContextMenuItem>
-					)}
+					{!isMember &&
+						(isPathShared(item.path) ? (
+							<ContextMenuItem disabled={!canRemoveShare} onClick={openShareInfoDialog}>
+								{t('files-action.sharing')}
+							</ContextMenuItem>
+						) : (
+							<ContextMenuItem disabled={!canShare} onClick={openShareInfoDialog}>
+								{t('files-action.share')}
+							</ContextMenuItem>
+						))}
 					{canShareWithUsers && (
 						<ContextMenuItem onClick={openShareUsersDialog}>
 							{shareForPath(item.path) ? t('files-action.sharing-with-users') : t('files-action.share-with-users')}

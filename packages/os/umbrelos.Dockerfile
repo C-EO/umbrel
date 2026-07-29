@@ -20,6 +20,10 @@ ARG KOPIA_VERSION=0.19.0
 ARG KOPIA_SHA256_amd64=c07843822c82ec752e5ee749774a18820b858215aabd7da448ce665b9b9107aa
 ARG KOPIA_SHA256_arm64=632db9d72f2116f1758350bf7c20aa57c22c220480aaccb5f839e75669210ed9
 
+ARG RCLONE_RELEASE=1.74.4
+ARG RCLONE_SHA256_amd64=fe435e0c36228e7c2f116a8701f01127bb1f694005fc11d1f27186c8bca4115d
+ARG RCLONE_SHA256_arm64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c358de419
+
 #########################################################################
 # ui build stage
 #########################################################################
@@ -205,6 +209,9 @@ ARG NODE_SHA256_arm64
 ARG KOPIA_VERSION
 ARG KOPIA_SHA256_amd64
 ARG KOPIA_SHA256_arm64
+ARG RCLONE_RELEASE
+ARG RCLONE_SHA256_amd64
+ARG RCLONE_SHA256_arm64
 
 # Install acpid
 # We use acpid to implement custom behaviour for power button presses
@@ -252,6 +259,21 @@ RUN YQ_SHA256=$(eval echo \$YQ_SHA256_${TARGETARCH}) && \
     echo "${YQ_SHA256} /usr/bin/yq" | sha256sum -c && \
     chmod +x /usr/bin/yq
 
+# Create the runtime user.
+RUN adduser --gecos "" --disabled-password umbrel
+RUN echo "umbrel:umbrel" | chpasswd
+RUN usermod -aG sudo umbrel
+
+# Install the rclone release used by Cloud.
+RUN RCLONE_SHA256=$(eval echo \$RCLONE_SHA256_${TARGETARCH}) && \
+    curl -L https://downloads.rclone.org/v${RCLONE_RELEASE}/rclone-v${RCLONE_RELEASE}-linux-${TARGETARCH}.zip -o /tmp/rclone.zip && \
+    echo "${RCLONE_SHA256} /tmp/rclone.zip" | sha256sum -c && \
+    python3 -m zipfile -e /tmp/rclone.zip /tmp/rclone && \
+    mv /tmp/rclone/rclone-v${RCLONE_RELEASE}-linux-${TARGETARCH}/rclone /usr/bin/rclone && \
+    chmod +x /usr/bin/rclone && \
+    test "$(rclone version | head -n 1)" = "rclone v${RCLONE_RELEASE}" && \
+    rm -rf /tmp/rclone /tmp/rclone.zip
+
 RUN curl -fsSL https://raw.githubusercontent.com/docker/docker-install/${DOCKER_INSTALL_SCRIPT_COMMIT}/install.sh -o /tmp/install-docker.sh
 RUN sh /tmp/install-docker.sh --version v${DOCKER_VERSION}
 RUN rm /tmp/install-docker.sh
@@ -276,11 +298,6 @@ RUN ln -sf /opt/linuxbrew/bin/watchman /usr/local/bin/watchman && \
     mkdir -p /usr/local/var/run/watchman && \
     chmod 2777 /usr/local/var/run/watchman && \
     watchman -v
-
-# Add Umbrel user
-RUN adduser --gecos "" --disabled-password umbrel
-RUN echo "umbrel:umbrel" | chpasswd
-RUN usermod -aG sudo umbrel
 
 # Preload images
 RUN sudo apt-get install --yes skopeo

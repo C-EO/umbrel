@@ -48,7 +48,7 @@ async function createMemberSharesWithFilesystem() {
 		if (key === 'files.memberShares') fileShares = value
 	})
 	const logger = {log: vi.fn(), error: vi.fn()}
-	const emit = vi.fn()
+	const emit = vi.fn(async () => {})
 
 	const virtualToSystemPath = vi.fn(async (virtualPath: string) => {
 		const segments = normalizeVirtualPath(virtualPath).split('/').filter(Boolean)
@@ -195,6 +195,33 @@ test('removing a filesystem subtree clears exact and nested shares without match
 		expect(fileShares()).toStrictEqual([{path: '/Home/shared-sibling', sharedWith: 'all'}])
 		expect(emit).toHaveBeenCalledWith('files:member-shares:change', {sharedWith: 'all'})
 		await expect(memberShares.removeWithin('/Home/missing')).resolves.toBe(false)
+	} finally {
+		await cleanup()
+	}
+})
+
+test('share revocation waits for listeners to stop affected work', async () => {
+	const {cleanup, emit, memberShares, root} = await createMemberSharesWithFilesystem()
+	try {
+		await fse.ensureDir(nodePath.join(root, 'home', 'shared'))
+		await memberShares.add('/Home/shared', ['member-1'])
+		emit.mockClear()
+
+		let releaseListener!: () => void
+		const listenerFinished = new Promise<void>((resolve) => {
+			releaseListener = resolve
+		})
+		emit.mockImplementationOnce(async () => listenerFinished)
+
+		let settled = false
+		const removal = memberShares.remove('/Home/shared').finally(() => {
+			settled = true
+		})
+		await vi.waitFor(() => expect(emit).toHaveBeenCalledOnce())
+		expect(settled).toBe(false)
+
+		releaseListener()
+		await expect(removal).resolves.toBe(true)
 	} finally {
 		await cleanup()
 	}

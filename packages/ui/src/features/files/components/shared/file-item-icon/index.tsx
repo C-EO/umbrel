@@ -2,9 +2,11 @@ import React, {useEffect, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {BsTrash2} from 'react-icons/bs'
 import {IoPlay} from 'react-icons/io5'
+import {RiAlertFill} from 'react-icons/ri'
 
 import backupsIcon from '@/features/backups/assets/backups-icon.png'
 import {AppsIcon} from '@/features/files/assets/apps-icon'
+import {CloudIcon} from '@/features/files/assets/cloud-icon'
 import externalStorageIcon from '@/features/files/assets/external-storage-icon.png'
 import {HomeIcon} from '@/features/files/assets/home-icon'
 import activeNasIcon from '@/features/files/assets/nas-icon-active.png'
@@ -26,6 +28,8 @@ import {UnknownFileThumbnail} from '@/features/files/components/shared/file-item
 import {
 	APPS_PATH,
 	BACKUPS_PATH,
+	CLOUD_PATH,
+	CLOUD_PROVIDER_LOGOS,
 	FILE_TYPE_MAP,
 	HOME_PATH,
 	IMAGE_EXTENSIONS_WITH_IMAGE_THUMBNAILS,
@@ -33,10 +37,13 @@ import {
 	TRASH_PATH,
 	VIDEO_EXTENSIONS_WITH_IMAGE_THUMBNAILS,
 } from '@/features/files/constants'
+import {useCloudAccounts} from '@/features/files/hooks/use-cloud'
+import {useCloudBadge} from '@/features/files/hooks/use-cloud-badge'
 import {useNetworkDeviceType} from '@/features/files/hooks/use-network-device-type'
 import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
 import {useShares} from '@/features/files/hooks/use-shares'
 import type {FileSystemItem} from '@/features/files/types'
+import {CLOUD_SELF_TILE_BRANDS, cloudAccountBrand} from '@/features/files/utils/cloud'
 import {splitFileName} from '@/features/files/utils/format-filesystem-name'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
 import {isDirectoryAnExternalDrivePartition} from '@/features/files/utils/is-directory-an-external-drive-partition'
@@ -55,10 +62,49 @@ export const FileItemIcon = ({item, onlySVG, className, useAnimatedIcon = false,
 	const {t} = useTranslation()
 	const {isPathShared} = useShares()
 	const isShared = isPathShared(item.path)
+	const cloudProvider = useCloudBadge(item.path)
+	// Flavor branding only matters for the handful of icons that carry a badge
+	const {data: badgeAccounts} = useCloudAccounts({enabled: Boolean(cloudProvider)})
+	const badgeAccount = badgeAccounts?.find(({id}) => id === cloudProvider?.accountId)
+	const badgeBrand = badgeAccount ? cloudAccountBrand(badgeAccount) : cloudProvider?.provider
 
 	const shareBadge = isShared ? (
 		<div className='absolute top-0 left-0 flex size-1/2 max-h-8 min-h-[0.9rem] max-w-8 min-w-[0.9rem] translate-x-[-30%] translate-y-[-20%] items-center justify-center rounded-full border border-white/15 bg-linear-to-b from-brand to-[color-mix(in_srgb,hsl(var(--color-brand))_80%,black_20%)] shadow-md'>
 			<SharedFolderBadge className='size-4/5' />
+		</div>
+	) : null
+
+	// Brand badge on folders that are cloud destinations, styled as a sticker
+	// slapped on the folder's corner: a tilted dark chip carrying the mark, or
+	// the logo itself for brands that are already full app-icon squares. A
+	// download that needs the user swaps the mark for an amber warning
+	// triangle on the same sticker. Width-based sizing with aspect-square
+	// keeps the sticker a true square; percentage heights would resolve
+	// against the folder's shorter box and squash it.
+	const badgeBrandId = badgeBrand ?? cloudProvider?.provider
+	const cloudBadge = cloudProvider ? (
+		<div className='absolute top-0 right-0 aspect-square w-1/2 max-w-7 min-w-4 translate-x-[26%] translate-y-[-10%] rotate-[10deg]'>
+			{cloudProvider.state === 'attention' ? (
+				<span className='flex size-full items-center justify-center rounded-[30%] border border-white/25 bg-neutral-900 shadow-[0_2px_6px_rgba(0,0,0,0.6)]'>
+					<RiAlertFill className='aspect-square w-[68%] text-yellow-400' />
+				</span>
+			) : badgeBrandId && CLOUD_SELF_TILE_BRANDS.has(badgeBrandId) ? (
+				<img
+					src={CLOUD_PROVIDER_LOGOS[badgeBrandId]}
+					alt=''
+					className='size-full rounded-[28%] object-contain shadow-[0_2px_6px_rgba(0,0,0,0.6)]'
+					draggable={false}
+				/>
+			) : (
+				<span className='flex size-full items-center justify-center rounded-[30%] border border-white/25 bg-neutral-900 shadow-[0_2px_6px_rgba(0,0,0,0.6)]'>
+					<img
+						src={CLOUD_PROVIDER_LOGOS[badgeBrandId ?? '']}
+						alt=''
+						className='aspect-square w-[62%] rounded-[16%] object-contain'
+						draggable={false}
+					/>
+				</span>
+			)}
 		</div>
 	) : null
 
@@ -117,6 +163,11 @@ export const FileItemIcon = ({item, onlySVG, className, useAnimatedIcon = false,
 		return <NetworkDeviceIcon path={item.path} className={className} />
 	}
 
+	// Cloud account for the pathbar's virtual /Cloud/<accountId> route
+	if (item.type === 'cloud-account') {
+		return <CloudAccountIcon path={item.path} className={className} />
+	}
+
 	// Folder
 	if (item.type === 'directory') {
 		if (onlySVG) {
@@ -129,6 +180,7 @@ export const FileItemIcon = ({item, onlySVG, className, useAnimatedIcon = false,
 				{isAppFolder ? <AppFolderBottomIcon appId={extractAppIdFromPath(item.path)} /> : null}
 
 				{shareBadge}
+				{cloudBadge}
 			</div>
 		)
 	}
@@ -178,10 +230,14 @@ const FolderIcon = ({
 	useAnimatedIcon: boolean
 	isHovered?: boolean
 }) => {
-	if (path === HOME_PATH) {
+	const memberHome = path.match(/^(\/Users\/[^/]+)(?:\/|$)/)?.[1]
+	const memberTrash = path.match(/^\/Users\/[^/]+\/Trash$/)?.[0]
+	const homeRoot = memberHome ?? HOME_PATH
+
+	if (path === homeRoot) {
 		return <HomeIcon className={className} />
 	}
-	if (path === TRASH_PATH) {
+	if (path === TRASH_PATH || path === memberTrash) {
 		return <BsTrash2 className={className} />
 	}
 	if (path === RECENTS_PATH) {
@@ -193,28 +249,28 @@ const FolderIcon = ({
 
 	const FolderComponent = useAnimatedIcon ? AnimatedFolderIcon : SimpleFolderIcon
 
-	if (path === `${HOME_PATH}/Videos`) {
+	if (path === `${homeRoot}/Videos`) {
 		return useAnimatedIcon ? (
 			<FolderComponent className={className} overlayIcon={VideosIcon} isHovered={isHovered} />
 		) : (
 			<FolderComponent className={className} overlayIcon={VideosIcon} />
 		)
 	}
-	if (path === `${HOME_PATH}/Downloads`) {
+	if (path === `${homeRoot}/Downloads`) {
 		return useAnimatedIcon ? (
 			<FolderComponent className={className} overlayIcon={DownloadsIcon} isHovered={isHovered} />
 		) : (
 			<FolderComponent className={className} overlayIcon={DownloadsIcon} />
 		)
 	}
-	if (path === `${HOME_PATH}/Documents`) {
+	if (path === `${homeRoot}/Documents`) {
 		return useAnimatedIcon ? (
 			<FolderComponent className={className} overlayIcon={DocumentsIcon} isHovered={isHovered} />
 		) : (
 			<FolderComponent className={className} overlayIcon={DocumentsIcon} />
 		)
 	}
-	if (path === `${HOME_PATH}/Photos`) {
+	if (path === `${homeRoot}/Photos`) {
 		return useAnimatedIcon ? (
 			<FolderComponent className={className} overlayIcon={PhotosIcon} isHovered={isHovered} />
 		) : (
@@ -345,6 +401,16 @@ const VideoThumbnail = ({
 		}
 	/>
 )
+
+// Brand logo for /Cloud/<accountId> paths, the generic cloud otherwise
+const CloudAccountIcon = ({path, className}: {path: string; className?: string}) => {
+	const accountId = path.startsWith(`${CLOUD_PATH}/`) ? path.split('/')[2] : undefined
+	const {data: accounts} = useCloudAccounts({enabled: Boolean(accountId)})
+	const account = accounts?.find(({id}) => id === accountId)
+	const logo = account ? CLOUD_PROVIDER_LOGOS[cloudAccountBrand(account)] : undefined
+	if (logo) return <img src={logo} alt='' className={`object-contain ${className ?? ''}`} draggable={false} />
+	return <CloudIcon className={className} />
+}
 
 // Component to render network device icon with Umbrel detection
 const NetworkDeviceIcon = ({path, className}: {path: string; className?: string}) => {

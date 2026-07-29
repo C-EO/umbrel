@@ -32,6 +32,7 @@ export interface ListingProps {
 	additionalContextMenuItems?: React.ReactNode // additional items for the context menu
 	enableFileDrop?: boolean // if file upload drop zone is enabled
 	marqueeScale?: number // scale factor applied to marquee math so the overlay stays aligned inside scaled embeds (see Rewind)
+	topBanner?: React.ReactNode // optional banner rendered above the listing card (e.g. cloud status)
 }
 
 function ListingContent({
@@ -122,6 +123,7 @@ export function Listing({
 	additionalContextMenuItems,
 	enableFileDrop = true,
 	marqueeScale = 1,
+	topBanner,
 }: ListingProps) {
 	const isTouchDevice = useIsTouchDevice()
 	const scrollAreaRef = useRef<HTMLDivElement>(null)
@@ -136,6 +138,7 @@ export function Listing({
 	const content = (
 		// Wrap in a flex column to ensure the context menu works
 		<div className='flex flex-col'>
+			{topBanner}
 			<ListingContent
 				items={items}
 				totalItems={totalItems}

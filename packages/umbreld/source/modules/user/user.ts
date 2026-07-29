@@ -226,6 +226,13 @@ export default class User {
 		return ((await this.#store.get('members')) ?? []).filter(isActiveMember)
 	}
 
+	// Deleted member ids are permanent security identities. Modules that restore
+	// account-owned background work use this before startup cleanup runs so a
+	// tombstoned account cannot briefly become active again after a restart.
+	async listDeletedMemberIds(): Promise<string[]> {
+		return ((await this.#store.get('members')) ?? []).filter(isDeletedMember).map(({id}) => id)
+	}
+
 	// Get a member account by user id
 	async getMember(userId: string): Promise<Member | undefined> {
 		const members = await this.listMembers()
@@ -320,9 +327,28 @@ export default class User {
 	}
 
 	async #finishDeletion(userId: string) {
-		await this.#umbreld.auth.revokeAllForAccount(userId)
+		// Revoke sessions and remove private Cloud state before deleting the
+		// private Home. Cloud data already downloaded to
+		// shared external/network storage is deliberately left behind as ordinary
+		// files. Attempt every independent cleanup even if one fails so neither an
+		// authenticated session nor a background transfer remains live because another
+		// subsystem needs a retry.
+		const privateServiceCleanup = await Promise.allSettled([
+			this.#umbreld.auth.revokeAllForAccount(userId),
+			this.#umbreld.files.cloud.removeUser(userId),
+		])
+		const cleanupFailures = privateServiceCleanup.filter(
+			(result): result is PromiseRejectedResult => result.status === 'rejected',
+		)
+		if (cleanupFailures.length === 1) throw cleanupFailures[0].reason
+		if (cleanupFailures.length > 1) {
+			throw new AggregateError(
+				cleanupFailures.map(({reason}) => reason),
+				`Failed to remove private services for ${userId}`,
+			)
+		}
 
-		// Delete the user's files
+		// Delete the user's private Home, trash, and associated metadata.
 		await this.#umbreld.files.deleteMemberDirectories(userId)
 
 		// Remove them from any share lists

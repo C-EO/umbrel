@@ -27,6 +27,7 @@ export type FilesCapabilities = {
 		external?: boolean
 		trash?: boolean
 		rewind?: boolean
+		cloud?: boolean
 	}
 }
 

@@ -199,24 +199,62 @@ function createTestHelpers(port: number) {
 	// `started` resolves once the server acknowledges the subscription. Await it
 	// before triggering the action under test, otherwise events emitted while
 	// the subscription is still being established are silently missed.
-	function subscribeToEvents<T>(event: (typeof events)[number]) {
+	function subscribeToEvents<T>(
+		event: (typeof events)[number],
+		{authToken: subscriptionAuthToken}: {authToken?: string} = {},
+	) {
+		const scopedTicketClient = subscriptionAuthToken
+			? createTRPCProxyClient<AppRouter>({
+					links: [
+						httpBatchLink({
+							url: `http://127.0.0.1:${port}/trpc`,
+							fetch: fetchWithBrowserSession,
+							headers: {Authorization: `Bearer ${subscriptionAuthToken}`},
+						}),
+					],
+				})
+			: undefined
+		const scopedWsClient = scopedTicketClient
+			? createWSClient({
+					url: async () => {
+						const ticket = await scopedTicketClient.user.createWebSocketTicket.mutate({target: 'trpc'})
+						return `ws://127.0.0.1:${port}/trpc?ticket=${ticket}`
+					},
+					retryDelayMs: () => 100,
+				})
+			: undefined
+		const subscriptionClient = scopedWsClient
+			? createTRPCProxyClient<AppRouter>({links: [wsLink({client: scopedWsClient})]})
+			: client
 		const collected: T[] = []
 		let resolveStarted = () => {}
-		const started = new Promise<void>((resolve) => {
+		let rejectStarted = (_error: unknown) => {}
+		let subscriptionStarted = false
+		const started = new Promise<void>((resolve, reject) => {
 			resolveStarted = resolve
+			rejectStarted = reject
 		})
-		const subscription = client.eventBus.listen.subscribe(
+		const subscription = subscriptionClient.eventBus.listen.subscribe(
 			{event},
 			{
-				onStarted: () => resolveStarted(),
+				onStarted: () => {
+					subscriptionStarted = true
+					resolveStarted()
+				},
 				onData: (data) => collected.push(data as T),
-				onError: (error) => console.error(`Subscription error for ${event}:`, error),
+				onError: (error) => {
+					if (!subscriptionStarted) rejectStarted(error)
+					else console.error(`Subscription error for ${event}:`, error)
+				},
 			},
 		)
 		return {
 			collected,
 			started,
-			unsubscribe: () => subscription.unsubscribe(),
+			unsubscribe: () => {
+				subscription.unsubscribe()
+				scopedWsClient?.close()
+			},
 		}
 	}
 
@@ -236,7 +274,10 @@ function createTestHelpers(port: number) {
 	}
 }
 
-export default async function createTestUmbreld({autoLogin = false, autoStart = true} = {}) {
+export default async function createTestUmbreld({
+	autoLogin = false,
+	autoStart = true,
+}: {autoLogin?: boolean; autoStart?: boolean} = {}) {
 	const directory = temporaryDirectory({parentDirectory: testDataDirectory})
 	await directory.createRoot()
 
@@ -300,17 +341,29 @@ export async function createTestVm({
 	bootDisk,
 	forwardPorts = [],
 	startupTimeout = 300_000,
+	stateDirectoryName,
 }: {
 	device?: 'umbrel-pro' | 'umbrel-home' | 'nas' | 'pi'
 	bootDisk?: 'default' | 'emmc' | 'nvme' | 'usb' | 'sdcard' | 'none'
 	forwardPorts?: Array<{hostPort: number; guestPort: number}>
 	startupTimeout?: number
+	stateDirectoryName?: string
 } = {}) {
 	const vmScript = path.resolve(currentDirectory, '../../../../os/vm.sh')
 
 	const directory = temporaryDirectory({parentDirectory: testDataDirectory})
 	await directory.createRoot()
-	const stateDir = await directory.create()
+	const generatedStateDirectory = await directory.create()
+	if (
+		stateDirectoryName !== undefined &&
+		(!stateDirectoryName ||
+			stateDirectoryName === '.' ||
+			stateDirectoryName === '..' ||
+			path.basename(stateDirectoryName) !== stateDirectoryName)
+	) {
+		throw new Error('stateDirectoryName must be a single directory name')
+	}
+	const stateDir = stateDirectoryName ? path.join(generatedStateDirectory, stateDirectoryName) : generatedStateDirectory
 	const env = {VM_STATE_DIR: stateDir}
 
 	const sshPort = await getPort()
@@ -513,6 +566,14 @@ export async function createTestVm({
 		await $({env})`${vmScript} usb destroy ${slot}`
 	}
 
+	async function disconnectUsbStorage({slot}: {slot: number}) {
+		await $({env})`${vmScript} usb disconnect ${slot}`
+	}
+
+	async function connectUsbStorage({slot}: {slot: number}) {
+		await $({env})`${vmScript} usb connect ${slot}`
+	}
+
 	async function disconnectNvme({slot}: {slot: number}) {
 		await $({env})`${vmScript} nvme disconnect ${slot}`
 	}
@@ -670,6 +731,8 @@ printf '\\n${authFailureMarker}\\n'
 		removeHdd,
 		addUsbStorage,
 		removeUsbStorage,
+		disconnectUsbStorage,
+		connectUsbStorage,
 		reflash,
 		ssh,
 		sshAsRoot,

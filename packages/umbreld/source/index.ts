@@ -22,6 +22,8 @@ import SystemNg from './modules/system-ng/system-ng.js'
 import LanIngress from './modules/lan-ingress/lan-ingress.js'
 import Auth from './modules/auth/auth.js'
 
+import type {CloudStore} from './modules/files/cloud-types.js'
+
 import {
 	commitOsPartition,
 	setupPiCpuGovernor,
@@ -109,6 +111,7 @@ type StoreSchema = {
 			password: string
 			mountPath: string
 		}[]
+		cloud?: CloudStore
 	}
 	notifications: string[]
 	backups: {
@@ -252,6 +255,18 @@ export default class Umbreld {
 		// nftables rules are in place before app proxies begin accepting traffic.
 		await this.lanIngress.start()
 
+		// Cloud must record restored entries as paused before routes or its
+		// scheduler can observe them. Consume the marker only after that write succeeds.
+		if (this.isBackupRestoreFirstStart) {
+			await this.files.cloud.pauseRestoredSyncs()
+			await this.consumeBackupRestoreFirstStartFlag()
+		}
+
+		// Restore Cloud's persisted destination and deleted-account guards before
+		// the dashboard can mutate files. Slower credential maintenance remains
+		// part of Files startup and runs in the background.
+		await this.files.cloud.restoreProtectionState()
+
 		// Initialise modules
 		await Promise.all([
 			this.user.start(),
@@ -278,11 +293,16 @@ export default class Umbreld {
 			if (await fse.pathExists(restoreFlagPath)) {
 				this.logger.log('Detected first start after backup restore')
 				this.isBackupRestoreFirstStart = true
-				await fse.remove(restoreFlagPath).catch(() => {})
 			}
 		} catch (error) {
 			this.logger.error('Failed checking backup restore first-start flag', error)
 		}
+	}
+
+	private async consumeBackupRestoreFirstStartFlag() {
+		if (!this.isBackupRestoreFirstStart) return
+		const restoreFlagPath = `${this.dataDirectory}/${BACKUP_RESTORE_FIRST_START_FLAG}`
+		await fse.remove(restoreFlagPath)
 	}
 
 	async stop() {

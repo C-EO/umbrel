@@ -357,9 +357,10 @@ describe('Multi-user accounts', () => {
 		const names = listing.files.map((file) => file.name).sort()
 		expect(names).toStrictEqual(['Documents', 'Downloads', 'Photos', 'Videos'])
 
-		// Owner-only features (sharing, favorites) aren't advertised on member files
+		// Members may export eligible folders from their own Home over SMB, while
+		// favorites remain owner-only.
 		const documents = listing.files.find((file) => file.name === 'Documents')!
-		expect(documents.operations).not.toContain('share')
+		expect(documents.operations).toContain('share')
 		expect(documents.operations).not.toContain('favorite')
 	})
 
@@ -832,9 +833,9 @@ describe('Multi-user accounts', () => {
 		).rejects.toThrow('forbidden')
 
 		// The member can create, rename and permanently delete inside the share
-		await expect(umbreld.client.files.createDirectory.mutate({path: '/Home/Photos/holiday/from-member'})).resolves.toBe(
-			true,
-		)
+		await expect(
+			umbreld.client.files.createDirectory.mutate({path: '/Home/Photos/holiday/from-member'}),
+		).resolves.toMatchObject({created: true})
 		await expect(
 			umbreld.client.files.rename.mutate({path: '/Home/Photos/holiday/from-member', newName: 'member-dir'}),
 		).resolves.toBe('/Home/Photos/holiday/member-dir')
@@ -1051,7 +1052,9 @@ rm -rf '${home}/Photos/holiday-private'
 		await expect(umbreld.client.files.list.query({path: '/Home/share'})).resolves.toBeDefined()
 		await expect(umbreld.client.files.list.query({path: '/Home/share/child'})).resolves.toBeDefined()
 		// Missing children inside the share can still be created
-		await expect(umbreld.client.files.createDirectory.mutate({path: '/Home/share/new-folder'})).resolves.toBe(true)
+		await expect(umbreld.client.files.createDirectory.mutate({path: '/Home/share/new-folder'})).resolves.toMatchObject({
+			created: true,
+		})
 		// A sibling directory that shares the path prefix is not inside the share
 		await expect(umbreld.client.files.list.query({path: '/Home/share-private'})).rejects.toThrow('forbidden')
 		// Nor is the parent, which only shows the whitelisted path down to the share
@@ -1492,12 +1495,12 @@ mkdir -p '${umbreld.vm.dataDirectory}/network/future-nas/media'
 		await expect(umbreld.client.files.list.query({path: '/Network'})).resolves.toMatchObject({
 			files: expect.arrayContaining([expect.objectContaining({name: 'future-nas'})]),
 		})
-		await expect(umbreld.client.files.createDirectory.mutate({path: '/External/future-usb/from-member'})).resolves.toBe(
-			true,
-		)
+		await expect(
+			umbreld.client.files.createDirectory.mutate({path: '/External/future-usb/from-member'}),
+		).resolves.toMatchObject({created: true})
 		await expect(
 			umbreld.client.files.createDirectory.mutate({path: '/Network/future-nas/media/from-member'}),
-		).resolves.toBe(true)
+		).resolves.toMatchObject({created: true})
 
 		// Uploads may create nested directories, but only below the nearest
 		// existing writable directory. Category and hostname management roots

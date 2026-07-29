@@ -22,9 +22,9 @@ import {
 	PlatformSelector,
 } from '@/features/files/components/dialogs/share-info-dialog/platform-selector'
 import {ShareToggle} from '@/features/files/components/dialogs/share-info-dialog/share-toggle'
-import {HOME_PATH} from '@/features/files/constants'
 import {useExternalStorage} from '@/features/files/hooks/use-external-storage'
 import {useHomeDirectoryName} from '@/features/files/hooks/use-home-directory-name'
+import {useHomePath} from '@/features/files/hooks/use-home-path'
 import {useShares} from '@/features/files/hooks/use-shares'
 import {getShareUnavailableReason} from '@/features/files/utils/get-share-unavailable-reason'
 import {useIsMobile} from '@/hooks/use-is-mobile'
@@ -34,6 +34,7 @@ export default function ShareInfoDialog() {
 	const {t} = useTranslation()
 	const isMobile = useIsMobile()
 	const homeDirectoryName = useHomeDirectoryName()
+	const homePath = useHomePath()
 	const [searchParams] = useSearchParams()
 	const name = searchParams.get('files-share-info-name') || ''
 	const path = searchParams.get('files-share-info-path') || ''
@@ -56,7 +57,7 @@ export default function ShareInfoDialog() {
 	const share = shares?.find((s) => s.path === path)
 	const isShared = isPathShared(path) ?? false
 	const isUnavailable = share?.available === false
-	const isSharingHome = path === HOME_PATH
+	const isSharingHome = path === homePath
 	const sharename = share?.sharename
 
 	const unavailableReason = share ? getShareUnavailableReason(share, disks) : undefined

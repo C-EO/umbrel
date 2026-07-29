@@ -2,8 +2,7 @@ import {keepPreviousData} from '@tanstack/react-query'
 import {useTranslation} from 'react-i18next'
 
 import {toast} from '@/components/ui/toast'
-import {HOME_PATH} from '@/features/files/constants'
-import {useIsMember} from '@/features/files/hooks/use-home-path'
+import {useHomePath, useIsMember} from '@/features/files/hooks/use-home-path'
 import type {Share} from '@/features/files/types'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
 import {trpcReact} from '@/trpc/trpc'
@@ -17,8 +16,8 @@ export function useShares() {
 	const {t} = useTranslation()
 	const utils = trpcReact.useUtils()
 
-	// Sharing is an owner-only feature, don't run its queries for member accounts
 	const isMember = useIsMember()
+	const homePath = useHomePath()
 
 	// Invalidate shares when external storage changes (e.g., drive ejected/mounted)
 	trpcReact.eventBus.listen.useSubscription(
@@ -36,21 +35,21 @@ export function useShares() {
 
 	// Query to fetch all shares
 	const {data: shares, isLoading: isLoadingShares} = trpcReact.files.shares.useQuery(undefined, {
+		enabled: !isMember,
 		placeholderData: keepPreviousData,
 		staleTime: 60_000, // Cache for 1 minute
-		enabled: !isMember,
 	})
 
 	// Check if item is shared
 	const isPathShared = (path: string) => shares?.some((share: Share) => share && share.path === path)
 
 	// Check if the entire home directory is shared
-	const isHomeShared = () => shares?.some((share: Share) => share && share.path === HOME_PATH)
+	const isHomeShared = () => shares?.some((share: Share) => share && share.path === homePath)
 
 	// Query to get share password
 	const {data: sharePassword, isLoading: isLoadingSharesPassword} = trpcReact.files.sharePassword.useQuery(undefined, {
-		staleTime: Infinity, // Cache indefinitely until browser refresh
 		enabled: !isMember,
+		staleTime: Infinity, // Cache indefinitely until browser refresh
 	})
 
 	// Add share mutation

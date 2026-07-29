@@ -67,6 +67,9 @@ describe.sequential('Network storage lifecycle', () => {
 		)
 	}
 
+	const cifsMountCount = async () =>
+		Number((await umbreld.vm.ssh(`awk '$3 == "cifs" {count++} END {print count + 0}' /proc/mounts`)).trim())
+
 	test('adds a CIFS share that later lifecycle checks can remount', async () => {
 		const shareName = 'network-lifecycle-test'
 		await createLocalSambaShare(shareName)
@@ -93,9 +96,6 @@ describe.sequential('Network storage lifecycle', () => {
 	})
 
 	test('unmounts CIFS shares when umbreld stops and remounts them on start', async () => {
-		const cifsMountCount = async () =>
-			Number((await umbreld.vm.ssh(`awk '$3 == "cifs" {count++} END {print count + 0}' /proc/mounts`)).trim())
-
 		await pRetry(
 			async () => {
 				expect(await cifsMountCount()).toBeGreaterThan(0)
@@ -144,5 +144,57 @@ describe.sequential('Network storage lifecycle', () => {
 			maxTimeout: 1000,
 		})
 		await expectMountedShareToContain('after-outage')
+	})
+
+	test('removes an unmounted configured share while its SMB server is offline', async () => {
+		const offlineShareName = 'network-offline-removal-test'
+		await createLocalSambaShare(offlineShareName)
+		const offlineMountPath = await mountLocalSambaShare(offlineShareName)
+
+		// Stop Umbreld while Samba is healthy so the real shutdown handler cleanly
+		// detaches the CIFS filesystem and removes its empty mount directory.
+		await umbreld.vm.sshAsRoot('systemctl stop umbrel')
+		await pRetry(
+			async () => {
+				expect(await cifsMountCount()).toBe(0)
+			},
+			{retries: 120, factor: 1, minTimeout: 1000, maxTimeout: 1000},
+		)
+		// This VM also hosts the Samba fixture, and Umbreld normally starts it
+		// for local shares. A runtime mask keeps that simulated remote server
+		// offline while allowing Umbreld itself to start.
+		await umbreld.vm.sshAsRoot('systemctl mask --runtime smbd')
+		await umbreld.vm.sshAsRoot('systemctl start umbrel')
+		await umbreld.waitForStartup({waitForUser: true})
+		await umbreld.login()
+
+		// The configured share is now offline. Removal must not depend on the
+		// server returning or on the timing of internal mount-directory cleanup.
+		await pRetry(
+			async () => {
+				await expect(umbreld.client.files.listNetworkShares.query()).resolves.toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							mountPath: offlineMountPath,
+							isMounted: false,
+						}),
+					]),
+				)
+			},
+			{retries: 20, factor: 1, minTimeout: 500, maxTimeout: 500},
+		)
+
+		await expect(umbreld.client.files.removeNetworkShare.mutate({mountPath: offlineMountPath})).resolves.toBe(true)
+		await expect(umbreld.client.files.listNetworkShares.query()).resolves.not.toEqual(
+			expect.arrayContaining([expect.objectContaining({mountPath: offlineMountPath})]),
+		)
+
+		// Returning the server must not resurrect a share the user removed.
+		await umbreld.vm.sshAsRoot('systemctl unmask --runtime smbd')
+		await umbreld.vm.sshAsRoot('systemctl start smbd')
+		await new Promise((resolve) => setTimeout(resolve, 1000))
+		await expect(umbreld.client.files.listNetworkShares.query()).resolves.not.toEqual(
+			expect.arrayContaining([expect.objectContaining({mountPath: offlineMountPath})]),
+		)
 	})
 })

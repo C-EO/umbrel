@@ -2,7 +2,6 @@ import {useEffect, useMemo, useState} from 'react'
 
 import {useBackups, useMountBackup, useRepositoryBackups, useUnmountBackup} from '@/features/backups/hooks/use-backups'
 import type {Backup, BackupRepository} from '@/features/backups/hooks/use-backups'
-import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import {trpcReact} from '@/trpc/trpc'
 
@@ -23,7 +22,6 @@ export function useRewind({overlayOpen, repoOpen}: {overlayOpen: boolean; repoOp
 	const {mountBackup} = useMountBackup()
 	const {unmountBackup} = useUnmountBackup()
 	const utils = trpcReact.useUtils()
-	const {copyItems} = useFilesOperations()
 	const selectedItems = useFilesStore((s) => s.selectedItems)
 	const resetInteractionState = useFilesStore((s) => s.resetInteractionState)
 
@@ -173,8 +171,6 @@ export function useRewind({overlayOpen, repoOpen}: {overlayOpen: boolean; repoOp
 		selectSnapshot,
 		unmountIfNeeded,
 
-		// restore helpers
-		copyItems,
 		canRecover,
 	}
 }

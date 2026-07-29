@@ -28,8 +28,7 @@ export function useFilesKeyboardShortcuts({
 	view: 'list' | 'icons'
 }) {
 	const isReadOnly = useIsFilesReadOnly()
-	// In read-only mode, disable write/selection shortcuts but allow viewer and navigation shortcuts.
-	const shortcutsEnabled = !isReadOnly
+	const writeShortcutsEnabled = !isReadOnly
 	const {currentPath, navigateToItem, navigateToDirectory} = useNavigate()
 	const routerNavigate = useRouterNavigate()
 	const linkToDialog = useLinkToDialog()
@@ -100,15 +99,23 @@ export function useFilesKeyboardShortcuts({
 					return
 				}
 
-				// Write shortcuts below require shortcutsEnabled (not read-only)
-				// Note: No Cmd+Shift+N for new folder — the browser intercepts it to open a new window.
-				if (!shortcutsEnabled) return
-
 				if (e.key === 'c') {
 					e.preventDefault()
 					copyItemsToClipboard()
 					return
 				}
+
+				if (e.key === 'a') {
+					e.preventDefault()
+					setSelectedItems(items)
+					return
+				}
+
+				// Write shortcuts below are unavailable in embedded read-only
+				// mode. Their command handlers also enforce per-path operations.
+				// Note: No Cmd+Shift+N for new folder — the browser intercepts it to open a new window.
+				if (!writeShortcutsEnabled) return
+
 				if (e.key === 'x') {
 					e.preventDefault()
 					cutItemsToClipboard()
@@ -132,11 +139,6 @@ export function useFilesKeyboardShortcuts({
 					} else if (canTrash) {
 						trashSelectedItems()
 					}
-					return
-				}
-				if (e.key === 'a') {
-					e.preventDefault()
-					setSelectedItems(items)
 					return
 				}
 			}
@@ -297,8 +299,7 @@ export function useFilesKeyboardShortcuts({
 				return
 			}
 
-			// Search functionality
-			if (!shortcutsEnabled) return
+			// Search/selection stays available in read-only views.
 			if (isInInput(e) || mod || e.altKey) return
 			if (e.key === ' ' && searchBuffer.current.length === 0) return
 
@@ -356,7 +357,7 @@ export function useFilesKeyboardShortcuts({
 		window.addEventListener('keydown', handleKeyDown)
 		return () => window.removeEventListener('keydown', handleKeyDown)
 	}, [
-		shortcutsEnabled,
+		writeShortcutsEnabled,
 		currentPath,
 		items,
 		isMobile,

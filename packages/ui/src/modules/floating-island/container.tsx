@@ -3,6 +3,7 @@ import {AnimatePresence, motion} from 'motion/react'
 import {BackupsIsland} from '@/features/backups/components/floating-island'
 import {useBackupProgress} from '@/features/backups/hooks/use-backups'
 import {AudioIsland} from '@/features/files/components/floating-islands/audio-island'
+import {CloudIsland} from '@/features/files/components/floating-islands/cloud-island'
 import {FormattingIsland} from '@/features/files/components/floating-islands/formatting-island'
 import {OperationsIsland} from '@/features/files/components/floating-islands/operations-island'
 import {UploadingIsland} from '@/features/files/components/floating-islands/uploading-island'
@@ -10,6 +11,7 @@ import {useExternalStorage} from '@/features/files/hooks/use-external-storage'
 import {RaidIsland} from '@/features/storage/components/floating-island'
 import {useRaidProgress} from '@/features/storage/hooks/use-raid-progress'
 import {usePendingRaidOperation} from '@/features/storage/providers/pending-operation-context'
+import {cloudActivityHasWork, useCloudActivity} from '@/providers/cloud'
 import {useGlobalFiles} from '@/providers/global-files'
 import {useImmersiveDialogOpen} from '@/providers/immersive-dialog'
 
@@ -32,6 +34,8 @@ export function FloatingIslandContainer() {
 	// RAID progress (real events + pending operation set by dialogs)
 	const raidProgress = useRaidProgress()
 	const {pendingOperation} = usePendingRaidOperation()
+	// Cloud transfers (live event-bus snapshots)
+	const {activities: cloudActivities} = useCloudActivity()
 
 	// Show audio island if there's an audio file playing
 	const showAudio = audio.path && audio.name
@@ -47,6 +51,9 @@ export function FloatingIslandContainer() {
 	const showFormatting = (disks?.filter((disk) => disk.isFormatting).length || 0) > 0
 	// Show RAID island if any RAID operation is in progress (real or pending)
 	const showRaid = raidProgress !== null || pendingOperation !== null
+	// Show cloud island only when a download has actual files to move,
+	// not during rclone's scan/check phase (no-op syncs never show it)
+	const showCloud = cloudActivities.some(cloudActivityHasWork)
 
 	// Common animation props
 	const commonProps = {
@@ -86,6 +93,11 @@ export function FloatingIslandContainer() {
 				{showBackups && (
 					<motion.div key='backups-island' layout {...commonProps}>
 						<BackupsIsland />
+					</motion.div>
+				)}
+				{showCloud && (
+					<motion.div key='cloud-island' layout {...commonProps}>
+						<CloudIsland />
 					</motion.div>
 				)}
 				{showAudio && (

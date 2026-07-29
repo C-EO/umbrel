@@ -1,6 +1,6 @@
 import {useTranslation} from 'react-i18next'
 
-import {Tooltip, TooltipContent, TooltipTrigger} from '@/features/files/components/rewind/tooltip'
+import {Tooltip, TooltipContent, TooltipTrigger} from '@/components/ui/tooltip'
 import {formatFilesystemDate} from '@/features/files/utils/format-filesystem-date'
 import {useLanguage} from '@/hooks/use-language'
 import {cn} from '@/lib/utils'

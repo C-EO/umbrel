@@ -9,17 +9,21 @@ import {ContextMenuItem, ContextMenuShortcut} from '@/components/ui/context-menu
 import {DropdownMenuItem} from '@/components/ui/dropdown-menu'
 import {IconButton} from '@/components/ui/icon-button'
 import {AddFolderIcon} from '@/features/files/assets/add-folder-icon'
+import {CloudBanner} from '@/features/files/components/cloud-banner'
 import {Listing} from '@/features/files/components/listing'
 import {useSetActionsBarConfig} from '@/features/files/components/listing/actions-bar/actions-bar-context'
 import {EmptyStateDirectory, EmptyStateNetwork} from '@/features/files/components/listing/directory-listing/empty-state'
 import {UploadInput} from '@/features/files/components/shared/upload-input'
+import {cloudSyncForPath, useCloudSyncs} from '@/features/files/hooks/use-cloud'
 import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
+import {useHomePath} from '@/features/files/hooks/use-home-path'
 import {useListDirectory} from '@/features/files/hooks/use-list-directory'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {useNewFolder} from '@/features/files/hooks/use-new-folder'
-import {useIsFilesEmbedded} from '@/features/files/providers/files-capabilities-context'
+import {useIsFilesEmbedded, useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FilesStore} from '@/features/files/store/use-files-store'
+import {isValidCloudDestination} from '@/features/files/utils/cloud'
 import {dashboardAuthHeaders} from '@/modules/auth/http-auth'
 import {trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
@@ -40,10 +44,18 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 		navigateToDirectory,
 	} = useNavigate()
 	const isEmbedded = useIsFilesEmbedded()
+	const isReadOnly = useIsFilesReadOnly()
 	const setActionsBarConfig = useSetActionsBarConfig()
 	const {listing, isLoading, error, fetchMoreItems} = useListDirectory(currentPath)
 	const routerNavigate = useRouterNavigate()
 	const linkToDialog = useLinkToDialog()
+	const homePath = useHomePath()
+
+	// The backend's writable operation on the current directory gates every
+	// write affordance here (new folder, new file, upload, paste, file drop),
+	// e.g. cloud mirrors and backup snapshots; mutations stay guarded
+	// server-side either way
+	const isWritable = listing?.operations.includes('writable') ?? false
 
 	// Grab the potential "new folder" item from store
 	const newFolder = useFilesStore((state: FilesStore) => state.newFolder)
@@ -61,6 +73,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 	// For "Upload"
 	const uploadInputRef = useRef<HTMLInputElement | null>(null)
 	const handleUploadClick = () => {
+		if (isReadOnly || !isWritable) return
 		uploadInputRef.current?.click()
 	}
 
@@ -68,6 +81,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 	const utils = trpcReact.useUtils()
 	const setViewerItem = useFilesStore((s) => s.setViewerItem)
 	const startNewTextFile = async () => {
+		if (isReadOnly || !isWritable) return
 		const baseName = t('files-action.new-text-file-name')
 		const ext = '.txt'
 		let name = baseName + ext
@@ -94,21 +108,44 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 		}
 	}
 
+	// Cloud context: the current directory may be a download destination
+	// (its listing shows a status banner) or an empty candidate for one
+	const {data: clouds} = useCloudSyncs()
+	const currentDirCloud = cloudSyncForPath(clouds, currentPath)
+	const canDownloadFromCloudHere =
+		!isEmbedded &&
+		!isLoading &&
+		!error &&
+		(listing?.items ?? []).length === 0 &&
+		!currentDirCloud &&
+		isValidCloudDestination(currentPath, homePath)
+
 	// Additional items for the directory context menu
 	// Disable write actions (New Folder, Upload, Paste) for read-only directories
 	const additionalContextMenuItems =
 		isViewingExternalDrives || isViewingNetworkDevices || isViewingNetworkShares ? null : (
 			<>
-				<ContextMenuItem onClick={startNewFolder}>{t('files-action.new-folder')}</ContextMenuItem>
-				<ContextMenuItem onClick={startNewTextFile}>{t('files-action.new-text-file')}</ContextMenuItem>
-				<ContextMenuItem onClick={handleUploadClick}>{t('files-action.upload')}</ContextMenuItem>
+				<ContextMenuItem disabled={!isWritable} onClick={startNewFolder}>
+					{t('files-action.new-folder')}
+				</ContextMenuItem>
+				<ContextMenuItem disabled={!isWritable} onClick={startNewTextFile}>
+					{t('files-action.new-text-file')}
+				</ContextMenuItem>
+				<ContextMenuItem disabled={!isWritable} onClick={handleUploadClick}>
+					{t('files-action.upload')}
+				</ContextMenuItem>
 				<ContextMenuItem
 					onClick={() => pasteItemsFromClipboard({toDirectory: currentPath})}
-					disabled={!hasItemsInClipboard()}
+					disabled={!hasItemsInClipboard() || !isWritable}
 				>
 					{t('files-action.paste')}
 					<ContextMenuShortcut>⌘V</ContextMenuShortcut>
 				</ContextMenuItem>
+				{canDownloadFromCloudHere && (
+					<ContextMenuItem onClick={() => routerNavigate(linkToDialog('files-cloud-add', {destination: currentPath}))}>
+						{t('files-cloud.download-here')}
+					</ContextMenuItem>
+				)}
 			</>
 		)
 
@@ -135,7 +172,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 	// - At /Network (devices view): show "Add share" action
 	// - Elsewhere (non-readonly): show New Folder and Upload
 	let DesktopActions: React.ReactNode = null
-	if (isViewingNetworkDevices) {
+	if (isViewingNetworkDevices && !isReadOnly) {
 		DesktopActions = (
 			<IconButton
 				icon={TbWorldPlus}
@@ -145,13 +182,13 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 				{t('files-action.add-network-device')}
 			</IconButton>
 		)
-	} else if (!(isViewingExternalDrives || isViewingNetworkShares)) {
+	} else if (!isReadOnly && !(isViewingExternalDrives || isViewingNetworkShares)) {
 		DesktopActions = (
 			<>
-				<IconButton icon={AddFolderIcon} onClick={startNewFolder} disabled={disableActions}>
+				<IconButton icon={AddFolderIcon} onClick={startNewFolder} disabled={disableActions || !isWritable}>
 					{t('files-folder')}
 				</IconButton>
-				<IconButton icon={Upload} onClick={handleUploadClick} disabled={disableActions}>
+				<IconButton icon={Upload} onClick={handleUploadClick} disabled={disableActions || !isWritable}>
 					{t('files-action.upload')}
 				</IconButton>
 			</>
@@ -160,27 +197,27 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 
 	// Mobile actions
 	let MobileDropdownActions: React.ReactNode = null
-	if (isViewingNetworkDevices) {
+	if (isViewingNetworkDevices && !isReadOnly) {
 		MobileDropdownActions = (
 			<DropdownMenuItem onClick={() => routerNavigate(linkToDialog('files-add-network-share'))}>
 				<TbWorldPlus className='mr-2 h-4 w-4' />
 				{t('files-action.add-network-device')}
 			</DropdownMenuItem>
 		)
-	} else if (!(isViewingExternalDrives || isViewingNetworkShares)) {
+	} else if (!isReadOnly && !(isViewingExternalDrives || isViewingNetworkShares)) {
 		MobileDropdownActions = (
 			<>
-				<DropdownMenuItem onClick={startNewFolder} disabled={disableActions}>
+				<DropdownMenuItem onClick={startNewFolder} disabled={disableActions || !isWritable}>
 					<AddFolderIcon className='mr-2 h-4 w-4 opacity-50' />
 					{t('files-action.new-folder')}
 				</DropdownMenuItem>
-				<DropdownMenuItem onClick={handleUploadClick} disabled={disableActions}>
+				<DropdownMenuItem onClick={handleUploadClick} disabled={disableActions || !isWritable}>
 					<Upload className='mr-2 h-4 w-4 opacity-50' />
 					{t('files-action.upload')}
 				</DropdownMenuItem>
 				<DropdownMenuItem
 					onClick={() => pasteItemsFromClipboard({toDirectory: currentPath})}
-					disabled={disableActions || !hasItemsInClipboard()}
+					disabled={disableActions || !hasItemsInClipboard() || !isWritable}
 				>
 					<RiClipboardLine className='mr-2 h-4 w-4 opacity-50' />
 					{t('files-action.paste')}
@@ -198,6 +235,8 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 		})
 	}, [
 		disableActions,
+		isReadOnly,
+		isWritable,
 		hidePath,
 		isBrowsingApps,
 		isBrowsingExternalStorage,
@@ -209,7 +248,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 
 	return (
 		<>
-			<UploadInput ref={uploadInputRef} />
+			<UploadInput ref={uploadInputRef} disabled={isReadOnly || !isWritable} />
 			<Listing
 				items={items}
 				totalItems={listing?.totalFiles}
@@ -223,6 +262,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 				enableFileDrop={!isViewingExternalDrives && !isViewingNetworkDevices && !isViewingNetworkShares}
 				CustomEmptyView={isViewingNetworkDevices ? EmptyStateNetwork : EmptyStateDirectory}
 				marqueeScale={marqueeScale}
+				topBanner={!isEmbedded ? <CloudBanner path={currentPath} /> : undefined}
 			/>
 		</>
 	)

@@ -40,20 +40,23 @@ let mockCommand = nullMock
 afterEach(() => (mockCommand = nullMock))
 vi.mock('execa', async () => {
 	const originalModule = (await vi.importActual('execa')) as any
+	const runMock = (tag: any, args: any[]) => {
+		const command = args[0]?.[0] ?? ''
+		const mockResult = mockCommand(command) as any
+		if (mockResult) return Promise.resolve(typeof mockResult === 'string' ? {stdout: mockResult} : mockResult)
+		return tag.apply(originalModule, args)
+	}
 	return {
 		...originalModule,
 		// Mock $ from execa
 		$: vi.fn(function () {
-			// Grab all arguments and pull out the command
 			const args = Array.from(arguments)
-			const command = args[0]?.[0] ?? ''
+			if (Array.isArray(args[0])) return runMock(originalModule.$, args)
 
-			// Test if we have a mock that wants to override this command
-			const mockResult = mockCommand(command) as any
-			if (mockResult) return Promise.resolve(typeof mockResult === 'string' ? {stdout: mockResult} : mockResult)
-
-			// Otherwise fall back to default execa behaviour
-			return originalModule.$.apply(originalModule, args)
+			const configuredTag = originalModule.$.apply(originalModule, args)
+			return function () {
+				return runMock(configuredTag, Array.from(arguments))
+			}
 		}),
 	}
 })
@@ -185,6 +188,7 @@ describe('files.mountedExternalDevices', () => {
 					{
 						id: 'sda1',
 						label: 'EFI',
+						filesystemUuid: '67E3-17ED',
 						mountpoints: [],
 						size: 209715200,
 						type: 'EFI System',
@@ -192,6 +196,7 @@ describe('files.mountedExternalDevices', () => {
 					{
 						id: 'sda2',
 						label: 'Red T5',
+						filesystemUuid: '67F5-306E',
 						mountpoints: [],
 						size: 999993376768,
 						type: 'Microsoft basic data',
@@ -226,6 +231,7 @@ describe('files.mountedExternalDevices', () => {
 					{
 						id: 'sda1',
 						label: 'EFI',
+						filesystemUuid: '67E3-17ED',
 						mountpoints: [],
 						size: 209715200,
 						type: 'EFI System',
@@ -233,6 +239,7 @@ describe('files.mountedExternalDevices', () => {
 					{
 						id: 'sda2',
 						label: 'Red T5',
+						filesystemUuid: '67F5-306E',
 						type: 'Microsoft basic data',
 						size: 999993376768,
 						mountpoints: ['/External/Red T5'],
@@ -308,6 +315,30 @@ describe('files.unmountExternalDevice', () => {
 		// Check mountpoint was removed
 		await expect(fse.pathExists(mountPoint)).resolves.toBe(false)
 	})
+
+	test('does not force-remove an external device when unmounting fails', async () => {
+		mockCommand = (command: string) => {
+			if (command.startsWith('lsblk'))
+				return JSON.stringify(LSBLK_EXTERNAL_DISK_MOUNTED).replaceAll(
+					'/home/umbrel/umbrel',
+					umbreld.instance.dataDirectory,
+				)
+			if (command.startsWith('umount')) return Promise.reject(new Error('device is busy'))
+			if (command.startsWith('mountpoint')) return {exitCode: 0}
+		}
+
+		let removeAttempts = 0
+		mockWriteFile = (path: string) => {
+			if (path === '/sys/block/sda/device/delete') removeAttempts++
+		}
+		vi.spyOn(umbreld.instance.files.samba, 'applyShares').mockImplementation(async () => ({}) as never)
+		await fse.ensureDir(`${umbreld.instance.dataDirectory}/external/Red T5`)
+
+		await expect(umbreld.client.files.unmountExternalDevice.mutate({deviceId: 'sda'})).rejects.toThrow(
+			'[failed-unmounts]',
+		)
+		expect(removeAttempts).toBe(0)
+	})
 })
 
 describe('externalstorage.#cleanLeftOverMountPoints()', () => {
@@ -331,6 +362,26 @@ describe('externalstorage.#cleanLeftOverMountPoints()', () => {
 })
 
 describe('externalstorage.#mountExternalDevices', () => {
+	test('detaches a mount whose block device was physically removed', async () => {
+		const mountPoint = `${umbreld.instance.dataDirectory}/external/Disconnected`
+		await fse.ensureDir(mountPoint)
+		let unmountCommands = 0
+		vi.spyOn(umbreld.instance.files.samba, 'applyShares').mockImplementation(async () => ({}) as never)
+		mockCommand = (command: string) => {
+			if (command.startsWith('findmnt')) return {stdout: '/dev/sdz1', exitCode: 0}
+			if (command.startsWith('umount ')) {
+				unmountCommands++
+				return 'fake unmount worked'
+			}
+			if (command.startsWith('lsblk')) return JSON.stringify(LSBLK_NO_EXTERNAL_DISK)
+		}
+
+		await umbreld.instance.eventBus.emit('system:disk:change')
+
+		expect(unmountCommands).toBe(1)
+		await expect(fse.pathExists(mountPoint)).resolves.toBe(false)
+	})
+
 	test('waits for a slow initial device scan before mounting', async () => {
 		let lsblkCommands = 0
 		let mountCommands = 0

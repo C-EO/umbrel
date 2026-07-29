@@ -6,6 +6,7 @@ import {Draggable, Droppable} from '@/features/files/components/shared/drag-and-
 import {useItemClick} from '@/features/files/hooks/use-item-click'
 import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
 import {usePreferences} from '@/features/files/hooks/use-preferences'
+import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
@@ -39,6 +40,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 	const isUploading = 'isUploading' in item && item.isUploading
 	const isSelected = isItemSelected(item)
 	const {preferences} = usePreferences()
+	const isReadOnly = useIsFilesReadOnly()
 	const view = preferences?.view
 	const setIsSelectingOnMobile = useFilesStore((state) => state.setIsSelectingOnMobile)
 
@@ -160,7 +162,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 		if (selectedItems.length !== 1) return
 
 		// check if the rename operation is allowed for this item
-		if (!item.operations?.includes('rename')) return
+		if (isReadOnly || !item.operations?.includes('rename')) return
 
 		// helper function to check if the event target is an input
 		function isInInput(event: KeyboardEvent) {
@@ -192,7 +194,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 		return () => {
 			window.removeEventListener('keydown', handleKeyDown)
 		}
-	}, [isSelected, selectedItems.length])
+	}, [isReadOnly, isSelected, item.name, item.operations, selectedItems.length])
 
 	return (
 		<div
@@ -210,13 +212,19 @@ export const FileItem = ({item, items}: FileItemProps) => {
 			<Droppable
 				id={`${view}-view-file-item-${item.path}`}
 				path={item.path}
-				disabled={!!isUploading || item.type !== 'directory' || !isItemInteractive}
+				disabled={
+					isReadOnly ||
+					!!isUploading ||
+					item.type !== 'directory' ||
+					!item.operations.includes('writable') ||
+					!isItemInteractive
+				}
 				className='rounded-lg'
 			>
 				<Draggable
 					id={`${view}-view-file-item-${item.path}`}
 					item={item}
-					disabled={!!isUploading || !isItemInteractive}
+					disabled={isReadOnly || !!isUploading || !item.operations.includes('move') || !isItemInteractive}
 				>
 					<div
 						onClick={(e) => handleClick(e, item, items)}

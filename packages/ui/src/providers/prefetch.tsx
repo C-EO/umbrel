@@ -78,6 +78,7 @@ export function Prefetcher() {
 			!lastFilesRoute.startsWith('/files/Search') &&
 			!lastFilesRoute.startsWith('/files/Recents') &&
 			!lastFilesRoute.startsWith('/files/Trash') &&
+			!lastFilesRoute.startsWith('/files/Cloud') &&
 			lastFilesRoute !== '/files/Apps'
 		const filesListPath = isListablePath ? toFsPath(lastFilesRoute) : '/Home'
 		utils.files.viewPreferences

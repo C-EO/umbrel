@@ -16,10 +16,13 @@
  */
 
 import nodePath from 'node:path'
+import {randomUUID} from 'node:crypto'
+import type {Stats} from 'node:fs'
 import {cp, constants} from 'node:fs/promises'
 
 import mime from 'mime-types'
 import fse from 'fs-extra'
+import {$, execa} from 'execa'
 import {minimatch} from 'minimatch'
 import isValidFilename from 'valid-filename'
 import pRetry from 'p-retry'
@@ -38,6 +41,12 @@ import ExternalStorage from './external-storage.js'
 import NetworkStorage from './network-storage.js'
 import Search from './search.js'
 import MemberShares from './member-shares.js'
+import CloudManager, {
+	cloudDestinationDetails,
+	cloudDestinationPath,
+	type SharedDestinationDeleteCandidate,
+} from './cloud.js'
+import {CLOUD_DESTINATION_MISSING_ERROR, isOsJunkBasename, type DestinationRef} from './cloud-types.js'
 
 import type Umbreld from '../../index.js'
 import {OWNER_USER_ID} from '../user/constants.js'
@@ -103,6 +112,12 @@ type OperationProgress = {
 
 export type OperationsInProgress = OperationProgress[]
 
+export type RewindRestoreWorkItem = {
+	path: string
+	toDirectory: string
+	collision: 'error' | 'replace' | 'keep-both'
+}
+
 export default class Files {
 	#umbreld: Umbreld
 	logger: Umbreld['logger']
@@ -110,7 +125,7 @@ export default class Files {
 	trashMetaDirectory: string
 	fileOwner = {userId: 1000, groupId: 1000}
 	maxDirectoryListing = 10000
-	// Prevent loads of .DS_Store (macOS) and .directory (KDE Dolphin) results
+	// Files visibility is intentionally narrower than Cloud's OS-junk filter.
 	hiddenFiles = ['.DS_Store', '.directory', '.umbrel-watcher-health-check']
 	hiddenExtensions = ['.umbrel-upload']
 	operationsInProgress: OperationsInProgress = []
@@ -124,6 +139,7 @@ export default class Files {
 	networkStorage: NetworkStorage
 	search: Search
 	memberShares: MemberShares
+	cloud: CloudManager
 
 	constructor(umbreld: Umbreld) {
 		this.#umbreld = umbreld
@@ -149,6 +165,11 @@ export default class Files {
 		this.networkStorage = new NetworkStorage(umbreld)
 		this.search = new Search(umbreld)
 		this.memberShares = new MemberShares(umbreld)
+		this.cloud = new CloudManager({
+			umbreld,
+			resolveDestination: (destination, userId, options) => this.resolveCloudDestination(destination, userId, options),
+			onActivity: (userId, activity) => this.#umbreld.eventBus.emit('files:cloud-progress', {userId, activity}),
+		})
 
 		// TODO: This should really be in a proper DB, refactor this once we've moved to SQLite
 		this.trashMetaDirectory = `${umbreld.dataDirectory}/trash-meta`
@@ -190,6 +211,7 @@ export default class Files {
 		await this.recents.start().catch((error) => this.logger.error(`Failed to start recents`, error))
 		await this.favorites.start().catch((error) => this.logger.error(`Failed to start favorites`, error))
 		await this.thumbnails.start().catch((error) => this.logger.error(`Failed to start thumbnails`, error))
+		await this.cloud.start({background: true}).catch((error) => this.logger.error(`Failed to start cloud`, error))
 	}
 
 	async firstRun() {
@@ -213,6 +235,7 @@ export default class Files {
 		this.logger.log('Stopping files')
 
 		// Stop submodules
+		await this.cloud.stop().catch((error) => this.logger.error(`Failed to stop cloud`, error))
 		await this.recents.stop().catch((error) => this.logger.error(`Failed to stop recents`, error))
 		await this.favorites.stop().catch((error) => this.logger.error(`Failed to stop favorites`, error))
 		await this.thumbnails.stop().catch((error) => this.logger.error(`Failed to stop thumbnails`, error))
@@ -273,10 +296,155 @@ export default class Files {
 		return path
 	}
 
-	// Creates a new directory at the given virtual path.
-	// Returns true if the directory already exists.
+	isCloudPathOverlap(virtualPath: string) {
+		const path = normalizePath(virtualPath)
+		return this.cloud.getDestinationPaths().some((destinationPath) => pathsOverlap(path, destinationPath))
+	}
+
+	isCloudDestinationOrDescendant(virtualPath: string) {
+		const path = normalizePath(virtualPath)
+		return this.cloud
+			.getDestinationPaths()
+			.some((destinationPath) => path === destinationPath || path.startsWith(`${destinationPath}/`))
+	}
+
+	// Cloud destinations are indexed across every account, so request paths must
+	// be authorized before consulting that index. Otherwise a Cloud-specific
+	// response would reveal that another account configured the supplied path.
+	async assertCloudMutablePath(virtualPath: string, userId: string) {
+		await this.virtualToSystemPath(virtualPath, userId)
+		if (this.isCloudPathOverlap(virtualPath)) throw new Error('[cloud-read-only]')
+	}
+
+	// Resolve a user-selected Files path into a stable Cloud destination
+	// reference. The client never receives global device/share inventories just
+	// to construct this value, so members cannot infer storage they were not
+	// granted.
+	async getCloudDestination(virtualPath: string, userId: string): Promise<DestinationRef> {
+		const path = normalizePath(virtualPath)
+		await this.virtualToSystemPath(path, userId)
+
+		const ownerId = this.ownerOfPath(path)
+		if (ownerId === userId) {
+			const homeRoot = userId === OWNER_USER_ID ? '/Home' : `/Users/${userId}`
+			const memberTrashRoot = `${homeRoot}/Trash`
+			if (
+				path.startsWith(`${homeRoot}/`) &&
+				(userId === OWNER_USER_ID || (path !== memberTrashRoot && !path.startsWith(`${memberTrashRoot}/`)))
+			) {
+				return {path}
+			}
+		}
+
+		if (path.startsWith('/External/')) {
+			const partitions = (await this.externalStorage.getMountedExternalDevices()).flatMap((device) => device.partitions)
+			const partition = partitions.find(({mountpoints}) =>
+				mountpoints.some((mountPath) => path === mountPath || path.startsWith(`${mountPath}/`)),
+			)
+			if (partition?.filesystemUuid) {
+				const destination = {path, filesystemUuid: partition.filesystemUuid}
+				cloudDestinationPath(destination, userId)
+				return destination
+			}
+		}
+
+		if (path.startsWith('/Network/')) {
+			const share = (await this.networkStorage.getShareInfo()).find(
+				(candidate) =>
+					candidate.isMounted && (path === candidate.mountPath || path.startsWith(`${candidate.mountPath}/`)),
+			)
+			if (share) {
+				const destination = {
+					path,
+					host: share.host,
+					share: share.share,
+				}
+				cloudDestinationPath(destination, userId)
+				return destination
+			}
+		}
+
+		throw new Error('[cloud-invalid-destination]')
+	}
+
+	async resolveCloudDestination(
+		destination: DestinationRef,
+		userId: string,
+		{requireEmpty = false}: {requireEmpty?: boolean; checkOnly?: boolean} = {},
+	) {
+		const details = cloudDestinationDetails(destination, userId)
+		const virtualPath = details.path
+		let virtualMountPath: string | undefined
+
+		if (details.kind === 'external') {
+			virtualMountPath = details.mountPath
+			const systemMountPath = this.virtualToSystemPathUnsafe(virtualMountPath)
+			if (!(await isExternalFilesystemMountedAt(details.filesystemUuid, systemMountPath))) {
+				throw new Error(CLOUD_DESTINATION_MISSING_ERROR)
+			}
+		} else if (details.kind === 'network') {
+			virtualMountPath = details.mountPath
+			const share = (await this.networkStorage.getShareInfo()).find(
+				(candidate) =>
+					candidate.mountPath === details.mountPath &&
+					candidate.host === details.host &&
+					candidate.share === details.share &&
+					candidate.isMounted,
+			)
+			if (!share) throw new Error(CLOUD_DESTINATION_MISSING_ERROR)
+			if (!(await isMountpoint(this.virtualToSystemPathUnsafe(virtualMountPath)))) {
+				throw new Error(CLOUD_DESTINATION_MISSING_ERROR)
+			}
+		}
+
+		let systemPath: string
+		let destinationStats: Stats
+		try {
+			systemPath = await this.virtualToSystemPath(virtualPath, userId)
+			destinationStats = await fse.lstat(systemPath)
+		} catch {
+			throw new Error(CLOUD_DESTINATION_MISSING_ERROR)
+		}
+		if (!destinationStats.isDirectory()) throw new Error('[cloud-invalid-destination]')
+
+		const canonicalPath = await fse.realpath(systemPath).catch(() => {
+			throw new Error('[cloud-invalid-destination]')
+		})
+		if (canonicalPath !== nodePath.resolve(systemPath)) throw new Error('[cloud-invalid-destination]')
+
+		if (virtualMountPath) {
+			try {
+				const mountStats = await fse.lstat(this.virtualToSystemPathUnsafe(virtualMountPath))
+				const dataDirectoryStats = await fse.lstat(this.#umbreld.dataDirectory)
+				if (mountStats.dev !== destinationStats.dev || destinationStats.dev === dataDirectoryStats.dev) {
+					throw new Error(CLOUD_DESTINATION_MISSING_ERROR)
+				}
+			} catch {
+				throw new Error(CLOUD_DESTINATION_MISSING_ERROR)
+			}
+		}
+
+		if (requireEmpty && (await fse.readdir(systemPath)).some((name) => !isOsJunkBasename(name))) {
+			throw new Error('[cloud-destination-not-empty]')
+		}
+		if (requireEmpty) {
+			const probePath = nodePath.join(systemPath, `.umbrel-cloud-probe-${randomUUID()}`)
+			try {
+				await execa('mkdir', ['--', probePath], {uid: this.fileOwner.userId, gid: this.fileOwner.groupId})
+				await execa('rmdir', ['--', probePath], {uid: this.fileOwner.userId, gid: this.fileOwner.groupId})
+			} catch {
+				await fse.rmdir(probePath).catch(() => {})
+				throw new Error('[cloud-destination-not-writable]')
+			}
+		}
+		return systemPath
+	}
+
+	// Creates a new directory at the given virtual path and reports whether this
+	// exact call created it.
 	async createDirectory(virtualPath: string, userId: string = OWNER_USER_ID) {
 		virtualPath = normalizePath(virtualPath)
+		await this.assertCloudMutablePath(virtualPath, userId)
 
 		// Check if operation is allowed
 		const containingDirectory = nodePath.dirname(virtualPath)
@@ -286,22 +454,61 @@ export default class Files {
 		// Get system path
 		const path = await this.virtualToSystemPath(virtualPath, userId)
 
-		// Check if the directory already exists
-		if (await fse.pathExists(path)) return true
-
 		// Create the directory
-		await fse.mkdir(path).catch((error) => {
-			if (error?.message?.includes('ENOENT')) throw new Error('[parent-not-exist]')
-			if (error?.message?.includes('ENOTDIR')) throw new Error('[parent-not-directory]')
-			throw new Error(`[mkdir-failed] ${error?.message}`)
-		})
+		try {
+			await fse.mkdir(path)
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code
+			if (code === 'EEXIST' && (await fse.lstat(path).catch(() => undefined))?.isDirectory()) {
+				return {created: false as const}
+			}
+			if (code === 'ENOENT') throw new Error('[parent-not-exist]')
+			if (code === 'ENOTDIR') throw new Error('[parent-not-directory]')
+			throw new Error(`[mkdir-failed] ${(error as Error)?.message}`)
+		}
 
 		// Set owner to the umbrel user
 		// We do nothing on fail because this isn't supported on all filesystems.
 		// e.g this is expected to throw on external exFAT drives.
 		await this.chownSystemPath(path).catch(() => {})
 
-		return true
+		const {dev: device, ino: inode, birthtimeMs} = await fse.lstat(path)
+		return {created: true as const, identity: {device, inode, birthtimeMs}}
+	}
+
+	// Removes a directory only when it is still the empty directory created by
+	// the caller's earlier createDirectory() request.
+	async cleanupCreatedDirectory(
+		virtualPath: string,
+		identity: {device: number; inode: number; birthtimeMs: number},
+		userId: string = OWNER_USER_ID,
+	) {
+		virtualPath = normalizePath(virtualPath)
+		await this.assertCloudMutablePath(virtualPath, userId)
+
+		const allowedOperations = await this.getAllowedOperations(virtualPath, userId)
+		if (!allowedOperations.includes('trash') && !allowedOperations.includes('delete')) {
+			throw new Error('[operation-not-allowed]')
+		}
+
+		const path = await this.virtualToSystemPath(virtualPath, userId)
+		try {
+			const stats = await fse.lstat(path)
+			if (
+				!stats.isDirectory() ||
+				stats.dev !== identity.device ||
+				stats.ino !== identity.inode ||
+				stats.birthtimeMs !== identity.birthtimeMs
+			) {
+				return false
+			}
+			await fse.rmdir(path)
+			return true
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code
+			if (code === 'ENOENT' || code === 'ENOTEMPTY' || code === 'EEXIST') return false
+			throw error
+		}
 	}
 
 	// Set owner of system path to umbrel user
@@ -541,18 +748,28 @@ export default class Files {
 	async copy(
 		sourceVirtualPath: string,
 		destinationVirtualDirectory: string,
-		{collision = 'error', userId = OWNER_USER_ID}: {collision?: string; userId?: string} = {},
+		{
+			collision = 'error',
+			userId = OWNER_USER_ID,
+			rewindRestoreToken,
+		}: {collision?: string; userId?: string; rewindRestoreToken?: symbol} = {},
 	) {
 		sourceVirtualPath = normalizePath(sourceVirtualPath)
 		destinationVirtualDirectory = normalizePath(destinationVirtualDirectory)
 
-		// Check if operation is allowed
-		const allowedOperations = await this.getAllowedOperations(destinationVirtualDirectory, userId)
-		if (!allowedOperations.includes('writable')) throw new Error('[operation-not-allowed]')
-
-		// Get the system paths
+		// Authorize every caller-supplied path before consulting advisory
+		// operations, which include the global Cloud destination policy.
 		let sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath, userId)
 		const destinationSystemDirectory = await this.virtualToSystemPath(destinationVirtualDirectory, userId)
+
+		// Check if operation is allowed
+		const allowedOperations = await this.getAllowedOperations(destinationVirtualDirectory, userId, {
+			rewindRestoreToken,
+		})
+		if (!allowedOperations.includes('writable')) {
+			await this.assertCloudMutablePath(destinationVirtualDirectory, userId)
+			throw new Error('[operation-not-allowed]')
+		}
 
 		// Error if the source doesn't exist
 		const sourceExists = await fse.exists(sourceSystemPath)
@@ -574,6 +791,7 @@ export default class Files {
 
 		// Build absolute destination path
 		let destinationSystemPath = nodePath.join(destinationSystemDirectory, nodePath.basename(sourceSystemPath))
+		const rewindRestoreTarget = this.systemToVirtualPath(destinationSystemPath)
 
 		// Always use 'keep-both' collision handling for same directory copies
 		const isSameDirectory = nodePath.dirname(sourceVirtualPath) === destinationVirtualDirectory
@@ -591,6 +809,8 @@ export default class Files {
 		// and require permission to remove it before replacing existing content.
 		destinationSystemPath = await this.authorizeDestinationSystemPath(destinationSystemPath, userId, {
 			replace: collision === 'replace',
+			rewindRestoreToken,
+			rewindRestoreTarget,
 		})
 
 		if (collision === 'replace') {
@@ -606,6 +826,45 @@ export default class Files {
 		return this.systemToVirtualPath(destinationSystemPath)
 	}
 
+	async restoreFromRewind(
+		workItems: RewindRestoreWorkItem[],
+		confirmedSyncIds: string[],
+		userId: string = OWNER_USER_ID,
+	) {
+		if (workItems.length === 0) throw new Error('[operation-not-allowed]')
+		const normalizedItems = workItems.map((item) => {
+			const sourcePath = normalizePath(item.path)
+			const components = sourcePath.split('/').filter(Boolean)
+			if (components[0] !== 'Backups' || !['Home', 'Apps'].includes(components[2])) {
+				throw new Error('[operation-not-allowed]')
+			}
+			return {
+				...item,
+				path: sourcePath,
+				toDirectory: normalizePath(item.toDirectory),
+			}
+		})
+		const targetPaths = normalizedItems.map(({path, toDirectory}) =>
+			normalizePath(`${toDirectory}/${nodePath.basename(path)}`),
+		)
+
+		await this.cloud.restoreForRewind({
+			userId,
+			confirmedSyncIds,
+			targetPaths,
+			restore: async (rewindRestoreToken) => {
+				for (const item of normalizedItems) {
+					await this.copy(item.path, item.toDirectory, {
+						collision: item.collision,
+						userId,
+						rewindRestoreToken,
+					})
+				}
+			},
+		})
+		return true
+	}
+
 	// Moves a file or directory from one virtual path to another.
 	async move(
 		sourceVirtualPath: string,
@@ -615,21 +874,36 @@ export default class Files {
 		sourceVirtualPath = normalizePath(sourceVirtualPath)
 		destinationVirtualDirectory = normalizePath(destinationVirtualDirectory)
 
+		// Authorize every caller-supplied path before consulting advisory
+		// operations, which include the global Cloud destination policy.
+		let sourceSystemPath: string
+		try {
+			sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath, userId)
+		} catch (error) {
+			// Preserve the public behavior for traversal outside a Files base:
+			// source paths are protected operations, not addressable locations.
+			if ((error as Error).message.startsWith('[invalid-base]')) throw new Error('[operation-not-allowed]')
+			throw error
+		}
+		const destinationSystemDirectory = await this.virtualToSystemPath(destinationVirtualDirectory, userId)
+
 		// If the destination is the current containing folder then the file is already in the correct location
 		// so we don't need to do anything.
 		if (nodePath.dirname(sourceVirtualPath) === destinationVirtualDirectory) return sourceVirtualPath
 
 		// Check if operation is allowed on source
 		const allowedSourceOperations = await this.getAllowedOperations(sourceVirtualPath, userId)
-		if (!allowedSourceOperations.includes('move')) throw new Error('[operation-not-allowed]')
+		if (!allowedSourceOperations.includes('move')) {
+			await this.assertCloudMutablePath(sourceVirtualPath, userId)
+			throw new Error('[operation-not-allowed]')
+		}
 
 		// Check if operation is allowed on destination
 		const allowedDestinationOperations = await this.getAllowedOperations(destinationVirtualDirectory, userId)
-		if (!allowedDestinationOperations.includes('writable')) throw new Error('[operation-not-allowed]')
-
-		// Get the system paths
-		let sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath, userId)
-		const destinationSystemDirectory = await this.virtualToSystemPath(destinationVirtualDirectory, userId)
+		if (!allowedDestinationOperations.includes('writable')) {
+			await this.assertCloudMutablePath(destinationVirtualDirectory, userId)
+			throw new Error('[operation-not-allowed]')
+		}
 
 		// Error if the source doesn't exist
 		const sourceStats = await fse.stat(sourceSystemPath).catch(() => {
@@ -680,15 +954,18 @@ export default class Files {
 	async rename(sourceVirtualPath: string, newName: string, userId: string = OWNER_USER_ID): Promise<string> {
 		sourceVirtualPath = normalizePath(sourceVirtualPath)
 
+		// Authorize before consulting Cloud-aware advisory operations.
+		const sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath, userId)
+
 		// Check if operation is allowed.
 		const allowedOperations = await this.getAllowedOperations(sourceVirtualPath, userId)
-		if (!allowedOperations.includes('rename')) throw new Error(`[operation-not-allowed]`)
+		if (!allowedOperations.includes('rename')) {
+			await this.assertCloudMutablePath(sourceVirtualPath, userId)
+			throw new Error(`[operation-not-allowed]`)
+		}
 
 		// Ensure that a new name is valid.
 		if (!isValidFilename(newName)) throw new Error(`[invalid-filename] Invalid filename: '${newName}'`)
-
-		// Convert the source virtual path into a system path.
-		const sourceSystemPath = await this.virtualToSystemPath(sourceVirtualPath, userId)
 
 		// If the new name is identical to the current base name, do nothing.
 		const currentName = nodePath.basename(sourceSystemPath)
@@ -710,13 +987,15 @@ export default class Files {
 	async trash(virtualPath: string, userId: string = OWNER_USER_ID) {
 		virtualPath = normalizePath(virtualPath)
 
+		// Authorize before consulting Cloud-aware advisory operations.
+		const systemPath = await this.virtualToSystemPath(virtualPath, userId)
+
 		// Check if operation is allowed
 		const allowedOperations = await this.getAllowedOperations(virtualPath, userId)
-		if (!allowedOperations.includes('trash')) throw new Error('[operation-not-allowed]')
-
-		// Get the system path
-		// This is important to piggy back on for validation logic
-		const systemPath = await this.virtualToSystemPath(virtualPath, userId)
+		if (!allowedOperations.includes('trash')) {
+			await this.assertCloudMutablePath(virtualPath, userId)
+			throw new Error('[operation-not-allowed]')
+		}
 
 		// Calculate the target trash system path (the user's own trash)
 		const trashSystemRoot = await this.virtualToSystemPath(this.trashRootForUser(userId), userId)
@@ -760,12 +1039,13 @@ export default class Files {
 	) {
 		trashVirtualPath = normalizePath(trashVirtualPath)
 
+		// Authorize before consulting Cloud-aware advisory operations.
+		const trashSystemPath = await this.virtualToSystemPath(trashVirtualPath, userId)
+
 		// Check if operation is allowed
 		const allowedOperations = await this.getAllowedOperations(trashVirtualPath, userId)
 		if (!allowedOperations.includes('restore')) throw new Error('[operation-not-allowed]')
 
-		// Get the system path
-		const trashSystemPath = await this.virtualToSystemPath(trashVirtualPath, userId)
 		if (!(await fse.pathExists(trashSystemPath))) throw new Error('[source-not-exists]')
 
 		// Read the meta data for the trashed file or directory. The trashed item's
@@ -807,9 +1087,11 @@ export default class Files {
 	// Empty the trash
 	async emptyTrash(userId: string = OWNER_USER_ID) {
 		let success = true
+		const trashRoot = this.trashRootForUser(userId)
+		await this.assertCloudMutablePath(trashRoot, userId)
 
 		// Get the system path for the trash directory (the user's own trash)
-		const trashDirectory = await this.virtualToSystemPath(this.trashRootForUser(userId), userId)
+		const trashDirectory = await this.virtualToSystemPath(trashRoot, userId)
 
 		// Stream the trash directory contents
 		for await (const systemPath of getDirectoryStream(trashDirectory)) {
@@ -833,11 +1115,35 @@ export default class Files {
 
 	// Permanently delete a file or directory
 	async delete(virtualPath: string, userId: string = OWNER_USER_ID) {
-		virtualPath = normalizePath(virtualPath)
+		return (await this.deleteMany([virtualPath], userId))[0]
+	}
 
+	// Permanently delete a batch, resolving any member-owned Cloud roots once
+	// before processing individual filesystem entries.
+	async deleteMany(virtualPaths: string[], userId: string = OWNER_USER_ID) {
+		const paths = virtualPaths.map(normalizePath)
+		// Shared-destination resolution consults the global Cloud index, so all
+		// request paths must pass authorization before it runs.
+		await Promise.all(paths.map((path) => this.virtualToSystemPath(path, userId)))
+		const cloudCandidates = await this.cloud.resolveSharedDestinationDeletesAsOwner(userId, paths)
+		const deletions = new Map<string, Promise<boolean>>()
+		for (const path of paths) {
+			if (!deletions.has(path)) deletions.set(path, this.deleteOne(path, userId, cloudCandidates.get(path)))
+		}
+		return Promise.all(paths.map((path) => deletions.get(path)!))
+	}
+
+	private async deleteOne(
+		virtualPath: string,
+		userId: string,
+		cloudCandidate: SharedDestinationDeleteCandidate | undefined,
+	) {
 		// Check if operation is allowed
 		const allowedOperations = await this.getAllowedOperations(virtualPath, userId)
-		if (!allowedOperations.includes('delete')) throw new Error('[operation-not-allowed]')
+		if (!allowedOperations.includes('delete')) {
+			await this.assertCloudMutablePath(virtualPath, userId)
+			throw new Error('[operation-not-allowed]')
+		}
 
 		// Get the system path
 		const systemPath = await this.virtualToSystemPath(virtualPath, userId)
@@ -845,15 +1151,16 @@ export default class Files {
 		// If deleting from /External, remove any shares for this path or its children
 		// (External paths aren't covered by the file watcher, so we handle it here)
 		if (virtualPath.startsWith('/External/')) {
-			const shares = (await this.#umbreld.store.get('files.shares')) || []
-			for (const share of shares) {
-				if (share.path.startsWith(virtualPath)) await this.samba.removeShare(share.path)
-			}
+			await this.samba.removeSharesWithin(virtualPath)
 		}
 
 		// Delete the file or directory
 		try {
-			await fse.remove(systemPath)
+			if (cloudCandidate) {
+				await this.cloud.deleteSharedDestinationAsOwner(userId, cloudCandidate, () => fse.remove(systemPath))
+			} else {
+				await fse.remove(systemPath)
+			}
 			await this.memberShares.removeWithin(virtualPath)
 			return true
 		} catch (error) {
@@ -865,7 +1172,11 @@ export default class Files {
 	// Get allowed operations for a given path. Advisory (the actual operations
 	// authorize via virtualToSystemPath), pass the requesting user so member
 	// share grants are reflected in the advertised operations.
-	async getAllowedOperations(virtualPath: string, userId: string = OWNER_USER_ID): Promise<FileOperation[]> {
+	async getAllowedOperations(
+		virtualPath: string,
+		userId: string = OWNER_USER_ID,
+		{rewindRestoreToken, rewindRestoreTarget}: {rewindRestoreToken?: symbol; rewindRestoreTarget?: string} = {},
+	): Promise<FileOperation[]> {
 		virtualPath = normalizePath(virtualPath)
 
 		// Get file status. Uses the unsafe resolver since this is advisory and the
@@ -971,11 +1282,11 @@ export default class Files {
 			operations.add('delete')
 		}
 
-		// Sharing and favorites are owner-only features for now, so don't
-		// advertise them on member paths (the endpoints would reject anyway)
+		// Favorites remain owner-only. Members may create household SMB exports
+		// from directories in their own private Home.
 		if (this.ownerOfPath(virtualPath) !== OWNER_USER_ID) {
-			operations.delete('share')
 			operations.delete('favorite')
+			if (this.ownerOfPath(virtualPath) !== userId) operations.delete('share')
 		}
 
 		// Paths a member doesn't own are governed by the owner's share grants
@@ -987,14 +1298,40 @@ export default class Files {
 			if (!share) return []
 
 			// The same rules as the owner apply (protected and read-only paths
-			// stay protected), minus the owner-only features
-			// (network sharing, favorites) and trashing, which would strand the
+			// stay protected), minus favorites and SMB-over-SMB, and trashing,
+			// which would strand the
 			// owner's files in the member's private trash, so members hard delete
 			// from shares instead
-			operations.delete('share')
+			if (!isExternal) operations.delete('share')
 			operations.delete('favorite')
 			if (operations.has('trash')) {
 				operations.delete('trash')
+				operations.add('delete')
+			}
+		}
+
+		// Apply the Cloud policy last so storage- and Trash-specific rules
+		// cannot add a forbidden operation back.
+		if (
+			this.isCloudPathOverlap(virtualPath) &&
+			!this.cloud.allowsRewindRestore(rewindRestoreToken, virtualPath, rewindRestoreTarget)
+		) {
+			for (const operation of ['move', 'rename', 'trash', 'restore', 'delete', 'unarchive'] as const) {
+				operations.delete(operation)
+			}
+			if (this.isCloudDestinationOrDescendant(virtualPath)) operations.delete('writable')
+
+			// The device owner may remove the exact root of a member-owned Cloud
+			// download on shared storage. It is presented as an ordinary hard
+			// delete; the Cloud manager stops and forgets the job atomically around
+			// the filesystem removal without exposing its metadata.
+			const destination = this.cloud.getDestinationAtPath(virtualPath)
+			if (
+				userId === OWNER_USER_ID &&
+				destination?.userId !== undefined &&
+				destination.userId !== OWNER_USER_ID &&
+				(virtualPath.startsWith('/External/') || virtualPath.startsWith('/Network/'))
+			) {
 				operations.add('delete')
 			}
 		}
@@ -1050,13 +1387,23 @@ export default class Files {
 	async authorizeDestinationSystemPath(
 		systemPath: string,
 		userId: string,
-		{replace = false}: {replace?: boolean} = {},
+		{
+			replace = false,
+			rewindRestoreToken,
+			rewindRestoreTarget,
+		}: {replace?: boolean; rewindRestoreToken?: symbol; rewindRestoreTarget?: string} = {},
 	) {
 		const virtualPath = this.systemToVirtualPath(systemPath)
 		const authorizedSystemPath = await this.virtualToSystemPath(virtualPath, userId)
+		if (!this.cloud.allowsRewindRestore(rewindRestoreToken, virtualPath, rewindRestoreTarget)) {
+			await this.assertCloudMutablePath(virtualPath, userId)
+		}
 
 		if (replace && (await fse.pathExists(authorizedSystemPath))) {
-			const operations = await this.getAllowedOperations(virtualPath, userId)
+			const operations = await this.getAllowedOperations(virtualPath, userId, {
+				rewindRestoreToken,
+				rewindRestoreTarget,
+			})
 			if (!operations.includes('trash') && !operations.includes('delete')) {
 				throw new Error('[operation-not-allowed]')
 			}
@@ -1252,6 +1599,7 @@ export default class Files {
 	): Promise<ViewPreferences> {
 		const currentViewPreferences = await this.getViewPreferences(userId)
 		const updatedViewPreferences = {...currentViewPreferences, ...newViewPreferences}
+		// Save the new preferences to the account-scoped store
 		await this.#umbreld.user.setAccountViewPreferences(userId, updatedViewPreferences)
 		return updatedViewPreferences
 	}
@@ -1298,7 +1646,20 @@ export async function assertSystemPathInsideBase(
 	return {baseRealPath, candidateRealPath}
 }
 
-function normalizePath(path: string) {
+export function pathsOverlap(first: string, second: string) {
+	return first === second || first.startsWith(`${second}/`) || second.startsWith(`${first}/`)
+}
+
+async function isMountpoint(systemPath: string) {
+	return (await $({reject: false})`mountpoint -q ${systemPath}`).exitCode === 0
+}
+
+async function isExternalFilesystemMountedAt(filesystemUuid: string, systemMountPath: string) {
+	const result = await $({reject: false})`findmnt --noheadings --output UUID --mountpoint ${systemMountPath}`
+	return result.exitCode === 0 && result.stdout.trim() === filesystemUuid
+}
+
+export function normalizePath(path: string) {
 	// Reduce `.`, `..` and multiple slashes to their canonical form
 	const normalized = nodePath.posix.normalize(path)
 

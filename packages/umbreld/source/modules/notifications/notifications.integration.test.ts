@@ -54,3 +54,37 @@ test.sequential('notifications.add(notification) moves duplicate notifications t
 		'notification-2',
 	])
 })
+
+test.sequential('account-scoped notifications are private and independently clearable', async () => {
+	const memberPassword = 'member-password'
+	const member = await umbreld.client.user.createUser.mutate({name: 'Alice', password: memberPassword})
+	await umbreld.instance.notifications.add('device-notification')
+	await umbreld.instance.notifications.addForAccount('0', 'owner-cloud-notification')
+	await umbreld.instance.notifications.addForAccount(member.userId, 'member-cloud-notification')
+
+	const ownerNotifications = await umbreld.client.notifications.get.query()
+	expect(ownerNotifications).toEqual(expect.arrayContaining(['device-notification', 'owner-cloud-notification']))
+	expect(ownerNotifications).not.toContain('member-cloud-notification')
+
+	const memberToken = await umbreld.client.user.login.mutate({
+		userId: member.userId,
+		password: memberPassword,
+	})
+	umbreld.setAuthToken(memberToken)
+	await expect(umbreld.client.notifications.get.query()).resolves.toEqual(['member-cloud-notification'])
+	await expect(umbreld.client.notifications.clear.mutate('member-cloud-notification')).resolves.toBe(true)
+	await expect(umbreld.client.notifications.get.query()).resolves.toEqual([])
+
+	const ownerToken = await umbreld.client.user.login.mutate({
+		userId: '0',
+		password: 'moneyprintergobrrr',
+	})
+	umbreld.setAuthToken(ownerToken)
+	const ownerNotificationsAfterMemberClear = await umbreld.client.notifications.get.query()
+	expect(ownerNotificationsAfterMemberClear).toEqual(
+		expect.arrayContaining(['device-notification', 'owner-cloud-notification']),
+	)
+	expect(await umbreld.instance.notifications.get()).not.toEqual(
+		expect.arrayContaining([expect.stringContaining('member-cloud-notification')]),
+	)
+})

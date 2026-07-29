@@ -2,9 +2,13 @@ import React, {CSSProperties} from 'react'
 import {useDropzone} from 'react-dropzone'
 import {useTranslation} from 'react-i18next'
 
+import {toast} from '@/components/ui/toast'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
+import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
+import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
 import {cn} from '@/lib/utils'
 import {useGlobalFiles} from '@/providers/global-files'
+import {trpcReact} from '@/trpc/trpc'
 
 interface FileUploadDropZoneProps {
 	children: React.ReactNode
@@ -13,15 +17,28 @@ interface FileUploadDropZoneProps {
 export function FileUploadDropZone({children}: FileUploadDropZoneProps) {
 	const {startUpload} = useGlobalFiles()
 	const {currentPath} = useNavigate()
+	const isReadOnly = useIsFilesReadOnly()
+	const utils = trpcReact.useUtils()
+	const {t} = useTranslation()
 
-	const onDrop = (acceptedFiles: File[]) => {
-		startUpload(acceptedFiles, currentPath)
+	const onDrop = async (acceptedFiles: File[]) => {
+		if (isReadOnly) return
+		const destination = currentPath
+		try {
+			const operations = await utils.files.pathOperations.fetch({path: destination})
+			if (!operations.includes('writable')) throw new Error('[operation-not-allowed]')
+			startUpload(acceptedFiles, destination)
+		} catch (error) {
+			const message = error instanceof Error ? error.message : '[operation-not-allowed]'
+			toast.error(t('files-error.upload', {message: getFilesErrorMessage(message)}))
+		}
 	}
 
 	const {getRootProps, getInputProps, isDragActive} = useDropzone({
 		onDrop,
 		noClick: true,
 		noKeyboard: true,
+		disabled: isReadOnly,
 	})
 
 	return (

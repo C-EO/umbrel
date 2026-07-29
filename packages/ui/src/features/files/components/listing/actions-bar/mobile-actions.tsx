@@ -28,7 +28,7 @@ export function MobileActions({DropdownItems = null}: {DropdownItems?: React.Rea
 	const {preferences, setView, setSortBy} = usePreferences()
 	const isSelectingOnMobile = useFilesStore((state) => state.isSelectingOnMobile)
 	const setIsSelectingOnMobile = useFilesStore((state) => state.setIsSelectingOnMobile)
-	const {hideSearch} = useActionsBarConfig()
+	const {hideSearch, mobilePrimaryAction} = useActionsBarConfig()
 	const isReadOnly = useIsFilesReadOnly()
 
 	return (
@@ -36,20 +36,23 @@ export function MobileActions({DropdownItems = null}: {DropdownItems?: React.Rea
 			{/* Search (hide in read-only or when explicitly hidden) */}
 			{!hideSearch && !isReadOnly ? <SearchInput /> : null}
 
-			{/* Select toggle button */}
-			<Button
-				className={cn(
-					'h-[1.9rem] rounded-full px-3 text-13',
-					'focus:ring-0 focus:ring-offset-0 focus-visible:ring-0',
-					'focus:outline-hidden focus-visible:outline-hidden',
-				)}
-				variant={isSelectingOnMobile ? 'secondary' : 'default'}
-				size='default'
-				aria-label={t('files-action.select')}
-				onClick={() => setIsSelectingOnMobile(!isSelectingOnMobile)}
-			>
-				{isSelectingOnMobile ? t('done') : t('files-action.select')}
-			</Button>
+			{/* Select toggle button, or the listing's own primary action where
+			    selection is meaningless */}
+			{mobilePrimaryAction ?? (
+				<Button
+					className={cn(
+						'h-[1.9rem] rounded-full px-3 text-13',
+						'focus:ring-0 focus:ring-offset-0 focus-visible:ring-0',
+						'focus:outline-hidden focus-visible:outline-hidden',
+					)}
+					variant={isSelectingOnMobile ? 'secondary' : 'default'}
+					size='default'
+					aria-label={t('files-action.select')}
+					onClick={() => setIsSelectingOnMobile(!isSelectingOnMobile)}
+				>
+					{isSelectingOnMobile ? t('done') : t('files-action.select')}
+				</Button>
+			)}
 
 			<DropdownMenu>
 				<DropdownMenuTrigger className='focus:ring-0 focus:ring-offset-0 focus:outline-hidden focus-visible:ring-0 focus-visible:outline-hidden'>

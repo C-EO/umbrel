@@ -14,6 +14,7 @@ import {RewindOverlay} from '@/features/files/components/rewind'
 import {RewindOverlayProvider} from '@/features/files/components/rewind/overlay-context'
 import {Sidebar} from '@/features/files/components/sidebar'
 import {MobileSidebarWrapper} from '@/features/files/components/sidebar/mobile-sidebar-wrapper'
+import {useIsMember} from '@/features/files/hooks/use-home-path'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import {useIsMobile} from '@/hooks/use-is-mobile'
@@ -25,6 +26,7 @@ const PermanentlyDeleteConfirmationDialog = lazy(
 )
 const AddNetworkShareDialog = lazy(() => import('@/features/files/components/dialogs/add-network-share-dialog'))
 const FormatDriveDialog = lazy(() => import('@/features/files/components/dialogs/format-drive-dialog'))
+const CloudAddDialog = lazy(() => import('@/features/files/components/dialogs/cloud-add-dialog'))
 
 export default function FilesLayout() {
 	const {t} = useTranslation()
@@ -36,6 +38,7 @@ export default function FilesLayout() {
 	const isMobile = useIsMobile()
 	const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
 	const isReadOnly = useIsFilesReadOnly()
+	const isMember = useIsMember()
 
 	useEffect(() => {
 		// TODO: Find a better place to do this
@@ -99,9 +102,11 @@ export default function FilesLayout() {
 					{/* Lazy loaded dialogs on non-read-only mode */}
 					{!isReadOnly ? (
 						<>
-							<Suspense>
-								<ShareInfoDialog />
-							</Suspense>
+							{!isMember && (
+								<Suspense>
+									<ShareInfoDialog />
+								</Suspense>
+							)}
 							<Suspense>
 								<ShareUsersDialog />
 							</Suspense>
@@ -113,6 +118,9 @@ export default function FilesLayout() {
 							</Suspense>
 							<Suspense>
 								<FormatDriveDialog />
+							</Suspense>
+							<Suspense>
+								<CloudAddDialog />
 							</Suspense>
 						</>
 					) : null}

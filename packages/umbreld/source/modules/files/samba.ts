@@ -238,10 +238,10 @@ export default class Samba {
 		const deletedShares = shares.filter(
 			(share) => share.path === virtualDeletedPath || share.path.startsWith(virtualDeletedPath + '/'),
 		)
-		for (const share of deletedShares) await this.removeShare(share.path)
+		if (deletedShares.length > 0) await this.removeSharesWithin(virtualDeletedPath)
 	}
 
-	// List favorited directories
+	// List owner-managed shares.
 	async listShares() {
 		// Get shares from the store
 		const shares = await this.#get()
@@ -252,7 +252,8 @@ export default class Samba {
 			shares.map(async (share) => {
 				const systemPath = await this.#umbreld.files.virtualToSystemPath(share.path, OWNER_USER_ID)
 				return {
-					...share,
+					name: share.name,
+					path: share.path,
 					available: await fse.pathExists(systemPath),
 					sharename: await this.#computeSharename(share.name, share.path),
 				}
@@ -270,7 +271,7 @@ export default class Samba {
 
 		// Resolve and validate the path (owner authorization + symlink containment)
 		// before persisting anything, so a traversal attempt can't be written to the
-		// store and later blow up applyShares. Shares are owner-only.
+		// store and later blow up applyShares.
 		await this.#umbreld.files.virtualToSystemPath(virtualPath, OWNER_USER_ID)
 
 		// Add share
@@ -329,6 +330,23 @@ export default class Samba {
 		}
 
 		// Return deleted boolean
+		return deleted
+	}
+
+	// Internal lifecycle cleanup for filesystem deletion. Removes exports owned
+	// by any account at the exact path or below it.
+	async removeSharesWithin(virtualPath: string) {
+		virtualPath = this.#umbreld.files.normalizeVirtualPath(virtualPath)
+		let deleted = false
+		await this.#umbreld.store.getWriteLock(async ({set}) => {
+			const shares = await this.#get()
+			const remaining = shares.filter(
+				(share) => share.path !== virtualPath && !share.path.startsWith(`${virtualPath}/`),
+			)
+			deleted = remaining.length < shares.length
+			if (deleted) await set('files.shares', remaining)
+		})
+		if (deleted) await this.applyShares()
 		return deleted
 	}
 }

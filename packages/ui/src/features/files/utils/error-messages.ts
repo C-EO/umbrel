@@ -26,5 +26,52 @@ export function getFilesErrorMessage(message: string): string {
 	if (message.includes('[share-already-exists]')) return t('files-backend-error.share-already-exists')
 	if (message.includes('[share-name-generation-failed]')) return t('files-backend-error.share-name-generation-failed')
 
+	// Cloud (codes are namespaced [cloud-*] by the backend)
+	if (message.includes('[cloud-account-already-exists]')) return t('files-cloud-error.account-already-exists')
+	if (message.includes('[cloud-account-auth-required]')) return t('files-cloud-error.account-auth-required')
+	if (message.includes('[cloud-account-busy]')) return t('files-cloud-error.account-busy')
+	if (message.includes('[cloud-account-identity-mismatch]')) return t('files-cloud-error.account-identity-mismatch')
+	if (message.includes('[cloud-account-not-found]')) return t('files-cloud-error.account-not-found')
+	if (message.includes('[cloud-account-removal-confirmation-mismatch]'))
+		return t('files-cloud-error.account-removal-confirmation-mismatch')
+	if (message.includes('[cloud-ambiguous-remote-name]')) return t('files-cloud-error.ambiguous-remote-name')
+	if (message.includes('[cloud-auth-session-expired]')) return t('files-cloud-error.auth-session-expired')
+	if (message.includes('[cloud-auth-session-not-found]') || message.includes('[cloud-auth-session-mismatch]'))
+		return t('files-cloud-error.auth-session-not-found')
+	if (message.includes('[cloud-destination-low-space]')) return t('files-cloud-error.destination-low-space')
+	if (message.includes('[cloud-destination-missing]')) return t('files-cloud-error.destination-missing')
+	if (message.includes('[cloud-destination-not-empty]')) return t('files-cloud-error.destination-not-empty')
+	if (message.includes('[cloud-destination-not-writable]')) return t('files-cloud-error.destination-not-writable')
+	if (message.includes('[cloud-destination-overlap]')) return t('files-cloud-error.destination-overlap')
+	if (message.includes('[cloud-icloud-auth-failed]')) return t('files-cloud-error.icloud-auth-failed')
+	if (message.includes('[cloud-not-found]')) return t('files-cloud-error.not-found')
+	if (message.includes('[cloud-invalid-apple-id]')) return t('files-cloud-error.invalid-apple-id')
+	if (message.includes('[cloud-invalid-authorization-code]')) return t('files-cloud-error.invalid-authorization-code')
+	if (message.includes('[cloud-invalid-destination]')) return t('files-cloud-error.invalid-destination')
+	if (message.includes('[cloud-invalid-icloud-password]') || message.includes('[cloud-invalid-webdav-password]'))
+		return t('files-cloud-error.invalid-password')
+	if (message.includes('[cloud-invalid-webdav-url]')) return t('files-cloud-error.invalid-webdav-url')
+	if (message.includes('[cloud-webdav-untrusted-certificate]'))
+		return t('files-cloud-error.webdav-untrusted-certificate')
+	if (message.includes('[cloud-invalid-webdav-username]')) return t('files-cloud-error.invalid-webdav-username')
+	if (message.includes('[cloud-provider-request-failed]')) return t('files-cloud-error.provider-request-failed')
+	if (message.includes('[cloud-provider-unavailable]')) return t('files-cloud-error.provider-unavailable')
+	if (message.includes('[cloud-read-only]')) return t('files-cloud-error.cloud-read-only')
+	// An expired or interrupted connect session always means the same thing to
+	// the user: the sign-in didn't survive, start it over
+	if (
+		message.includes('[cloud-invalid-icloud-auth-state]') ||
+		message.includes('[cloud-config-session-start-timeout]') ||
+		message.includes('[cloud-config-session-control-timeout]') ||
+		message.includes('[cloud-config-transaction-closed]')
+	)
+		return t('files-cloud-error.auth-session-expired')
+	// Pathological listings the provider returned but the UI can't render
+	if (message.includes('[cloud-rclone-output-too-large]') || message.includes('[cloud-invalid-rclone-listing]'))
+		return t('files-cloud-error.folder-unreadable')
+	// Every other cloud code is an internal invariant: never surface a
+	// raw bracket code to the user
+	if (message.includes('[cloud-')) return t('files-cloud-error.generic')
+
 	return message
 }

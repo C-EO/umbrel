@@ -1,6 +1,7 @@
 import Emittery from 'emittery'
 
 import type Umbreld from '../../index.js'
+import type {CloudSyncActivity} from '../files/cloud-types.js'
 import type {FileChangeEvent} from '../files/watcher.js'
 import type {OperationsInProgress} from '../files/files.js'
 import type {BackupsInProgress, RestoreStatus} from '../backups/backups.js'
@@ -18,6 +19,7 @@ export type MemberSharesChangeEvent = {sharedWith: 'all' | string[]}
 export const events = [
 	'files:watcher:change',
 	'files:operation-progress',
+	'files:cloud-progress',
 	'files:member-shares:change',
 	'apps:member-shares:change',
 	'backups:backup-progress',
@@ -37,6 +39,9 @@ export type EventTypes = {
 	// Fires repeatedly while file operations (copy/move) are in progress
 	// with the current progress of each operation
 	'files:operation-progress': OperationsInProgress
+	// Internal account-scoped wake-up with the current sanitized progress
+	// snapshot. The public subscription yields only `activity` to that account.
+	'files:cloud-progress': {userId: string; activity: CloudSyncActivity[]}
 	// Fires when the paths shared with members change, with the accounts the
 	// affected share was or is now shared with
 	'files:member-shares:change': MemberSharesChangeEvent

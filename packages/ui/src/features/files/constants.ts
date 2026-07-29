@@ -40,6 +40,23 @@ export const BACKUPS_PATH = '/Backups' as const
 export const SEARCH_PATH = '/Search' as const
 export const RECENTS_PATH = '/Recents' as const
 
+// Cloud is also not a real directory on disk: /Cloud/<accountId> is a virtual
+// route listing a connected account's download destination folders.
+export const CLOUD_PATH = '/Cloud' as const
+
+// Cloud provider logos keyed by backend provider id, plus the UI-only
+// WebDAV flavors (Nextcloud/ownCloud). Served from public/ because the CSP
+// blocks data: URIs, so they must never be inlined.
+export const CLOUD_PROVIDER_LOGOS: Record<string, string> = {
+	'google-drive': '/assets/cloud/google-drive.svg',
+	dropbox: '/assets/cloud/dropbox.svg',
+	onedrive: '/assets/cloud/onedrive.svg',
+	webdav: '/assets/cloud/webdav.svg',
+	icloud: '/assets/cloud/icloud.webp',
+	nextcloud: '/assets/cloud/nextcloud.svg',
+	owncloud: '/assets/cloud/owncloud.svg',
+}
+
 // Directory listing constants
 export const USE_LIST_DIRECTORY_LOAD_ITEMS = {
 	INITIAL: 250, // Number of items to load when first viewing a directory

@@ -124,7 +124,7 @@ export default class NetworkStorage {
 	}
 
 	// Attempt to mount a share
-	async #mountShare(share: NetworkShare): Promise<void> {
+	async #mountShare(share: NetworkShare, {blockCloud = true} = {}): Promise<void> {
 		this.logger.log(`Mounting network share: ${share.mountPath}`)
 
 		if (/[\r\n]/.test(share.username) || /[\r\n]/.test(share.password)) {
@@ -133,10 +133,12 @@ export default class NetworkStorage {
 
 		// Ensure mount directory exists
 		const systemMountPath = this.#umbreld.files.virtualToSystemPathUnsafe(share.mountPath)
-		await fse.ensureDir(systemMountPath)
+		const releaseClouds = blockCloud ? await this.#umbreld.files.cloud.blockNetworkStorage(share) : () => {}
 
 		let credentialsDirectory: string | undefined
 		try {
+			await fse.ensureDir(systemMountPath)
+
 			// Mount the network share
 			const smbPath = `//${share.host}/${share.share}`
 			const {userId, groupId} = this.#umbreld.files.fileOwner
@@ -149,7 +151,7 @@ export default class NetworkStorage {
 		} catch (error) {
 			// Clean up the directory we created if mount fails
 			this.logger.error(`Failed to mount network share: ${share.mountPath}, cleaning up mount directory`)
-			this.#unmountShare(share).catch((error) =>
+			await this.#unmountShare(share, {blockCloud: false}).catch((error) =>
 				this.logger.error(`Failed to clean up mount directory after mount failure: ${share.mountPath}`, error),
 			)
 
@@ -157,32 +159,47 @@ export default class NetworkStorage {
 			throw error
 		} finally {
 			if (credentialsDirectory) await fse.remove(credentialsDirectory).catch(() => {})
+			releaseClouds()
 		}
 	}
 
-	// Unmount a share, don't throw on failure
-	async #unmountShare(share: NetworkShare): Promise<void> {
+	// Unmount a share
+	async #unmountShare(share: NetworkShare, {blockCloud = true} = {}): Promise<void> {
 		this.logger.log(`Unmounting network share: ${share.mountPath}`)
+		const releaseClouds = blockCloud ? await this.#umbreld.files.cloud.blockNetworkStorage(share) : () => {}
 		try {
 			// If we're mounted, unmount
 			const systemMountPath = this.#umbreld.files.virtualToSystemPathUnsafe(share.mountPath)
 			if (await this.#isMounted(share)) await $`umount ${systemMountPath}`
 
-			// Clean up empty mount directory
-			await fse.rmdir(systemMountPath)
+			// Directory cleanup is housekeeping, not part of proving that the
+			// filesystem was detached. A failed mount may already have removed
+			// these paths, and non-empty paths must be left untouched.
+			await this.#removeEmptyDirectory(systemMountPath)
 
 			// Clean up parent dir if it's empty
 			const parentDirectory = nodePath.dirname(systemMountPath)
-			const parentFiles = await fse.readdir(parentDirectory)
-			const isParentEmpty = parentFiles.length === 0
 			const isParentChildOfNetwork =
 				nodePath.dirname(parentDirectory) === this.#umbreld.files.getBaseDirectory('/Network')
-			if (isParentEmpty && isParentChildOfNetwork) await fse.rmdir(parentDirectory)
+			if (isParentChildOfNetwork) await this.#removeEmptyDirectory(parentDirectory)
 
 			this.mountedShares.delete(share.mountPath)
 			this.logger.log(`Successfully unmounted network share: ${share.mountPath}`)
 		} catch (error) {
 			this.logger.error(`Failed to unmount network share ${share.mountPath}`, error)
+			throw error
+		} finally {
+			releaseClouds()
+		}
+	}
+
+	async #removeEmptyDirectory(path: string) {
+		try {
+			await fse.rmdir(path)
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code
+			if (code === 'ENOENT' || code === 'ENOTEMPTY') return
+			this.logger.error(`Failed to clean up network mount directory ${path}`, error)
 		}
 	}
 
@@ -232,18 +249,22 @@ export default class NetworkStorage {
 	// Remove a share
 	async removeShare(sharePath: string) {
 		const share = await this.getShare(sharePath)
+		const releaseClouds = await this.#umbreld.files.cloud.blockNetworkStorage(share)
+		try {
+			// Attempt to unmount the share first
+			await this.#unmountShare(share, {blockCloud: false})
 
-		// Attempt to unmount the share first
-		await this.#unmountShare(share)
+			// Remove the share from the store
+			await this.#umbreld.store.getWriteLock(async ({set}) => {
+				const shares = await this.getShares()
+				const newShares = shares.filter((existingShare) => existingShare.mountPath !== sharePath)
+				await set('files.networkStorage', newShares)
+			})
 
-		// Remove the share from the store
-		await this.#umbreld.store.getWriteLock(async ({set}) => {
-			const shares = await this.getShares()
-			const newShares = shares.filter((existingShare) => existingShare.mountPath !== sharePath)
-			await set('files.networkStorage', newShares)
-		})
-
-		return true
+			return true
+		} finally {
+			releaseClouds()
+		}
 	}
 
 	// Discover available servers

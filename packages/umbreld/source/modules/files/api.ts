@@ -80,6 +80,8 @@ function requireFileApiAuth(umbreld: Umbreld) {
 		const path = request.path.replace(/\/+$/, '') || '/'
 		let authorization: Promise<Principal> | undefined
 
+		// This router is deny-by-default. Adding a handler below also requires an
+		// explicit policy here, so a future endpoint cannot accidentally be public.
 		if (request.method === 'GET' && (path === '/thumbnail' || path.startsWith('/thumbnail/'))) {
 			authorization = authorizeHttpRequest(
 				umbreld,
@@ -100,7 +102,6 @@ function requireFileApiAuth(umbreld: Umbreld) {
 			authorization = authorizeDashboardRequest(umbreld, request)
 		}
 
-		// Deny by default: every future route needs an explicit credential policy.
 		if (!authorization) return response.status(401).json({error: 'unauthorized'})
 
 		authorization
@@ -116,6 +117,11 @@ export default function api(umbreld: Umbreld) {
 	const api = express.Router()
 	api.use(requireFileApiAuth(umbreld))
 
+	// Serve thumbnails from the thumbnails directory
+	// GET /api/files/thumbnail/:thumbnail
+	// Serve the thumbnail assets
+	// Thumbnail assets are named with a hash that only changes when the file is modified
+	// so a browser can cache them for the session without a shared cache retaining private data.
 	// A thumbnail is served only while this account can still resolve its source
 	// path. Revalidation keeps revocations effective while the hash remains the
 	// stable cache key for unchanged content.
@@ -134,16 +140,24 @@ export default function api(umbreld: Umbreld) {
 			return response.status(404).json({error: 'not found'})
 		}
 	})
+	// Don't serve directory indexes
+	// If we don't get a file hit, return a 404
 	api.get('/thumbnail', (_request, response) => response.status(404).json({error: 'not found'}))
 
+	// Downloads a file, directory or multiple files
+	// GET /api/files/download?path=/Home/file.txt&path=/Home/file-2.txt
 	api.get('/download', async (request, response) => {
+		// Normalise a single path or multiple paths into an array
 		const requestedPaths = virtualPaths(request)
+		// Check that at least one path is provided
 		if (requestedPaths.length < 1) return response.status(400).json({error: 'bad request'})
 
+		// Get file data
 		const files = await Promise.all(
 			requestedPaths.map(async (path) => {
 				try {
 					const systemPath = await umbreld.files.virtualToSystemPath(path, accountId(response))
+					// This means a file doesn't exist (or can't be safely resolved) so we return a 404
 					if (!(await fse.exists(systemPath))) throw new Error('not found')
 					return systemPath
 				} catch (error) {
@@ -153,6 +167,7 @@ export default function api(umbreld: Umbreld) {
 			}),
 		)
 
+		// If we only have a single file, serve it directly
 		if (files.length === 1 && (await fse.stat(files[0])).isFile()) {
 			const filename = nodePath.basename(files[0])
 			response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
@@ -161,6 +176,8 @@ export default function api(umbreld: Umbreld) {
 			return response.sendFile(files[0], {dotfiles: 'allow'})
 		}
 
+		// For directory or multiple files, create zip archive
+		// Create an archive and stream it to the response
 		try {
 			const filename = umbreld.files.archive.zipName(files, {defaultName: 'umbrel-files.zip'})
 			response.setHeader('Content-Type', 'application/zip')
@@ -174,6 +191,8 @@ export default function api(umbreld: Umbreld) {
 		}
 	})
 
+	// Views a file
+	// GET /api/files/view?path=/Home/file.txt
 	api.get('/view', async (request, response) => {
 		try {
 			if (typeof request.query.path !== 'string') return response.status(400).json({error: 'path is required'})
@@ -187,6 +206,8 @@ export default function api(umbreld: Umbreld) {
 			response.setHeader('X-Content-Type-Options', 'nosniff')
 			const mimeType = mime.lookup(systemPath)
 			const isImageEmbed = acceptsEmbeddedSvg(request)
+			// Files are user-controlled but served same-origin, so only low-risk preview types render inline.
+			// All others download, with CSP sandbox and nosniff as defense-in-depth if a browser renders anyway.
 			if (
 				mimeType &&
 				(inlineViewMimeTypes.has(mimeType) || (isImageEmbed && embedOnlyInlineViewMimeTypes.has(mimeType)))
@@ -203,12 +224,19 @@ export default function api(umbreld: Umbreld) {
 		}
 	})
 
+	// Uploads a file
+	// POST /api/files/upload?path=/Home/file.txt&collision=error|keep-both|replace
 	api.post('/upload', async (request, response) => {
+		// Note: We must set the `Connection: close` header on error to prevent the XHR upload logic
+		// from uploading the entire file before checking for errors in the response. cURL handles this
+		// without the extra header, I'm not sure why it's only needed in the browser.
+		// Check we have a path
 		if (typeof request.query.path !== 'string') {
 			response.setHeader('Connection', 'close')
 			return response.status(400).json({error: 'path is required'})
 		}
 
+		// Get the collision strategy
 		const collision = typeof request.query.collision === 'string' ? request.query.collision : 'error'
 		if (!['error', 'keep-both', 'replace'].includes(collision)) {
 			response.setHeader('Connection', 'close')
@@ -217,14 +245,19 @@ export default function api(umbreld: Umbreld) {
 
 		let systemPath: string
 		try {
+			// Check path is valid
 			systemPath = await umbreld.files.virtualToSystemPath(request.query.path, accountId(response))
 
+			// Handle name conflicts
 			if (await fse.pathExists(systemPath)) {
 				if (collision === 'error') {
 					response.setHeader('Connection', 'close')
 					return response.status(400).json({error: '[destination-already-exists]'})
 				} else if (collision === 'keep-both') {
+					// For 'keep-both' we generate a unique name for the file
 					systemPath = await umbreld.files.getUniqueName(systemPath)
+				} else {
+					// For 'replace' we simply continue with the upload over the original file
 				}
 			}
 
@@ -233,23 +266,41 @@ export default function api(umbreld: Umbreld) {
 			systemPath = await umbreld.files.authorizeWritableDestinationSystemPath(systemPath, accountId(response), {
 				replace: collision === 'replace',
 			})
-		} catch {
+		} catch (error) {
 			response.setHeader('Connection', 'close')
-			return response.status(400).json({error: 'invalid path'})
+			// Keep path-resolution and authorization details private, but let the
+			// Files client explain why an otherwise accessible Cloud mirror is read-only.
+			const safeError = error instanceof Error && error.message === '[cloud-read-only]' ? error.message : 'invalid path'
+			return response.status(400).json({error: safeError})
 		}
 
+		// TODO: Implement resume support
+		// TODO: Check available disk space
+		// We need the frontend to provide the total size of the file
+
+		// Temporary file to store the uploaded data
+		// We do this to avoid ending up with partially uploaded files of the correct name.
+		// It's clear that a partially uploaded file with the .umbrel-upload suffix is not a
+		// completed upload.
+		// It also sets the groundwork for resuming uploads in the future.
+		// It also means that fs change events during upload are fired for
+		// .somefile.jpg.umbrel-upload not somefile.jpg so we don't trigger loads of
+		// thumbnail generation attempts (matching the .jpg suffix) until the file is fully uploaded.
+		// Using a dotfile also automatically hides these temporary files from most file listings
 		const fileName = nodePath.basename(systemPath)
 		const directory = nodePath.dirname(systemPath)
 		const temporarySystemPath = nodePath.join(
 			directory,
 			`.${fileName}.${randomBytes(16).toString('hex')}.umbrel-upload`,
 		)
+		// Ensure containing directories exist
 		await fse.ensureDir(directory)
 
 		let promoted = false
 		try {
 			let temporaryFile: Awaited<ReturnType<typeof open>> | undefined
 			try {
+				// Write the file
 				// Never open a predictable path or follow a pre-existing link. Archive
 				// extraction can create symlinks, and umbreld writes uploads as root.
 				temporaryFile = await open(
@@ -263,17 +314,24 @@ export default function api(umbreld: Umbreld) {
 				temporaryFile = undefined
 				await pipeline(request, writeStream)
 			} catch {
+				// Return an error
 				response.setHeader('Connection', 'close')
 				return response.status(500).json({error: 'error writing file'})
 			} finally {
 				await temporaryFile?.close().catch(() => {})
 			}
 
+			// Rename the temporary file to the final path
 			await fse.rename(temporarySystemPath, systemPath)
 			promoted = true
+			// Set owner to the umbrel user
+			// We do nothing on fail because this isn't supported on all filesystems.
+			// e.g this is expected to throw on external exFAT drives.
 			await umbreld.files.chownSystemPath(systemPath).catch(() => {})
+			// Return success
 			return response.status(200).json({path: umbreld.files.systemToVirtualPath(systemPath)})
 		} finally {
+			// Clean up the temporary file
 			if (!promoted) await fse.remove(temporarySystemPath).catch(() => {})
 		}
 	})

@@ -366,7 +366,9 @@ export default class Backups {
 				}
 			})
 			// We mark that the next boot is the first start after a backup restore.
-			await fse.ensureFile(`${temporaryData}/${BACKUP_RESTORE_FIRST_START_FLAG}`).catch(() => {})
+			// Cloud uses this marker on the next boot to pause restored syncs before
+			// they can run, so failing to persist it must fail the restore.
+			await fse.ensureFile(`${temporaryData}/${BACKUP_RESTORE_FIRST_START_FLAG}`)
 			await fse.move(temporaryData, finalData, {overwrite: true})
 			success = true
 		} finally {

@@ -64,7 +64,7 @@ export function ShareAllToggle({
 					<TooltipContent
 						side='top'
 						collisionPadding={12}
-						className='z-50 max-w-60 rounded-8 border-white/10 bg-neutral-800 px-3 py-2 text-center text-12 leading-snug text-white/90 shadow-xl'
+						className='z-50 max-w-60 rounded-8 border-hpx border-white/10 px-3 py-2 text-center text-12 leading-snug text-white/90 shadow-xl [--tooltip-background:var(--color-neutral-800)]'
 					>
 						{tooltip}
 					</TooltipContent>

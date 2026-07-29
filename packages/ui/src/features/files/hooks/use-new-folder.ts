@@ -4,6 +4,7 @@ import {useTranslation} from 'react-i18next'
 import {toast} from '@/components/ui/toast'
 import {useListDirectory} from '@/features/files/hooks/use-list-directory'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
+import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
@@ -14,6 +15,7 @@ export function useNewFolder() {
 	const utils = trpcReact.useUtils()
 	const {currentPath} = useNavigate()
 	const {listing} = useListDirectory(currentPath)
+	const isReadOnly = useIsFilesReadOnly()
 	const setNewFolder = useFilesStore((s) => s.setNewFolder)
 	const setSelectedItems = useFilesStore((s) => s.setSelectedItems)
 
@@ -49,6 +51,10 @@ export function useNewFolder() {
 	// Commits the folder name synchronously: removes the top-pinned placeholder
 	// and inserts a sorted incoming item, then fires the mutation.
 	const commitNewFolder = (fullPath: string) => {
+		if (isReadOnly || !listingRef.current?.operations.includes('writable')) {
+			setNewFolder(null)
+			return
+		}
 		const name = fullPath.split('/').pop() || ''
 
 		if (listingRef.current?.items) {
@@ -81,6 +87,7 @@ export function useNewFolder() {
 	// and keep incrementing the index until we find an available name.
 	// (e.g., "Folder (2)", "Folder (3)", etc.)
 	const startNewFolder = async () => {
+		if (isReadOnly || !listingRef.current?.operations.includes('writable')) return
 		let name = t('files-folder')
 		if (listingRef.current?.items) {
 			// Check if the base name already exists

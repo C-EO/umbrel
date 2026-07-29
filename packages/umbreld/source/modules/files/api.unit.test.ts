@@ -19,6 +19,7 @@ describe('file API authentication boundaries', () => {
 	beforeAll(async () => {
 		await directory.createRoot()
 		const thumbnailDirectory = await directory.create()
+		const uploadDirectory = await directory.create()
 		const systemPrincipal = {sessionId: 'system', accountId: OWNER_ACCOUNT_ID, actor: 'system'} as const
 		const umbreld = {
 			auth: {
@@ -32,7 +33,13 @@ describe('file API authentication boundaries', () => {
 				},
 				authorizeHttpApi: async () => systemPrincipal,
 			},
-			files: {thumbnails: {thumbnailDirectory}},
+			files: {
+				thumbnails: {thumbnailDirectory},
+				virtualToSystemPath: async () => `${uploadDirectory}/blocked.txt`,
+				authorizeWritableDestinationSystemPath: async () => {
+					throw new Error('[cloud-read-only]')
+				},
+			},
 		} as unknown as Umbreld
 
 		const app = express()
@@ -79,5 +86,17 @@ describe('file API authentication boundaries', () => {
 			throwHttpErrors: false,
 		})
 		expect(response.statusCode).toBe(statusCode)
+	})
+
+	test('upload preserves the Cloud read-only policy error', async () => {
+		const response = await got(`${origin}/api/files/upload?path=${encodeURIComponent('/Home/Cloud/blocked.txt')}`, {
+			method: 'POST',
+			headers: {Authorization: 'Bearer system-token'},
+			body: 'blocked',
+			throwHttpErrors: false,
+		})
+
+		expect(response.statusCode).toBe(400)
+		expect(JSON.parse(response.body)).toEqual({error: '[cloud-read-only]'})
 	})
 })

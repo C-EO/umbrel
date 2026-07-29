@@ -56,7 +56,6 @@ export function SidebarHome() {
 		/>
 	)
 
-	// Sharing is owner-only, members get the plain item without the share menu
 	if (isMember) return homeItem
 
 	return (

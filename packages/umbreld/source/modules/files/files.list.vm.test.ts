@@ -265,23 +265,29 @@ test('list() shows dotfiles', async () => {
 	)
 })
 
-test('list() hides .DS_Store files', async () => {
+test('list() keeps Files visibility independent from Cloud junk filtering', async () => {
 	// Create a test directory
-	await umbreld.client.files.createDirectory.mutate({path: '/Home/ds-store-test'})
-	await uploadFile('/Home/ds-store-test/regular.txt', '')
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/visibility-test'})
 
-	// .DS_Store files appear out-of-band (e.g. macOS clients over SMB), so
-	// seed it over SSH
-	await umbreld.vm.ssh(`touch ${guestHome}/ds-store-test/.DS_Store`)
+	// These files typically appear out-of-band (for example over SMB), so seed
+	// both the Files-hidden names and Cloud-only junk names over SSH.
+	await umbreld.vm.ssh(
+		`touch ${guestHome}/visibility-test/{regular.txt,.DS_Store,.directory,.umbrel-watcher-health-check,partial.umbrel-upload,Thumbs.db,desktop.ini,._photo.jpg}`,
+	)
 
 	// Query the directory listing
 	const listing = await umbreld.client.files.list.query({
-		path: '/Home/ds-store-test',
+		path: '/Home/visibility-test',
 	})
+	const names = listing.files.map((file) => file.name)
 
-	// Verify that .DS_Store is not included but other files are
-	expect(listing.files.map((file) => file.name)).not.toContain('.DS_Store')
-	expect(listing.files.map((file) => file.name)).toContain('regular.txt')
+	// Cloud ignores additional platform metadata when mirroring, but that must
+	// not make those names globally invisible in Files.
+	expect(names).not.toContain('.DS_Store')
+	expect(names).not.toContain('.directory')
+	expect(names).not.toContain('.umbrel-watcher-health-check')
+	expect(names).not.toContain('partial.umbrel-upload')
+	expect(names).toEqual(expect.arrayContaining(['regular.txt', 'Thumbs.db', 'desktop.ini', '._photo.jpg']))
 })
 
 test('list() paginates directory listings', async () => {

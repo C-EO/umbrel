@@ -40,6 +40,7 @@
 		"@types/js-yaml": "^4.0.5",
 		"@types/mime-types": "^2.1.4",
 		"@types/ms": "^0.7.31",
+		"@types/node": "^22.20.1",
 		"@types/notp": "^2.0.2",
 		"@types/semver": "^7.5.8",
 		"@types/tcp-port-used": "^1.0.4",

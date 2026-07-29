@@ -1,3 +1,4 @@
+import {useQuery} from '@tanstack/react-query'
 import {ChevronRight, FolderPlus, Loader2} from 'lucide-react'
 import {useEffect, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
@@ -10,6 +11,7 @@ import {EmptyFolderIcon} from '@/features/files/assets/empty-folder-icon'
 import externalStorageIcon from '@/features/files/assets/external-storage-icon.png'
 import activeNasIcon from '@/features/files/assets/nas-icon-active.png'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
+import {EXTERNAL_STORAGE_PATH, NETWORK_STORAGE_PATH} from '@/features/files/constants'
 import {useListDirectory} from '@/features/files/hooks/use-list-directory'
 import type {FileSystemItem} from '@/features/files/types'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
@@ -24,6 +26,9 @@ type MiniBrowserProps = {
 	onOpenChange: (open: boolean) => void
 	// The root path to start the tree from (shows contents directly)
 	rootPath: string
+	// Optional custom directory source. When provided, the tree lists entries via this
+	// function instead of the local filesystem, e.g. to browse a cloud remote.
+	listDirectory?: (path: string) => Promise<FileSystemItem[]>
 	// Optional multiple root paths — when provided, each root is rendered as a
 	// top-level expandable node instead of listing a single root's contents.
 	rootPaths?: string[]
@@ -41,7 +46,9 @@ type MiniBrowserProps = {
 	subtitle?: React.ReactNode
 	// optional actions to render in the browser. e.g., "add NAS" button to open the add NAS dialog
 	actions?: React.ReactNode
-	// Optional function to determine which items are selectable
+	// Optional function gating only the confirm button: every entry allowed by
+	// selectionMode stays highlightable for navigation (and as a New Folder
+	// target), but the selection can only be confirmed when it passes
 	selectableFilter?: (entry: FileSystemItem) => boolean
 	// Allow creating new folders
 	allowNewFolderCreation?: boolean
@@ -71,6 +78,7 @@ export function MiniBrowser({
 	open,
 	onOpenChange,
 	rootPath,
+	listDirectory,
 	rootPaths,
 	disabledPaths = [],
 	onOpenPath = rootPath,
@@ -144,12 +152,15 @@ export function MiniBrowser({
 	const effectiveRootPath = rootPaths?.[0] ?? rootPath
 	const currentPath = selected?.isDirectory ? selected.path : effectiveRootPath
 
+	// Folder creation is impossible where children aren't regular folders: the
+	// storage roots (children are drives/hosts) and a network host (children
+	// are shares). Anywhere else — Home, inside a drive, inside a share — is fine.
+	const canCreateFolderIn = (path: string) =>
+		path !== EXTERNAL_STORAGE_PATH && path !== NETWORK_STORAGE_PATH && !isDirectoryANetworkDevice(path)
+
 	const handleNewFolder = () => {
 		const parentPath = currentPath
-
-		// Prevent folder creation at Network host level (folders here would be shares, not regular folders)
-		// External device level is allowed
-		if (isDirectoryANetworkDevice(parentPath)) return
+		if (!canCreateFolderIn(parentPath)) return
 
 		const name = t('files-folder')
 
@@ -173,7 +184,7 @@ export function MiniBrowser({
 		<Button
 			variant='default'
 			onClick={handleNewFolder}
-			disabled={!!newFolder || isDirectoryANetworkDevice(currentPath)}
+			disabled={!!newFolder || !canCreateFolderIn(currentPath)}
 			size='default'
 			className={isMobile ? '' : 'mr-auto'}
 		>
@@ -208,7 +219,6 @@ export function MiniBrowser({
 							onSelect={(p, isDirectory) => setSelected({path: p, isDirectory})}
 							selectedPath={selected?.path ?? null}
 							selectionMode={selectionMode}
-							selectableFilter={selectableFilter}
 							newFolder={newFolder}
 							onCancelNewFolder={() => setNewFolder(null)}
 							onCreateFolder={(path) => createFolder.mutate({path})}
@@ -216,11 +226,11 @@ export function MiniBrowser({
 					) : (
 						<Tree
 							initialPath={rootPath}
+							listDirectory={listDirectory}
 							expandTo={onOpenPath}
 							onSelect={(p, isDirectory) => setSelected({path: p, isDirectory})}
 							selectedPath={selected?.path ?? null}
 							selectionMode={selectionMode}
-							selectableFilter={selectableFilter}
 							newFolder={newFolder}
 							onCancelNewFolder={() => setNewFolder(null)}
 							onCreateFolder={(path) => createFolder.mutate({path})}
@@ -251,7 +261,6 @@ function MultiRootTree({
 	selectedPath,
 	expandTo,
 	selectionMode,
-	selectableFilter,
 	newFolder,
 	onCancelNewFolder,
 	onCreateFolder,
@@ -261,7 +270,6 @@ function MultiRootTree({
 	selectedPath: string | null
 	expandTo?: string
 	selectionMode: 'folders' | 'files-and-folders'
-	selectableFilter?: (entry: FileSystemItem) => boolean
 	newFolder: (FileSystemItem & {isNew: boolean}) | null
 	onCancelNewFolder: () => void
 	onCreateFolder: (path: string) => void
@@ -290,7 +298,6 @@ function MultiRootTree({
 					selectedPath={selectedPath}
 					expandTo={expandTo}
 					selectionMode={selectionMode}
-					selectableFilter={selectableFilter}
 					newFolder={newFolder}
 					onCancelNewFolder={onCancelNewFolder}
 					onCreateFolder={onCreateFolder}
@@ -300,31 +307,61 @@ function MultiRootTree({
 	)
 }
 
+// Lists a directory from either the local filesystem or a custom source (e.g. a cloud remote)
+function useBrowserListing(path: string, listDirectory?: (path: string) => Promise<FileSystemItem[]>) {
+	const custom = useQuery({
+		// listDirectory is intentionally not part of the key: with staleTime/gcTime 0 the
+		// cache is per-mount, and including the (unstable) function would defeat caching
+		// eslint-disable-next-line @tanstack/query/exhaustive-deps
+		queryKey: ['mini-browser-custom-listing', path],
+		queryFn: () => listDirectory!(path),
+		enabled: !!listDirectory,
+		staleTime: 0,
+		gcTime: 0,
+	})
+	const local = useListDirectory(path, {enabled: !listDirectory})
+
+	if (listDirectory) {
+		return {
+			items: custom.data ?? [],
+			isLoading: custom.isLoading,
+			hasMore: false,
+			fetchMoreItems: async () => {},
+		}
+	}
+	return {
+		items: (local.listing?.items as FileSystemItem[]) ?? [],
+		isLoading: local.isLoading,
+		hasMore: local.listing?.hasMore ?? false,
+		fetchMoreItems: local.fetchMoreItems,
+	}
+}
+
 // This Tree component renders the root of the tree (top-level nodes). Each Node can expand to show its Subtree.
 // This component kicks off the recursive rendering: Tree -> Node -> Subtree -> Node -> ...
 function Tree({
 	initialPath,
+	listDirectory,
 	onSelect,
 	selectedPath,
 	expandTo,
 	selectionMode,
-	selectableFilter,
 	newFolder,
 	onCancelNewFolder,
 	onCreateFolder,
 }: {
 	initialPath: string
+	listDirectory?: (path: string) => Promise<FileSystemItem[]>
 	onSelect: (p: string, isDirectory: boolean) => void
 	selectedPath: string | null
 	expandTo?: string
 	selectionMode: 'folders' | 'files-and-folders'
-	selectableFilter?: (entry: FileSystemItem) => boolean
 	newFolder: (FileSystemItem & {isNew: boolean}) | null
 	onCancelNewFolder: () => void
 	onCreateFolder: (path: string) => void
 }) {
 	const {t} = useTranslation()
-	const {listing, isLoading} = useListDirectory(initialPath)
+	const {items: entries, isLoading} = useBrowserListing(initialPath, listDirectory)
 
 	// Tailored empty state message and icon for known roots
 	const emptyStateText = useMemo(() => {
@@ -344,10 +381,6 @@ function Tree({
 			)
 		return EmptyFolderIcon
 	}, [initialPath])
-
-	const entries: FileSystemItem[] = useMemo(() => {
-		return (listing?.items as FileSystemItem[]) ?? []
-	}, [listing])
 
 	// Check if the new folder should be rendered at this level
 	const shouldRenderNewFolder = newFolder && newFolder.path.startsWith(initialPath + '/')
@@ -375,11 +408,11 @@ function Tree({
 							entry={d}
 							// depth=0 means root-level nodes
 							depth={0}
+							listDirectory={listDirectory}
 							onSelect={onSelect}
 							selectedPath={selectedPath}
 							expandTo={expandTo}
 							selectionMode={selectionMode}
-							selectableFilter={selectableFilter}
 							newFolder={newFolder}
 							onCancelNewFolder={onCancelNewFolder}
 							onCreateFolder={onCreateFolder}
@@ -398,22 +431,22 @@ function Tree({
 function Node({
 	entry,
 	depth,
+	listDirectory,
 	onSelect,
 	selectedPath,
 	expandTo,
 	selectionMode,
-	selectableFilter,
 	newFolder,
 	onCancelNewFolder,
 	onCreateFolder,
 }: {
 	entry: FileSystemItem
 	depth: number
+	listDirectory?: (path: string) => Promise<FileSystemItem[]>
 	onSelect: (p: string, isDirectory: boolean) => void
 	selectedPath: string | null
 	expandTo?: string
 	selectionMode: 'folders' | 'files-and-folders'
-	selectableFilter?: (entry: FileSystemItem) => boolean
 	newFolder: (FileSystemItem & {isNew: boolean}) | null
 	onCancelNewFolder: () => void
 	onCreateFolder: (path: string) => void
@@ -453,27 +486,22 @@ function Node({
 	// TODO: get rid of this, and have the backend return the repository directory as a file type instead
 	const isRepositoryDir = entry.type === 'directory' && entry.name === BACKUP_FILE_NAME
 
-	// Selection logic: when selectableFilter is provided we use it; otherwise use default directory/file rules
-	const isSelectable = selectableFilter
-		? selectableFilter(entry)
-		: entry.type === 'directory' || selectionMode === 'files-and-folders'
-
-	// Visual disabling: only show disabled state when NOT using selectableFilter (preserves expand/collapse UX)
-	const isDisabled = !selectableFilter && !isSelectable
-	const isFaded = (isDisabled || !isSelectable) && entry.type !== 'directory'
+	// Every entry allowed by selectionMode can be highlighted; whether the
+	// highlight can be confirmed is the top-level selectableFilter's business
+	const isSelectable = entry.type === 'directory' || selectionMode === 'files-and-folders'
+	const isFaded = !isSelectable && entry.type !== 'directory'
 
 	return (
 		<div>
 			<div
 				className={cn(
 					'flex min-w-0 items-center gap-2 rounded-md p-2',
-					isDisabled && 'cursor-not-allowed opacity-60',
 					isSelected ? 'border border-brand bg-brand/15' : 'border border-transparent hover:bg-white/10',
 					isFaded && 'opacity-50',
 				)}
 				style={{paddingLeft: 8 + Math.min(depth, maxIndentLevels) * INDENT_PER_LEVEL}}
 				onClick={() => {
-					if (isDisabled || !isSelectable) return
+					if (!isSelectable) return
 					onSelect(entry.path, entry.type === 'directory')
 				}}
 				onDoubleClick={() => {
@@ -502,11 +530,11 @@ function Node({
 				<Subtree
 					path={entry.path}
 					depth={depth + 1}
+					listDirectory={listDirectory}
 					onSelect={onSelect}
 					selectedPath={selectedPath}
 					expandTo={expandTo}
 					selectionMode={selectionMode}
-					selectableFilter={selectableFilter}
 					newFolder={newFolder}
 					onCancelNewFolder={onCancelNewFolder}
 					onCreateFolder={onCreateFolder}
@@ -520,30 +548,28 @@ function Node({
 function Subtree({
 	path,
 	depth,
+	listDirectory,
 	onSelect,
 	selectedPath,
 	expandTo,
 	selectionMode,
-	selectableFilter,
 	newFolder,
 	onCancelNewFolder,
 	onCreateFolder,
 }: {
 	path: string
 	depth: number
+	listDirectory?: (path: string) => Promise<FileSystemItem[]>
 	onSelect: (p: string, isDirectory: boolean) => void
 	selectedPath: string | null
 	expandTo?: string
 	selectionMode: 'folders' | 'files-and-folders'
-	selectableFilter?: (entry: FileSystemItem) => boolean
 	newFolder: (FileSystemItem & {isNew: boolean}) | null
 	onCancelNewFolder: () => void
 	onCreateFolder: (path: string) => void
 }) {
 	const {t} = useTranslation()
-	const {listing, isLoading, fetchMoreItems} = useListDirectory(path)
-	const children: FileSystemItem[] = useMemo(() => (listing?.items as FileSystemItem[]) ?? [], [listing])
-	const hasMore = listing?.hasMore ?? false
+	const {items: children, isLoading, hasMore, fetchMoreItems} = useBrowserListing(path, listDirectory)
 
 	// Visual indentation for the Subtree
 	// We need less indentation for mobile devices so the tree doesn't get too wide and become unreadable
@@ -560,16 +586,26 @@ function Subtree({
 
 	return (
 		<div className='mt-1 space-y-1'>
+			{/* Loading row while children are fetched. Local listings resolve near
+			    instantly, but a custom source (e.g. a cloud remote) can take a while */}
+			{isLoading && children.length === 0 && (
+				<div className='flex items-center gap-2 rounded-md p-2' style={{paddingLeft: leftPad}}>
+					{/* Invisible chevron spacer so the row aligns with sibling entries */}
+					<ChevronRight className='size-4 shrink-0 opacity-0' />
+					<Loader2 className='size-3 shrink-0 animate-spin opacity-60' />
+					<span className='text-sm text-white/40'>{t('files-listing.loading')}</span>
+				</div>
+			)}
 			{children.map((c) => (
 				<Node
 					key={c.path}
 					entry={c}
 					depth={depth}
+					listDirectory={listDirectory}
 					onSelect={onSelect}
 					selectedPath={selectedPath}
 					expandTo={expandTo}
 					selectionMode={selectionMode}
-					selectableFilter={selectableFilter}
 					newFolder={newFolder}
 					onCancelNewFolder={onCancelNewFolder}
 					onCreateFolder={onCreateFolder}

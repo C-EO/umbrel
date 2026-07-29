@@ -71,7 +71,14 @@ test('createDirectory() creates directory in /Home', async () => {
 	const path = '/Home/test-directory'
 
 	// Create directory
-	await expect(umbreld.client.files.createDirectory.mutate({path})).resolves.toBe(true)
+	await expect(umbreld.client.files.createDirectory.mutate({path})).resolves.toEqual({
+		created: true,
+		identity: {
+			device: expect.any(Number),
+			inode: expect.any(Number),
+			birthtimeMs: expect.any(Number),
+		},
+	})
 
 	// Verify directory exists
 	const listing = await umbreld.client.files.list.query({path: '/Home'})
@@ -84,14 +91,42 @@ test('createDirectory() creates directory in /Home', async () => {
 	)
 })
 
-test('createDirectory() returns true for existing directories', async () => {
+test('createDirectory() reports an existing directory as not created', async () => {
 	const path = '/Home/existing-directory'
 
 	// Create directory first time
 	await umbreld.client.files.createDirectory.mutate({path})
 
 	// Try creating same directory again
-	await expect(umbreld.client.files.createDirectory.mutate({path})).resolves.toBe(true)
+	await expect(umbreld.client.files.createDirectory.mutate({path})).resolves.toEqual({created: false})
+})
+
+test('cleanupCreatedDirectory() removes only the matching empty directory', async () => {
+	const path = '/Home/cleanup-created-directory'
+	const creation = await umbreld.client.files.createDirectory.mutate({path})
+	expect(creation.created).toBe(true)
+	if (!creation.created) return
+
+	// The identity returned by the creating request authorizes empty cleanup.
+	await expect(umbreld.client.files.cleanupCreatedDirectory.mutate({path, identity: creation.identity})).resolves.toBe(
+		true,
+	)
+	const listing = await umbreld.client.files.list.query({path: '/Home'})
+	expect(listing.files.some((file) => file.path === path)).toBe(false)
+})
+
+test('cleanupCreatedDirectory() leaves a directory that gained user content', async () => {
+	const path = '/Home/cleanup-directory-with-content'
+	const creation = await umbreld.client.files.createDirectory.mutate({path})
+	expect(creation.created).toBe(true)
+	if (!creation.created) return
+	await umbreld.api.post(`files/upload?path=${path}/keep.txt`, {body: 'keep me'})
+
+	await expect(umbreld.client.files.cleanupCreatedDirectory.mutate({path, identity: creation.identity})).resolves.toBe(
+		false,
+	)
+	const listing = await umbreld.client.files.list.query({path})
+	expect(listing.files.map(({name}) => name)).toContain('keep.txt')
 })
 
 test('createDirectory() creates directory with correct permissions', async () => {

@@ -9,6 +9,32 @@ import {
 	publicProcedureWhenNoUserExists,
 	publicProcedureWhenNoUserExistsWithMembers,
 } from '../server/trpc/trpc.js'
+import {CLOUD_SYNC_MODE_IDS, CLOUD_WEBDAV_FLAVOR_IDS} from './cloud-types.js'
+
+const accountId = z.string().uuid()
+const oauthProvider = z.enum(['google-drive', 'dropbox', 'onedrive'])
+const remote = z
+	.object({
+		path: z.string(),
+		folderId: z.string().optional(),
+		sharedDriveId: z.string().optional(),
+		driveId: z.string().optional(),
+		driveType: z.enum(['personal', 'business']).optional(),
+	})
+	.strict()
+const destination = z
+	.object({
+		path: z.string(),
+		filesystemUuid: z.string().optional(),
+		host: z.string().optional(),
+		share: z.string().optional(),
+	})
+	.strict()
+
+const cloudProcedure = privateProcedureWithMembers.use(({ctx, next}) => {
+	ctx.umbreld.files.cloud.assertReady()
+	return next()
+})
 
 export default router({
 	// List a directory
@@ -68,10 +94,34 @@ export default router({
 			}
 		}),
 
+	// Resolve one accessible path's capabilities without listing all of its
+	// children. Paste and drag/drop check this immediately before dispatch;
+	// mutations still enforce the same rules independently.
+	pathOperations: privateProcedureWithMembers.input(z.object({path: z.string()})).query(async ({ctx, input}) => {
+		const userId = ctx.principal?.accountId ?? OWNER_USER_ID
+		await ctx.umbreld.files.virtualToSystemPath(input.path, userId)
+		return ctx.umbreld.files.getAllowedOperations(input.path, userId)
+	}),
+
 	// Create a directory
 	createDirectory: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
 		.mutation(async ({ctx, input}) => ctx.umbreld.files.createDirectory(input.path, ctx.principal?.accountId)),
+
+	cleanupCreatedDirectory: privateProcedureWithMembers
+		.input(
+			z.object({
+				path: z.string(),
+				identity: z.object({
+					device: z.number().int().nonnegative(),
+					inode: z.number().int().nonnegative(),
+					birthtimeMs: z.number().nonnegative(),
+				}),
+			}),
+		)
+		.mutation(async ({ctx, input}) =>
+			ctx.umbreld.files.cleanupCreatedDirectory(input.path, input.identity, ctx.principal?.accountId),
+		),
 
 	// Copy a file or directory
 	copy: privateProcedureWithMembers
@@ -105,7 +155,8 @@ export default router({
 			}),
 		),
 
-	// Get progress of the current account's file operations
+	// Get progress of file operations
+	// Scoped to the current account
 	operationProgress: privateProcedureWithMembers.query(async ({ctx}) => {
 		const userId = ctx.principal?.accountId ?? OWNER_USER_ID
 		return ctx.umbreld.files.operationsInProgress.filter((operation) => operation.userId === userId)
@@ -138,6 +189,10 @@ export default router({
 		.input(z.object({path: z.string()}))
 		.mutation(async ({ctx, input}) => ctx.umbreld.files.delete(input.path, ctx.principal?.accountId)),
 
+	deleteMany: privateProcedureWithMembers
+		.input(z.object({paths: z.array(z.string()).min(1)}))
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.deleteMany(input.paths, ctx.principal?.accountId)),
+
 	// Get favorites
 	favorites: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.favorites.listFavorites()),
 
@@ -154,13 +209,15 @@ export default router({
 	// Get recent files
 	recents: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.recents.get()),
 
-	// Get the current account's view preferences
+	// Get view preferences
+	// Scoped to the current account
 	// Public only when no user exists for onboarding restore flow (returns defaults); private once a user exists
 	viewPreferences: publicProcedureWhenNoUserExistsWithMembers.query(async ({ctx}) =>
 		ctx.umbreld.files.getViewPreferences(ctx.principal?.accountId),
 	),
 
-	// Update the current account's view preferences
+	// Update view preferences
+	// Scoped to the current account
 	updateViewPreferences: privateProcedureWithMembers
 		.input(
 			z.object({
@@ -276,7 +333,8 @@ export default router({
 			ctx.umbreld.files.externalStorage.unmountExternalDevice(input.deviceId, {remove: true}),
 		),
 
-	// Search for a file in the current account's home directory
+	// Search for a file
+	// Members are confined to their current account's home directory
 	search: privateProcedureWithMembers
 		.input(
 			z.object({
@@ -326,4 +384,150 @@ export default router({
 	isServerAnUmbrelDevice: privateProcedure
 		.input(z.object({address: z.string()}))
 		.query(async ({ctx, input}) => ctx.umbreld.files.networkStorage.isServerAnUmbrelDevice(input.address)),
+
+	cloud: router({
+		providers: cloudProcedure.query(({ctx}) => ctx.umbreld.files.cloud.getProviders()),
+		accounts: cloudProcedure.query(({ctx}) =>
+			ctx.umbreld.files.cloud.getAccounts(ctx.principal?.accountId ?? OWNER_USER_ID),
+		),
+		syncs: cloudProcedure.query(({ctx}) => ctx.umbreld.files.cloud.getSyncs(ctx.principal?.accountId ?? OWNER_USER_ID)),
+		activity: cloudProcedure.query(({ctx}) =>
+			ctx.umbreld.files.cloud.getActivity(ctx.principal?.accountId ?? OWNER_USER_ID),
+		),
+		destination: cloudProcedure
+			.input(z.object({path: z.string()}))
+			.query(({ctx, input}) =>
+				ctx.umbreld.files.getCloudDestination(input.path, ctx.principal?.accountId ?? OWNER_USER_ID),
+			),
+		locations: cloudProcedure
+			.input(z.object({accountId}))
+			.query(({ctx, input}) =>
+				ctx.umbreld.files.cloud.getLocations(ctx.principal?.accountId ?? OWNER_USER_ID, input.accountId),
+			),
+		browse: cloudProcedure
+			.input(z.object({accountId, remote, maxEntries: z.number().int().min(1).max(1000).default(500)}))
+			.query(({ctx, input}) =>
+				ctx.umbreld.files.cloud.browse(
+					ctx.principal?.accountId ?? OWNER_USER_ID,
+					input.accountId,
+					input.remote,
+					input.maxEntries,
+				),
+			),
+		oauthBegin: cloudProcedure
+			.input(z.object({provider: oauthProvider, accountId: accountId.optional()}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.beginOAuth(ctx.principal?.accountId ?? OWNER_USER_ID, input.provider, input.accountId),
+			),
+		oauthComplete: cloudProcedure
+			.input(z.object({accountId, code: z.string().min(1).max(8192)}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.completeOAuth(ctx.principal?.accountId ?? OWNER_USER_ID, input.accountId, input.code),
+			),
+		oauthCancel: cloudProcedure
+			.input(z.object({accountId, sessionId: z.string().uuid()}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.cancelOAuth(
+					ctx.principal?.accountId ?? OWNER_USER_ID,
+					input.accountId,
+					input.sessionId,
+				),
+			),
+		connectWebDav: cloudProcedure
+			.input(
+				z.object({
+					accountId: accountId.optional(),
+					flavor: z.enum(CLOUD_WEBDAV_FLAVOR_IDS),
+					url: z.string().min(1).max(8192),
+					username: z.string().min(1).max(1024),
+					password: z.string().min(1).max(8192),
+					tlsMode: z.enum(['default', 'insecure']),
+				}),
+			)
+			.mutation(({ctx, input}) => {
+				const {accountId, ...credentials} = input
+				return ctx.umbreld.files.cloud.connectWebDav(ctx.principal?.accountId ?? OWNER_USER_ID, credentials, accountId)
+			}),
+		beginICloud: cloudProcedure
+			.input(
+				z.object({
+					accountId: accountId.optional(),
+					appleId: z.string().min(1).max(320),
+					password: z.string().min(1).max(1024),
+				}),
+			)
+			.mutation(({ctx, input}) => {
+				const {accountId, ...credentials} = input
+				return ctx.umbreld.files.cloud.beginICloud(ctx.principal?.accountId ?? OWNER_USER_ID, credentials, accountId)
+			}),
+		continueICloud: cloudProcedure
+			.input(z.object({accountId, result: z.string().min(1).max(8192)}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.continueICloud(
+					ctx.principal?.accountId ?? OWNER_USER_ID,
+					input.accountId,
+					input.result,
+				),
+			),
+		create: cloudProcedure
+			.input(z.object({accountId, remote, destination, mode: z.enum(CLOUD_SYNC_MODE_IDS)}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.create({
+					...input,
+					userId: ctx.principal?.accountId ?? OWNER_USER_ID,
+				}),
+			),
+		restore: cloudProcedure
+			.input(
+				z.object({
+					confirmedSyncIds: z.array(z.string().uuid()).max(1000),
+					workItems: z
+						.array(
+							z.object({
+								path: z.string(),
+								toDirectory: z.string(),
+								collision: z.enum(['error', 'replace', 'keep-both']),
+							}),
+						)
+						.min(1)
+						.max(1000),
+				}),
+			)
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.restoreFromRewind(
+					input.workItems,
+					input.confirmedSyncIds,
+					ctx.principal?.accountId ?? OWNER_USER_ID,
+				),
+			),
+		pause: cloudProcedure
+			.input(z.object({syncId: z.string().uuid()}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.pause(ctx.principal?.accountId ?? OWNER_USER_ID, input.syncId),
+			),
+		resume: cloudProcedure
+			.input(z.object({syncId: z.string().uuid()}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.resume(ctx.principal?.accountId ?? OWNER_USER_ID, input.syncId),
+			),
+		run: cloudProcedure
+			.input(z.object({syncId: z.string().uuid()}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.runOnce(ctx.principal?.accountId ?? OWNER_USER_ID, input.syncId),
+			),
+		remove: cloudProcedure
+			.input(z.object({syncId: z.string().uuid()}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.remove(ctx.principal?.accountId ?? OWNER_USER_ID, input.syncId),
+			),
+		removeAccount: cloudProcedure
+			.input(z.object({accountId, confirmedSyncIds: z.array(z.string().uuid())}))
+			.mutation(({ctx, input}) =>
+				ctx.umbreld.files.cloud.removeAccount(
+					ctx.principal?.accountId ?? OWNER_USER_ID,
+					input.accountId,
+					input.confirmedSyncIds,
+				),
+			),
+	}),
 })

@@ -17,6 +17,9 @@ import {
 import {Button} from '@/components/ui/button'
 import {BackupDeviceIcon} from '@/features/backups/components/backup-device-icon'
 import {getDeviceNameFromPath} from '@/features/backups/utils/backup-location-helpers'
+import {CloudBreakDiagram} from '@/features/files/components/cloud-break-diagram'
+import {useHomePath} from '@/features/files/hooks/use-home-path'
+import {cloudAccountBrand} from '@/features/files/utils/cloud'
 import {useNotifications} from '@/hooks/use-notifications'
 import {cn} from '@/lib/utils'
 import {shouldShowWhatsNew} from '@/routes/whats-new'
@@ -180,6 +183,7 @@ export function Notifications() {
 	const {notifications, clearNotification} = useNotifications()
 	const navigate = useNavigate()
 	const linkToDialog = useLinkToDialog()
+	const homePath = useHomePath()
 	const versionQ = trpcReact.system.version.useQuery()
 
 	// Determine if we need to query backup repositories
@@ -190,6 +194,12 @@ export function Notifications() {
 	// Query backup repositories (only when needed)
 	const backupRepositoriesQuery = trpcReact.backups.getRepositories.useQuery(undefined, {
 		enabled: hasBackupNotification,
+	})
+
+	// Query cloud accounts (only when a cloud auth notification is present)
+	const hasCloudNotification = notifications.some((n) => n.startsWith('cloud-auth:'))
+	const cloudAccountsQuery = trpcReact.files.cloud.accounts.useQuery(undefined, {
+		enabled: hasCloudNotification,
 	})
 
 	// Separate umbrelos-updated notification from others
@@ -221,6 +231,35 @@ export function Notifications() {
 				clearNotification(notification)
 			}
 			return getBackupFailingContent(notification, backupRepositoriesQuery, onGoToBackups, onClearNotification, t)
+		}
+
+		// Handle cloud auth notifications: cloud-auth:<accountId>
+		if (notification.startsWith('cloud-auth:')) {
+			const accountId = notification.split(':')[1]
+			const account = cloudAccountsQuery.data?.find(({id}) => id === accountId)
+			const onSignIn = () => {
+				clearNotification(notification)
+				navigate(
+					`/files${homePath}?dialog=files-cloud-add&files-cloud-add-account=${accountId}&files-cloud-add-reauth=1`,
+				)
+			}
+			return {
+				title: t('notifications.cloud-auth.title'),
+				icon: <CloudBreakDiagram provider={account && cloudAccountBrand(account)} glyph='alert' />,
+				description: account
+					? t('notifications.cloud-auth.description', {account: account.displayName})
+					: t('notifications.cloud-auth.description-generic'),
+				action: (
+					<>
+						<Button variant='default' size='dialog' onClick={() => clearNotification(notification)} tabIndex={-1}>
+							{t('ok')}
+						</Button>
+						<AlertDialogAction variant='primary' onClick={onSignIn} tabIndex={0}>
+							{t('notifications.cloud-auth.sign-in')}
+						</AlertDialogAction>
+					</>
+				),
+			}
 		}
 
 		// Handle specific notification types

@@ -82,6 +82,8 @@ export default class Archive {
 	}
 
 	// Creates a zip archive
+	// Concurrent attempts can calculate the same archive name. Reserve the
+	// output with O_EXCL and retry instead of allowing one to overwrite another.
 	async createZipFile(virtualPaths: string[], userId: string = OWNER_USER_ID) {
 		virtualPaths = virtualPaths.map((virtualPath) => this.#umbreld.files.normalizeVirtualPath(virtualPath))
 
@@ -145,12 +147,15 @@ export default class Archive {
 
 	// Unarchives an archive
 	async unarchive(virtualPath: string, userId: string = OWNER_USER_ID) {
+		// Authorize before consulting Cloud-aware advisory operations.
+		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, userId)
+
 		// Check if operation is allowed
 		const allowedOperations = await this.#umbreld.files.getAllowedOperations(virtualPath, userId)
-		if (!allowedOperations.includes('unarchive')) throw new Error('[operation-not-allowed]')
-
-		// Get system path (authorized against the requesting account)
-		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, userId)
+		if (!allowedOperations.includes('unarchive')) {
+			await this.#umbreld.files.assertCloudMutablePath(virtualPath, userId)
+			throw new Error('[operation-not-allowed]')
+		}
 
 		// The archive is extracted next to itself, so authorize the containing directory.
 		await this.#umbreld.files.virtualToSystemPath(nodePath.posix.dirname(virtualPath), userId)

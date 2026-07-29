@@ -1,6 +1,17 @@
+import {setTimeout} from 'node:timers/promises'
+
 import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from 'vitest'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
+import {CLOUD_SCHEDULER_INTERVAL} from '../files/cloud.js'
+import {
+	startVmCloudWebDav,
+	waitForSync,
+	VM_CLOUD_WEBDAV_PASSWORD,
+	VM_CLOUD_WEBDAV_URL,
+	VM_CLOUD_WEBDAV_USERNAME,
+	writeVmCloudFixture,
+} from '../files/cloud.vm-test-helpers.js'
 import type {RestoreStatus} from './backups.js'
 import {
 	bootWithExternalStorage,
@@ -17,6 +28,10 @@ describe.sequential('Backup restore on current install', () => {
 	let umbreld: Awaited<ReturnType<typeof createTestVm>>
 	let failed = false
 	let repositoryId: string
+	let cloudAccountId: string
+	let syncId: string
+	let cloudLastSuccessfulAt: number
+	const cloudDestination = '/Home/current-restore-cloud'
 
 	beforeAll(async () => {
 		umbreld = await createTestVm({device: 'umbrel-home'})
@@ -35,6 +50,29 @@ describe.sequential('Backup restore on current install', () => {
 
 	test('creates a restorable backup on external storage', async () => {
 		await umbreld.client.files.createDirectory.mutate({path: '/Home/current-restore-marker'})
+		await writeVmCloudFixture(umbreld, '/source/before-restore.txt', 'present in the backup')
+		await startVmCloudWebDav(umbreld)
+		const connected = await umbreld.client.files.cloud.connectWebDav.mutate({
+			flavor: 'webdav',
+			url: VM_CLOUD_WEBDAV_URL,
+			username: VM_CLOUD_WEBDAV_USERNAME,
+			password: VM_CLOUD_WEBDAV_PASSWORD,
+			tlsMode: 'default',
+		})
+		cloudAccountId = connected.account.id
+		await umbreld.client.files.createDirectory.mutate({path: cloudDestination})
+		const created = await umbreld.client.files.cloud.create.mutate({
+			accountId: cloudAccountId,
+			remote: {path: '/source'},
+			destination: {path: cloudDestination},
+			mode: 'auto',
+		})
+		syncId = created.id
+		const completed = await waitForSync(umbreld.client, syncId, (cloud) => cloud.lastSuccessfulAt !== undefined, {
+			timeout: 120_000,
+		})
+		cloudLastSuccessfulAt = completed.lastSuccessfulAt!
+
 		repositoryId = await umbreld.client.backups.createRepository.mutate({
 			path: externalPath,
 			password: repositoryPassword,
@@ -48,6 +86,7 @@ describe.sequential('Backup restore on current install', () => {
 		const restoreProgressSubscription = umbreld.subscribeToEvents<RestoreStatus>('backups:restore-progress')
 		await restoreProgressSubscription.started
 
+		await writeVmCloudFixture(umbreld, '/source/after-restore.txt', 'created after the backup')
 		await umbreld.client.files.trash.mutate({path: '/Home/current-restore-marker'})
 		await restoreBackupAndWait({umbreld, backupId: backup.id})
 
@@ -61,6 +100,53 @@ describe.sequential('Backup restore on current install', () => {
 		})
 		expectRestoreProgressEvents(restoreProgressSubscription.collected, backup.id)
 		restoreProgressSubscription.unsubscribe()
+
+		const restoredCloud = await waitForSync(
+			umbreld.client,
+			syncId,
+			(cloud) => cloud.pauseReasons?.restore === true && cloud.status.state === 'paused',
+			{timeout: 120_000},
+		)
+		expect(restoredCloud).toMatchObject({
+			accountId: cloudAccountId,
+			pauseReasons: {restore: true},
+			status: {state: 'paused'},
+		})
+		expect(await umbreld.client.files.cloud.accounts.query()).toEqual([
+			expect.objectContaining({id: cloudAccountId, provider: 'webdav'}),
+		])
+		expect((await umbreld.client.files.list.query({path: cloudDestination})).files.map(({name}) => name)).toEqual([
+			'before-restore.txt',
+		])
+
+		await startVmCloudWebDav(umbreld)
+		const remoteListing = await umbreld.client.files.cloud.browse.query({
+			accountId: cloudAccountId,
+			remote: {path: '/source'},
+		})
+		expect(remoteListing.entries.map(({name}) => name).sort()).toEqual(['after-restore.txt', 'before-restore.txt'])
+		expect(remoteListing.truncated).toBe(false)
+
+		// Observe a complete scheduler interval so this proves the restored sync
+		// stays paused rather than merely checking before its first tick.
+		await setTimeout(CLOUD_SCHEDULER_INTERVAL + 2_000)
+		expect(await umbreld.client.files.cloud.activity.query()).toEqual([])
+		expect((await umbreld.client.files.cloud.syncs.query()).find(({id}) => id === syncId)).toMatchObject({
+			lastSuccessfulAt: cloudLastSuccessfulAt,
+			pauseReasons: {restore: true},
+			status: {state: 'paused'},
+		})
+		expect((await umbreld.client.files.list.query({path: cloudDestination})).files.map(({name}) => name)).toEqual([
+			'before-restore.txt',
+		])
+
+		await umbreld.client.files.cloud.resume.mutate({syncId: syncId})
+		await waitForSync(umbreld.client, syncId, (cloud) => (cloud.lastSuccessfulAt ?? 0) > cloudLastSuccessfulAt, {
+			timeout: 120_000,
+		})
+		expect(
+			(await umbreld.client.files.list.query({path: cloudDestination})).files.map(({name}) => name).sort(),
+		).toEqual(['after-restore.txt', 'before-restore.txt'])
 
 		await waitForExternalStorage(umbreld)
 		await waitForBackupsKopiaReady(umbreld)

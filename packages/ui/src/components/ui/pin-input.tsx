@@ -18,10 +18,11 @@ export type CodeState = 'input' | 'loading' | 'error' | 'success'
 type PinInputProps = {
 	length: number
 	autoFocus?: boolean
+	disabled?: boolean
 	onCodeCheck: (code: string) => Promise<boolean>
 }
 
-export const PinInput = ({length, onCodeCheck, autoFocus}: PinInputProps) => {
+export const PinInput = ({length, onCodeCheck, autoFocus, disabled = false}: PinInputProps) => {
 	const [state, setState] = useState<CodeState>('input')
 	const inputRef = useRef<HTMLInputElement>(null)
 	const focused = useIsFocused(inputRef as RefObject<HTMLInputElement>)
@@ -37,8 +38,8 @@ export const PinInput = ({length, onCodeCheck, autoFocus}: PinInputProps) => {
 			inputClassName={tw`caret-transparent selection:bg-transparent`}
 			autoFocus={autoFocus}
 			length={length}
-			readOnly={state !== 'input'}
-			disabled={state === 'loading'}
+			readOnly={disabled || state !== 'input'}
+			disabled={disabled || state === 'loading'}
 			inputRef={inputRef as RefObject<HTMLInputElement>}
 			padding={padding}
 			spacing={'10px'}

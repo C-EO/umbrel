@@ -5,7 +5,14 @@ import {FadeScroller} from '@/components/fade-scroller'
 import {CaretRightIcon} from '@/features/files/assets/caret-right'
 import {Droppable} from '@/features/files/components/shared/drag-and-drop'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
-import {APPS_PATH, EXTERNAL_STORAGE_PATH, NETWORK_STORAGE_PATH, RECENTS_PATH} from '@/features/files/constants'
+import {
+	APPS_PATH,
+	CLOUD_PATH,
+	EXTERNAL_STORAGE_PATH,
+	NETWORK_STORAGE_PATH,
+	RECENTS_PATH,
+} from '@/features/files/constants'
+import {cloudAccountLabel, useCloudAccounts, useCloudProviders} from '@/features/files/hooks/use-cloud'
 import {useHomePath, useIsMember, useTrashPath} from '@/features/files/hooks/use-home-path'
 import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
@@ -17,7 +24,16 @@ type PathSegment = {
 	id: number
 	path: string
 	segment: string
-	type: 'home' | 'trash' | 'recents' | 'apps' | 'folder' | 'external-storage' | 'network-root' | 'network-share'
+	type:
+		| 'home'
+		| 'trash'
+		| 'recents'
+		| 'apps'
+		| 'folder'
+		| 'external-storage'
+		| 'network-root'
+		| 'network-share'
+		| 'cloud-account'
 }
 
 export function PathBarDesktop({path}: {path: string}) {
@@ -29,6 +45,12 @@ export function PathBarDesktop({path}: {path: string}) {
 	const fadeScrollerRef = useRef<HTMLDivElement | null>(null)
 
 	const {navigateToDirectory, isBrowsingExternalStorage, isBrowsingNetworkStorage, uiPath} = useNavigate()
+
+	// Account label for the virtual /Cloud/<accountId> route
+	const isUiCloudRoot = uiPath === CLOUD_PATH
+	const isUiCloudAccount = uiPath.startsWith(`${CLOUD_PATH}/`)
+	const {data: cloudAccounts} = useCloudAccounts({enabled: isUiCloudAccount})
+	const {data: cloudProviders} = useCloudProviders({enabled: isUiCloudAccount})
 
 	// The current account's home and trash roots (owner: /Home and /Trash,
 	// member: /Users/<slug> and /Users/<slug>/Trash) so a member's breadcrumb
@@ -72,19 +94,21 @@ export function PathBarDesktop({path}: {path: string}) {
 					? {segment: t('files-sidebar.recents'), type: 'recents' as const, path: RECENTS_PATH}
 					: isUiApps
 						? {segment: t('files-sidebar.apps'), type: 'apps' as const, path: APPS_PATH}
-						: isUiExternal
-							? {
-									segment: displaySegments[1] || t('files-sidebar.external-storage'),
-									type: 'external-storage' as const,
-									path: `${EXTERNAL_STORAGE_PATH}/${displaySegments[1] || ''}`,
-								}
-							: isUiNetwork
+						: isUiCloudRoot || isUiCloudAccount
+							? {segment: t('files-sidebar.cloud'), type: 'cloud-account' as const, path: CLOUD_PATH}
+							: isUiExternal
 								? {
-										segment: displayPath === NETWORK_STORAGE_PATH ? t('files-sidebar.network-pathbar') : '',
-										type: 'network-root' as const,
-										path: NETWORK_STORAGE_PATH,
+										segment: displaySegments[1] || t('files-sidebar.external-storage'),
+										type: 'external-storage' as const,
+										path: `${EXTERNAL_STORAGE_PATH}/${displaySegments[1] || ''}`,
 									}
-								: {segment: t('files-sidebar.home'), type: 'home' as const, path: homePath}
+								: isUiNetwork
+									? {
+											segment: displayPath === NETWORK_STORAGE_PATH ? t('files-sidebar.network-pathbar') : '',
+											type: 'network-root' as const,
+											path: NETWORK_STORAGE_PATH,
+										}
+									: {segment: t('files-sidebar.home'), type: 'home' as const, path: homePath}
 
 		// Start with the root segment
 		const items: PathSegment[] = [
@@ -104,22 +128,42 @@ export function PathBarDesktop({path}: {path: string}) {
 
 			// Determine the type for the segment
 			let segmentType: PathSegment['type'] = 'folder'
+			let segmentLabel = segment
 
 			// First level network share gets network-share type for NAS icon
 			if (isBrowsingNetworkStorage && i === 0) {
 				segmentType = 'network-share'
 			}
 
+			// First level cloud segment is the account: provider logo + account label
+			if (isUiCloudAccount && i === 0) {
+				segmentType = 'cloud-account'
+				const account = cloudAccounts?.find(({id}) => id === segment)
+				if (account) segmentLabel = cloudAccountLabel(account, cloudAccounts, cloudProviders)
+			}
+
 			items.push({
 				id: i + 1,
 				type: segmentType,
-				segment,
+				segment: segmentLabel,
 				path: segmentUiPath,
 			})
 		})
 
 		return items
-	}, [uiPath, homePath, trashPath, isMember, ownersUmbrelName, isBrowsingExternalStorage, isBrowsingNetworkStorage])
+	}, [
+		uiPath,
+		homePath,
+		trashPath,
+		isMember,
+		ownersUmbrelName,
+		isBrowsingExternalStorage,
+		isBrowsingNetworkStorage,
+		isUiCloudRoot,
+		isUiCloudAccount,
+		cloudAccounts,
+		cloudProviders,
+	])
 
 	const deriveIsOverflow = useCallback(() => {
 		if (!breadcrumbsRef.current) return
@@ -241,7 +285,9 @@ const PathSegment = ({segment, hasArrow, onClick, isStatic, path, type}: PathSeg
 								? 'network-root'
 								: type === 'network-share'
 									? 'network-share'
-									: 'directory',
+									: type === 'cloud-account'
+										? 'cloud-account'
+										: 'directory',
 					name: segment,
 					operations: [],
 					size: 0,

@@ -23,6 +23,7 @@ export type FilesDialogKey =
 	| 'files-permanently-delete-confirmation'
 	| 'files-add-network-share'
 	| 'files-format-drive'
+	| 'files-cloud-add'
 export type DialogKey = GlobalDialogKey | AppStoreDialogKey | SettingsDialogKey | FilesDialogKey
 
 // TODO: make dialog query params typesafe

@@ -17,6 +17,7 @@ describe('member lifecycle', () => {
 		await umbreld.store.set('user', {name: 'Owner', hashedPassword: 'unused'})
 		vi.spyOn(umbreld.files, 'createMemberDirectories').mockResolvedValue()
 		vi.spyOn(umbreld.files, 'deleteMemberDirectories').mockResolvedValue()
+		vi.spyOn(umbreld.files.cloud, 'removeUser').mockResolvedValue()
 		vi.spyOn(umbreld.files.memberShares, 'removeUserFromShares').mockResolvedValue()
 		vi.spyOn(umbreld.apps, 'removeUserFromMemberShares').mockResolvedValue()
 		vi.spyOn(umbreld.auth, 'revokeAllForAccount').mockResolvedValue(0)
@@ -39,7 +40,10 @@ describe('member lifecycle', () => {
 		// The account disappears immediately even though cleanup did not finish.
 		expect(await umbreld.user.getMember(first.userId)).toBeUndefined()
 		expect(await umbreld.user.listMembers()).toEqual([])
+		expect(await umbreld.user.listDeletedMemberIds()).toEqual(['Alice'])
 		expect(await umbreld.store.get('members')).toEqual([{id: 'Alice', deleted: true}])
+		expect(umbreld.files.cloud.removeUser).toHaveBeenCalledWith('Alice')
+		expect(umbreld.files.deleteMemberDirectories).not.toHaveBeenCalled()
 
 		// Reusing the display name creates a new security identity.
 		const replacement = await umbreld.user.createUser('Alice', 'passwordpassword')
@@ -52,9 +56,14 @@ describe('member lifecycle', () => {
 			deleted: true,
 			cleanupComplete: true,
 		})
+		expect(await umbreld.user.listDeletedMemberIds()).toEqual(['Alice'])
+		expect(umbreld.files.cloud.removeUser).toHaveBeenCalledWith('Alice')
 		expect(umbreld.files.deleteMemberDirectories).toHaveBeenCalledWith('Alice')
 		expect(umbreld.files.memberShares.removeUserFromShares).toHaveBeenCalledWith('Alice')
 		expect(umbreld.apps.removeUserFromMemberShares).toHaveBeenCalledWith('Alice')
+		expect(vi.mocked(umbreld.files.cloud.removeUser).mock.invocationCallOrder[0]).toBeLessThan(
+			vi.mocked(umbreld.files.deleteMemberDirectories).mock.invocationCallOrder[0],
+		)
 	})
 
 	test('resumes pending member cleanup after restart', async () => {
@@ -65,6 +74,7 @@ describe('member lifecycle', () => {
 		vi.restoreAllMocks()
 		const restarted = new Umbreld({dataDirectory})
 		vi.spyOn(restarted.files, 'deleteMemberDirectories').mockResolvedValue()
+		vi.spyOn(restarted.files.cloud, 'removeUser').mockResolvedValue()
 		vi.spyOn(restarted.files.memberShares, 'removeUserFromShares').mockResolvedValue()
 		vi.spyOn(restarted.apps, 'removeUserFromMemberShares').mockResolvedValue()
 		vi.spyOn(restarted.auth, 'revokeAllForAccount').mockResolvedValue(0)
@@ -72,7 +82,20 @@ describe('member lifecycle', () => {
 		await restarted.user.finishPendingDeletions()
 
 		expect(restarted.auth.revokeAllForAccount).toHaveBeenCalledWith('Grace')
+		expect(restarted.files.cloud.removeUser).toHaveBeenCalledWith('Grace')
+		expect(restarted.files.deleteMemberDirectories).toHaveBeenCalledWith('Grace')
 		expect(await restarted.store.get('members')).toEqual([{id: 'Grace', deleted: true, cleanupComplete: true}])
+	})
+
+	test('keeps member files until retryable Cloud cleanup succeeds', async () => {
+		const member = await umbreld.user.createUser('Alice', 'passwordpassword')
+		vi.mocked(umbreld.files.cloud.removeUser).mockRejectedValueOnce(new Error('cloud cleanup unavailable'))
+
+		await expect(umbreld.user.deleteUser(member.userId)).rejects.toThrow('cloud cleanup unavailable')
+
+		expect(umbreld.files.cloud.removeUser).toHaveBeenCalledWith(member.userId)
+		expect(umbreld.files.deleteMemberDirectories).not.toHaveBeenCalled()
+		expect(await umbreld.store.get('members')).toEqual([{id: member.userId, deleted: true}])
 	})
 
 	test('serializes display-name uniqueness checks with account renames', async () => {

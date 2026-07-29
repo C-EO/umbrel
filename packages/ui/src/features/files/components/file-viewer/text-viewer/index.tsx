@@ -139,7 +139,7 @@ export default function TextViewer({item}: TextViewerProps) {
 	const {t} = useTranslation()
 	const viewerMode = useFilesStore((s) => s.viewerMode)
 	const setViewerItem = useFilesStore((s) => s.setViewerItem)
-	const isReadOnly = useIsFilesReadOnly()
+	const isReadOnly = useIsFilesReadOnly() || !item.operations.includes('writable')
 	const utils = trpcReact.useUtils()
 	const {wallpaper} = useWallpaper()
 	const isPreviewMode = viewerMode === 'preview'

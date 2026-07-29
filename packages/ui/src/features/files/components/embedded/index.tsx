@@ -52,7 +52,7 @@ export function EmbeddedFiles({
 				// can transparently remap logical roots to alternate physical roots.
 				pathAliases,
 				hiddenSidebarItems:
-					mode === 'read-only' ? {network: true, external: true, trash: true, rewind: true} : undefined,
+					mode === 'read-only' ? {network: true, external: true, trash: true, rewind: true, cloud: true} : undefined,
 			}}
 		>
 			<div className={['grid grid-cols-1 lg:grid-cols-[188px_1fr]', className].join(' ')}>

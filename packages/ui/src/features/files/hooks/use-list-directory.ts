@@ -12,6 +12,7 @@ import {trpcReact} from '@/trpc/trpc'
 interface UseListDirectoryOptions {
 	itemsOnScrollEnd?: number
 	initialItems?: number
+	enabled?: boolean
 }
 
 export function useListDirectory(
@@ -19,6 +20,7 @@ export function useListDirectory(
 	{
 		itemsOnScrollEnd = USE_LIST_DIRECTORY_LOAD_ITEMS.ON_SCROLL_END,
 		initialItems = USE_LIST_DIRECTORY_LOAD_ITEMS.INITIAL,
+		enabled = true,
 	}: UseListDirectoryOptions = {},
 ) {
 	const {preferences} = usePreferences()
@@ -49,7 +51,7 @@ export function useListDirectory(
 	const {data, isLoading, isError, error, isPlaceholderData} = trpcReact.files.list.useQuery(
 		{path, limit: initialItems, sortBy, sortOrder},
 		{
-			enabled: !!path && !skipBackendRequest,
+			enabled: enabled && !!path && !skipBackendRequest,
 			placeholderData: keepPreviousData,
 			staleTime: 5_000,
 			// Don't retry on error. Backend errors like ENOENT/EIO/does-not-exist are deterministic, not transient.

@@ -6,6 +6,8 @@ STATE_DIR="${VM_STATE_DIR:-$SCRIPT_DIR/vm-state}"
 NVME_STATE_FILE="$STATE_DIR/nvme.json"
 HDD_STATE_FILE="$STATE_DIR/hdd.json"
 USB_STATE_FILE="$STATE_DIR/usb.json"
+QMP_SOCKET=""
+RUNNING_DEVICE_FILE="$STATE_DIR/running-device"
 
 # Defaults
 DEFAULT_DEVICE="umbrel-pro"
@@ -113,6 +115,8 @@ Commands:
     usb list                       List all USB storage devices and their status
     usb add <slot> [--size SIZE]   Add a USB storage device to slot (1-${MAX_USB_STORAGE_SLOTS})
     usb destroy <slot>             Destroy USB storage device (deletes data)
+    usb connect <slot>             Connect an existing USB storage device to the running VM
+    usb disconnect <slot>          Disconnect USB storage from the running VM without deleting data
 
 Boot Options:
     --device <type>                Device to emulate: umbrel-pro, umbrel-home, nas, pi (default: ${DEFAULT_DEVICE})
@@ -153,9 +157,41 @@ Examples:
 EOF
 }
 
+initialize_qmp_socket() {
+  [[ -n "$QMP_SOCKET" ]] && return
+
+  local canonical_state_dir digest
+  if [[ -d "$STATE_DIR" ]]; then
+    canonical_state_dir="$(cd "$STATE_DIR" && pwd -P)"
+  else
+    local state_parent state_name
+    state_parent="$(dirname "$STATE_DIR")"
+    state_name="$(basename "$STATE_DIR")"
+    if [[ -d "$state_parent" ]]; then
+      canonical_state_dir="$(cd "$state_parent" && pwd -P)/$state_name"
+    elif [[ "$STATE_DIR" == /* ]]; then
+      canonical_state_dir="$STATE_DIR"
+    else
+      canonical_state_dir="$(pwd -P)/$STATE_DIR"
+    fi
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest=$(printf '%s' "$canonical_state_dir" | sha256sum)
+  elif command -v shasum >/dev/null 2>&1; then
+    digest=$(printf '%s' "$canonical_state_dir" | shasum -a 256)
+  else
+    echo "Error: sha256sum or shasum is required to identify the VM QMP socket" >&2
+    exit 1
+  fi
+  digest="${digest%% *}"
+  QMP_SOCKET="/tmp/umbrel-vm-${digest:0:16}.qmp"
+}
+
 # Initialize state directory and state files
 init_state() {
   mkdir -p "$STATE_DIR"
+  initialize_qmp_socket
   if [[ ! -f "$NVME_STATE_FILE" ]]; then
     echo '{}' > "$NVME_STATE_FILE"
   fi
@@ -555,6 +591,11 @@ usb_add() {
   validate_slot "$slot" "$MAX_USB_STORAGE_SLOTS"
   init_state
 
+  if qmp_is_available; then
+    echo "Error: Adding new USB storage while the VM is running is not supported. Power off the VM, add the device, then boot it again." >&2
+    exit 1
+  fi
+
   local disk_path
   disk_path=$(get_usb_disk_path "$slot")
 
@@ -599,6 +640,171 @@ usb_destroy() {
   tmp=$(mktemp)
   jq "del(.\"$slot\")" "$USB_STATE_FILE" > "$tmp" && mv "$tmp" "$USB_STATE_FILE"
   echo "Done. USB storage in slot $slot destroyed"
+}
+
+# Send one QMP command to the running VM. An optional event name and device id
+# make destructive hotplug commands wait until QEMU confirms their completion.
+qmp_execute() {
+  local command="$1"
+  local expected_event="${2:-}"
+  local expected_device="${3:-}"
+  local python
+  python=$(find_command python3 /usr/bin/python3 /opt/homebrew/bin/python3)
+  local python_code
+  python_code=$(cat <<'PY'
+import json
+import socket
+import sys
+
+socket_path, command_json, expected_event, expected_device = sys.argv[1:]
+command = json.loads(command_json)
+
+with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+    client.settimeout(15)
+    client.connect(socket_path)
+    stream = client.makefile("rwb", buffering=0)
+
+    def read_message():
+        while True:
+            line = stream.readline()
+            if not line:
+                raise RuntimeError("QMP connection closed")
+            message = json.loads(line)
+            if message:
+                return message
+
+    def send(message):
+        stream.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
+
+    greeting = read_message()
+    if "QMP" not in greeting:
+        raise RuntimeError("Invalid QMP greeting")
+    send({"execute": "qmp_capabilities"})
+    while True:
+        response = read_message()
+        if "error" in response:
+            raise RuntimeError(json.dumps(response["error"], separators=(",", ":")))
+        if "return" in response:
+            break
+
+    send(command)
+    command_complete = False
+    event_complete = not expected_event
+    while not (command_complete and event_complete):
+        response = read_message()
+        if "error" in response:
+            raise RuntimeError(json.dumps(response["error"], separators=(",", ":")))
+        if "return" in response:
+            command_complete = True
+        if response.get("event") == expected_event:
+            device = response.get("data", {}).get("device")
+            if not expected_device or device == expected_device:
+                event_complete = True
+PY
+)
+
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    sudo "$python" -c "$python_code" "$QMP_SOCKET" "$command" "$expected_event" "$expected_device"
+  else
+    "$python" -c "$python_code" "$QMP_SOCKET" "$command" "$expected_event" "$expected_device"
+  fi
+}
+
+qmp_is_available() {
+  [[ -S "$QMP_SOCKET" ]] || return 1
+  qmp_execute '{"execute":"query-status"}' >/dev/null 2>&1
+}
+
+set_usb_connected() {
+  local slot="$1"
+  local connected="$2"
+  local tmp
+  tmp=$(mktemp)
+  jq ".\"$slot\".connected = $connected" "$USB_STATE_FILE" > "$tmp" && mv "$tmp" "$USB_STATE_FILE"
+}
+
+# USB state predates the connected flag, so missing means connected. Preserve
+# an explicit false value instead of using jq's // operator, which treats false
+# as absent.
+get_usb_connected() {
+  local slot="$1"
+  jq -r ".\"$slot\".connected | if type == \"boolean\" then . else true end" "$USB_STATE_FILE"
+}
+
+usb_disconnect() {
+  local slot="$1"
+  validate_slot "$slot" "$MAX_USB_STORAGE_SLOTS"
+  init_state
+
+  local exists connected device_id
+  exists=$(jq -r ".\"$slot\".exists // empty" "$USB_STATE_FILE")
+  connected=$(get_usb_connected "$slot")
+  device_id="usb-storage${slot}"
+  if [[ "$exists" != "true" ]]; then
+    echo "Error: No USB storage in slot $slot" >&2
+    exit 1
+  fi
+  if [[ "$connected" != "true" ]]; then
+    echo "USB storage in slot $slot is already disconnected"
+    return
+  fi
+
+  if ! qmp_is_available; then
+    echo "Error: USB storage can only be disconnected while the VM is running" >&2
+    exit 1
+  fi
+  local command
+  command=$(jq -cn --arg id "$device_id" '{execute:"device_del",arguments:{id:$id}}')
+  qmp_execute "$command" "DEVICE_DELETED" "$device_id"
+  set_usb_connected "$slot" false
+  echo "USB storage in slot $slot disconnected (disk image preserved)"
+}
+
+usb_connect() {
+  local slot="$1"
+  validate_slot "$slot" "$MAX_USB_STORAGE_SLOTS"
+  init_state
+
+  local exists connected serial device_id
+  exists=$(jq -r ".\"$slot\".exists // empty" "$USB_STATE_FILE")
+  connected=$(get_usb_connected "$slot")
+  serial=$(jq -r ".\"$slot\".serial // \"usb${slot}\"" "$USB_STATE_FILE")
+  device_id="usb-storage${slot}"
+  if [[ "$exists" != "true" ]]; then
+    echo "Error: No USB storage in slot $slot" >&2
+    exit 1
+  fi
+  if [[ "$connected" == "true" ]]; then
+    echo "USB storage in slot $slot is already connected"
+    return
+  fi
+
+  if ! qmp_is_available; then
+    echo "Error: USB storage can only be connected while the VM is running" >&2
+    exit 1
+  fi
+  local device bus port command
+  device=$(cat "$RUNNING_DEVICE_FILE" 2>/dev/null || true)
+  if [[ "$device" == "pi" ]]; then
+    if (( slot <= 6 )); then
+      bus="usb-bus.0"
+      port="1.$(( slot + 1 ))"
+    else
+      bus="usb-bus.0"
+      port="1.8.$(( slot - 6 ))"
+    fi
+    command=$(jq -cn \
+      --arg id "$device_id" --arg drive "usb${slot}" --arg serial "$serial" --arg bus "$bus" --arg port "$port" \
+      '{execute:"device_add",arguments:{driver:"usb-storage",id:$id,drive:$drive,serial:$serial,bus:$bus,port:$port}}')
+  else
+    bus="usb_storage_xhci.0"
+    command=$(jq -cn \
+      --arg id "$device_id" --arg drive "usb${slot}" --arg serial "$serial" --arg bus "$bus" \
+      '{execute:"device_add",arguments:{driver:"usb-storage",id:$id,drive:$drive,serial:$serial,bus:$bus}}')
+  fi
+  qmp_execute "$command"
+  set_usb_connected "$slot" true
+  echo "USB storage in slot $slot connected"
 }
 
 # Build QEMU HDD arguments for connected devices (SATA via AHCI)
@@ -647,8 +853,9 @@ build_usb_args() {
   local has_usb_storage=false
 
   for (( slot=1; slot<=MAX_USB_STORAGE_SLOTS; slot++ )); do
-    local exists
+    local exists connected
     exists=$(jq -r ".\"$slot\".exists // empty" "$USB_STATE_FILE")
+    connected=$(get_usb_connected "$slot")
 
     if [[ "$exists" == "true" ]]; then
       local disk_path serial bus_arg=""
@@ -678,8 +885,13 @@ build_usb_args() {
         bus_arg=",bus=usb_storage_xhci.0"
       fi
 
-      usb_args="$usb_args -drive file=${disk_path},format=qcow2,if=none,id=usb${slot},cache=none,discard=unmap,aio=threads"
-      usb_args="$usb_args -device usb-storage${bus_arg},drive=usb${slot},serial=${serial}"
+      # Keep the named block nodes alive when device_del removes the USB device
+      # so usb connect can attach the same backing disk again.
+      usb_args="$usb_args -blockdev driver=file,node-name=usb${slot}-file,filename=${disk_path},cache.direct=on,cache.no-flush=off,aio=threads"
+      usb_args="$usb_args -blockdev driver=qcow2,node-name=usb${slot},file=usb${slot}-file,discard=unmap"
+      if [[ "$connected" == "true" ]]; then
+        usb_args="$usb_args -device usb-storage${bus_arg},id=usb-storage${slot},drive=usb${slot},serial=${serial}"
+      fi
     fi
   done
 
@@ -1114,6 +1326,9 @@ boot_vm() {
   done
   echo
 
+  rm -f "$QMP_SOCKET"
+  printf '%s\n' "$device" > "$RUNNING_DEVICE_FILE"
+
   local netdev_arg="user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22,hostfwd=tcp:127.0.0.1:${http_port}-:80"
   # ${arr[@]+...} guard: empty array expansion errors under set -u on bash < 4.4 (stock macOS bash 3.2)
   for port_forward in ${forward_ports[@]+"${forward_ports[@]}"}; do
@@ -1128,6 +1343,7 @@ boot_vm() {
     -smp "$cores" \
     -m "$memory" \
     -rtc base=utc \
+    -qmp "unix:${QMP_SOCKET},server=on,wait=off" \
     -nographic -monitor none -chardev stdio,id=char0,signal=off $serial_args \
     "${smbios_args[@]}" \
     "${firmware_args[@]}" \
@@ -1175,6 +1391,8 @@ reflash() {
 
 # Reset all state
 reset_state() {
+  initialize_qmp_socket
+  rm -f "$QMP_SOCKET"
   if [[ -d "$STATE_DIR" ]]; then
     echo "Removing VM state directory: $STATE_DIR"
     rm -rf "$STATE_DIR"
@@ -1361,7 +1579,7 @@ case "$command" in
   usb)
     if [[ $# -lt 1 ]]; then
       echo "Error: usb requires a subcommand" >&2
-      echo "Usage: $0 usb <list|add|destroy> [args]" >&2
+      echo "Usage: $0 usb <list|add|destroy|connect|disconnect> [args]" >&2
       exit 1
     fi
 
@@ -1401,9 +1619,23 @@ case "$command" in
         fi
         usb_destroy "$1"
         ;;
+      connect)
+        if [[ $# -lt 1 ]]; then
+          echo "Error: usb connect requires a slot number" >&2
+          exit 1
+        fi
+        usb_connect "$1"
+        ;;
+      disconnect)
+        if [[ $# -lt 1 ]]; then
+          echo "Error: usb disconnect requires a slot number" >&2
+          exit 1
+        fi
+        usb_disconnect "$1"
+        ;;
       *)
         echo "Error: Unknown usb subcommand: $subcommand" >&2
-        echo "Usage: $0 usb <list|add|destroy> [args]" >&2
+        echo "Usage: $0 usb <list|add|destroy|connect|disconnect> [args]" >&2
         exit 1
         ;;
     esac
