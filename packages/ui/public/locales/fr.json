@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Téléchargez tous les fichiers et dossiers de votre {{provider}}",
   "files-cloud.folder-error": "Impossible de charger les dossiers.",
   "files-cloud.folder-loading": "Chargement de vos dossiers {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Le Coffre-fort personnel</personalVault> n’est pas inclus, car Microsoft exige une vérification d’identité supplémentaire pour y accéder.",
   "files-cloud.folder-sign-in": "Se reconnecter",
   "files-cloud.folder-step-title": "Télécharger depuis {{provider}}",
   "files-cloud.folder-title": "Choisissez un dossier dans {{provider}}",

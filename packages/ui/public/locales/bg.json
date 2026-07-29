@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Изтегли всички файлове и папки от {{provider}}",
   "files-cloud.folder-error": "Папките не можаха да бъдат заредени.",
   "files-cloud.folder-loading": "Зареждане на папките ти от {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Личният сейф</personalVault> не е включен, защото Microsoft изисква допълнителна проверка на самоличността за достъп до него.",
   "files-cloud.folder-sign-in": "Вход отново",
   "files-cloud.folder-step-title": "Изтегляне от {{provider}}",
   "files-cloud.folder-title": "Избери папка в {{provider}}",

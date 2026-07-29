@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Stiahni všetky súbory a priečinky zo služby {{provider}}",
   "files-cloud.folder-error": "Priečinky sa nepodarilo načítať.",
   "files-cloud.folder-loading": "Načítavajú sa tvoje priečinky zo služby {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Osobný trezor</personalVault> nie je zahrnutý, pretože Microsoft na prístup vyžaduje dodatočné overenie identity.",
   "files-cloud.folder-sign-in": "Znova sa prihlásiť",
   "files-cloud.folder-step-title": "Stiahnuť zo služby {{provider}}",
   "files-cloud.folder-title": "Vyber priečinok v službe {{provider}}",

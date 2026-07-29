@@ -25,16 +25,17 @@ import {
 	type CloudSync,
 } from '@/features/files/hooks/use-cloud'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
-import {cloudAccountBrand, cloudBrandName} from '@/features/files/utils/cloud'
+import {cloudAccountBrand, cloudBrandName, soleRootCloudDestination} from '@/features/files/utils/cloud'
 import {useLinkToDialog} from '@/utils/dialog'
 
 // Virtual /Cloud route: connected cloud accounts as tiles, like the network
-// devices view. A tile opens the account's destination listing.
+// devices view. A tile opens the sole root download directly, otherwise it
+// opens the account's destination listing.
 export function CloudAccountsListing() {
 	const {t} = useTranslation()
 	const {data: accounts, isLoading: isLoadingAccounts} = useCloudAccounts()
 	const {data: providers, isLoading: isLoadingProviders} = useCloudProviders()
-	const {data: clouds} = useCloudSyncs()
+	const {data: clouds, isLoading: isLoadingClouds} = useCloudSyncs()
 	const {navigateToDirectory} = useNavigate()
 	const routerNavigate = useRouterNavigate()
 	const linkToDialog = useLinkToDialog()
@@ -42,7 +43,7 @@ export function CloudAccountsListing() {
 	const [managing, setManaging] = useState<CloudAccount | null>(null)
 	const [disconnecting, setDisconnecting] = useState<CloudAccount | null>(null)
 
-	const isLoading = isLoadingAccounts || isLoadingProviders
+	const isLoading = isLoadingAccounts || isLoadingProviders || isLoadingClouds
 
 	const openAddWizard = () => routerNavigate(linkToDialog('files-cloud-add'))
 
@@ -75,17 +76,22 @@ export function CloudAccountsListing() {
 			) : (
 				<ScrollArea className='h-full'>
 					<div className='grid grid-cols-[repeat(auto-fill,minmax(130px,1fr))] gap-4 p-4 pt-1 sm:grid-cols-[repeat(auto-fill,minmax(160px,1fr))]'>
-						{(accounts ?? []).map((account) => (
-							<AccountTile
-								key={account.id}
-								account={account}
-								providerName={cloudBrandName(cloudAccountBrand(account), providers) ?? account.displayName}
-								accountClouds={clouds?.filter(({accountId}) => accountId === account.id) ?? []}
-								onOpen={() => navigateToDirectory(`${CLOUD_PATH}/${account.id}`)}
-								onManage={() => setManaging(account)}
-								onDisconnect={() => setDisconnecting(account)}
-							/>
-						))}
+						{(accounts ?? []).map((account) => {
+							const accountClouds = clouds?.filter(({accountId}) => accountId === account.id) ?? []
+							const openPath = soleRootCloudDestination(accountClouds) ?? `${CLOUD_PATH}/${account.id}`
+
+							return (
+								<AccountTile
+									key={account.id}
+									account={account}
+									providerName={cloudBrandName(cloudAccountBrand(account), providers) ?? account.displayName}
+									accountClouds={accountClouds}
+									onOpen={() => navigateToDirectory(openPath)}
+									onManage={() => setManaging(account)}
+									onDisconnect={() => setDisconnecting(account)}
+								/>
+							)
+						})}
 					</div>
 				</ScrollArea>
 			)}

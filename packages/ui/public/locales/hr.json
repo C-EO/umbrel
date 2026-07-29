@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Preuzmi sve datoteke i mape iz usluge {{provider}}",
   "files-cloud.folder-error": "Učitavanje mapa nije uspjelo.",
   "files-cloud.folder-loading": "Učitavanje tvojih mapa iz usluge {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Osobni sef</personalVault> nije uključen jer Microsoft zahtijeva dodatnu provjeru identiteta za pristup.",
   "files-cloud.folder-sign-in": "Ponovno se prijavi",
   "files-cloud.folder-step-title": "Preuzmi iz usluge {{provider}}",
   "files-cloud.folder-title": "Odaberi mapu na usluzi {{provider}}",

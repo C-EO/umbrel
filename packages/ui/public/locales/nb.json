@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Last ned alle filer og mapper fra {{provider}}",
   "files-cloud.folder-error": "Kunne ikke laste inn mapper.",
   "files-cloud.folder-loading": "Laster inn mappene dine fra {{provider}} …",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Personlig hvelv</personalVault> er ikke inkludert fordi Microsoft krever en ekstra identitetskontroll for å få tilgang til det.",
   "files-cloud.folder-sign-in": "Logg på igjen",
   "files-cloud.folder-step-title": "Last ned fra {{provider}}",
   "files-cloud.folder-title": "Velg en mappe i {{provider}}",

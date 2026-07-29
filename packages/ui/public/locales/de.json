@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Lade alle Dateien und Ordner von {{provider}} herunter",
   "files-cloud.folder-error": "Ordner konnten nicht geladen werden.",
   "files-cloud.folder-loading": "Deine Ordner von {{provider}} werden geladen…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Persönlicher Tresor</personalVault> ist nicht enthalten, da Microsoft für den Zugriff eine zusätzliche Identitätsprüfung verlangt.",
   "files-cloud.folder-sign-in": "Erneut anmelden",
   "files-cloud.folder-step-title": "Von {{provider}} herunterladen",
   "files-cloud.folder-title": "Wähle einen Ordner in {{provider}}",

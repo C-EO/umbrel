@@ -15,7 +15,7 @@ import {CircularProgress} from '@/features/files/components/shared/circular-prog
 import {CLOUD_PATH, CLOUD_PROVIDER_LOGOS} from '@/features/files/constants'
 import {useCloudAccounts, useCloudProviders, useCloudSyncs, type CloudAccount} from '@/features/files/hooks/use-cloud'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
-import {cloudAccountBrand, cloudBrandName} from '@/features/files/utils/cloud'
+import {cloudAccountBrand, cloudBrandName, soleRootCloudDestination} from '@/features/files/utils/cloud'
 import {useQueryParams} from '@/hooks/use-query-params'
 import {cn} from '@/lib/utils'
 import {useCloudActivity} from '@/providers/cloud'
@@ -185,6 +185,8 @@ export function SidebarCloud() {
 	const renderAccountRow = (account: CloudAccount, {label, showLogo = true}: {label: string; showLogo?: boolean}) => {
 		const activity = activityFor([account.id])
 		const accountPath = `${CLOUD_PATH}/${account.id}`
+		const accountClouds = fullClouds?.filter(({accountId}) => accountId === account.id) ?? []
+		const openPath = soleRootCloudDestination(accountClouds) ?? accountPath
 		const treeItemId = `account-${account.id}`
 		const isSelected = currentPath === accountPath
 		return (
@@ -197,7 +199,7 @@ export function SidebarCloud() {
 						aria-selected={isSelected}
 						tabIndex={tabbableTreeItem === treeItemId ? 0 : -1}
 						onFocus={() => setFocusedTreeItem(treeItemId)}
-						onClick={() => navigateToDirectory(accountPath)}
+						onClick={() => navigateToDirectory(openPath)}
 						className={cn(
 							'flex w-full items-center gap-1.5 rounded-lg border border-transparent px-2 py-1.5 text-left text-12 focus-visible:ring-1 focus-visible:ring-white/40 focus-visible:outline-hidden',
 							isSelected ? selectedClass : 'text-white/60 transition-colors hover:bg-white/10 hover:text-white',

@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Sæktu allar skrár og möppur úr {{provider}}",
   "files-cloud.folder-error": "Ekki tókst að hlaða möppum.",
   "files-cloud.folder-loading": "Hleð möppum úr {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Persónulega hvelfingin</personalVault> er ekki tekin með vegna þess að Microsoft krefst viðbótarstaðfestingar á auðkenni til að veita aðgang að henni.",
   "files-cloud.folder-sign-in": "Skrá inn aftur",
   "files-cloud.folder-step-title": "Sækja úr {{provider}}",
   "files-cloud.folder-title": "Veldu möppu í {{provider}}",

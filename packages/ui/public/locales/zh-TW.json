@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "下載你 {{provider}} 中的所有檔案和資料夾",
   "files-cloud.folder-error": "無法載入資料夾。",
   "files-cloud.folder-loading": "正在載入你的 {{provider}} 資料夾…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>個人保存庫</personalVault>不包含在內，因為 Microsoft 要求額外的身分驗證才能存取。",
   "files-cloud.folder-sign-in": "再次登入",
   "files-cloud.folder-step-title": "從 {{provider}} 下載",
   "files-cloud.folder-title": "在 {{provider}} 中選擇資料夾",

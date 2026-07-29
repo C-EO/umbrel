@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "{{provider}} hesabınızdaki tüm dosya ve klasörleri indirin",
   "files-cloud.folder-error": "Klasörler yüklenemedi.",
   "files-cloud.folder-loading": "{{provider}} klasörleriniz yükleniyor…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Kişisel Kasa</personalVault>, Microsoft erişim için ek bir kimlik doğrulaması gerektirdiğinden dahil edilmez.",
   "files-cloud.folder-sign-in": "Tekrar oturum aç",
   "files-cloud.folder-step-title": "{{provider}} üzerinden indir",
   "files-cloud.folder-title": "{{provider}} içinde bir klasör seçin",

@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Download all files and folders from your {{provider}}",
   "files-cloud.folder-error": "Couldn't load folders.",
   "files-cloud.folder-loading": "Loading your {{provider}} folders…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Personal Vault</personalVault> isn’t included because Microsoft requires an additional identity check to access it.",
   "files-cloud.folder-sign-in": "Sign in again",
   "files-cloud.folder-step-title": "Download from {{provider}}",
   "files-cloud.folder-title": "Choose a folder in {{provider}}",

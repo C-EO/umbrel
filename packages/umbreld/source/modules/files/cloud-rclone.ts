@@ -46,6 +46,18 @@ const RCLONE_PROVIDER_TYPES: Record<Provider, string> = {
 	icloud: 'iclouddrive',
 }
 
+// Verified against rclone v1.74.4: generic WebDAV and iCloud do not reliably
+// expose the hashes used by the default track-renames strategy.
+// iCloud reports the uncompressed size of package documents such as Pages
+// files, but serves them as smaller ZIP archives.
+const RCLONE_SYNC_PROVIDER_FLAGS: Record<Provider, string[]> = {
+	'google-drive': ['--track-renames', '--drive-skip-dangling-shortcuts', '--tpslimit', '5', '--tpslimit-burst', '10'],
+	dropbox: ['--track-renames'],
+	onedrive: ['--track-renames'],
+	webdav: [],
+	icloud: ['--ignore-size'],
+}
+
 type FileOwner = {userId: number; groupId: number}
 
 type AccountPaths = {
@@ -720,18 +732,12 @@ export default class CloudRclone {
 		const paths = await this.ensureAccountDirectory(accountId)
 		await assertCanonicalConfig(paths.config, this.fileOwner, provider)
 		const source = buildRcloneRemoteSource(provider, remote)
-		// Verified against rclone v1.74.4: generic WebDAV and iCloud do not reliably
-		// expose the hashes used by the default track-renames strategy.
-		// iCloud reports the uncompressed size of package documents such as Pages
-		// files, but serves them as smaller ZIP archives.
-		const providerFlags =
-			provider === 'google-drive'
-				? ['--track-renames', '--drive-skip-dangling-shortcuts', '--tpslimit', '5', '--tpslimit-burst', '10']
-				: provider === 'icloud'
-					? ['--ignore-size']
-					: provider === 'webdav'
-						? []
-						: ['--track-renames']
+		const providerFlags = [
+			...RCLONE_SYNC_PROVIDER_FLAGS[provider],
+			...(provider === 'onedrive' && remote.driveType === 'personal' && remote.path === '/'
+				? ['--filter', '- /Personal Vault/**']
+				: []),
+		]
 		const filesystem = await statfs(destination, {bigint: true})
 		const maxTransferBytes = cloudTransferBudget(filesystem.bavail * filesystem.bsize, minimumFreeBytes)
 		if (maxTransferBytes === undefined) throw new Error('[cloud-destination-low-space]')

@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Download alle bestanden en mappen van je {{provider}}",
   "files-cloud.folder-error": "Kan mappen niet laden.",
   "files-cloud.folder-loading": "Je mappen van {{provider}} laden…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Persoonlijke kluis</personalVault> is niet inbegrepen, omdat Microsoft een extra identiteitscontrole vereist om er toegang toe te krijgen.",
   "files-cloud.folder-sign-in": "Opnieuw inloggen",
   "files-cloud.folder-step-title": "Downloaden van {{provider}}",
   "files-cloud.folder-title": "Kies een map in {{provider}}",

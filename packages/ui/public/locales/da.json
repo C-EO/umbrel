@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Download alle filer og mapper fra {{provider}}",
   "files-cloud.folder-error": "Kunne ikke indlæse mapper.",
   "files-cloud.folder-loading": "Indlæser dine mapper fra {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Personlig boks</personalVault> er ikke inkluderet, fordi Microsoft kræver en ekstra identitetskontrol for at få adgang til den.",
   "files-cloud.folder-sign-in": "Log ind igen",
   "files-cloud.folder-step-title": "Download fra {{provider}}",
   "files-cloud.folder-title": "Vælg en mappe i {{provider}}",

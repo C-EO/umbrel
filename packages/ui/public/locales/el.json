@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Κατέβασε όλα τα αρχεία και τους φακέλους από το {{provider}} σου",
   "files-cloud.folder-error": "Δεν ήταν δυνατή η φόρτωση των φακέλων.",
   "files-cloud.folder-loading": "Φόρτωση των φακέλων σου από το {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Το Προσωπικό θησαυροφυλάκιο</personalVault> δεν περιλαμβάνεται, επειδή η Microsoft απαιτεί έναν επιπλέον έλεγχο ταυτότητας για την πρόσβαση σε αυτό.",
   "files-cloud.folder-sign-in": "Σύνδεση ξανά",
   "files-cloud.folder-step-title": "Λήψη από {{provider}}",
   "files-cloud.folder-title": "Επίλεξε έναν φάκελο στο {{provider}}",

@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Descarga todos los archivos y carpetas de tu {{provider}}",
   "files-cloud.folder-error": "No se han podido cargar las carpetas.",
   "files-cloud.folder-loading": "Cargando tus carpetas de {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>El Almacén personal</personalVault> no está incluido porque Microsoft requiere una comprobación de identidad adicional para acceder a él.",
   "files-cloud.folder-sign-in": "Volver a iniciar sesión",
   "files-cloud.folder-step-title": "Descargar de {{provider}}",
   "files-cloud.folder-title": "Elige una carpeta en {{provider}}",

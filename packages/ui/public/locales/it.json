@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Scarica tutti i file e le cartelle da {{provider}}",
   "files-cloud.folder-error": "Impossibile caricare le cartelle.",
   "files-cloud.folder-loading": "Caricamento delle cartelle di {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Il Vault personale</personalVault> non è incluso perché Microsoft richiede un’ulteriore verifica dell’identità per accedervi.",
   "files-cloud.folder-sign-in": "Accedi di nuovo",
   "files-cloud.folder-step-title": "Scarica da {{provider}}",
   "files-cloud.folder-title": "Scegli una cartella in {{provider}}",

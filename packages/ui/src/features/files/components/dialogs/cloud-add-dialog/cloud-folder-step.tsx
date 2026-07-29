@@ -1,5 +1,5 @@
 import {ChevronRight, CloudDownload, FolderSearch, Loader2, type LucideIcon} from 'lucide-react'
-import {useTranslation} from 'react-i18next'
+import {Trans, useTranslation} from 'react-i18next'
 
 import {Button} from '@/components/ui/button'
 import {DialogFooter} from '@/components/ui/dialog'
@@ -45,6 +45,7 @@ export function CloudFolderStep({
 	layoutKey,
 	morph,
 	state,
+	isPersonalOneDrive,
 	onRetry,
 	onOpenPicker,
 	onDownloadAll,
@@ -56,6 +57,7 @@ export function CloudFolderStep({
 	layoutKey: string
 	morph: boolean
 	state: CloudFolderState
+	isPersonalOneDrive: boolean
 	onRetry: () => void
 	onOpenPicker: () => void
 	onDownloadAll: () => void
@@ -86,12 +88,32 @@ export function CloudFolderStep({
 						description={t('files-cloud.folder-choose-specific-description', {provider: displayName})}
 						onClick={onOpenPicker}
 					/>
-					<ScopeOption
-						icon={CloudDownload}
-						title={t('files-cloud.folder-download-all')}
-						description={t('files-cloud.folder-download-all-description', {provider: displayName})}
-						onClick={onDownloadAll}
-					/>
+					<div className='space-y-2'>
+						<ScopeOption
+							icon={CloudDownload}
+							title={t('files-cloud.folder-download-all')}
+							description={t('files-cloud.folder-download-all-description', {provider: displayName})}
+							onClick={onDownloadAll}
+						/>
+						{isPersonalOneDrive && (
+							<p className='px-4 text-center text-12 leading-relaxed text-white/50'>
+								<Trans
+									t={t}
+									i18nKey='files-cloud.folder-personal-vault-note'
+									components={{
+										personalVault: (
+											<a
+												href='https://support.microsoft.com/en-US/onedrive/protect-your-onedrive-files-in-personal-vault'
+												target='_blank'
+												rel='noopener noreferrer'
+												className='underline decoration-white/30 underline-offset-2 transition-colors hover:text-white'
+											/>
+										),
+									}}
+								/>
+							</p>
+						)}
+					</div>
 				</div>
 				<DialogFooter className='flex-col-reverse justify-center gap-2 pt-6'>
 					<Button size='dialog' onClick={onBack}>

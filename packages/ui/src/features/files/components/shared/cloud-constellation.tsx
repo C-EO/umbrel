@@ -346,7 +346,7 @@ export function CloudConstellation({
 						'flex flex-col items-center gap-2 rounded-xl border border-white/5 bg-white/3 p-4 hover:border-white/10 hover:bg-white/6 focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6',
 					!isPitch &&
 						isFooter &&
-						'col-span-2 flex items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-white/60 transition-colors hover:bg-white/5 hover:text-white focus:outline-hidden focus-visible:bg-white/5 focus-visible:text-white sm:col-span-3',
+						'col-span-2 flex items-center justify-center gap-2 rounded-xl border border-white/5 bg-white/3 px-3 py-2.5 text-white/60 hover:border-white/10 hover:bg-white/6 hover:text-white focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6 focus-visible:text-white sm:col-span-3',
 				)}
 				style={
 					isPitch && orbit && slot

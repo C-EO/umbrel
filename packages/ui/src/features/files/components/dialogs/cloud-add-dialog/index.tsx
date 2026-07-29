@@ -323,6 +323,7 @@ export default function CloudAddDialog() {
 	const sourceName = webdavFlavor
 		? (CLOUD_WEBDAV_FLAVORS.find(({id}) => id === webdavFlavor)?.displayName ?? '')
 		: (provider?.displayName ?? '')
+	const isPersonalOneDrive = provider?.id === 'onedrive' && locations?.locations[0]?.remote.driveType === 'personal'
 
 	// Names already present in a destination parent. Best-effort: the check is
 	// capped at 10k entries, and anything it misses is still caught server-side.
@@ -541,6 +542,7 @@ export default function CloudAddDialog() {
 								layoutKey={webdavFlavor ?? provider.id}
 								morph={cameFromConnect}
 								state={folderState}
+								isPersonalOneDrive={isPersonalOneDrive}
 								onRetry={() => accountId && loadLocations(accountId)}
 								onOpenPicker={() => setCloudPickerOpen(true)}
 								onDownloadAll={handleDownloadAll}

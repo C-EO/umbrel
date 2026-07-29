@@ -35,6 +35,36 @@ const state = vi.hoisted(() => ({
 		{id: 'dropbox', displayName: 'Dropbox'},
 		{id: 'google-drive', displayName: 'Google Drive'},
 	],
+	clouds: [
+		{
+			id: 'dropbox-personal-root',
+			accountId: 'dropbox-personal',
+			remote: {path: ''},
+			destination: {path: '/Home/Dropbox'},
+			status: {state: 'idle'},
+		},
+		{
+			id: 'dropbox-work-root',
+			accountId: 'dropbox-work',
+			remote: {path: ''},
+			destination: {path: '/Home/Dropbox Work'},
+			status: {state: 'idle'},
+		},
+		{
+			id: 'dropbox-work-projects',
+			accountId: 'dropbox-work',
+			remote: {path: 'Projects'},
+			destination: {path: '/Home/Work Projects'},
+			status: {state: 'idle'},
+		},
+		{
+			id: 'drive-personal-projects',
+			accountId: 'drive-personal',
+			remote: {path: 'Projects'},
+			destination: {path: '/Home/Drive Projects'},
+			status: {state: 'idle'},
+		},
+	],
 }))
 
 vi.mock('react-i18next', () => ({
@@ -73,7 +103,7 @@ vi.mock('@/features/files/components/shared/circular-progress', () => ({Circular
 vi.mock('@/features/files/hooks/use-cloud', () => ({
 	useCloudAccounts: () => ({data: state.accounts}),
 	useCloudProviders: () => ({data: state.providers}),
-	useCloudSyncs: () => ({data: []}),
+	useCloudSyncs: () => ({data: state.clouds, isLoading: false}),
 }))
 vi.mock('@/features/files/hooks/use-navigate', () => ({
 	useNavigate: () => ({currentPath: state.currentPath, navigateToDirectory: state.navigateToDirectory}),
@@ -148,22 +178,43 @@ describe('Cloud sidebar keyboard navigation', () => {
 		keyDown(accounts[1], 'ArrowLeft')
 		expect(document.activeElement).toBe(provider)
 
+		accounts[0].click()
+		expect(state.navigateToDirectory).toHaveBeenLastCalledWith('/Home/Dropbox')
+
 		accounts[1].click()
-		expect(state.navigateToDirectory).toHaveBeenCalledWith('/Cloud/dropbox-work')
+		expect(state.navigateToDirectory).toHaveBeenLastCalledWith('/Cloud/dropbox-work')
+
+		const drive = Array.from(container.querySelectorAll<HTMLElement>('[role="treeitem"]')).find((item) =>
+			item.textContent?.includes('Google Drive'),
+		)
+		drive?.click()
+		expect(state.navigateToDirectory).toHaveBeenLastCalledWith('/Cloud/drive-personal')
 	})
 })
 
 describe('Cloud account tile navigation', () => {
-	it('uses a native button that activates the account destination', () => {
+	it('opens a sole root directly and otherwise opens the account listing', () => {
 		act(() => root.render(<CloudAccountsListing />))
-		const accountButton = Array.from(container.querySelectorAll('button')).find((button) =>
+		const personalButton = Array.from(container.querySelectorAll('button')).find((button) =>
 			button.textContent?.includes('Personal'),
 		)
+		const workButton = Array.from(container.querySelectorAll('button')).find((button) =>
+			button.textContent?.includes('Work'),
+		)
+		const driveButton = Array.from(container.querySelectorAll('button')).find((button) =>
+			button.textContent?.includes('Drive account'),
+		)
 
-		expect(accountButton).not.toBeUndefined()
+		expect(personalButton).not.toBeUndefined()
 		expect(container.querySelector('div[role="button"]')).toBeNull()
 
-		accountButton?.click()
-		expect(state.navigateToDirectory).toHaveBeenCalledWith('/Cloud/dropbox-personal')
+		personalButton?.click()
+		expect(state.navigateToDirectory).toHaveBeenLastCalledWith('/Home/Dropbox')
+
+		workButton?.click()
+		expect(state.navigateToDirectory).toHaveBeenLastCalledWith('/Cloud/dropbox-work')
+
+		driveButton?.click()
+		expect(state.navigateToDirectory).toHaveBeenLastCalledWith('/Cloud/drive-personal')
 	})
 })

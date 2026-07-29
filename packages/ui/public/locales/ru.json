@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Скачать все файлы и папки из {{provider}}",
   "files-cloud.folder-error": "Не удалось загрузить папки.",
   "files-cloud.folder-loading": "Загрузка папок из {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Личное хранилище</personalVault> не включено, потому что для доступа к нему Microsoft требует дополнительную проверку личности.",
   "files-cloud.folder-sign-in": "Войти снова",
   "files-cloud.folder-step-title": "Скачать из {{provider}}",
   "files-cloud.folder-title": "Выбери папку в {{provider}}",

@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Az összes fájl és mappa letöltése a(z) {{provider}} szolgáltatásból",
   "files-cloud.folder-error": "Nem sikerült betölteni a mappákat.",
   "files-cloud.folder-loading": "A(z) {{provider}} mappáinak betöltése…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>A Személyes tár</personalVault> nem része a letöltésnek, mert a Microsoft további személyazonosság-ellenőrzést kér a hozzáféréshez.",
   "files-cloud.folder-sign-in": "Újbóli bejelentkezés",
   "files-cloud.folder-step-title": "Letöltés innen: {{provider}}",
   "files-cloud.folder-title": "Válassz egy mappát a(z) {{provider}} szolgáltatásban",

@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Pobierz wszystkie pliki i foldery z {{provider}}",
   "files-cloud.folder-error": "Nie udało się wczytać folderów.",
   "files-cloud.folder-loading": "Wczytywanie folderów z {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Magazyn osobisty</personalVault> nie jest uwzględniony, ponieważ firma Microsoft wymaga dodatkowego potwierdzenia tożsamości, aby uzyskać do niego dostęp.",
   "files-cloud.folder-sign-in": "Zaloguj się ponownie",
   "files-cloud.folder-step-title": "Pobierz z {{provider}}",
   "files-cloud.folder-title": "Wybierz folder w {{provider}}",

@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Baixe todos os arquivos e pastas do seu {{provider}}",
   "files-cloud.folder-error": "Não foi possível carregar as pastas.",
   "files-cloud.folder-loading": "Carregando suas pastas do {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>O Cofre Pessoal</personalVault> não está incluído porque a Microsoft exige uma verificação de identidade adicional para lhe aceder.",
   "files-cloud.folder-sign-in": "Iniciar sessão novamente",
   "files-cloud.folder-step-title": "Baixar de {{provider}}",
   "files-cloud.folder-title": "Escolha uma pasta no {{provider}}",

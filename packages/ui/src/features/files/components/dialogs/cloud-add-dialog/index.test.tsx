@@ -7,7 +7,11 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 import CloudAddDialog from '@/features/files/components/dialogs/cloud-add-dialog'
 
 type Locations = {
-	locations: Array<{id: string; displayName: string; remote: {path: string}}>
+	locations: Array<{
+		id: string
+		displayName: string
+		remote: {path: string; driveType?: 'personal' | 'business'}
+	}>
 	truncated: boolean
 }
 
@@ -31,10 +35,13 @@ const mocks = vi.hoisted(() => ({
 	accounts: [
 		{id: 'account-a', provider: 'dropbox', displayName: 'Account A', connection: {kind: 'oauth'}},
 		{id: 'account-b', provider: 'google-drive', displayName: 'Account B', connection: {kind: 'oauth'}},
+		{id: 'onedrive-personal', provider: 'onedrive', displayName: 'OneDrive Personal', connection: {kind: 'oauth'}},
+		{id: 'onedrive-business', provider: 'onedrive', displayName: 'OneDrive Business', connection: {kind: 'oauth'}},
 	],
 	providers: [
 		{id: 'dropbox', displayName: 'Dropbox'},
 		{id: 'google-drive', displayName: 'Google Drive'},
+		{id: 'onedrive', displayName: 'OneDrive'},
 	],
 }))
 
@@ -133,8 +140,16 @@ vi.mock('./source-step', () => ({
 	),
 }))
 vi.mock('./cloud-folder-step', () => ({
-	CloudFolderStep: ({state, onBack}: {state: string; onBack: () => void}) => (
-		<div data-testid='folder-step' data-state={state}>
+	CloudFolderStep: ({
+		state,
+		isPersonalOneDrive,
+		onBack,
+	}: {
+		state: string
+		isPersonalOneDrive: boolean
+		onBack: () => void
+	}) => (
+		<div data-testid='folder-step' data-state={state} data-personal-onedrive={String(isPersonalOneDrive)}>
 			<button data-testid='folder-back' onClick={onBack}>
 				Back
 			</button>
@@ -184,6 +199,17 @@ const locations = (count: number): Locations => ({
 	truncated: false,
 })
 
+const oneDriveLocation = (driveType: 'personal' | 'business'): Locations => ({
+	locations: [
+		{
+			id: `${driveType}-drive`,
+			displayName: `${driveType} OneDrive`,
+			remote: {path: '/', driveType},
+		},
+	],
+	truncated: false,
+})
+
 describe('Cloud location request generations', () => {
 	it('ignores an older account response after another account is selected', async () => {
 		click('[data-account="account-a"]')
@@ -219,5 +245,23 @@ describe('Cloud location request generations', () => {
 
 		expect(mocks.onDialogOpenChange).toHaveBeenCalledWith(false)
 		expect(container.querySelector('[data-testid="cloud-picker"]')).toBeNull()
+	})
+})
+
+describe('OneDrive location metadata', () => {
+	it('identifies only a personal OneDrive location', async () => {
+		click('[data-account="onedrive-personal"]')
+		await act(async () => mocks.locationRequests.get('onedrive-personal')?.(oneDriveLocation('personal')))
+		expect(container.querySelector('[data-testid="folder-step"]')?.getAttribute('data-personal-onedrive')).toBe('true')
+
+		click('[data-testid="folder-back"]')
+		click('[data-account="onedrive-business"]')
+		await act(async () => mocks.locationRequests.get('onedrive-business')?.(oneDriveLocation('business')))
+		expect(container.querySelector('[data-testid="folder-step"]')?.getAttribute('data-personal-onedrive')).toBe('false')
+
+		click('[data-testid="folder-back"]')
+		click('[data-account="account-a"]')
+		await act(async () => mocks.locationRequests.get('account-a')?.(locations(1)))
+		expect(container.querySelector('[data-testid="folder-step"]')?.getAttribute('data-personal-onedrive')).toBe('false')
 	})
 })

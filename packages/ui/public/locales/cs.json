@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Stáhni všechny soubory a složky z {{provider}}",
   "files-cloud.folder-error": "Složky se nepodařilo načíst.",
   "files-cloud.folder-loading": "Načítání složek z {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Osobní trezor</personalVault> není zahrnutý, protože Microsoft pro přístup vyžaduje dodatečné ověření identity.",
   "files-cloud.folder-sign-in": "Přihlásit se znovu",
   "files-cloud.folder-step-title": "Stáhnout z {{provider}}",
   "files-cloud.folder-title": "Vyber složku v {{provider}}",

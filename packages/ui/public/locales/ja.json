@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "{{provider}}からすべてのファイルとフォルダをダウンロード",
   "files-cloud.folder-error": "フォルダを読み込めませんでした。",
   "files-cloud.folder-loading": "{{provider}}のフォルダを読み込み中…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Personal Vault</personalVault> は含まれません。アクセスするには Microsoft による追加の本人確認が必要です。",
   "files-cloud.folder-sign-in": "もう一度サインイン",
   "files-cloud.folder-step-title": "{{provider}}からダウンロード",
   "files-cloud.folder-title": "{{provider}}内のフォルダを選択",

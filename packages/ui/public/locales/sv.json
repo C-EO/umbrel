@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Ladda ned alla filer och mappar från {{provider}}",
   "files-cloud.folder-error": "Det gick inte att läsa in mappar.",
   "files-cloud.folder-loading": "Läser in dina mappar från {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Personligt valv</personalVault> ingår inte eftersom Microsoft kräver en extra identitetskontroll för åtkomst.",
   "files-cloud.folder-sign-in": "Logga in igen",
   "files-cloud.folder-step-title": "Ladda ned från {{provider}}",
   "files-cloud.folder-title": "Välj en mapp i {{provider}}",

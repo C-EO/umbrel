@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Descarcă toate fișierele și dosarele din {{provider}}",
   "files-cloud.folder-error": "Dosarele nu au putut fi încărcate.",
   "files-cloud.folder-loading": "Se încarcă dosarele tale din {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Seiful personal</personalVault> nu este inclus, deoarece Microsoft solicită o verificare suplimentară a identității pentru acces.",
   "files-cloud.folder-sign-in": "Autentifică-te din nou",
   "files-cloud.folder-step-title": "Descarcă din {{provider}}",
   "files-cloud.folder-title": "Alege un dosar din {{provider}}",

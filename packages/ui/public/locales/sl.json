@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Prenesi vse datoteke in mape iz {{provider}}",
   "files-cloud.folder-error": "Map ni bilo mogoče naložiti.",
   "files-cloud.folder-loading": "Nalaganje tvojih map iz {{provider}} …",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Osebni trezor</personalVault> ni vključen, ker Microsoft za dostop zahteva dodatno preverjanje identitete.",
   "files-cloud.folder-sign-in": "Znova se prijavi",
   "files-cloud.folder-step-title": "Prenos iz {{provider}}",
   "files-cloud.folder-title": "Izberi mapo v {{provider}}",

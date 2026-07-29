@@ -51,6 +51,11 @@ export function cloudBrandName(brand: string | undefined, providers?: CloudProvi
 	)
 }
 
+export function soleRootCloudDestination(clouds: CloudSync[]): string | undefined {
+	const cloud = clouds.length === 1 ? clouds[0] : undefined
+	return cloud?.remote.path.split('/').filter(Boolean).length === 0 ? cloud.destination.path : undefined
+}
+
 // Builds the WebDAV endpoint for a Nextcloud/ownCloud server from the address
 // a user would naturally type ("cloud.example.com"). A pasted URL that already
 // carries the WebDAV path is respected, and plain http is kept for LAN servers.

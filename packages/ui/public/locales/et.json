@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Laadi teenusest {{provider}} alla kõik failid ja kaustad",
   "files-cloud.folder-error": "Kaustu ei saanud laadida.",
   "files-cloud.folder-loading": "Teenuse {{provider}} kaustade laadimine…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Isiklik seif</personalVault> ei kuulu allalaadimisele, sest Microsoft nõuab sellele juurdepääsuks täiendavat isikutuvastust.",
   "files-cloud.folder-sign-in": "Logi uuesti sisse",
   "files-cloud.folder-step-title": "Laadi alla teenusest {{provider}}",
   "files-cloud.folder-title": "Vali teenuses {{provider}} kaust",

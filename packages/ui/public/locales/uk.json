@@ -577,6 +577,7 @@
   "files-cloud.folder-download-all-description": "Завантажити всі файли й папки з {{provider}}",
   "files-cloud.folder-error": "Не вдалося завантажити список папок.",
   "files-cloud.folder-loading": "Завантаження папок із {{provider}}…",
+  "files-cloud.folder-personal-vault-note": "<personalVault>Особисте сховище</personalVault> не включено, оскільки для доступу до нього Microsoft вимагає додаткової перевірки особи.",
   "files-cloud.folder-sign-in": "Увійти знову",
   "files-cloud.folder-step-title": "Завантаження з {{provider}}",
   "files-cloud.folder-title": "Виберіть папку в {{provider}}",

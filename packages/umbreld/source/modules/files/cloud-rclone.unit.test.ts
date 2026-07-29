@@ -215,6 +215,56 @@ describe('CloudRclone', () => {
 		expect(dropboxArgs).not.toContain('--ignore-size')
 	})
 
+	test('excludes Personal Vault only from personal OneDrive root syncs', async () => {
+		const paths = await rclone.ensureAccountDirectory(ACCOUNT_ID)
+		await fsp.writeFile(paths.config, '[cloud]\ntype = onedrive\n', {mode: 0o600})
+
+		const syncOneDrive = async (remote: {
+			path: string
+			folderId: string
+			driveId: string
+			driveType: 'personal' | 'business'
+		}) => {
+			await rclone.sync({
+				accountId: ACCOUNT_ID,
+				provider: 'onedrive',
+				syncId: SYNC_ID,
+				remote,
+				destination: dataDirectory,
+				minimumFreeBytes: 0n,
+			})
+			return JSON.parse(await fsp.readFile(`${paths.config}.args`, 'utf8')) as string[]
+		}
+
+		const personalRootArgs = await syncOneDrive({
+			path: '/',
+			folderId: 'personal-root',
+			driveId: 'personal-drive',
+			driveType: 'personal',
+		})
+		expect(personalRootArgs).toContain('--track-renames')
+		expect(personalRootArgs).toContain('--filter')
+		expect(personalRootArgs).toContain('- /Personal Vault/**')
+
+		const businessRootArgs = await syncOneDrive({
+			path: '/',
+			folderId: 'business-root',
+			driveId: 'business-drive',
+			driveType: 'business',
+		})
+		expect(businessRootArgs).not.toContain('--filter')
+		expect(businessRootArgs).not.toContain('- /Personal Vault/**')
+
+		const personalFolderArgs = await syncOneDrive({
+			path: '/Photos',
+			folderId: 'photos',
+			driveId: 'personal-drive',
+			driveType: 'personal',
+		})
+		expect(personalFolderArgs).not.toContain('--filter')
+		expect(personalFolderArgs).not.toContain('- /Personal Vault/**')
+	})
+
 	test('prioritizes smaller files without delaying the initial transfer', async () => {
 		const paths = await rclone.ensureAccountDirectory(ACCOUNT_ID)
 		await fsp.writeFile(paths.config, '[cloud]\ntype = webdav\n', {mode: 0o600})
