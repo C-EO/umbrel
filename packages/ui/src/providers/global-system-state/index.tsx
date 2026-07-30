@@ -29,7 +29,8 @@ const GlobalSystemStateContext = createContext<{
 	reset: (password: string) => void
 	getError(): RouterError | null
 	clearError(): void
-	// We call this before triggering a custom restart flow (e.g., RAID setup) to prevent error boundary from showing when requests fail.
+	// We call this before triggering a custom restart flow (e.g., RAID setup) to prevent the error boundary
+	// and the status covers from replacing the flow's own progress UI when the device goes down.
 	// Unlike the normal restart flow, this does NOT trigger reload-on-running behavior.
 	suppressErrors: () => void
 } | null>(null)
@@ -49,6 +50,7 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 	// Start over fresh when any of the supported actions is triggered
 	const onMutate = async () => {
 		setTriggered(true)
+		setErrorsSuppressedOnly(false)
 		setFailure(false)
 		setRestoreFailure(false)
 		setShouldReloadOnRunning(false)
@@ -203,8 +205,13 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 
 	// When we come back online, we should continue to show the previous state until we've logged out,
 	// plus, when the action failed, we should show the failure cover until the user interacts with it.
-	const statusToShow =
-		(triggered || failure || restoreFailure) && (!status || status === 'running') ? prevStatus : status
+	// When an external flow owns the restart UX (suppressErrors), render no cover at all — the flow
+	// shows its own progress screen and handles the post-restart redirect itself.
+	const statusToShow = errorsSuppressedOnly
+		? undefined
+		: (triggered || failure || restoreFailure) && (!status || status === 'running')
+			? prevStatus
+			: status
 
 	// Debug info can be activated by adding the local storage key 'debug' with a value of `true`
 	const debugInfo = (

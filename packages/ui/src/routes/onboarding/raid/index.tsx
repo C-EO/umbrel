@@ -4,6 +4,7 @@ import {useTranslation} from 'react-i18next'
 import {useLocation, useNavigate} from 'react-router-dom'
 
 import {AccountCredentials} from '@/routes/onboarding/create-account'
+import {trpcReact} from '@/trpc/trpc'
 
 import {RaidError} from './raid-error'
 import {useDetectStorageDevices} from './use-raid-setup'
@@ -21,6 +22,12 @@ export default function Raid() {
 
 	// Get credentials passed from create-account page via React Router's location.state
 	const credentials = location.state?.credentials as AccountCredentials | undefined
+	const recoverableInstallQ = trpcReact.hardware.raid.hasRecoverableInstall.useQuery(undefined, {
+		enabled: !!credentials,
+		refetchOnWindowFocus: false,
+		retry: false,
+		staleTime: Infinity,
+	})
 
 	// Track minimum display time and detection complete state
 	const [minTimeElapsed, setMinTimeElapsed] = useState(false)
@@ -46,27 +53,32 @@ export default function Raid() {
 
 	// Mark detection as complete once min time elapsed and not detecting
 	useEffect(() => {
-		if (minTimeElapsed && !isDetecting) {
+		if (minTimeElapsed && !isDetecting && !recoverableInstallQ.isLoading) {
 			setDetectionComplete(true)
 		}
-	}, [minTimeElapsed, isDetecting])
+	}, [minTimeElapsed, isDetecting, recoverableInstallQ.isLoading])
 
 	// Navigate to setup if SSDs found (after detection complete)
 	// Note: We only pass credentials, not devices. Setup page fetches its own fresh device list
 	// to avoid stale data issues after hardware changes (e.g., user shuts down to change an SSD, boots up, refreshes current page)
 	useEffect(() => {
-		if (!credentials || error) return
+		if (!credentials || error || recoverableInstallQ.isError) return
 		if (detectionComplete && devices.length > 0) {
 			navigate('/onboarding/raid/setup', {state: {credentials}})
 		}
-	}, [detectionComplete, devices.length, credentials, navigate, error])
+	}, [detectionComplete, devices.length, credentials, navigate, error, recoverableInstallQ.isError])
 
 	// Don't render while redirecting due to missing credentials
 	if (!credentials) return null
 
 	// Show error state if detection failed
-	if (error) {
-		return <RaidError title={error} instructions={t('onboarding.raid.error.detection-instructions')} />
+	if (error || recoverableInstallQ.error) {
+		return (
+			<RaidError
+				title={error ?? t('onboarding.raid.error.detection-failed')}
+				instructions={t('onboarding.raid.error.detection-instructions')}
+			/>
+		)
 	}
 
 	// Show no SSDs state if detection complete but no devices found

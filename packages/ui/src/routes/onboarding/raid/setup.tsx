@@ -27,6 +27,8 @@ import {AccountCredentials} from '@/routes/onboarding/create-account'
 import {trpcReact} from '@/trpc/trpc'
 import {linkClass} from '@/utils/element-classes'
 
+import {RaidError} from './raid-error'
+import {RecoverExistingInstall} from './recover-existing-install'
 import {SsdHealthDialog, useSsdHealthDialog} from './ssd-health-dialog'
 import {SsdSlot, SsdTray} from './ssd-tray'
 import {
@@ -141,6 +143,13 @@ export default function RaidSetup() {
 
 	// Always fetch fresh devices from server in case user shut down to change an SSD and refreshes current url
 	const {devices, isDetecting} = useDetectStorageDevices()
+	const recoverableInstallQ = trpcReact.hardware.raid.hasRecoverableInstall.useQuery(undefined, {
+		enabled: !!credentials,
+		refetchOnWindowFocus: false,
+		retry: false,
+		staleTime: Infinity,
+	})
+	const [setUpAsNew, setSetUpAsNew] = useState(false)
 
 	// FailSafe rendering logic:
 	// ┌─────────────────────────┬─────────────┬─────────────┬─────────────────┐
@@ -250,6 +259,40 @@ export default function RaidSetup() {
 	// Don't render while redirecting
 	if (!credentials || isDetecting || devices.length === 0) {
 		return null
+	}
+
+	if (recoverableInstallQ.isLoading) {
+		return (
+			<Layout
+				title={t('onboarding.raid.recovery.checking.title')}
+				subTitle={t('onboarding.raid.recovery.checking.subtitle')}
+				subTitleMaxWidth={430}
+				showLogo={false}
+			>
+				<img
+					src='/assets/onboarding/pro-front.webp'
+					alt={t('storage-manager.umbrel-pro')}
+					draggable={false}
+					className='w-64 md:w-96'
+				/>
+				<div className='mt-4 w-full max-w-sm'>
+					<Progress />
+				</div>
+			</Layout>
+		)
+	}
+
+	if (recoverableInstallQ.error) {
+		return (
+			<RaidError
+				title={t('onboarding.raid.error.detection-failed')}
+				instructions={t('onboarding.raid.recovery.checking.failed')}
+			/>
+		)
+	}
+
+	if (recoverableInstallQ.data && !setUpAsNew) {
+		return <RecoverExistingInstall devices={devices} onSetUpAsNew={() => setSetUpAsNew(true)} />
 	}
 
 	// --- Event Handlers ---

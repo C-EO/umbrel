@@ -1,0 +1,240 @@
+import {useEffect, useState} from 'react'
+import {useTranslation} from 'react-i18next'
+import {TbAlertTriangleFilled, TbCircleCheckFilled, TbDatabase} from 'react-icons/tb'
+
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import {Layout, primaryButtonProps, secondaryButtonClasss} from '@/layouts/bare/shared'
+import {Progress} from '@/modules/bare/progress'
+import {useGlobalSystemState} from '@/providers/global-system-state/index'
+import {trpcClient, trpcReact} from '@/trpc/trpc'
+
+import {SsdHealthDialog, useSsdHealthDialog} from './ssd-health-dialog'
+import {SsdSlot, SsdTray} from './ssd-tray'
+import {formatSize, getDeviceHealth, StorageDevice} from './use-raid-setup'
+
+type RecoverExistingInstallProps = {
+	devices: StorageDevice[]
+	onSetUpAsNew: () => void
+}
+
+export function RecoverExistingInstall({devices, onSetUpAsNew}: RecoverExistingInstallProps) {
+	const {t} = useTranslation()
+	const {suppressErrors} = useGlobalSystemState()
+	const healthDialog = useSsdHealthDialog()
+	const [restoreRequested, setRestoreRequested] = useState(false)
+	const [restoreFailed, setRestoreFailed] = useState(false)
+	const [showSetUpAsNewDialog, setShowSetUpAsNewDialog] = useState(false)
+
+	const recoverMut = trpcReact.hardware.raid.recoverExistingInstall.useMutation()
+
+	// Poll system status with the vanilla client to detect when the recovery reboot has completed.
+	// The backend sets status to 'restarting' before the mutation resolves, so polls from here on
+	// return 'restarting' until the device goes down, then fail while it reboots — a fresh 'running'
+	// can only mean the reboot finished. We deliberately avoid the shared react-query cache here: it
+	// already holds a stale pre-reboot 'running' from the global system state provider's background
+	// polling, which would trigger the redirect before the reboot even starts.
+	const rebootStarted = recoverMut.data === true
+	useEffect(() => {
+		if (!rebootStarted) return
+		const interval = setInterval(async () => {
+			try {
+				const status = await trpcClient.system.status.query()
+				// Land on `/` and let the router guards route the outcome: login on a successful
+				// recovery, or the RAID error screen if the pool failed to mount.
+				if (status === 'running') window.location.href = '/'
+			} catch {
+				// Expected while the device is down mid-reboot — keep polling
+			}
+		}, 2000)
+		return () => clearInterval(interval)
+	}, [rebootStarted])
+
+	const handleRestore = async () => {
+		suppressErrors()
+		setRestoreRequested(true)
+		setRestoreFailed(false)
+		recoverMut.reset()
+
+		try {
+			const recovered = await recoverMut.mutateAsync()
+			if (!recovered) setRestoreFailed(true)
+		} catch {
+			setRestoreFailed(true)
+		}
+	}
+
+	const slots: (SsdSlot | null)[] = [null, null, null, null]
+	devices.forEach((device) => {
+		const slotIndex = (device.slot ?? 0) - 1
+		if (slotIndex >= 0 && slotIndex < slots.length) {
+			slots[slotIndex] = {
+				size: formatSize(device.roundedSize),
+				hasWarning: getDeviceHealth(device).hasWarning,
+			}
+		}
+	})
+
+	const setUpAsNewDialog = (
+		<AlertDialog open={showSetUpAsNewDialog} onOpenChange={setShowSetUpAsNewDialog}>
+			<AlertDialogContent>
+				<AlertDialogHeader icon={TbAlertTriangleFilled}>
+					<AlertDialogTitle>{t('onboarding.raid.recovery.set-up-new-dialog.title')}</AlertDialogTitle>
+					<AlertDialogDescription>{t('onboarding.raid.recovery.set-up-new-dialog.description')}</AlertDialogDescription>
+				</AlertDialogHeader>
+				<AlertDialogFooter>
+					<AlertDialogAction variant='destructive' onClick={onSetUpAsNew}>
+						{t('onboarding.raid.recovery.set-up-new-dialog.confirm')}
+					</AlertDialogAction>
+					<AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+				</AlertDialogFooter>
+			</AlertDialogContent>
+		</AlertDialog>
+	)
+
+	if (restoreRequested && !restoreFailed) {
+		return (
+			<Layout
+				title={t('onboarding.raid.recovery.restoring.title')}
+				subTitle={t('onboarding.raid.recovery.restoring.subtitle')}
+				subTitleMaxWidth={430}
+				showLogo={false}
+				footer={
+					<div className='w-full max-w-sm'>
+						<p className='text-center text-sm text-white/60'>{t('onboarding.raid.recovery.restoring.warning')}</p>
+					</div>
+				}
+			>
+				<img
+					src='/assets/onboarding/pro-front.webp'
+					alt={t('storage-manager.umbrel-pro')}
+					draggable={false}
+					className='w-64 md:w-96'
+				/>
+				<p className='-mt-4 text-[13px] font-medium text-white/30'>{t('storage-manager.umbrel-pro')}</p>
+				<div className='mt-4 w-full max-w-sm'>
+					<Progress />
+				</div>
+			</Layout>
+		)
+	}
+
+	if (restoreFailed) {
+		const errorMessage = recoverMut.error?.message ?? t('onboarding.raid.recovery.failed.description')
+
+		return (
+			<>
+				<div className='flex flex-1 flex-col items-center justify-center gap-4 px-4'>
+					<TbAlertTriangleFilled className='size-[22px] text-[#F5A623]' />
+					<h1
+						className='text-[20px] font-bold text-white/85'
+						style={{textShadow: '0 0 8px rgba(255, 255, 255, 0.2), 0 0 16px rgba(255, 255, 255, 0.15)'}}
+					>
+						{t('onboarding.raid.recovery.failed.title')}
+					</h1>
+					<p className='max-w-[360px] text-center text-[15px] text-white/70'>{errorMessage}</p>
+					<div className='flex flex-col gap-3 sm:flex-row'>
+						<button onClick={handleRestore} {...primaryButtonProps}>
+							{t('onboarding.raid.try-again')}
+						</button>
+						<button
+							onClick={() => setShowSetUpAsNewDialog(true)}
+							className={`${secondaryButtonClasss} w-full sm:w-fit`}
+						>
+							{t('onboarding.raid.recovery.set-up-new')}
+						</button>
+					</div>
+				</div>
+				{setUpAsNewDialog}
+			</>
+		)
+	}
+
+	return (
+		<div className='flex flex-1 flex-col md:flex-row'>
+			<div className='flex flex-1 flex-col justify-center gap-5 px-4 py-6 md:pr-0 md:pl-6'>
+				<div className='flex flex-col gap-1 md:gap-2'>
+					<h1
+						className='text-[20px] font-bold text-white/85 md:text-[24px]'
+						style={{textShadow: '0 0 8px rgba(255, 255, 255, 0.2), 0 0 16px rgba(255, 255, 255, 0.15)'}}
+					>
+						{t('onboarding.raid.recovery.found.title')}
+					</h1>
+					<p className='max-w-[500px] text-[14px] text-white/50 md:text-[16px]'>
+						{t('onboarding.raid.recovery.found.subtitle')}
+					</p>
+				</div>
+
+				<div className='flex max-w-[500px] items-start gap-3 rounded-xl bg-white/5 p-4'>
+					<div className='relative mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-brand/15'>
+						<TbDatabase className='size-5 text-brand' />
+						<TbCircleCheckFilled className='absolute -right-0.5 -bottom-0.5 size-3.5 text-brand' />
+					</div>
+					<div className='flex flex-col gap-1'>
+						<p className='text-[15px] font-medium text-white/85'>{t('onboarding.raid.recovery.found.install-title')}</p>
+						<p className='text-[13px] leading-relaxed text-white/50'>
+							{t('onboarding.raid.recovery.found.install-description')}
+						</p>
+					</div>
+				</div>
+
+				<p className='max-w-[500px] text-[13px] leading-relaxed text-white/50'>
+					{t('onboarding.raid.recovery.found.sign-in-note')}
+				</p>
+
+				<div className='flex flex-col gap-3 sm:flex-row'>
+					<button
+						onClick={handleRestore}
+						{...primaryButtonProps}
+						className={`${primaryButtonProps.className} w-full sm:w-fit`}
+					>
+						{t('onboarding.raid.recovery.restore')}
+					</button>
+					<button onClick={() => setShowSetUpAsNewDialog(true)} className={`${secondaryButtonClasss} w-full sm:w-fit`}>
+						{t('onboarding.raid.recovery.set-up-new')}
+					</button>
+				</div>
+			</div>
+
+			<div className='hidden flex-1 flex-col items-end justify-center md:-mr-6 md:flex'>
+				<div
+					className='w-[95%]'
+					style={{
+						maskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
+						WebkitMaskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
+					}}
+				>
+					<SsdTray
+						slots={slots}
+						onHealthClick={(slotIndex) => {
+							const device = devices.find((candidate) => candidate.slot === slotIndex + 1)
+							if (device) healthDialog.openDialog(device, slotIndex + 1)
+						}}
+					/>
+				</div>
+				<p className='-mt-20 flex w-[95%] translate-x-4 justify-center text-[18px] font-semibold text-brand'>
+					{t('onboarding.raid.recovery.found.storage-detected')}
+				</p>
+			</div>
+
+			{setUpAsNewDialog}
+
+			{healthDialog.selectedDevice && (
+				<SsdHealthDialog
+					device={healthDialog.selectedDevice.device}
+					slotNumber={healthDialog.selectedDevice.slotNumber}
+					open={healthDialog.open}
+					onOpenChange={healthDialog.onOpenChange}
+				/>
+			)}
+		</div>
+	)
+}
