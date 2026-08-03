@@ -61,7 +61,7 @@ export function SheetLayout() {
 			{isFullscreenRoute && (
 				<>
 					{/* Immediate blur backdrop - renders before lazy component loads */}
-					<div className='fixed inset-0 z-50 transform-gpu bg-black/30 backdrop-blur-xl will-change-[backdrop-filter]' />
+					<div className='fixed inset-0 z-50 transform-gpu bg-black/30 backdrop-blur-xl' />
 					<Suspense fallback={null}>
 						<Outlet />
 					</Suspense>
@@ -92,7 +92,7 @@ export function SheetLayout() {
 					>
 						<SheetFixedTarget />
 						<SheetStickyHeaderTarget />
-						<ScrollArea className='h-full rounded-t-20' viewportRef={scrollRef}>
+						<ScrollArea className='umbrel-window-surface-top h-full' viewportRef={scrollRef}>
 							<div className='flex flex-col gap-5 px-3 pt-6 md:px-[40px] md:pt-12 xl:px-[70px]'>
 								<Suspense>
 									<Outlet />

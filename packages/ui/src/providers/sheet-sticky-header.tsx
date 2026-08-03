@@ -74,7 +74,7 @@ export function SheetStickyHeaderTarget() {
 		<div
 			id={SHEET_HEADER_ID}
 			className={cn(
-				'invisible absolute inset-x-0 top-0 z-50 h-[76px] rounded-t-20 border-b border-white/10 bg-black/50 px-5 backdrop-blur-xl empty:hidden',
+				'umbrel-window-surface-top invisible absolute inset-x-0 top-0 z-50 h-[76px] border-b border-white/10 bg-black/50 px-5 backdrop-blur-xl empty:hidden',
 				showStickyHeader && 'visible',
 			)}
 			style={{

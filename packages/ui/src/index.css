@@ -60,6 +60,153 @@ html {
 	/* Space above the sheet. Putting here because it's used in multiple places for calculations */
 	--sheet-top: 2vh;
 	--wallpaper-blur: 12px;
+
+	/* System material recipe */
+	--material-tint-rgb: 0 0 0;
+	--material-tint-opacity: 0.36;
+	--material-blur: 20px;
+	--material-saturation: 120%;
+	--material-brightness: 90%;
+	--material-border-width: 0.5px;
+	--material-border-opacity: 0.1;
+	--material-shine-opacity: 0.2;
+	--material-shadow-opacity: 0.5;
+	--material-shadow-y: 14px;
+	--material-shadow-blur: 34px;
+	--material-context-menu-radius: 20px;
+	--material-dropdown-radius: 20px;
+	--material-popover-radius: 20px;
+	--material-modal-radius: 24px;
+	--material-item-radius: 16px;
+
+	/* Window surface recipe */
+	--window-radius: 24px;
+	--window-edge-width: 0.5px;
+	--window-edge-opacity: 0.08;
+	--window-shine-opacity: 0.25;
+	--window-background-tint-rgb: 0 0 0;
+	--window-background-tint-opacity: 0.7;
+	--window-background-blur: 40px;
+	--window-background-saturation: 150%;
+	--window-background-brightness: 70%;
+	--window-background-shadow-opacity: 0.8;
+	--window-background-shadow-y: 10px;
+	--window-background-shadow-blur: 64px;
+
+	/* Immersive dialogs run a live backdrop-filter, unlike the sheet's cached
+	   static blur — keep their radius on its own knob so retuning the (free)
+	   sheet blur can never inflate a per-frame filter. */
+	--immersive-blur: 0px;
+}
+
+@layer components {
+	.umbrel-material {
+		-webkit-backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation))
+			brightness(var(--material-brightness));
+		backdrop-filter: blur(var(--material-blur)) saturate(var(--material-saturation))
+			brightness(var(--material-brightness));
+		box-shadow:
+			1px 0 0 rgb(255 255 255 / calc(var(--material-shine-opacity) * 0.3)) inset,
+			-1px 0 0 rgb(255 255 255 / calc(var(--material-shine-opacity) * 0.3)) inset,
+			0 1px 0 rgb(255 255 255 / var(--material-shine-opacity)) inset,
+			0 0.5px 0 rgb(255 255 255 / calc(var(--material-shine-opacity) * 0.5)) inset,
+			0 var(--material-shadow-y) var(--material-shadow-blur) rgb(0 0 0 / var(--material-shadow-opacity));
+		border: var(--material-border-width) solid rgb(255 255 255 / var(--material-border-opacity));
+		background-clip: padding-box;
+		background-color: rgb(var(--material-tint-rgb) / var(--material-tint-opacity));
+	}
+
+	.umbrel-material-context-menu {
+		border-radius: var(--material-context-menu-radius);
+	}
+
+	.umbrel-material-dropdown {
+		border-radius: var(--material-dropdown-radius);
+	}
+
+	.umbrel-material-popover {
+		border-radius: var(--material-popover-radius);
+	}
+
+	.umbrel-material-modal {
+		border-radius: var(--material-modal-radius);
+	}
+
+	.umbrel-material-menu-item {
+		border-radius: var(--material-item-radius);
+	}
+
+	.umbrel-window-surface-top {
+		border-top-right-radius: var(--window-radius);
+		border-top-left-radius: var(--window-radius);
+	}
+
+	.umbrel-window-surface-all {
+		border-radius: var(--window-radius);
+	}
+
+	.umbrel-window-shadow {
+		box-shadow: 0 var(--window-background-shadow-y) var(--window-background-shadow-blur)
+			rgb(0 0 0 / var(--window-background-shadow-opacity));
+	}
+
+	/* Static stand-in for a live backdrop-filter: the same --window-background-*
+	   recipe applied as a regular filter on a wallpaper thumbnail, so the blur is
+	   computed once and cached by the GPU instead of re-sampled every frame. */
+	.umbrel-window-wallpaper {
+		transform: scale(1.2);
+		filter: blur(var(--window-background-blur)) saturate(var(--window-background-saturation))
+			brightness(var(--window-background-brightness));
+		animation: fade-in 700ms ease-out 200ms both;
+		background-position: center;
+		background-size: cover;
+	}
+
+	.umbrel-window-tint {
+		background-color: rgb(var(--window-background-tint-rgb) / var(--window-background-tint-opacity));
+	}
+
+	.umbrel-material.umbrel-window-surface-all {
+		-webkit-backdrop-filter: blur(var(--immersive-blur)) saturate(var(--window-background-saturation))
+			brightness(var(--window-background-brightness));
+		backdrop-filter: blur(var(--immersive-blur)) saturate(var(--window-background-saturation))
+			brightness(var(--window-background-brightness));
+		box-shadow: 0 var(--window-background-shadow-y) var(--window-background-shadow-blur)
+			rgb(0 0 0 / var(--window-background-shadow-opacity));
+		border: 0;
+		background-color: rgb(var(--window-background-tint-rgb) / var(--window-background-tint-opacity));
+	}
+
+	.umbrel-window-chrome {
+		box-shadow:
+			1px 0 0 rgb(255 255 255 / calc(var(--window-shine-opacity) * 0.3)) inset,
+			-1px 0 0 rgb(255 255 255 / calc(var(--window-shine-opacity) * 0.3)) inset,
+			0 1px 0 rgb(255 255 255 / var(--window-shine-opacity)) inset,
+			0 0.5px 0 rgb(255 255 255 / calc(var(--window-shine-opacity) * 0.5)) inset;
+		border: var(--window-edge-width) solid rgb(255 255 255 / var(--window-edge-opacity));
+	}
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+	.umbrel-material {
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+		background-color: rgb(var(--material-tint-rgb) / 0.9);
+	}
+
+	.umbrel-material.umbrel-window-surface-all {
+		background-color: rgb(var(--window-background-tint-rgb) / 0.9);
+	}
+}
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+	.umbrel-material {
+		background-color: rgb(var(--material-tint-rgb) / 0.82);
+	}
+
+	.umbrel-material.umbrel-window-surface-all {
+		background-color: rgb(var(--window-background-tint-rgb) / 0.82);
+	}
 }
 
 /* Global scrollbar styling */

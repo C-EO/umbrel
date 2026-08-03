@@ -48,16 +48,21 @@ function ContextMenuSubContent({
 	ref?: React.Ref<React.ComponentRef<typeof ContextMenuPrimitive.SubContent>>
 }) {
 	return (
-		<ContextMenuPrimitive.SubContent
-			ref={ref}
-			className={cn(contextMenuClasses.content, className)}
-			{...props}
-			// Prevent right-clicks within subcontent from triggering parent context menus
-			onContextMenu={(e) => {
-				e.preventDefault() // Prevent default browser context menu
-				e.stopPropagation()
-			}}
-		/>
+		// Portalled so the parent menu's backdrop-filter doesn't become this
+		// element's backdrop root, which would make its own backdrop-filter
+		// sample an empty region wherever it extends past the parent menu.
+		<ContextMenuPrimitive.Portal>
+			<ContextMenuPrimitive.SubContent
+				ref={ref}
+				className={cn(contextMenuClasses.content, className)}
+				{...props}
+				// Prevent right-clicks within subcontent from triggering parent context menus
+				onContextMenu={(e) => {
+					e.preventDefault() // Prevent default browser context menu
+					e.stopPropagation()
+				}}
+			/>
+		</ContextMenuPrimitive.Portal>
 	)
 }
 

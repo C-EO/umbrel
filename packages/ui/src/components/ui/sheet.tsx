@@ -13,15 +13,15 @@ const SheetPortal = (props: SheetPrimitive.DialogPortalProps) => <SheetPrimitive
 SheetPortal.displayName = SheetPrimitive.Portal.displayName
 
 const sheetVariants = cva(
-	'fixed z-30 gap-4 bg-black/70 contrast-more:bg-black overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-100 data-[state=open]:duration-100 outline-hidden data-[state=closed]:fade-out data-[state=closed]:ease-in fill-mode-both',
+	'fixed z-30 gap-4 contrast-more:bg-black overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-100 data-[state=open]:duration-100 outline-hidden data-[state=closed]:fade-out data-[state=closed]:ease-in fill-mode-both',
 	{
 		variants: {
 			side: {
 				top: 'inset-x-0 top-0 border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
 				bottom:
-					'inset-x-0 bottom-0 data-[state=closed]:slide-out-to-bottom-1/2 data-[state=open]:slide-in-from-bottom-1/2 rounded-t-20',
+					'inset-x-0 bottom-0 data-[state=closed]:slide-out-to-bottom-1/2 data-[state=open]:slide-in-from-bottom-1/2',
 				'bottom-zoom':
-					'inset-x-0 bottom-0 data-[state=closed]:zoom-out-75 data-[state=open]:zoom-in-90 rounded-t-20 data-[state=open]:duration-200 data-[state=closed]:duration-100',
+					'inset-x-0 bottom-0 data-[state=closed]:zoom-out-75 data-[state=open]:zoom-in-90 data-[state=open]:duration-200 data-[state=closed]:duration-100',
 				left: 'inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm',
 				right:
 					'inset-y-0 right-0 h-full w-3/4  border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm',
@@ -58,30 +58,27 @@ function SheetContent({
 			{/* <SheetOverlay /> */}
 			<SheetPrimitive.Content
 				ref={ref}
-				className={cn(sheetVariants({side}), 'transform-gpu will-change-transform', className)}
+				className={cn(
+					sheetVariants({side}),
+					'umbrel-window-shadow umbrel-window-surface-top transform-gpu will-change-[transform]',
+					className,
+				)}
 				{...props}
 			>
 				{/* Keep before other elements to prevent auto-focus on other elements. Some element must be focused for accessibility */}
 				{closeButton}
 				<div className='absolute inset-0 bg-black contrast-more:hidden'>
-					{/* Fade in sheet background to avoid white flash when sheet opens.
-					    Using filter (not backdrop-filter) so the blur is computed once and cached
-					    by the GPU, rather than re-sampled every frame during animations/scrolling. */}
+					{/* Fade in the wallpaper to avoid a flash when the sheet opens. The
+					    tint layer above stays constant so the fade happens under it. */}
 					<div
-						className='absolute inset-0 opacity-0'
-						style={{
-							animation: 'fade-in 700ms ease-out 200ms both',
-							backgroundImage: `url(/assets/wallpapers/generated-thumbs/${wallpaper.id}.jpg)`,
-							backgroundSize: 'cover',
-							backgroundPosition: 'center',
-							transform: 'scale(1.2) rotate(180deg)',
-							filter: 'blur(48px) brightness(0.3) saturate(1.2)',
-						}}
+						className='umbrel-window-wallpaper absolute inset-0 opacity-0'
+						style={{backgroundImage: `url(/assets/wallpapers/generated-thumbs/${wallpaper.id}.jpg)`}}
 					/>
+					<div className='umbrel-window-tint absolute inset-0' />
 				</div>
 				{children}
-				{/* Sheet inner glow highlight */}
-				<div className='pointer-events-none absolute inset-0 z-50 rounded-t-20 shadow-sheet-shadow' />
+				{/* Window edge and inner shine */}
+				<div className='umbrel-window-chrome umbrel-window-surface-top pointer-events-none absolute inset-0 z-50' />
 			</SheetPrimitive.Content>
 		</>
 		// </SheetPortal>

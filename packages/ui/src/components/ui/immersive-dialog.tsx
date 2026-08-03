@@ -65,6 +65,7 @@ export function ImmersiveDialogContent({
 			ref={ref}
 			className={cn(
 				dialogContentClass,
+				'umbrel-window-surface-all',
 				dialogContentAnimationClass,
 				dialogContentAnimationSlideClass,
 				short ? immersiveContentShortClass : immersiveContentTallClass,
@@ -84,6 +85,7 @@ export function ImmersiveDialogContent({
 			) : (
 				<div className={immersiveScrollAreaContentsClass}>{children}</div>
 			)}
+			<div className='umbrel-window-chrome umbrel-window-surface-all pointer-events-none absolute inset-0 z-50' />
 			<ImmersiveDialogClose />
 		</DialogContent>
 	)
@@ -104,6 +106,7 @@ export function ImmersiveDialogSplitContent({
 				ref={ref}
 				className={cn(
 					dialogContentClass,
+					'umbrel-window-surface-all',
 					'bg-transparent shadow-none ring-2 ring-white/3', // remove shadow from `dialogContentClass`
 					dialogContentAnimationClass,
 					dialogContentAnimationSlideClass,
@@ -112,14 +115,15 @@ export function ImmersiveDialogSplitContent({
 				)}
 				{...contentProps}
 			>
-				<section className='hidden w-[210px] flex-col items-center justify-center bg-black/40 md:flex md:rounded-l-20'>
+				<section className='hidden w-[210px] flex-col items-center justify-center bg-black/40 md:flex md:[border-top-left-radius:var(--window-radius)] md:[border-bottom-left-radius:var(--window-radius)]'>
 					{side}
 				</section>
-				<section className='min-w-0 flex-1 overflow-hidden bg-dialog-content/70 max-md:rounded-20 md:rounded-r-20'>
+				<section className='umbrel-window-tint min-w-0 flex-1 overflow-hidden max-md:[border-radius:var(--window-radius)] md:[border-top-right-radius:var(--window-radius)] md:[border-bottom-right-radius:var(--window-radius)]'>
 					<ScrollArea dialogInset className='h-full'>
 						<div className={immersiveScrollAreaContentsClass}>{children}</div>
 					</ScrollArea>
 				</section>
+				<div className='umbrel-window-chrome umbrel-window-surface-all pointer-events-none absolute inset-0 z-50' />
 				<ImmersiveDialogClose />
 			</DialogContent>
 		</DialogPortal>
@@ -134,10 +138,7 @@ export function ImmersiveDialogOverlay({ref}: {ref?: React.Ref<HTMLDivElement>})
 	return (
 		<DialogOverlay
 			ref={ref}
-			className={cn(
-				dialogOverlayClass,
-				'transform-gpu bg-black/30 backdrop-blur-xl will-change-[backdrop-filter] contrast-more:backdrop-blur-none',
-			)}
+			className={cn(dialogOverlayClass, 'transform-gpu bg-black/30 backdrop-blur-xl contrast-more:backdrop-blur-none')}
 		/>
 	)
 }

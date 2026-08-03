@@ -3,7 +3,7 @@ import * as React from 'react'
 
 import {cn} from '@/lib/utils'
 
-import {contextMenuClasses} from './shared/menu'
+import {floatingContentAnimationClass, materialSurfaceClasses} from './shared/material'
 
 const Popover = PopoverPrimitive.Root
 
@@ -28,7 +28,12 @@ function PopoverContent({
 				ref={ref}
 				align={align}
 				sideOffset={sideOffset}
-				className={cn(contextMenuClasses.content, className)}
+				className={cn(
+					materialSurfaceClasses.popover,
+					floatingContentAnimationClass,
+					'z-50 min-w-[8rem] p-1 text-white',
+					className,
+				)}
 				{...props}
 				// Prevent right-clicks within content from triggering parent context menus
 				onContextMenu={(e) => {

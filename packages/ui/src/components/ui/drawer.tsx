@@ -42,19 +42,18 @@ function DrawerContent({
 			<DrawerPrimitive.Content
 				ref={ref}
 				className={cn(
-					'fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col gap-5 rounded-t-20 bg-[#0F0F0F] p-5 outline-hidden',
+					'umbrel-window-shadow umbrel-window-surface-top fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto flex-col gap-5 bg-[#0A0A0A] p-5 outline-hidden',
 					fullHeight && 'top-0',
 					className,
 				)}
-				style={{
-					boxShadow: '0px 2px 2px 0px hsla(0, 0%, 100%, 0.05) inset',
-				}}
 				{...props}
 			>
 				{/* -mb-[4px] so height is effectively zero */}
 				<div className='top-6 mx-auto -mb-[4px] h-[4px] w-[40px] shrink-0 rounded-full bg-white/10' />
 				{!withScroll && children}
 				{withScroll && <DrawerScroller>{children}</DrawerScroller>}
+				{/* Window edge and inner shine */}
+				<div className='umbrel-window-chrome umbrel-window-surface-top pointer-events-none absolute inset-0 z-50' />
 			</DrawerPrimitive.Content>
 		</DrawerPortal>
 	)

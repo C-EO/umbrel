@@ -3,6 +3,7 @@ import {useCallback, useEffect, useRef, useState} from 'react'
 import {RiAddLine, RiArrowDownSLine} from 'react-icons/ri'
 import {TbEdit, TbLoader} from 'react-icons/tb'
 
+import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
 import {Popover, PopoverAnchor, PopoverContent} from '@/components/ui/popover'
 import {useShortcuts} from '@/hooks/use-shortcuts'
 import {cn} from '@/lib/utils'
@@ -58,6 +59,30 @@ export function ShortcutPopover({
 	const userEditedTitleRef = useRef(false)
 	const urlInputRef = useRef<HTMLInputElement>(null)
 	const nameInputRef = useRef<HTMLInputElement>(null)
+	const popoverContentRef = useRef<HTMLDivElement>(null)
+
+	// Shake the whole card on failure, reusing the `shake` keyframes from
+	// tailwind.config.ts. Applied as an inline style rather than the
+	// `animate-shake` class: the content's `animation` property belongs to its
+	// enter animation, which wins the specificity fight against the class while
+	// the popover is open, and replays visibly when a shake class is removed.
+	// Parked at `none` afterwards (instead of cleared) for the same reason.
+	useEffect(() => {
+		if (!showShake) return
+		const el = popoverContentRef.current
+		if (!el) return
+		el.style.animation = 'shake 0.7s ease-out both'
+		const onEnd = (e: AnimationEvent) => {
+			if (e.animationName !== 'shake') return
+			el.style.animation = 'none'
+			setShowShake(false)
+		}
+		el.addEventListener('animationend', onEnd)
+		return () => {
+			el.removeEventListener('animationend', onEnd)
+			el.style.animation = 'none'
+		}
+	}, [showShake])
 
 	// Clear pending debounce timeout on unmount
 	useEffect(() => {
@@ -260,56 +285,38 @@ export function ShortcutPopover({
 		<Popover open={open} onOpenChange={onOpenChange}>
 			<PopoverAnchor className='fixed' ref={anchorRef} />
 			<PopoverContent
+				ref={popoverContentRef}
 				align='start'
 				sideOffset={8}
-				className='!backdrop-blur-0 w-[280px] !border-none !bg-transparent !p-0 !shadow-none'
+				className='w-[280px] p-2'
 				onOpenAutoFocus={(e) => e.preventDefault()}
 			>
-				<div
-					className={cn(
-						'rounded-12 border-hpx border-white/10 bg-black/10 p-2 shadow-dock backdrop-blur-2xl',
-						showShake && 'animate-shake',
-					)}
-					onAnimationEnd={() => setShowShake(false)}
-				>
+				<div>
 					{/* URL input row with protocol dropdown */}
 					<div className='flex items-center'>
-						{/* Protocol selector */}
-						<div className='relative'>
-							<button
-								onClick={() => setShowProtocolMenu(!showProtocolMenu)}
-								className='flex items-center gap-0.5 rounded-6 py-1.5 pr-1 pl-1.5 text-12 font-medium -tracking-2 text-white/80 transition-colors hover:bg-white/5 hover:text-white'
-							>
-								<span className='whitespace-nowrap'>{currentProtocolLabel}</span>
-								<RiArrowDownSLine className='h-3 w-3' />
-							</button>
-
-							{/* Protocol dropdown */}
-							<AnimatePresence>
-								{showProtocolMenu && (
-									<motion.div
-										initial={{opacity: 0, y: -4}}
-										animate={{opacity: 1, y: 0}}
-										exit={{opacity: 0, y: -4}}
-										transition={{duration: 0.15}}
-										className='absolute top-full left-0 z-10 mt-1 overflow-hidden rounded-8 border-hpx border-white/10 bg-black/60 shadow-lg'
+						{/* Protocol selector. Uses the shared dropdown so it portals out of
+						    this popover — nested inside it, the popover's backdrop-filter
+						    would make its own backdrop blur sample an empty region. */}
+						<DropdownMenu open={showProtocolMenu} onOpenChange={setShowProtocolMenu} modal={false}>
+							<DropdownMenuTrigger asChild>
+								<button className='flex items-center gap-0.5 rounded-6 py-1.5 pr-1 pl-1.5 text-12 font-medium -tracking-2 text-white/80 transition-colors hover:bg-white/5 hover:text-white'>
+									<span className='whitespace-nowrap'>{currentProtocolLabel}</span>
+									<RiArrowDownSLine className='h-3 w-3' />
+								</button>
+							</DropdownMenuTrigger>
+							{/* onCloseAutoFocus prevented so handleProtocolChange can keep focus on the URL input */}
+							<DropdownMenuContent align='start' className='min-w-0 p-1' onCloseAutoFocus={(e) => e.preventDefault()}>
+								{PROTOCOL_OPTIONS.map((opt) => (
+									<DropdownMenuItem
+										key={opt.value}
+										onSelect={() => handleProtocolChange(opt.value)}
+										className={cn('text-12 whitespace-nowrap', protocol === opt.value ? 'text-white' : 'text-white/70')}
 									>
-										{PROTOCOL_OPTIONS.map((opt) => (
-											<button
-												key={opt.value}
-												onClick={() => handleProtocolChange(opt.value)}
-												className={cn(
-													'flex w-full items-center px-3 py-1.5 text-12 font-medium -tracking-2 whitespace-nowrap transition-colors hover:bg-white/10',
-													protocol === opt.value ? 'text-white' : 'text-white/70',
-												)}
-											>
-												{opt.labelTKey ? t(opt.labelTKey) : opt.label}
-											</button>
-										))}
-									</motion.div>
-								)}
-							</AnimatePresence>
-						</div>
+										{opt.labelTKey ? t(opt.labelTKey) : opt.label}
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuContent>
+						</DropdownMenu>
 
 						<div className='relative min-w-0 flex-1'>
 							<input

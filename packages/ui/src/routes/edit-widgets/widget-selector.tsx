@@ -168,7 +168,7 @@ function WidgetSheet({
 					backdrop={<div className='fixed inset-0 z-30' onClick={() => onOpenChange(false)} />}
 					closeButton={<DialogCloseButton className='absolute top-2.5 right-2.5 z-50' />}
 				>
-					<ScrollArea className='h-full rounded-t-20'>
+					<ScrollArea className='umbrel-window-surface-top h-full'>
 						<div
 							className={cn(
 								'flex h-full flex-col items-start gap-5 px-4 pt-6 opacity-0 md:gap-8 md:px-[80px] md:pt-12',
