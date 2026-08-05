@@ -1,28 +1,30 @@
+import {ReactNode} from 'react'
 import {useTranslation} from 'react-i18next'
 
+import {ChevronDown} from '@/components/chevron-down'
 import {AnimatedNumber} from '@/components/ui/animated-number'
-import {SegmentedControl} from '@/components/ui/segmented-control'
-import {useIsMobile} from '@/hooks/use-is-mobile'
 import {
-	temperatureDescriptions,
-	temperatureDescriptionsKeyed,
-	TemperatureUnit,
-	useTemperatureUnit,
-} from '@/hooks/use-temperature-unit'
-import {cn} from '@/lib/utils'
+	DropdownMenu,
+	DropdownMenuCheckboxItem,
+	DropdownMenuContent,
+	DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import {temperatureDescriptionsKeyed, TemperatureUnit, useTemperatureUnit} from '@/hooks/use-temperature-unit'
 import {isCpuTooHot} from '@/utils/system'
-import {celciusToFahrenheit, temperatureWarningToColor, temperatureWarningToMessage} from '@/utils/temperature'
+import {celciusToFahrenheit, temperatureWarningToMessage} from '@/utils/temperature'
 
-import {cardErrorClass, cardSecondaryValueClass, cardTitleClass, cardValueClass} from './shared'
+import {cardErrorClass} from './shared'
 
 export function CpuTemperatureCardContent({
 	temperatureInCelcius,
 	defaultUnit,
 	warning,
+	headerIcon,
 }: {
 	temperatureInCelcius?: number
 	defaultUnit?: TemperatureUnit
 	warning?: string
+	headerIcon?: ReactNode
 }) {
 	const {t} = useTranslation()
 	const [unit, setUnit] = useTemperatureUnit(defaultUnit)
@@ -31,39 +33,72 @@ export function CpuTemperatureCardContent({
 	const temperatureUnitLabel = temperatureDescriptionsKeyed[unit].label
 	const temperatureMessage = temperatureNumber === 69 ? t('temperature.nice') : temperatureWarningToMessage(warning)
 
-	// 60% opacity to base 16
-	const opacity = (60).toString(16)
 	const isUnknown = temperatureNumber === undefined
 
-	const isMobile = useIsMobile()
+	const indicatorPosition =
+		temperatureInCelcius === undefined ? undefined : Math.max(5, Math.min(95, ((temperatureInCelcius - 35) / 65) * 100))
+
+	const compactValue = (
+		<span className='-mr-2 flex shrink-0 items-center gap-1 font-medium'>
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<button
+						type='button'
+						aria-label={`${t('cpu-temperature')}: ${temperatureNumber ?? '--'}${temperatureUnitLabel}`}
+						className='group flex items-center gap-1 rounded-4 text-white outline-hidden transition-colors hover:text-white/80 focus-visible:ring-2 focus-visible:ring-white/20'
+					>
+						<span>
+							{isUnknown ? '--' : <AnimatedNumber to={temperatureNumber} />}
+							{temperatureUnitLabel}
+						</span>
+						<span className='shrink-0 text-white/30 transition-colors group-hover:text-white/60'>
+							<ChevronDown />
+						</span>
+					</button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align='end'>
+					<DropdownMenuCheckboxItem checked={unit === 'c'} onSelect={() => setUnit('c')}>
+						{t('temperature.celsius')} ({temperatureDescriptionsKeyed.c.label})
+					</DropdownMenuCheckboxItem>
+					<DropdownMenuCheckboxItem checked={unit === 'f'} onSelect={() => setUnit('f')}>
+						{t('temperature.fahrenheit')} ({temperatureDescriptionsKeyed.f.label})
+					</DropdownMenuCheckboxItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
+			<span className='text-white/45'>{temperatureMessage}</span>
+		</span>
+	)
 
 	return (
-		<div className='flex flex-col gap-4'>
-			<div className={cardTitleClass}>{t('temperature')}</div>
-			<div className='flex flex-wrap-reverse items-center justify-between gap-2'>
-				<div className='flex shrink-0 flex-col gap-2.5'>
-					<div className={cardValueClass}>
-						{isUnknown ? '--' : <AnimatedNumber to={temperatureNumber} />} {temperatureUnitLabel}
+		<div className='flex flex-col gap-3'>
+			{headerIcon ? (
+				<>
+					<div className='flex min-w-0 items-start justify-between gap-3 text-13 -tracking-2'>
+						<span className='min-w-0 truncate font-semibold text-white/45'>{t('cpu-temperature')}</span>
+						{headerIcon}
 					</div>
-					<div className='flex items-center gap-2'>
-						<div
-							className={cn('h-[5px] w-[5px] rounded-full ring-3', !isUnknown && 'animate-pulse')}
-							style={
-								{
-									backgroundColor: temperatureWarningToColor(warning),
-									'--tw-ring-color': temperatureWarningToColor(warning) + opacity,
-								} as React.CSSProperties // forcing because of `--tw-ring-color`
-							}
-						/>
-						<div className={cn(cardSecondaryValueClass, 'leading-inter-trimmed')}>{temperatureMessage}</div>
-					</div>
+					<div className='flex justify-start text-13 -tracking-2'>{compactValue}</div>
+				</>
+			) : (
+				<div className='flex items-center justify-between gap-3 text-13 -tracking-2'>
+					<span className='truncate font-semibold text-white/45'>{t('cpu-temperature')}</span>
+					{compactValue}
 				</div>
-				<SegmentedControl
-					size={isMobile ? 'sm' : 'default'}
-					variant='primary'
-					tabs={temperatureDescriptions}
-					value={unit}
-					onValueChange={setUnit}
+			)}
+			<div className='relative pt-[5px]'>
+				{indicatorPosition !== undefined && (
+					<div
+						className='absolute top-0 size-0 -translate-x-1/2 border-x-[5px] border-t-[7px] border-x-transparent border-t-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)] transition-[left] duration-700'
+						style={{left: `${indicatorPosition}%`}}
+					/>
+				)}
+				<div
+					className='h-2 rounded-full border shadow-[0_0_16px_hsl(var(--color-brand)/0.24)]'
+					style={{
+						background:
+							'linear-gradient(90deg, hsl(var(--settings-tone-cold)), hsl(var(--color-brand)), hsl(var(--settings-tone-hot)))',
+						borderColor: 'hsl(var(--settings-tone-temperature-border))',
+					}}
 				/>
 			</div>
 			{isCpuTooHot(warning) && <span className={cardErrorClass}>{t('temperature.too-hot-suggestion')}</span>}

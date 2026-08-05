@@ -1,7 +1,7 @@
 import React, {Suspense, useState} from 'react'
 import {ErrorBoundary} from 'react-error-boundary'
 import {useTranslation} from 'react-i18next'
-import {Route, Routes, useLocation} from 'react-router-dom'
+import {Navigate, Route, Routes, useLocation, useParams} from 'react-router-dom'
 import {keys} from 'remeda'
 import {arrayIncludes} from 'ts-extras'
 
@@ -33,9 +33,6 @@ const SettingsContent = React.lazy(() =>
 )
 const SettingsContentMobile = React.lazy(() =>
 	import('./_components/settings-content-mobile').then((m) => ({default: m.SettingsContentMobile})),
-)
-const MemberSettingsContent = React.lazy(() =>
-	import('./_components/member-settings-content').then((m) => ({default: m.MemberSettingsContent})),
 )
 
 const FileSharingDrawerOrDialog = React.lazy(() => import('@/routes/settings/file-sharing'))
@@ -101,7 +98,7 @@ const routeToDialogMobile: Record<string, React.ComponentType> = {
 	shutdown: ShutdownDialog,
 } as const satisfies Record<SettingsDialogKey, React.ComponentType>
 
-function QueryStringDialog() {
+function QueryStringDialog({isMember}: {isMember: boolean}) {
 	const isMobile = useIsMobile() && !IS_ANDROID
 	const routeToDialog = isMobile ? routeToDialogMobile : routeToDialogDesktop
 
@@ -109,10 +106,21 @@ function QueryStringDialog() {
 	const dialog = params.get('dialog')
 
 	// Prevent breaking if there's a dialog that is rendered somewhere else and not in this map ("logout", for example)
-	const has = dialog && arrayIncludes(dialogKeys, dialog)
+	const isRestrictedMemberAction = isMember && (dialog === 'restart' || dialog === 'shutdown')
+	const has = dialog && !isRestrictedMemberAction && arrayIncludes(dialogKeys, dialog)
 	const Component = has && dialog ? routeToDialog[dialog] : () => null
 
 	return <Component />
+}
+
+function OwnerAccountRedirect() {
+	const {accountTab} = useParams<{accountTab: string}>()
+	const panel = accountTab === 'change-password' ? 'password' : accountTab === 'sessions' ? 'sessions' : 'name'
+	return <Navigate replace to={`/settings/users?ownerPanel=${panel}`} />
+}
+
+function OwnerSessionsRedirect() {
+	return <Navigate replace to='/settings/users?ownerPanel=sessions' />
 }
 
 export function Settings() {
@@ -121,9 +129,8 @@ export function Settings() {
 	const location = useLocation()
 	const isMobile = useIsMobile() && !IS_ANDROID
 
-	// Members get a minimal settings pane instead of the owner's device
-	// dashboard (which is built from owner-only queries). Wait for the role to
-	// be known so the owner dashboard never mounts for a member.
+	// Wait for the role before mounting the settings content so role-restricted
+	// queries and rows never flash while the current account is resolving.
 	const userQ = trpcReact.user.get.useQuery()
 	const isMember = userQ.data?.role === 'member'
 
@@ -139,49 +146,48 @@ export function Settings() {
 	}
 
 	return (
-		<>
-			<SheetHeader className='px-2.5'>
-				<SheetTitle className='leading-none'>{title}</SheetTitle>
+		<div className='contents lg:flex lg:h-full lg:min-h-0 lg:flex-col'>
+			<SheetHeader className='px-2.5 lg:shrink-0 lg:px-0.5 lg:pt-12 lg:pb-5'>
+				<SheetTitle className='leading-none lg:text-36'>{title}</SheetTitle>
 			</SheetHeader>
 			<ErrorBoundary FallbackComponent={ErrorBoundaryCardFallback}>
-				{userQ.isLoading ? null : isMember ? (
-					<MemberSettingsContent />
-				) : isMobile ? (
-					<SettingsContentMobile />
+				{userQ.isLoading ? null : isMobile ? (
+					<SettingsContentMobile isMember={isMember} />
 				) : (
-					<SettingsContent />
+					<SettingsContent isMember={isMember} />
 				)}
 				<Suspense>
-					<Routes>
-						<Route path='/2fa' Component={TwoFactorDialog} />
-						<Route path='/device-info' Component={isMobile ? DeviceInfoDrawer : DeviceInfoDialog} />
-						{!isMobile && <Route path='/account/change-name' Component={ChangeNameDialog} />}
-						{!isMobile && <Route path='/account/change-password' Component={ChangePasswordDialog} />}
-						<Route path='/users' Component={UsersDialog} />
-						<Route path='/sessions' Component={SessionsDialog} />
-						{/* Fall-through `/account` to here. If going to account, always show drawer, even if on desktop */}
-						{<Route path='/account/:accountTab' Component={AccountDrawer} />}
-						{isMobile && <Route path='/wallpaper' Component={WallpaperDrawer} />}
-						<Route path='/wifi' Component={Wifi} />
-						<Route path='/wifi-unsupported' Component={WifiUnsupported} />
-						{/* Backup: mobile drawer (/backups) opens first on mobile to give same options as desktop */}
-						{isMobile && <Route path='/backups' Component={BackupsMobileDrawer} />}
-						<Route path='/backups/*' Component={BackupsRestoreDialog} />
-						{/* Not choosing based on `isMobile` because we don't want the dialog state to get reset if you resize the browser window. But also we want the same `/settings/migration-assistant` path for the first dialog/drawer you see */}
-						<Route path='/migration-assistant' Component={StartMigrationDrawerOrDialog} />
-						{isMobile && <Route path='/language' Component={LanguageDrawer} />}
-						<Route path='/troubleshoot/*' Component={TroubleshootDialog} />
-						<Route path='/terminal/*' Component={TerminalDialog} />
-						{isMobile && <Route path='/software-update' Component={SoftwareUpdateDrawer} />}
-						<Route path='/software-update/confirm' Component={SoftwareUpdateConfirmDialog} />
-						<Route path='/file-sharing' Component={FileSharingDrawerOrDialog} />
-						<Route path='/advanced/:advancedSelection?' Component={AdvancedSettingsDrawerOrDialog} />
-						<Route path='/storage/*' Component={StorageManagerDialog} />
-					</Routes>
-					<QueryStringDialog />
+					{!userQ.isLoading && (
+						<Routes>
+							<Route path='/2fa' Component={TwoFactorDialog} />
+							<Route path='/device-info' Component={isMobile ? DeviceInfoDrawer : DeviceInfoDialog} />
+							{isMember && !isMobile && <Route path='/account/change-name' Component={ChangeNameDialog} />}
+							{isMember && !isMobile && <Route path='/account/change-password' Component={ChangePasswordDialog} />}
+							{!isMember && <Route path='/users' Component={UsersDialog} />}
+							<Route path='/sessions' Component={isMember ? SessionsDialog : OwnerSessionsRedirect} />
+							<Route path='/account/:accountTab' Component={isMember ? AccountDrawer : OwnerAccountRedirect} />
+							{isMobile && <Route path='/wallpaper' Component={WallpaperDrawer} />}
+							<Route path='/wifi' Component={Wifi} />
+							<Route path='/wifi-unsupported' Component={WifiUnsupported} />
+							{/* Backup: mobile drawer (/backups) opens first on mobile to give same options as desktop */}
+							{isMobile && <Route path='/backups' Component={BackupsMobileDrawer} />}
+							<Route path='/backups/*' Component={BackupsRestoreDialog} />
+							{/* Not choosing based on `isMobile` because we don't want the dialog state to get reset if you resize the browser window. But also we want the same `/settings/migration-assistant` path for the first dialog/drawer you see */}
+							<Route path='/migration-assistant' Component={StartMigrationDrawerOrDialog} />
+							{isMobile && <Route path='/language' Component={LanguageDrawer} />}
+							<Route path='/troubleshoot/*' Component={TroubleshootDialog} />
+							<Route path='/terminal/*' Component={TerminalDialog} />
+							{isMobile && <Route path='/software-update' Component={SoftwareUpdateDrawer} />}
+							<Route path='/software-update/confirm' Component={SoftwareUpdateConfirmDialog} />
+							<Route path='/file-sharing' Component={FileSharingDrawerOrDialog} />
+							<Route path='/advanced/:advancedSelection?' Component={AdvancedSettingsDrawerOrDialog} />
+							<Route path='/storage/*' Component={StorageManagerDialog} />
+						</Routes>
+					)}
+					{!userQ.isLoading && <QueryStringDialog isMember={isMember} />}
 				</Suspense>
 			</ErrorBoundary>
-		</>
+		</div>
 	)
 }
 

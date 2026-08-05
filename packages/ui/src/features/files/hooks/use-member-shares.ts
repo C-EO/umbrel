@@ -9,7 +9,7 @@ import type {RouterError} from '@/trpc/trpc'
  * Hook to manage paths shared with member accounts (owner only) and, for
  * members, the paths that have been shared with them.
  */
-export function useMemberShares() {
+export function useMemberShares({enabled = true}: {enabled?: boolean} = {}) {
 	const {t} = useTranslation()
 	const utils = trpcReact.useUtils()
 
@@ -23,13 +23,13 @@ export function useMemberShares() {
 		isLoading: isLoadingMemberShares,
 		isError: isErrorMemberShares,
 	} = trpcReact.files.memberShares.useQuery(undefined, {
-		enabled: isOwner,
+		enabled: enabled && isOwner,
 		staleTime: 15_000,
 	})
 
 	// The paths shared with the current member account
 	const {data: sharedWithMe, isLoading: isLoadingSharedWithMe} = trpcReact.files.sharedWithMe.useQuery(undefined, {
-		enabled: isMember,
+		enabled: enabled && isMember,
 		staleTime: 15_000,
 	})
 

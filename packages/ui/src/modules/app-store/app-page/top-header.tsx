@@ -94,8 +94,9 @@ function BackButton() {
 	}
 
 	if (isMobile) {
+		// Mirrors the sheet's floating close button (layouts/sheet.tsx) — keep the two insets in sync
 		return (
-			<button className={cn(dialogHeaderCircleButtonClass, 'absolute top-2.5 left-2.5 z-50')} onClick={handleBack}>
+			<button className={cn(dialogHeaderCircleButtonClass, 'absolute top-5 left-5 z-[60]')} onClick={handleBack}>
 				<TbCircleArrowLeftFilled className='h-5 w-5' />
 			</button>
 		)

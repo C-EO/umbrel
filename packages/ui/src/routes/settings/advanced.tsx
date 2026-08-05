@@ -4,6 +4,7 @@ import {PiFlaskFill} from 'react-icons/pi'
 import {TbChevronRight} from 'react-icons/tb'
 import {useParams, useSearchParams} from 'react-router-dom'
 
+import {AnimatedHeight} from '@/components/ui/animated-height'
 import {CopyableField} from '@/components/ui/copyable-field'
 import {CoverMessage, CoverMessageParagraph} from '@/components/ui/cover-message'
 import {Dialog, DialogHeader, DialogScrollableContent, DialogTitle} from '@/components/ui/dialog'
@@ -22,10 +23,16 @@ import {HttpsCertificateSettingsPanel} from '@/routes/settings/https-access'
 import {trpcReact} from '@/trpc/trpc'
 import {tw} from '@/utils/tw'
 
+type AdvancedPanel = 'overview' | 'network' | 'https-certificate'
+
 export default function AdvancedSettingsDrawerOrDialog() {
 	const {t} = useTranslation()
 	const title = t('advanced-settings')
 	const dialogProps = useSettingsDialogProps()
+	const {advancedSelection} = useParams<{
+		advancedSelection?: 'beta-program' | 'network' | 'tor'
+	}>()
+	const [searchParams] = useSearchParams()
 
 	const isBetaChannel = useIsBetaChannel()
 
@@ -38,24 +45,19 @@ export default function AdvancedSettingsDrawerOrDialog() {
 
 	// Track the last action (enable/disable) to show appropriate cover message
 	const [torEnabling, setTorEnabling] = React.useState(false)
-	const [showNetwork, setShowNetwork] = React.useState(false)
-	const [showHttpsCertificateSettings, setShowHttpsCertificateSettings] = React.useState(false)
+	const [activePanel, setActivePanel] = React.useState<AdvancedPanel>(() =>
+		advancedSelection === 'network' ? 'network' : 'overview',
+	)
 
 	const handleTorToggle = (checked: boolean) => {
 		setTorEnabling(checked)
 		tor.setEnabled(checked)
 	}
 
-	const {advancedSelection} = useParams<{
-		advancedSelection?: 'beta-program' | 'network' | 'tor'
-	}>()
-	const [searchParams] = useSearchParams()
-
-	// Auto-open network panel if URL has advancedSelection=network
+	// Keep URL-driven shortcuts in sync without coupling manual panel navigation
+	// to the route parameter.
 	React.useEffect(() => {
-		if (advancedSelection === 'network') {
-			setShowNetwork(true)
-		}
+		setActivePanel(advancedSelection === 'network' ? 'network' : 'overview')
 	}, [advancedSelection])
 
 	const remoteTorAccessSettingRow = (
@@ -80,7 +82,7 @@ export default function AdvancedSettingsDrawerOrDialog() {
 
 	const networkSettingRow = (
 		<button
-			onClick={() => setShowNetwork(true)}
+			onClick={() => setActivePanel('network')}
 			className={cn(cardClass, 'pointer-events-auto cursor-pointer text-left transition-colors hover:bg-white/8')}
 		>
 			<CardText title={t('network')} description={t('network-description')} />
@@ -128,28 +130,28 @@ export default function AdvancedSettingsDrawerOrDialog() {
 		</div>
 	)
 
-	const animatedContent = showHttpsCertificateSettings ? (
-		<HttpsCertificateSettingsPanel onBack={() => setShowHttpsCertificateSettings(false)} />
-	) : showNetwork ? (
-		<NetworkPanel
-			onBack={() => setShowNetwork(false)}
-			onOpenHttpsCertificateSettings={() => setShowHttpsCertificateSettings(true)}
-			expandHttpsAccessInstructions={searchParams.get('httpsAccess') === 'guide'}
-		/>
-	) : (
-		mainContent
-	)
+	const content =
+		activePanel === 'https-certificate' ? (
+			<HttpsCertificateSettingsPanel onBack={() => setActivePanel('network')} />
+		) : activePanel === 'network' ? (
+			<NetworkPanel
+				onBack={() => setActivePanel('overview')}
+				onOpenHttpsCertificateSettings={() => setActivePanel('https-certificate')}
+				expandHttpsAccessInstructions={searchParams.get('httpsAccess') === 'guide'}
+			/>
+		) : (
+			mainContent
+		)
+	const showOverview = activePanel === 'overview'
 
 	if (isMobile) {
 		return (
 			<Drawer {...dialogProps}>
 				<DrawerContent fullHeight>
-					{!showNetwork && !showHttpsCertificateSettings && (
-						<DrawerHeader>
-							<DrawerTitle>{title}</DrawerTitle>
-						</DrawerHeader>
-					)}
-					<DrawerScroller>{animatedContent}</DrawerScroller>
+					<DrawerHeader className={cn(!showOverview && 'sr-only')}>
+						<DrawerTitle>{title}</DrawerTitle>
+					</DrawerHeader>
+					<DrawerScroller>{content}</DrawerScroller>
 				</DrawerContent>
 			</Drawer>
 		)
@@ -157,15 +159,15 @@ export default function AdvancedSettingsDrawerOrDialog() {
 
 	return (
 		<Dialog {...dialogProps}>
-			<DialogScrollableContent>
-				<div className='space-y-6 px-5 py-6'>
-					{!showNetwork && !showHttpsCertificateSettings && (
-						<DialogHeader>
+			<DialogScrollableContent showClose>
+				<AnimatedHeight>
+					<div className='space-y-6 px-5 py-6'>
+						<DialogHeader className={cn(!showOverview && 'sr-only')}>
 							<DialogTitle>{title}</DialogTitle>
 						</DialogHeader>
-					)}
-					{animatedContent}
-				</div>
+						{content}
+					</div>
+				</AnimatedHeight>
 			</DialogScrollableContent>
 		</Dialog>
 	)

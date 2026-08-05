@@ -7,10 +7,12 @@ import {cn} from '@/lib/utils'
 
 type Props = React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root> & {
 	viewportRef?: React.RefObject<HTMLDivElement | null>
+	viewportClassName?: string
+	scrollbarClassName?: string
 	ref?: React.Ref<React.ComponentRef<typeof ScrollAreaPrimitive.Root>>
 }
 
-function ScrollArea({className, children, viewportRef, ref, ...props}: Props) {
+function ScrollArea({className, children, viewportRef, viewportClassName, scrollbarClassName, ref, ...props}: Props) {
 	const {scrollerClass, ref: scrollerRef} = useFadeScroller('y')
 	return (
 		<ScrollAreaPrimitive.Root
@@ -26,11 +28,11 @@ function ScrollArea({className, children, viewportRef, ref, ...props}: Props) {
 		 */}
 			<ScrollAreaPrimitive.Viewport
 				ref={mergeRefs([viewportRef, scrollerRef])}
-				className={cn(scrollerClass, 'h-full w-full rounded-[inherit] [&>div]:!block')}
+				className={cn(scrollerClass, 'h-full w-full rounded-[inherit] [&>div]:!block', viewportClassName)}
 			>
 				{children}
 			</ScrollAreaPrimitive.Viewport>
-			<ScrollBar />
+			<ScrollBar className={scrollbarClassName} />
 			<ScrollAreaPrimitive.Corner />
 		</ScrollAreaPrimitive.Root>
 	)

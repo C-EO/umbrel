@@ -80,7 +80,7 @@ html {
 	--material-item-radius: 16px;
 
 	/* Window surface recipe */
-	--window-radius: 24px;
+	--window-radius: 40px;
 	--window-edge-width: 0.5px;
 	--window-edge-opacity: 0.08;
 	--window-shine-opacity: 0.25;
@@ -184,6 +184,51 @@ html {
 			0 1px 0 rgb(255 255 255 / var(--window-shine-opacity)) inset,
 			0 0.5px 0 rgb(255 255 255 / calc(var(--window-shine-opacity) * 0.5)) inset;
 		border: var(--window-edge-width) solid rgb(255 255 255 / var(--window-edge-opacity));
+	}
+
+	/* Rows darken progressively down each section, bottoming out at tone 6 —
+	   rows past the sixth stay at the darkest tone. */
+	.settings-list-group > .settings-list-row {
+		--settings-row-tone: var(--settings-tone-6);
+	}
+
+	.settings-list-group > .settings-list-row:nth-child(1) {
+		--settings-row-tone: var(--settings-tone-1);
+	}
+
+	.settings-list-group > .settings-list-row:nth-child(2) {
+		--settings-row-tone: var(--settings-tone-2);
+	}
+
+	.settings-list-group > .settings-list-row:nth-child(3) {
+		--settings-row-tone: var(--settings-tone-3);
+	}
+
+	.settings-list-group > .settings-list-row:nth-child(4) {
+		--settings-row-tone: var(--settings-tone-4);
+	}
+
+	.settings-list-group > .settings-list-row:nth-child(5) {
+		--settings-row-tone: var(--settings-tone-5);
+	}
+
+	.settings-list-group > .settings-list-row:nth-child(6) {
+		--settings-row-tone: var(--settings-tone-6);
+	}
+
+	.settings-list-icon {
+		box-shadow: 0 1px 0 rgb(255 255 255 / 0.28) inset;
+		background: linear-gradient(to bottom, rgb(255 255 255 / 0.18), rgb(0 0 0 / 0.28)), hsl(var(--settings-row-tone));
+	}
+
+	.settings-edge-material {
+		box-shadow:
+			0 4px 8px rgb(0 0 0 / 0.1),
+			0 1px 0 rgb(255 255 255 / 0.08) inset,
+			0 0.5px 0 rgb(255 255 255 / 0.027) inset,
+			0 -1px 0 rgb(0 0 0 / 0.12) inset;
+		border: 0.1px solid rgb(255 255 255 / 0.04);
+		background-color: rgb(255 255 255 / 0.03);
 	}
 }
 
@@ -299,6 +344,13 @@ html {
 
 .umbrel-fade-scroller-y {
 	mask-image: linear-gradient(to bottom, transparent, red var(--distance1) calc(100% - var(--distance2)), transparent);
+}
+
+/* Mobile settings pins a controls rail to the top of the sheet's scroller. Drop the
+   top half of the fade mask while it's stuck so the rail reads as solid chrome
+   rather than fading out under its own sticky position. */
+.umbrel-fade-scroller-y:has([data-settings-rail-stuck='true']) {
+	mask-image: linear-gradient(to bottom, red 0, red calc(100% - var(--distance2)), transparent);
 }
 
 .umbrel-fade-scroller-x {

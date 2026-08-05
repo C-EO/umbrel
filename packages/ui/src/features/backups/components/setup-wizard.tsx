@@ -251,7 +251,7 @@ export function BackupsSetupWizard() {
 				})
 			}
 			// On success, close the dialog by navigating to Configure
-			navigate('/settings/backups/configure', {preventScrollReset: true})
+			navigate('/settings/backups/configure')
 		} catch {
 			// Error toasts are handled in the hook; remain on this step
 		}
@@ -361,7 +361,7 @@ export function BackupsSetupWizard() {
 					onClose={() => setAlreadyConfiguredOpen(false)}
 					onManage={() => {
 						setAlreadyConfiguredOpen(false)
-						navigate('/settings/backups/configure', {preventScrollReset: true})
+						navigate('/settings/backups/configure')
 					}}
 				/>
 				{/* Modal: shown when the chosen folder contains a backup that is not yet connected here */}
@@ -381,7 +381,7 @@ export function BackupsSetupWizard() {
 							password: connectPassword,
 						})
 						setConnectExistingOpen(false)
-						navigate('/settings/backups/configure', {preventScrollReset: true})
+						navigate('/settings/backups/configure')
 					}}
 					isConnecting={isConnectingExisting}
 				/>

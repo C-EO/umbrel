@@ -13,6 +13,11 @@ type ContextT = {
 	showStickyHeader: boolean
 	hasStickyHeader: boolean
 	setHasStickyHeader: (has: boolean) => void
+	// Lets a page suppress the sheet's floating close button while it renders its
+	// own close affordance (see settings on mobile, where a sticky controls rail
+	// would otherwise sit underneath it).
+	hideCloseButton: boolean
+	setHideCloseButton: (hide: boolean) => void
 }
 
 const StickyContext = createContext<ContextT | null>(null)
@@ -25,7 +30,8 @@ export function SheetStickyHeaderProvider({
 	scrollRef: React.RefObject<HTMLDivElement | null>
 }) {
 	const [hasStickyHeader, setHasStickyHeader] = useState(false)
-	const [showStickyHeader, setShowStickyHeader] = useState(false)
+	const [showScrollStickyHeader, setShowScrollStickyHeader] = useState(false)
+	const [hideCloseButton, setHideCloseButton] = useState(false)
 
 	useEffect(() => {
 		const el = scrollRef.current
@@ -33,9 +39,9 @@ export function SheetStickyHeaderProvider({
 			const scrollTop = scrollRef.current?.scrollTop ?? 0
 			// console.log('scroll', scrollTop)
 			if (scrollTop > SCROLL_THRESHOLD && hasStickyHeader) {
-				setShowStickyHeader(true)
+				setShowScrollStickyHeader(true)
 			} else {
-				setShowStickyHeader(false)
+				setShowScrollStickyHeader(false)
 			}
 		}
 
@@ -44,7 +50,19 @@ export function SheetStickyHeaderProvider({
 		return () => el?.removeEventListener('scroll', scrollHandler)
 	}, [scrollRef, hasStickyHeader])
 
-	return <StickyContext value={{showStickyHeader, hasStickyHeader, setHasStickyHeader}}>{children}</StickyContext>
+	return (
+		<StickyContext
+			value={{
+				showStickyHeader: showScrollStickyHeader,
+				hasStickyHeader,
+				setHasStickyHeader,
+				hideCloseButton,
+				setHideCloseButton,
+			}}
+		>
+			{children}
+		</StickyContext>
+	)
 }
 
 export function useSheetStickyHeader() {

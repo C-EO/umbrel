@@ -13,12 +13,18 @@ export function SegmentedControl<T extends string>({
 	size = 'default',
 	variant = 'default',
 	tabs,
+	ariaLabel,
+	className,
+	tabClassName,
 }: {
 	value?: T
 	onValueChange: (value: T) => void
 	size?: 'default' | 'lg' | 'sm'
-	variant?: 'default' | 'primary'
+	variant?: 'default' | 'primary' | 'muted-primary'
 	tabs: readonly Tab<T>[]
+	ariaLabel?: string
+	className?: string
+	tabClassName?: string
 }) {
 	// When layout shifts, we don't want the layout animation to play
 	const id = useId()
@@ -29,11 +35,16 @@ export function SegmentedControl<T extends string>({
 		<motion.div
 			// `layoutRoot` to prevent it from animating when the layout shifts
 			layoutRoot
+			// Account for horizontally scrollable segmented controls when measuring the moving pill.
+			layoutScroll
+			role='group'
+			aria-label={ariaLabel}
 			className={cn(
 				'flex shrink-0 gap-0 rounded-full border-[0.5px] border-white/6 bg-white/3',
 				size === 'sm' && 'h-[24px] p-1 text-[9px]',
 				size === 'default' && 'h-[30px] p-1 text-12',
 				size === 'lg' && 'h-[40px] p-[5px] text-12',
+				className,
 			)}
 			onClick={() => {
 				if (justTwo && value !== undefined) {
@@ -48,13 +59,17 @@ export function SegmentedControl<T extends string>({
 			{tabs.map((tab) => (
 				<button
 					key={tab.id}
+					type='button'
+					aria-pressed={value === tab.id}
 					className={cn(
 						'group relative flex-grow rounded-full leading-inter-trimmed outline-hidden transition-[box-shadow,background]',
 						value === tab.id && variant === 'primary' && 'focus-visible:ring-2 focus-visible:ring-brand/40',
+						value === tab.id && variant === 'muted-primary' && 'focus-visible:ring-2 focus-visible:ring-white/25',
 						value !== tab.id && 'outline-1 -outline-offset-2 outline-transparent focus-visible:outline-white/10',
 						size === 'sm' && 'px-2',
 						size === 'default' && 'px-2.5',
 						size === 'lg' && 'px-[14px]',
+						tabClassName,
 					)}
 					disabled={!justTwo ? value === tab.id : undefined}
 					onClick={() => onValueChange(tab.id)}
@@ -66,15 +81,21 @@ export function SegmentedControl<T extends string>({
 								'absolute inset-0 z-10 rounded-full',
 								variant === 'default' && 'bg-white/10',
 								variant === 'primary' && 'bg-brand',
+								variant === 'muted-primary' && 'bg-brand/45 shadow-button-highlight-soft-hpx',
 							)}
-							transition={{type: 'spring', bounce: 0.2, duration: 0.4}}
+							transition={
+								variant === 'muted-primary'
+									? {type: 'tween', ease: 'easeInOut', duration: 0.2}
+									: {type: 'spring', bounce: 0.2, duration: 0.4}
+							}
 						/>
 					)}
 					<span
 						className={cn(
 							'relative z-10 transition-opacity duration-200',
 							size === 'lg' && 'font-medium',
-							value !== tab.id && 'opacity-50 group-hover:opacity-80',
+							value !== tab.id && variant !== 'muted-primary' && 'opacity-50 group-hover:opacity-80',
+							value !== tab.id && variant === 'muted-primary' && 'opacity-75 group-hover:opacity-90',
 						)}
 					>
 						{tab.label}

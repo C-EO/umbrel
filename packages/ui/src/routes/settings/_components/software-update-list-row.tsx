@@ -1,5 +1,6 @@
 import {Trans, useTranslation} from 'react-i18next'
-import {RiArrowUpCircleFill, RiCheckboxCircleFill, RiInformationLine, RiRefreshLine} from 'react-icons/ri'
+import {IconType} from 'react-icons'
+import {RiArrowUpCircleFill, RiCheckboxCircleFill} from 'react-icons/ri'
 import {Link} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
@@ -11,7 +12,7 @@ import {useLinkToDialog} from '@/utils/dialog'
 
 import {ListRow} from './list-row'
 
-export function SoftwareUpdateListRow({isActive}: {isActive: boolean}) {
+export function SoftwareUpdateListRow({isActive, icon}: {isActive: boolean; icon?: IconType}) {
 	const {t} = useTranslation()
 	const {state, currentVersion, latestVersion, checkLatest} = useSoftwareUpdate()
 	const linkToDialog = useLinkToDialog()
@@ -19,16 +20,17 @@ export function SoftwareUpdateListRow({isActive}: {isActive: boolean}) {
 	if (state === 'update-available') {
 		return (
 			<ListRow
+				icon={icon}
 				isActive={isActive}
 				title={currentVersion?.name || `umbrelOS ${LOADING_DASH}`}
 				description={
-					<span className='flex items-center gap-1 pb-3'>
+					<span className='flex items-center gap-1'>
 						<Icon component={RiArrowUpCircleFill} className='text-brand' />
 						{t('software-update.new-version', {name: latestVersion?.name || LOADING_DASH})}
 					</span>
 				}
 			>
-				<IconButtonLink icon={RiInformationLine} variant='primary' to='/settings/software-update/confirm'>
+				<IconButtonLink variant='primary' to='/settings/software-update/confirm'>
 					{t('software-update.view')}
 				</IconButtonLink>
 			</ListRow>
@@ -37,10 +39,11 @@ export function SoftwareUpdateListRow({isActive}: {isActive: boolean}) {
 
 	return (
 		<ListRow
+			icon={icon}
 			isActive={isActive}
 			title={currentVersion?.name || `umbrelOS ${LOADING_DASH}`}
 			description={
-				<span className='flex items-center gap-1 pb-3'>
+				<span className='flex items-center gap-1'>
 					{state === 'at-latest' || state === 'checking' ? (
 						<>
 							<Icon component={RiCheckboxCircleFill} className='text-success' />
@@ -50,7 +53,7 @@ export function SoftwareUpdateListRow({isActive}: {isActive: boolean}) {
 								t={t}
 								i18nKey='software-update.see-whats-new'
 								components={{
-									linked: <Link to={linkToDialog('whats-new')} className='underline' />,
+									linked: <Link key='whats-new' to={linkToDialog('whats-new')} className='underline' />,
 								}}
 							/>
 						</>
@@ -65,7 +68,6 @@ export function SoftwareUpdateListRow({isActive}: {isActive: boolean}) {
 			}
 		>
 			<Button onClick={checkLatest}>
-				<Icon component={RiRefreshLine} className={state === 'checking' ? 'animate-spin' : undefined} />
 				{state === 'checking' ? t('software-update.checking') : t('software-update.check')}
 			</Button>
 		</ListRow>

@@ -166,7 +166,7 @@ function WidgetSheet({
 						height: `calc(100dvh - ${selectedCssHeight})`,
 					}}
 					backdrop={<div className='fixed inset-0 z-30' onClick={() => onOpenChange(false)} />}
-					closeButton={<DialogCloseButton className='absolute top-2.5 right-2.5 z-50' />}
+					closeButton={<DialogCloseButton className='absolute top-5 right-5 z-[60]' />}
 				>
 					<ScrollArea className='umbrel-window-surface-top h-full'>
 						<div

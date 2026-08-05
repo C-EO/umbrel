@@ -1,16 +1,15 @@
-import {Globe} from 'lucide-react'
 import {matchSorter} from 'match-sorter'
 import {useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 
 import {ChevronDown} from '@/components/chevron-down'
+import {Button} from '@/components/ui/button'
 import {
 	DropdownMenu,
 	DropdownMenuCheckboxItem,
 	DropdownMenuContent,
 	DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import {IconButton} from '@/components/ui/icon-button'
 import {Input} from '@/components/ui/input'
 import {ScrollArea} from '@/components/ui/scroll-area'
 import {useLanguage} from '@/hooks/use-language'
@@ -31,10 +30,10 @@ export function LanguageDropdownTrigger() {
 
 	return (
 		<DropdownMenuTrigger asChild>
-			<IconButton icon={Globe}>
+			<Button>
 				{languages.find(({code}) => code === activeCode)?.name}
 				<ChevronDown />
-			</IconButton>
+			</Button>
 		</DropdownMenuTrigger>
 	)
 }

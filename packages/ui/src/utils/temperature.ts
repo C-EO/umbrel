@@ -1,4 +1,3 @@
-import {LOADING_DASH} from '@/constants'
 import {t} from '@/utils/i18n'
 
 export function celciusToFahrenheit(temperatureInCelcius?: number) {
@@ -14,20 +13,8 @@ export function formatTemperature(tempCelcius: number | undefined, unit: 'c' | '
 	return `${temp}${label}`
 }
 
-export function temperatureWarningToColor(warning?: string) {
-	if (warning === undefined) return '#CCCCCC'
-
-	if (warning === 'warm') {
-		return '#E6E953'
-	}
-	if (warning === 'hot') {
-		return '#F45252'
-	}
-	return '#96F16B'
-}
-
 export function temperatureWarningToMessage(warning?: string) {
-	if (warning === undefined) return LOADING_DASH
+	if (warning === undefined) return ''
 
 	if (warning === 'normal') {
 		return t('temperature.normal')

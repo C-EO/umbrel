@@ -7,13 +7,11 @@ import {useNavigate} from 'react-router-dom'
 import {range} from 'remeda'
 
 // Pluggable search providers rendered inside the command palette
-// Currently only /features/files uses this
 import {cmdkSearchProviders} from '@/components/cmdk-providers'
 import {CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList} from '@/components/ui/command'
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
 import {Separator} from '@/components/ui/separator'
 import {LOADING_DASH} from '@/constants'
-import backupsIcon from '@/features/backups/assets/backups-icon.png'
 import {
 	APPS_PATH as FILES_APPS_PATH,
 	RECENTS_PATH as FILES_RECENTS_PATH,
@@ -22,7 +20,6 @@ import {
 import {useDebugInstallRandomApps} from '@/hooks/use-debug-install-random-apps'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useLaunchApp} from '@/hooks/use-launch-app'
-import {useQueryParams} from '@/hooks/use-query-params'
 import {useShortcuts} from '@/hooks/use-shortcuts'
 import {cn} from '@/lib/utils'
 import {resolveShortcutUrl} from '@/modules/desktop/shortcut-dialog'
@@ -86,7 +83,6 @@ function CmdkContent() {
 	const {t} = useTranslation()
 	const {setOpen} = useCmdkOpen()
 	const navigate = useNavigate()
-	const {addLinkSearchParams} = useQueryParams()
 	const userApps = useApps()
 	const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -118,15 +114,6 @@ function CmdkContent() {
 			<FrequentApps onLaunchApp={() => setOpen(false)} />
 			<CommandEmpty>{t('no-results-found')}</CommandEmpty>
 			<CommandItem
-				icon={systemAppsKeyed['UMBREL_settings'].icon}
-				onSelect={() => {
-					navigate({pathname: '/settings', search: addLinkSearchParams({dialog: 'restart'})})
-					setOpen(false)
-				}}
-			>
-				{t('cmdk.restart-umbrel')}
-			</CommandItem>
-			<CommandItem
 				icon={systemAppsKeyed['UMBREL_app-store'].icon}
 				onSelect={() => {
 					navigate('/app-store?dialog=updates')
@@ -134,15 +121,6 @@ function CmdkContent() {
 				}}
 			>
 				{t('cmdk.update-all-apps')}
-			</CommandItem>
-			<CommandItem
-				icon={systemAppsKeyed['UMBREL_settings'].icon}
-				onSelect={() => {
-					navigate('/settings/wallpaper')
-					setOpen(false)
-				}}
-			>
-				{t('cmdk.change-wallpaper')}
 			</CommandItem>
 			<CommandItem
 				icon={systemAppsKeyed['UMBREL_live-usage'].icon}
@@ -237,60 +215,15 @@ function CmdkContent() {
 			>
 				{t('files-sidebar.trash')}
 			</SearchItem>
-			<SettingsSearchItem
+			<SearchItem
+				icon={systemAppsKeyed['UMBREL_settings'].icon}
 				value={systemAppsKeyed['UMBREL_settings'].name}
-				onSelect={() => navigate(systemAppsKeyed['UMBREL_settings'].systemAppTo)}
-			/>
-			<SettingsSearchItem
-				value={t('logout')}
-				onSelect={() => navigate({search: addLinkSearchParams({dialog: 'logout'})})}
-			/>
-			<SettingsSearchItem
-				value={t('cmdk.shutdown-umbrel')}
-				onSelect={() => navigate({pathname: 'settings', search: addLinkSearchParams({dialog: 'shutdown'})})}
-			/>
-			{/* ---- */}
-			{/* List rows */}
-			<SettingsSearchItem value={t('change-name')} onSelect={() => navigate('settings/account/change-name')} />
-			<SettingsSearchItem value={t('change-password')} onSelect={() => navigate('settings/account/change-password')} />
-			<SettingsSearchItem value={'wifi'} onSelect={() => navigate('/settings/wifi')}>
-				{t('wifi')}
-			</SettingsSearchItem>
-			<SettingsSearchItem value={'2fa'} onSelect={() => navigate('/settings/2fa')}>
-				{t('2fa')}
-			</SettingsSearchItem>
-			<SettingsSearchItem value={t('remote-tor-access')} onSelect={() => navigate('/settings/advanced/tor')} />
-			<SettingsSearchItem value={t('migration-assistant')} onSelect={() => navigate('/settings/migration-assistant')} />
-			<SettingsSearchItem value={t('language')} onSelect={() => navigate('/settings/language')} />
-			<SettingsSearchItem value={t('troubleshoot')} onSelect={() => navigate('/settings/troubleshoot')} />
-			<SettingsSearchItem value={t('terminal')} onSelect={() => navigate('/settings/terminal')} />
-			<SettingsSearchItem value={t('device-info')} onSelect={() => navigate('/settings/device-info')} />
-			<SettingsSearchItem value={t('software-update.title')} onSelect={() => navigate('/settings/software-update')} />
-			<SettingsSearchItem value={t('factory-reset')} onSelect={() => navigate('/factory-reset')} />
-			<SettingsSearchItem value={t('advanced-settings')} onSelect={() => navigate('/settings/advanced')} />
-			<SettingsSearchItem value={t('beta-program')} onSelect={() => navigate('/settings/advanced/beta-program')} />
-			<SettingsSearchItem value={t('external-dns')} onSelect={() => navigate('/settings/advanced/external-dns')} />
-			<SettingsSearchItem value={t('settings.file-sharing')} onSelect={() => navigate('/settings/file-sharing')} />
-			<SettingsSearchItem value={t('storage-manager')} onSelect={() => navigate('/settings/storage')} />
-			<SearchItem
-				value={t('backups-restore')}
-				icon={<img src={backupsIcon} alt='' className='size-full' />}
 				onSelect={() => {
-					navigate('/settings/backups/restore')
+					navigate(systemAppsKeyed['UMBREL_settings'].systemAppTo)
 					setOpen(false)
 				}}
 			>
-				{t('backups-restore')}
-			</SearchItem>
-			<SearchItem
-				value={t('backups-rewind')}
-				icon={systemAppsKeyed['UMBREL_files'].icon}
-				onSelect={() => {
-					navigate('/files/Home?rewind=open')
-					setOpen(false)
-				}}
-			>
-				{t('backups-rewind')}
+				{systemAppsKeyed['UMBREL_settings'].name}
 			</SearchItem>
 			{readyApps.map((app) => (
 				<SearchItem
@@ -462,30 +395,6 @@ function FrequentApp({
 			<AppIcon src={icon} size={isMobile ? 48 : 64} className='rounded-10 lg:rounded-15' />
 			<div className='w-full truncate text-[10px] -tracking-2 text-white/75 md:text-13'>{name ?? appId}</div>
 		</button>
-	)
-}
-
-const SettingsSearchItem = ({
-	onSelect,
-	value,
-	children,
-}: {
-	onSelect: () => void
-	value: string
-	children?: React.ReactNode
-}) => {
-	const {setOpen} = useCmdkOpen()
-	return (
-		<SearchItem
-			value={value}
-			icon={systemAppsKeyed['UMBREL_settings'].icon}
-			onSelect={() => {
-				onSelect()
-				setOpen(false)
-			}}
-		>
-			{children ?? value}
-		</SearchItem>
 	)
 }
 

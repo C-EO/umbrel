@@ -1,6 +1,6 @@
 import {useTranslation} from 'react-i18next'
 
-import {CmdkSearchProviderProps} from '@/components/cmdk-providers'
+import {type CmdkSearchProviderProps} from '@/components/cmdk-providers'
 import {CommandItem} from '@/components/ui/command'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
 import {useNavigate} from '@/features/files/hooks/use-navigate'

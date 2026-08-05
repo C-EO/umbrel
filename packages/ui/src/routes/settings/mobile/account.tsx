@@ -1,6 +1,5 @@
-import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {useParams} from 'react-router-dom'
+import {useNavigate, useParams} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
 import {
@@ -24,17 +23,18 @@ export function AccountDrawer() {
 	const title = t('account')
 
 	const dialogProps = useSettingsDialogProps()
+	const navigate = useNavigate()
 	const closeDialog = () => dialogProps.onOpenChange(false)
 
 	const tabs = [
 		{id: 'change-name', label: t('name')},
 		{id: 'change-password', label: t('password')},
-		{id: 'sessions', label: t('sessions.title')},
+		{id: 'sessions', label: t('active-logins.title')},
 	] as const
 	type TabId = (typeof tabs)[number]['id']
 
 	const {accountTab} = useParams<{accountTab: TabId}>()
-	const [activeTab, setActiveTab] = useState(accountTab ?? tabs[0].id)
+	const activeTab = tabs.some(({id}) => id === accountTab) ? accountTab! : tabs[0].id
 
 	return (
 		<Drawer {...dialogProps}>
@@ -44,7 +44,12 @@ export function AccountDrawer() {
 					<DrawerDescription>{t('account-description')}</DrawerDescription>
 				</DrawerHeader>
 				<DrawerScroller>
-					<SegmentedControl size='lg' tabs={tabs} value={activeTab} onValueChange={setActiveTab} />
+					<SegmentedControl
+						size='lg'
+						tabs={tabs}
+						value={activeTab}
+						onValueChange={(tab) => navigate(`/settings/account/${tab}`, {replace: true})}
+					/>
 					{activeTab === 'change-name' && <ChangeName closeDialog={closeDialog} />}
 					{activeTab === 'change-password' && <ChangePassword closeDialog={closeDialog} />}
 					{activeTab === 'sessions' && <SessionsPanel />}

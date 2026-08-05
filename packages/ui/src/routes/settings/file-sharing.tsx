@@ -350,7 +350,7 @@ export default function FileSharingDrawerOrDialog() {
 
 	return (
 		<Dialog {...dialogProps}>
-			<DialogScrollableContent>
+			<DialogScrollableContent showClose>
 				<div className='space-y-3 px-5 py-6'>
 					<DialogHeader>
 						<DialogTitle>{title}</DialogTitle>

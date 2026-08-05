@@ -1,41 +1,22 @@
-import {Suspense, useRef, useState} from 'react'
-import {NavigationType, Outlet, useLocation, useNavigate} from 'react-router-dom'
+import {Suspense, useLayoutEffect, useRef, useState} from 'react'
+import {useTranslation} from 'react-i18next'
+import {Outlet, useLocation, useNavigate} from 'react-router-dom'
 
 import {DialogCloseButton} from '@/components/ui/dialog-close-button'
-import {Sheet, SheetContent} from '@/components/ui/sheet'
+import {Sheet, SheetContent, SheetTitle} from '@/components/ui/sheet'
 import {ScrollArea} from '@/components/ui/sheet-scroll-area'
 import {useScrollRestoration} from '@/hooks/use-scroll-restoration'
+import {cn} from '@/lib/utils'
 import {DockSpacer} from '@/modules/desktop/dock'
 import {SheetFixedTarget} from '@/modules/sheet-top-fixed'
 import {SheetStickyHeaderProvider, SheetStickyHeaderTarget, useSheetStickyHeader} from '@/providers/sheet-sticky-header'
 import {isFullscreenSettingsPath} from '@/routes/settings'
 import {useAfterDelayedClose} from '@/utils/dialog'
 
-// Determine if scroll position should be restored (`true`), reset (`false`) or
-// ignored (`undefined`). SheetLayout is shared accross settings, app store and
-// so on, so we are handling multiple paths here, with the option to precisely
-// handle scroll restoration between any two paths using SheetLayout.
-const scrollRestorationHandler = (thisPathname: string, prevPathname: string, navigationType: NavigationType) => {
-	// Ignore scroll restoration in settings (only has dialogs)
-	const isSettings = /^\/settings(\/|$)/.test(thisPathname)
-	if (isSettings) {
-		return 'ignore'
-	}
-	// Reset scroll position to zero unless going back in history
-	if (navigationType !== 'POP') {
-		return 'reset'
-	}
-	// In app store, restore position when navigating back from an app
-	const isAppStore = /^\/app-store(\/|$)/.test(thisPathname)
-	if (isAppStore) {
-		const cameFromApp = /^\/app-store\/[^/]+$/.test(prevPathname)
-		return cameFromApp ? 'restore' : 'reset'
-	}
-	// Otherwise reset scroll position to zero
-	return 'reset'
-}
+import {getSheetScrollRestorationAction} from './sheet-scroll-restoration'
 
 export function SheetLayout() {
+	const {t} = useTranslation()
 	const navigate = useNavigate()
 	const location = useLocation()
 
@@ -43,10 +24,18 @@ export function SheetLayout() {
 
 	const scrollRef = useRef<HTMLDivElement>(null)
 
-	useScrollRestoration(scrollRef, scrollRestorationHandler)
+	useScrollRestoration(scrollRef, getSheetScrollRestorationAction)
 
 	// For fullscreen settings routes, render content outside the Sheet
 	const isFullscreenRoute = isFullscreenSettingsPath(location.pathname)
+	const isSettingsRoute = /^\/settings(\/|$)/.test(location.pathname)
+
+	// The Sheet layout persists between Files, App Store, and Settings. Clear a
+	// stale outer offset before paint when entering Settings. Desktop Settings
+	// then delegates scrolling to its two contained panes.
+	useLayoutEffect(() => {
+		if (isSettingsRoute) scrollRef.current?.scrollTo(0, 0)
+	}, [isSettingsRoute])
 
 	useAfterDelayedClose(open, () => {
 		// Don't navigate away if we're on a fullscreen route
@@ -92,12 +81,22 @@ export function SheetLayout() {
 					>
 						<SheetFixedTarget />
 						<SheetStickyHeaderTarget />
-						<ScrollArea className='umbrel-window-surface-top h-full' viewportRef={scrollRef}>
-							<div className='flex flex-col gap-5 px-3 pt-6 md:px-[40px] md:pt-12 xl:px-[70px]'>
-								<Suspense>
+						<ScrollArea
+							className='umbrel-window-surface-top h-full'
+							viewportRef={scrollRef}
+							viewportClassName={cn(isSettingsRoute && 'lg:!overflow-hidden lg:[&>div]:!h-full')}
+							scrollbarClassName={cn(isSettingsRoute && 'lg:hidden')}
+						>
+							<div
+								className={cn(
+									'flex flex-col gap-5 px-3 pt-6 md:px-[40px] md:pt-12',
+									isSettingsRoute ? 'lg:h-full lg:min-h-0 lg:gap-0 lg:pt-0 xl:px-[60px]' : 'xl:px-[70px]',
+								)}
+							>
+								<Suspense fallback={<SheetTitle className='sr-only'>{t('loading')}</SheetTitle>}>
 									<Outlet />
 								</Suspense>
-								<DockSpacer className='mt-4' />
+								<DockSpacer className={cn('mt-4', isSettingsRoute && 'lg:hidden')} />
 							</div>
 						</ScrollArea>
 					</SheetContent>
@@ -108,9 +107,11 @@ export function SheetLayout() {
 }
 
 function SheetCloseButton() {
-	const {showStickyHeader} = useSheetStickyHeader()
+	const {showStickyHeader, hideCloseButton} = useSheetStickyHeader()
 
-	if (showStickyHeader) return null
+	// A sticky header portals in its own close button, and a page can suppress this
+	// one outright when it renders its own (mobile settings' sticky controls rail).
+	if (showStickyHeader || hideCloseButton) return null
 
-	return <DialogCloseButton className='absolute top-2.5 right-2.5 z-50' />
+	return <DialogCloseButton className='absolute top-5 right-5 z-[60]' />
 }

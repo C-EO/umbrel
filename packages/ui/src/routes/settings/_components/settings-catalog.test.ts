@@ -1,0 +1,102 @@
+import {TFunction} from 'i18next'
+import {describe, expect, it} from 'vitest'
+
+import {
+	createSettingsCatalog,
+	getDefaultSettingsCommandItems,
+	getSettingsCommandItems,
+	getSettingsCommandTarget,
+	getSettingsPage,
+} from './settings-catalog'
+
+const t = ((key: string) => (key === 'backups-description' ? 'Back up your files, apps, and data' : key)) as TFunction
+
+function catalog(translator = t) {
+	return createSettingsCatalog(translator, {deviceName: 'Umbrel Home'})
+}
+
+describe('settings catalog search', () => {
+	it('indexes nested copy under its top-level rows', () => {
+		for (const query of ['sessions', 'change-password', '2fa']) {
+			expect(getSettingsPage(catalog(), {query}).items.map(({id}) => id)).toContain('users')
+		}
+
+		expect(getSettingsPage(catalog(), {query: 'https'}).items.map(({id}) => id)).toContain('advanced')
+		expect(getSettingsCommandItems(catalog(), 'https').map(({id}) => id)).toContain('https-access')
+	})
+
+	it('derives mounted categories from matching rows', () => {
+		const page = getSettingsPage(catalog(), {query: 'wifi'})
+
+		expect(page.categoryIds).toEqual(['system'])
+		expect(page.items).not.toHaveLength(0)
+		expect(page.items.every(({category}) => category === 'system')).toBe(true)
+	})
+
+	it('matches accentless and compact fuzzy queries', () => {
+		const localizedT = ((key: string) => {
+			if (key === 'network.hostname') return 'Nom d’hôte sécurisé'
+			if (key === 'change-password') return 'Change password'
+			return key
+		}) as TFunction
+		const localizedCatalog = catalog(localizedT)
+
+		expect(getSettingsPage(localizedCatalog, {query: 'hote securise'}).items.map(({id}) => id)).toContain('advanced')
+		expect(getSettingsCommandItems(localizedCatalog, 'hote securise').map(({id}) => id)).toContain('network')
+		expect(getSettingsCommandItems(localizedCatalog, 'chpass').map(({id}) => id)).toContain('change-password')
+	})
+
+	it('resolves page command targets from the page destination when no override exists', () => {
+		const settingsCatalog = catalog()
+		const wallpaper = getSettingsCommandItems(settingsCatalog, 'wallpaper').find(({id}) => id === 'wallpaper')!
+		const support = getSettingsCommandItems(settingsCatalog, 'contact-support').find(({id}) => id === 'support')!
+		const backups = getSettingsCommandItems(settingsCatalog, 'back up your files').find(({id}) => id === 'backups')!
+
+		expect(wallpaper.kind).toBe('page')
+		expect(support.kind).toBe('page')
+		if (wallpaper.kind !== 'page' || support.kind !== 'page') throw new Error('Expected page command items')
+		expect(getSettingsCommandTarget(wallpaper)).toEqual({type: 'navigate', to: wallpaper.to})
+		expect(getSettingsCommandTarget(support)).toEqual({type: 'external', to: support.to})
+		expect(getSettingsCommandTarget(backups)).toEqual({type: 'backups'})
+	})
+
+	it('keeps the established zero-query actions', () => {
+		expect(getDefaultSettingsCommandItems(catalog()).map(({id}) => id)).toEqual(['wallpaper', 'backups', 'restart'])
+	})
+
+	it('gates owner-only settings for members', () => {
+		const memberCatalog = createSettingsCatalog(t, {
+			deviceName: 'Umbrel Home',
+			isMember: true,
+			memberName: 'Alice Member',
+		})
+		const page = getSettingsPage(memberCatalog)
+		const commandIds = getSettingsCommandItems(memberCatalog, 'settings').map(({id}) => id)
+
+		expect(page.items).not.toHaveLength(0)
+		expect(page.items.every(({category}) => category === 'account')).toBe(true)
+		expect(page.items.find(({id}) => id === 'change-name')?.description).toBe('Alice Member')
+		expect(commandIds).not.toContain('advanced')
+		expect(getSettingsCommandItems(memberCatalog, 'restart')).toEqual([])
+		expect(getSettingsCommandItems(memberCatalog, 'change-password').map(({id}) => id)).toContain('change-password')
+	})
+
+	it('filters by category without changing row categories', () => {
+		for (const filter of ['storage', 'system'] as const) {
+			const page = getSettingsPage(catalog(), {filter})
+
+			expect(page.categoryIds).toEqual([filter])
+			expect(page.items).not.toHaveLength(0)
+			expect(page.items.every(({category}) => category === filter)).toBe(true)
+		}
+	})
+
+	it('searches the full catalog independently of the selected filter', () => {
+		const results = getSettingsPage(catalog(), {filter: 'account', query: 'https'})
+
+		expect(results.items.map(({id}) => id)).toContain('advanced')
+		expect(getSettingsPage(catalog(), {filter: 'account'}).items.every(({category}) => category === 'account')).toBe(
+			true,
+		)
+	})
+})

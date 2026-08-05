@@ -26,7 +26,7 @@ function SplitDialog({
 			open={true}
 			onOpenChange={(isOpen) => {
 				if (!isOpen) {
-					navigate(onClosePath, {preventScrollReset: true})
+					navigate(onClosePath)
 				}
 			}}
 		>

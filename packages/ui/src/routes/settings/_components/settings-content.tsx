@@ -1,35 +1,16 @@
-import {Loader2} from 'lucide-react'
-import {useEffect, useState} from 'react'
+import {ChevronRight, Loader2} from 'lucide-react'
+import {Fragment, useEffect, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {FaRegSave} from 'react-icons/fa'
-import {
-	RiComputerLine,
-	RiExpandRightFill,
-	RiKeyLine,
-	RiLogoutCircleRLine,
-	RiPulseLine,
-	RiRestartLine,
-	RiShutDownLine,
-	RiUserLine,
-} from 'react-icons/ri'
-import {
-	TbColumns3,
-	TbHistory,
-	TbServer,
-	TbSettings,
-	TbSettingsMinus,
-	TbShare,
-	TbTool,
-	TbUsers,
-	TbWifi,
-} from 'react-icons/tb'
 import {useNavigate, useParams} from 'react-router-dom'
 
 import {ChevronDown} from '@/components/chevron-down'
+import {FadeScroller} from '@/components/fade-scroller'
+import {Button} from '@/components/ui/button'
+import {ButtonLink} from '@/components/ui/button-link'
 import {Card} from '@/components/ui/card'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
-import {IconButton} from '@/components/ui/icon-button'
 import {IconButtonLink} from '@/components/ui/icon-button-link'
+import {Separator} from '@/components/ui/separator'
 import {Switch} from '@/components/ui/switch'
 import {SETTINGS_SYSTEM_CARDS_ID} from '@/constants'
 import {useBackups} from '@/features/backups/hooks/use-backups'
@@ -37,8 +18,10 @@ import {getDeviceHealth} from '@/features/storage/hooks/use-storage'
 import {useCpuTemperature} from '@/hooks/use-cpu-temperature'
 import {useIsHomeOrPro} from '@/hooks/use-is-home-or-pro'
 import {useIsUmbrelPro} from '@/hooks/use-is-umbrel-pro'
+import {cn} from '@/lib/utils'
 import {DesktopPreviewConnected, DesktopPreviewFrame} from '@/modules/desktop/desktop-preview'
 import {WifiListRowConnectedDescription} from '@/modules/wifi/wifi-list-row-connected-description'
+import {useWallpaper} from '@/providers/wallpaper'
 import {LanguageDropdownContent, LanguageDropdownTrigger} from '@/routes/settings/_components/language-dropdown'
 import {SettingsSummary} from '@/routes/settings/_components/settings-summary'
 import {trpcReact} from '@/trpc/trpc'
@@ -49,175 +32,185 @@ import {CpuCardContent} from './cpu-card-content'
 import {CpuTemperatureCardContent} from './cpu-temperature-card-content'
 import {ListRow} from './list-row'
 import {MemoryCardContent} from './memory-card-content'
-import {ContactSupportLink} from './shared'
+import {createSettingsCatalog, getSettingsPage, SettingsPageItem} from './settings-catalog'
+import {SettingsFilterPills, SettingsItemsGroup, SettingsSearch} from './settings-page-controls'
+import {SettingsFilterId, useSettingsFilterLabels} from './settings-taxonomy'
+import {SettingsAccountAvatarLink} from './shared'
 import {SoftwareUpdateListRow} from './software-update-list-row'
 import {StorageCardContent} from './storage-card-content'
 import {WallpaperPicker} from './wallpaper-picker'
 
-export function SettingsContent() {
+function RowChevron() {
+	return <ChevronRight className='size-4 text-white/55' aria-hidden='true' />
+}
+
+export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 	const {t} = useTranslation()
+	const filterLabels = useSettingsFilterLabels()
 	const navigate = useNavigate()
 	const linkToDialog = useLinkToDialog()
 	const [languageOpen, setLanguageOpen] = useState(false)
+	const [searchQuery, setSearchQuery] = useState('')
+	const [settingsFilter, setSettingsFilter] = useState<SettingsFilterId>('all')
+	const sidebarScrollRef = useRef<HTMLDivElement>(null)
+	const rowsScrollRef = useRef<HTMLDivElement>(null)
 
-	const cpuTemp = useCpuTemperature()
-	const {isUmbrelPro} = useIsUmbrelPro()
+	const cpuTemp = useCpuTemperature({enabled: !isMember})
+	const {isUmbrelPro} = useIsUmbrelPro({enabled: !isMember})
 	const {deviceName} = useIsHomeOrPro()
+	const {wallpaper} = useWallpaper()
 
 	const [userQ, wifiSupportedQ, is2faEnabledQ, raidStatusQ, devicesQ] = trpcReact.useQueries((t) => [
 		t.user.get(),
-		t.wifi.supported(),
-		t.user.is2faEnabled(),
-		// Storage queries only run on Umbrel Pro to avoid unnecessary API calls on other devices
-		t.hardware.raid.getStatus(undefined, {enabled: isUmbrelPro}),
-		t.hardware.internalStorage.getDevices(undefined, {enabled: isUmbrelPro}),
+		t.wifi.supported(undefined, {enabled: !isMember}),
+		t.user.is2faEnabled(undefined, {enabled: isMember}),
+		t.hardware.raid.getStatus(undefined, {enabled: !isMember && isUmbrelPro}),
+		t.hardware.internalStorage.getDevices(undefined, {enabled: !isMember && isUmbrelPro}),
 	])
-
-	const {repositories: backupRepositories, isLoadingRepositories: isLoadingBackups} = useBackups()
-
-	// Check if there's a RAID issue that needs attention
+	const wifiQ = trpcReact.wifi.connected.useQuery(undefined, {enabled: !isMember && wifiSupportedQ.data === true})
+	const {repositories: backupRepositories, isLoadingRepositories: isLoadingBackups} = useBackups({
+		repositoriesEnabled: !isMember,
+	})
 	const hasRaidIssue = raidStatusQ.data?.exists && raidStatusQ.data?.status && raidStatusQ.data?.status !== 'ONLINE'
-
-	// Check if any SSD has health issues
 	const hasHealthIssue = devicesQ.data?.some((device) => getDeviceHealth(device).hasWarning)
-
-	// Show indicator if any storage issue exists
-	// Note: Storage Manager row only renders on Umbrel Pro, so this indicator is Pro-only
 	const hasStorageIssue = hasRaidIssue || hasHealthIssue
-
 	const {settingsDialog} = useParams<{settingsDialog: 'wallpaper' | 'language' | 'software-update'}>()
+	const ownerFirstName = userQ.data?.name ? firstNameFromFullName(userQ.data.name) : ''
+	const ownerHeading = ownerFirstName ? `${ownerFirstName}’s ${t('umbrel')}` : t('umbrel')
 
-	// Scroll to hash
+	const settingsCatalog = useMemo(
+		() => createSettingsCatalog(t, {deviceName, isMember, memberName: userQ.data?.name}),
+		[t, deviceName, isMember, userQ.data?.name],
+	)
+	const settingsPage = useMemo(
+		() => getSettingsPage(settingsCatalog, {query: searchQuery, filter: settingsFilter}),
+		[settingsCatalog, searchQuery, settingsFilter],
+	)
+
 	useEffect(() => {
-		if (location.hash) {
-			const el = document.querySelector(location.hash)
-			if (el) {
-				el.scrollIntoView({behavior: 'instant', block: 'center'})
-			}
-		}
+		if (!location.hash) return
+
+		const target = document.querySelector<HTMLElement>(location.hash)
+		const scroller = sidebarScrollRef.current?.contains(target) ? sidebarScrollRef.current : rowsScrollRef.current
+		if (!scroller || !target) return
+
+		const scrollerRect = scroller.getBoundingClientRect()
+		const targetRect = target.getBoundingClientRect()
+		const centeredTop =
+			scroller.scrollTop + targetRect.top - scrollerRect.top - (scroller.clientHeight - targetRect.height) / 2
+		scroller.scrollTop = Math.max(0, centeredTop)
 	}, [])
 
-	return (
-		<div className='animate-in fade-in'>
-			<div className='grid w-full gap-x-[30px] gap-y-[20px] lg:grid-cols-[280px_auto]'>
-				<div className='flex items-center justify-center'>
-					<DesktopPreviewFrame>
-						<DesktopPreviewConnected />
-					</DesktopPreviewFrame>
-				</div>
-				<Card className='flex flex-wrap items-center justify-between gap-5'>
-					<div>
-						<h2 className='text-24 leading-none font-bold -tracking-4'>
-							{userQ.data?.name && `${firstNameFromFullName(userQ.data?.name)}’s`}{' '}
-							<span className='opacity-40'>{t('umbrel')}</span>
-						</h2>
-						<div className='pt-5' />
-						<SettingsSummary />
-					</div>
-					<div className='flex w-full flex-col items-stretch gap-2.5 md:w-auto md:flex-row'>
-						<IconButtonLink to={linkToDialog('logout')} size='xl' icon={RiLogoutCircleRLine}>
-							{t('logout')}
-						</IconButtonLink>
-						<IconButtonLink to={linkToDialog('restart')} size='xl' icon={RiRestartLine}>
-							{t('restart')}
-						</IconButtonLink>
-						<IconButtonLink to={linkToDialog('shutdown')} size='xl' text='destructive' icon={RiShutDownLine}>
-							{t('shut-down')}
-						</IconButtonLink>
-					</div>
-				</Card>
-				<div className='flex flex-col gap-3'>
-					<Card>
-						<StorageCardContent />
-					</Card>
-					{/* Choosing middle card because we wanna scroll to center to likely see them all */}
-					<Card id={SETTINGS_SYSTEM_CARDS_ID}>
-						<MemoryCardContent />
-					</Card>
-					<Card>
-						<CpuCardContent />
-					</Card>
-					<Card>
-						<CpuTemperatureCardContent warning={cpuTemp.warning} temperatureInCelcius={cpuTemp.temperature} />
-					</Card>
-					<div className='mx-auto'>
-						<IconButtonLink icon={RiPulseLine} to={linkToDialog('live-usage')}>
-							{t('open-live-usage')}
-						</IconButtonLink>
-					</div>
-					<div className='flex-1' />
-					<ContactSupportLink className='max-lg:hidden' />
-				</div>
-				<Card className='umbrel-divide-y overflow-hidden !py-0'>
-					<ListRow title={t('account')} description={t('account-description')}>
-						<div className='flex flex-wrap gap-2 pt-3'>
-							<IconButtonLink to={'account/change-name'} icon={RiUserLine}>
-								{t('change-name')}
-							</IconButtonLink>
-							<IconButtonLink to={'account/change-password'} icon={RiKeyLine}>
-								{t('change-password')}
-							</IconButtonLink>
-							<IconButtonLink to={'sessions'} icon={RiComputerLine}>
-								{t('sessions.title')}
-							</IconButtonLink>
-						</div>
-					</ListRow>
+	const resetRowsScroll = () => rowsScrollRef.current?.scrollTo(0, 0)
+
+	const handleFilterSelect = (filter: SettingsFilterId) => {
+		setSettingsFilter(filter)
+		resetRowsScroll()
+	}
+
+	const handleSearchChange = (query: string) => {
+		setSearchQuery(query)
+		resetRowsScroll()
+	}
+
+	// The preview renders the whole app grid, including layout-animated icons. It is
+	// independent of search, so keep it out of the search keystroke render path.
+	const desktopPreview = useMemo(
+		() => (
+			<DesktopPreviewFrame>
+				<DesktopPreviewConnected />
+			</DesktopPreviewFrame>
+		),
+		[],
+	)
+
+	const renderSettingsItem = (item: SettingsPageItem) => {
+		switch (item.id) {
+			case '2fa':
+				return (
 					<ListRow
-						title={t('wallpaper')}
-						description={t('wallpaper-description')}
+						icon={item.icon}
+						title={item.title}
+						description={item.description}
+						disabled={is2faEnabledQ.isLoading}
+					>
+						<Switch checked={is2faEnabledQ.data ?? false} onCheckedChange={() => navigate(item.to)} />
+					</ListRow>
+				)
+			case 'wallpaper':
+				return (
+					<ListRow
+						icon={item.icon}
+						title={item.title}
+						description={item.description}
 						isActive={settingsDialog === 'wallpaper'}
 					>
-						{/* -mx-2 so that when last item is active, it right aligns with other list row buttons, and first item aligns on mobile when picker wrapped down */}
-						{/* w-full to prevent overflow issues */}
-						<div className='-mx-2 max-w-full'>
-							<WallpaperPicker />
+						<div className='-mx-2 max-w-[170px]'>
+							<WallpaperPicker maxW={170} />
 						</div>
 					</ListRow>
-					{wifiSupportedQ.data ? (
-						<WifiSupportedListRow />
-					) : (
-						<ListRow title={t('wifi')} description={t('wifi-description')}>
-							<Switch checked={false} onCheckedChange={() => navigate('wifi-unsupported')} />
-						</ListRow>
-					)}
-					<ListRow title={t('2fa')} description={t('2fa-description')} disabled={is2faEnabledQ.isLoading}>
-						<Switch checked={is2faEnabledQ.data} onCheckedChange={() => navigate('2fa')} />
+				)
+			case 'language':
+				return (
+					<ListRow
+						icon={item.icon}
+						title={item.title}
+						description={item.description}
+						isActive={settingsDialog === 'language'}
+					>
+						<DropdownMenu open={languageOpen} onOpenChange={setLanguageOpen}>
+							<div className="[&>button]:after:absolute [&>button]:after:inset-0 [&>button]:after:cursor-pointer [&>button]:after:content-['']">
+								<LanguageDropdownTrigger />
+							</div>
+							<LanguageDropdownContent open={languageOpen} onOpenChange={setLanguageOpen} />
+						</DropdownMenu>
 					</ListRow>
-					{userQ.data?.role === 'owner' && (
-						<ListRow title={t('users')} description={t('users.description')}>
-							<IconButton icon={TbUsers} onClick={() => navigate('users')}>
-								{t('users.manage')}
-							</IconButton>
-						</ListRow>
-					)}
-					{/* Storage Manager - Umbrel Pro only */}
-					{isUmbrelPro && (
-						<ListRow title={t('storage-manager')} description={t('storage-manager.description')}>
-							<div className='relative'>
+				)
+			case 'wifi': {
+				const supported = wifiSupportedQ.data
+				return (
+					<ListRow
+						icon={item.icon}
+						title={item.title}
+						description={
+							wifiQ.data?.status === 'connected' ? (
+								<WifiListRowConnectedDescription network={wifiQ.data} />
+							) : (
+								item.description
+							)
+						}
+						disabled={wifiSupportedQ.isLoading || (supported === true && wifiQ.isLoading)}
+						onClick={() => navigate(supported === false ? '/settings/wifi-unsupported' : item.to)}
+					>
+						<RowChevron />
+					</ListRow>
+				)
+			}
+			case 'storage':
+				return (
+					<ListRow
+						icon={item.icon}
+						title={
+							<span className='flex items-center gap-1.5'>
+								{item.title}
 								{hasStorageIssue && (
-									<div className='absolute top-0 -right-0.5 h-2.5 w-2.5'>
+									<span className='relative size-2.5' role='img' aria-label={t('storage-manager.health.title')}>
 										<span className='absolute inset-0 rounded-full bg-[#FF3434]' />
 										<span className='absolute inset-0 animate-ping rounded-full bg-[#FF3434] opacity-75' />
-									</div>
+									</span>
 								)}
-								<IconButton icon={TbColumns3} onClick={() => navigate('storage')}>
-									{t('storage-manager.manage')}
-								</IconButton>
-							</div>
-						</ListRow>
-					)}
-					<ListRow title={t('settings.file-sharing')} description={t('settings.file-sharing.description')}>
-						<IconButton icon={TbShare} onClick={() => navigate('file-sharing')}>
-							{t('settings.file-sharing.configure')}
-						</IconButton>
+							</span>
+						}
+						description={item.description}
+						onClick={() => navigate(item.to)}
+					>
+						<RowChevron />
 					</ListRow>
-					{/* Backups */}
-					<ListRow title={t('backups')} description={t('backups-description')}>
-						<div className='flex flex-wrap gap-2 pt-3'>
-							{/* There are 2 buttons/dropdowns (Set up/Configure dropdown, Restore dropdown) */}
-							{/* We always render the "Restore" dropdown with Full Restore and Rewind options */}
-							{/* We render the "Set up" dropdown if the user has no backup repo yet, or the "Configure" button if they do*/}
-							{/* If we're still checking for existing backup repos we just show a load spinner in place of the Set up or Configure button */}
+				)
+			case 'backups':
+				return (
+					<ListRow icon={item.icon} title={item.title} description={item.description}>
+						<div className='flex flex-wrap justify-end gap-2'>
 							{isLoadingBackups ? (
 								<div className='flex h-[30px] items-center'>
 									<Loader2 className='size-4 animate-spin text-white/60' aria-label={t('loading')} />
@@ -225,25 +218,27 @@ export function SettingsContent() {
 							) : (backupRepositories?.length ?? 0) === 0 ? (
 								<DropdownMenu>
 									<DropdownMenuTrigger asChild>
-										<IconButton icon={FaRegSave}>
+										<Button>
 											{t('backups-setup')}
 											<ChevronDown />
-										</IconButton>
+										</Button>
 									</DropdownMenuTrigger>
 									<DropdownMenuContent align='end' className='min-w-[280px]'>
-										<DropdownMenuItem onSelect={() => navigate('backups/setup?backups-setup-tab=nas')}>
+										<DropdownMenuItem onSelect={() => navigate('/settings/backups/setup?backups-setup-tab=nas')}>
 											<div className='flex flex-col'>
 												<div className='text-14 font-medium'>{t('backups-setup-umbrel-or-nas')}</div>
 												<div className='text-12 text-white/40'>{t('backups-setup-nas-or-umbrel-description')}</div>
 											</div>
 										</DropdownMenuItem>
-										<DropdownMenuItem onSelect={() => navigate('backups/setup?backups-setup-tab=external')}>
+										<DropdownMenuItem onSelect={() => navigate('/settings/backups/setup?backups-setup-tab=external')}>
 											<div className='flex flex-col'>
 												<div className='text-14 font-medium'>{t('external-drive')}</div>
 												<div className='text-12 text-white/40'>{t('backups-setup-external-description')}</div>
 											</div>
 										</DropdownMenuItem>
-										<DropdownMenuItem onSelect={() => navigate('backups/setup?backups-setup-tab=umbrel-private-cloud')}>
+										<DropdownMenuItem
+											onSelect={() => navigate('/settings/backups/setup?backups-setup-tab=umbrel-private-cloud')}
+										>
 											<div className='flex flex-col'>
 												<div className='text-14 font-medium'>{t('backups-setup-umbrel-private-cloud')}</div>
 												<div className='text-12 text-white/40'>
@@ -254,19 +249,17 @@ export function SettingsContent() {
 									</DropdownMenuContent>
 								</DropdownMenu>
 							) : (
-								<IconButtonLink to={'backups/configure'} icon={TbSettings}>
-									{t('backups-configure')}
-								</IconButtonLink>
+								<IconButtonLink to='/settings/backups/configure'>{t('backups-configure')}</IconButtonLink>
 							)}
 							<DropdownMenu>
 								<DropdownMenuTrigger asChild>
-									<IconButton icon={TbHistory}>
+									<Button>
 										{t('backups-restore')}
 										<ChevronDown />
-									</IconButton>
+									</Button>
 								</DropdownMenuTrigger>
 								<DropdownMenuContent align='end' className='min-w-[280px]'>
-									<DropdownMenuItem onSelect={() => navigate('backups/restore')}>
+									<DropdownMenuItem onSelect={() => navigate('/settings/backups/restore')}>
 										<div className='flex flex-col'>
 											<div className='text-14 font-medium'>{t('backups-restore-full')}</div>
 											<div className='text-12 text-white/40'>{t('backups-restore-full-description')}</div>
@@ -282,70 +275,174 @@ export function SettingsContent() {
 							</DropdownMenu>
 						</div>
 					</ListRow>
-					{/* <ListRow title={t('app-store.title')} description={t('app-store.description')}>
-						<IconButton icon={RiEqualizerLine} onClick={() => navigate(linkToDialog('app-store-preferences'))}>
-							{t('preferences')}
-						</IconButton>
-					</ListRow> */}
-					<ListRow title={t('troubleshoot')} description={t('troubleshoot-description')}>
-						<IconButton icon={TbTool} onClick={() => navigate('troubleshoot')}>
-							{t('troubleshoot')}
-						</IconButton>
-					</ListRow>
-					<ListRow title={t('device-info')} description={t('device-info-description')}>
-						<IconButton icon={TbServer} onClick={() => navigate('device-info')}>
-							{t('device-info.view-info')}
-						</IconButton>
-					</ListRow>
-					<ListRow title={t('migration-assistant')} description={t('migration-assistant-description', {deviceName})}>
-						{/* We could use an IconButtonLink but then the ` from `ListRow` wouldn't work */}
-						<IconButton icon={RiExpandRightFill} onClick={() => navigate('migration-assistant')}>
-							{t('migrate')}
-						</IconButton>
-					</ListRow>
-					{/* TODO: Uncomment and enable after fixing translations  */}
+				)
+			case 'software-update':
+				return (
+					<SoftwareUpdateListRow
+						isActive={settingsDialog === 'software-update'}
+						icon={typeof item.icon === 'string' ? undefined : item.icon}
+					/>
+				)
+			case 'support':
+				return (
 					<ListRow
-						title={t('language')}
-						description={t('language-description')}
-						onClick={() => setLanguageOpen(true)}
-						isActive={settingsDialog === 'language'}
+						icon={item.icon}
+						title={item.title}
+						description={item.description}
+						onClick={() => window.open(item.to, '_blank', 'noopener,noreferrer')}
 					>
-						<DropdownMenu open={languageOpen} onOpenChange={setLanguageOpen}>
-							<LanguageDropdownTrigger />
-							<LanguageDropdownContent open={languageOpen} onOpenChange={setLanguageOpen} />
-						</DropdownMenu>
+						<RowChevron />
 					</ListRow>
-					<ListRow title={t('advanced-settings')} description={t('advanced-settings-description')}>
-						<IconButtonLink icon={TbSettingsMinus} to='/settings/advanced'>
-							{t('open')}
-						</IconButtonLink>
+				)
+			default:
+				return (
+					<ListRow icon={item.icon} title={item.title} description={item.description} onClick={() => navigate(item.to)}>
+						<RowChevron />
 					</ListRow>
-					<SoftwareUpdateListRow isActive={settingsDialog === 'software-update'} />
-				</Card>
-				<ContactSupportLink className='lg:hidden' />
+				)
+		}
+	}
+
+	return (
+		<div className='relative h-full min-h-0 animate-in fade-in lg:flex-1'>
+			<div className='grid h-full min-h-0 w-full items-start gap-[34px] lg:grid-cols-[286px_minmax(0,1fr)]'>
+				<aside className='min-h-0 lg:-ml-4 lg:h-full lg:w-[calc(100%+50px)]'>
+					<FadeScroller
+						ref={sidebarScrollRef}
+						direction='y'
+						data-testid='settings-sidebar-scroller'
+						className='umbrel-hide-scrollbar min-h-0 overscroll-contain lg:h-full lg:overflow-y-auto lg:pr-[34px] lg:pb-24 lg:pl-4'
+					>
+						<div className='flex flex-col gap-3'>
+							<div className='flex shrink-0 flex-col items-center gap-5'>
+								<div className='relative isolate'>
+									{wallpaper.id && (
+										<img
+											src={`/assets/wallpapers/generated-small/${wallpaper.id}.jpg`}
+											alt=''
+											aria-hidden='true'
+											className='pointer-events-none absolute top-5 left-3 -z-10 h-[154px] w-[263px] translate-y-5 scale-[0.96] rounded-10 object-cover opacity-65 blur-[22px] saturate-150'
+										/>
+									)}
+									<div className='relative z-10'>{desktopPreview}</div>
+									{userQ.data && (
+										<SettingsAccountAvatarLink name={userQ.data.name} userId={userQ.data.userId} isMember={isMember} />
+									)}
+								</div>
+								<h2
+									title={ownerHeading}
+									aria-label={ownerHeading}
+									className='flex w-full min-w-0 items-center justify-center gap-1 overflow-hidden py-2 text-24 leading-none font-semibold -tracking-4'
+								>
+									{ownerFirstName && <span className='min-w-0 truncate'>{ownerFirstName}’s</span>}
+									<span className='shrink-0 text-white/45'>{t('umbrel')}</span>
+								</h2>
+							</div>
+
+							<SettingsSummary />
+
+							<div className='mt-1.5 mb-3 flex shrink-0 gap-2'>
+								<ButtonLink to={linkToDialog('logout')} className='min-w-0 flex-1 px-1.5 text-11 whitespace-nowrap'>
+									{t('logout')}
+								</ButtonLink>
+								{isMember ? (
+									<>
+										<Button disabled className='min-w-0 flex-1 px-1.5 text-11 whitespace-nowrap'>
+											{t('restart')}
+										</Button>
+										<Button disabled text='destructive' className='min-w-0 flex-1 px-1.5 text-11 whitespace-nowrap'>
+											{t('shut-down')}
+										</Button>
+									</>
+								) : (
+									<>
+										<ButtonLink
+											to={linkToDialog('restart')}
+											className='min-w-0 flex-1 px-1.5 text-11 whitespace-nowrap'
+										>
+											{t('restart')}
+										</ButtonLink>
+										<ButtonLink
+											to={linkToDialog('shutdown')}
+											text='destructive'
+											className='min-w-0 flex-1 px-1.5 text-11 whitespace-nowrap'
+										>
+											{t('shut-down')}
+										</ButtonLink>
+									</>
+								)}
+							</div>
+
+							{!isMember && (
+								<>
+									<Separator />
+									<Card className='settings-edge-material mt-3 shrink-0 rounded-24 !p-5'>
+										<StorageCardContent />
+									</Card>
+									<Card id={SETTINGS_SYSTEM_CARDS_ID} className='settings-edge-material shrink-0 rounded-24 !p-5'>
+										<MemoryCardContent />
+									</Card>
+									<Card className='settings-edge-material shrink-0 rounded-24 !p-5'>
+										<CpuCardContent />
+									</Card>
+									<Card className='settings-edge-material shrink-0 rounded-24 !p-5'>
+										<CpuTemperatureCardContent warning={cpuTemp.warning} temperatureInCelcius={cpuTemp.temperature} />
+									</Card>
+
+									<ButtonLink
+										to={linkToDialog('live-usage')}
+										className='mt-1 min-w-0 shrink-0 self-center px-6 text-11 whitespace-nowrap'
+									>
+										{t('open-live-usage')}
+									</ButtonLink>
+								</>
+							)}
+						</div>
+					</FadeScroller>
+				</aside>
+
+				<main className='min-w-0 lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:overflow-hidden'>
+					<div
+						data-testid='settings-controls-rail'
+						className={cn(
+							'z-20 -mx-2 mb-1 flex shrink-0 items-center justify-between gap-3 px-2 py-2',
+							isMember && 'justify-end',
+						)}
+					>
+						{!isMember && (
+							<SettingsFilterPills
+								activeFilter={settingsFilter}
+								labels={filterLabels}
+								ariaLabel={t('settings.filters-label')}
+								onSelect={handleFilterSelect}
+							/>
+						)}
+						<SettingsSearch value={searchQuery} onChange={handleSearchChange} label={t('search')} />
+					</div>
+
+					<FadeScroller
+						ref={rowsScrollRef}
+						direction='y'
+						data-testid='settings-rows-scroller'
+						className='umbrel-hide-scrollbar min-w-0 overscroll-contain pt-2.5 lg:min-h-0 lg:flex-1 lg:overflow-y-auto lg:pb-24'
+					>
+						<div className='flex flex-col gap-5 pb-8'>
+							{settingsPage.categoryIds.map((categoryId) => (
+								<SettingsItemsGroup key={categoryId} id={categoryId} label={filterLabels[categoryId]} overflowVisible>
+									{settingsPage.itemsByCategory[categoryId].map((item) => (
+										<Fragment key={item.id}>{renderSettingsItem(item)}</Fragment>
+									))}
+								</SettingsItemsGroup>
+							))}
+							{settingsPage.items.length === 0 && (
+								<div className='rounded-24 bg-white/4 px-6 py-12 text-center text-14 text-white/45'>
+									{t('settings.no-results', {query: searchQuery})}
+								</div>
+							)}
+						</div>
+					</FadeScroller>
+				</main>
 			</div>
 		</div>
-	)
-}
-
-function WifiSupportedListRow() {
-	const {t} = useTranslation()
-	const navigate = useNavigate()
-	const wifiQ = trpcReact.wifi.connected.useQuery()
-
-	return wifiQ.data?.status === 'connected' ? (
-		<ListRow
-			title={t('wifi')}
-			description={<WifiListRowConnectedDescription network={wifiQ.data} />}
-			disabled={wifiQ.isLoading}
-		>
-			<IconButtonLink to={'wifi'} icon={TbWifi}>
-				{t('wifi-view-networks')}
-			</IconButtonLink>
-		</ListRow>
-	) : (
-		<ListRow title={t('wifi')} description={t('wifi-description')} disabled={wifiQ.isLoading}>
-			<Switch checked={false} onCheckedChange={() => navigate('wifi')} />
-		</ListRow>
 	)
 }

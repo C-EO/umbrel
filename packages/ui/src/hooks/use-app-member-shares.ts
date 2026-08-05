@@ -7,7 +7,7 @@ import type {RouterError} from '@/trpc/trpc'
 /**
  * Hook to manage apps shared with member accounts (owner only).
  */
-export function useAppMemberShares() {
+export function useAppMemberShares({enabled = true}: {enabled?: boolean} = {}) {
 	const {t} = useTranslation()
 	const utils = trpcReact.useUtils()
 
@@ -19,7 +19,7 @@ export function useAppMemberShares() {
 		isLoading: isLoadingAppMemberShares,
 		isError: isErrorAppMemberShares,
 	} = trpcReact.apps.memberShares.useQuery(undefined, {
-		enabled: isOwner,
+		enabled: enabled && isOwner,
 		staleTime: 15_000,
 	})
 

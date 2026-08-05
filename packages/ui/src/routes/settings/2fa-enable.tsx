@@ -21,13 +21,13 @@ import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useSettingsDialogProps} from '@/routes/settings/_components/shared'
 import {tw} from '@/utils/tw'
 
-export default function TwoFactorEnableDialog() {
+export default function TwoFactorEnableDialog({closeTo}: {closeTo?: string}) {
 	const {t} = useTranslation()
 	const title = t('2fa.enable.title')
 	const scanThisMessage = t('2fa.enable.scan-this')
 
 	const isMobile = useIsMobile()
-	const dialogProps = useSettingsDialogProps()
+	const dialogProps = useSettingsDialogProps({closeTo})
 
 	// const dialogProps = useDialogOpenProps('2fa-enable')
 	const {enable, totpUri, generateTotpUri} = use2fa(() => dialogProps.onOpenChange(false))

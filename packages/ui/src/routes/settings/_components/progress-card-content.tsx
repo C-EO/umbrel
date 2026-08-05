@@ -1,34 +1,44 @@
 import {Progress} from '@/components/ui/progress'
-import {cn} from '@/lib/utils'
-
-import {cardSecondaryValueClass, cardTitleClass, cardValueClass, cardValueSubClass} from './shared'
 
 export function ProgressStatCardContent({
 	title,
 	value,
 	valueSub,
-	secondaryValue,
 	progress,
 	afterChildren,
+	headerIcon,
 }: {
-	title?: string
+	title: string
 	value?: string
 	valueSub?: string
-	secondaryValue?: string
 	progress: number
 	afterChildren?: React.ReactNode
+	headerIcon?: React.ReactNode
 }) {
+	const compactValue = (
+		<span className='flex min-w-0 items-baseline gap-1 truncate font-medium text-white'>
+			<span className='truncate'>{value}</span>
+			<span className='truncate text-white/45'>{valueSub}</span>
+		</span>
+	)
+
 	return (
-		<div className='flex flex-col gap-4'>
-			<div className={cardTitleClass}>{title}</div>
-			<div className='flex items-baseline justify-between gap-4 truncate text-17 leading-tight'>
-				<div className='flex items-baseline gap-1 truncate'>
-					<span className={cardValueClass}>{value}</span>{' '}
-					<span className={cn(cardValueSubClass, 'hidden sm:block')}>{valueSub}</span>
+		<div className='flex flex-col gap-3'>
+			{headerIcon ? (
+				<>
+					<div className='flex min-w-0 items-start justify-between gap-3 text-13 -tracking-2'>
+						<span className='min-w-0 truncate font-semibold text-white/45'>{title}</span>
+						{headerIcon}
+					</div>
+					<div className='flex min-w-0 justify-start text-13 -tracking-2'>{compactValue}</div>
+				</>
+			) : (
+				<div className='flex min-w-0 items-center justify-between gap-4 text-13 -tracking-2'>
+					<span className='font-semibold text-white/45'>{title}</span>
+					{compactValue}
 				</div>
-				<span className={cn(cardSecondaryValueClass, 'text-xs')}>{secondaryValue}</span>
-			</div>
-			<Progress value={progress * 100} size='thicker' variant='primary' />
+			)}
+			<Progress value={progress * 100} size='thicker' variant='primary' trackClassName='bg-white/10' />
 			{afterChildren}
 		</div>
 	)

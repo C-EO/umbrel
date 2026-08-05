@@ -1,6 +1,6 @@
 import type {ReactNode} from 'react'
 import {useTranslation} from 'react-i18next'
-import {TbChevronLeft, TbDeviceDesktop, TbDeviceMobile, TbHelp, TbLogout} from 'react-icons/tb'
+import {TbChevronLeft, TbDeviceDesktop, TbDeviceMobile, TbHelp} from 'react-icons/tb'
 import {useNavigate} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
@@ -118,9 +118,9 @@ function SessionsView({
 
 	const revokeSession = async (session: Session) => {
 		const confirmed = await confirmAction(
-			session.current ? t('sessions.revoke-current-confirm-title') : t('sessions.revoke-confirm-title'),
-			session.current ? t('sessions.revoke-current-confirm-description') : t('sessions.revoke-confirm-description'),
-			t('sessions.revoke'),
+			session.current ? t('sessions.revoke-current-confirm-title') : t('active-logins.logout-device-title'),
+			session.current ? t('sessions.revoke-current-confirm-description') : t('active-logins.logout-device-description'),
+			t('active-logins.logout'),
 		)
 		if (!confirmed) return
 
@@ -129,9 +129,9 @@ function SessionsView({
 			if (result.revokedCurrent) return finishBrowserLogout()
 			if (!result.revoked) throw new Error('Session no longer exists')
 			await refreshSessions()
-			toast.success(t('sessions.revoked'))
+			toast.success(t('active-logins.logged-out'))
 		} catch {
-			toast.error(t('sessions.revoke-error'))
+			toast.error(t('active-logins.logout-error'))
 			await refreshSessions()
 		}
 	}
@@ -139,28 +139,28 @@ function SessionsView({
 	const revokeOtherSessions = async () => {
 		if (!revokeOtherSessionsMutation) return
 		const confirmed = await confirmAction(
-			t('sessions.revoke-others-confirm-title'),
-			t('sessions.revoke-others-confirm-description'),
-			t('sessions.revoke-others'),
+			t('active-logins.logout-other-devices-title'),
+			t('active-logins.logout-other-devices-description'),
+			t('active-logins.logout-other-devices'),
 		)
 		if (!confirmed) return
 
 		try {
-			const {revokedCount} = await revokeOtherSessionsMutation()
+			await revokeOtherSessionsMutation()
 			await refreshSessions()
-			toast.success(t('sessions.revoked-count', {count: revokedCount}))
+			toast.success(t('active-logins.logged-out'))
 		} catch {
-			toast.error(t('sessions.revoke-error'))
+			toast.error(t('active-logins.logout-error'))
 		}
 	}
 
 	const revokeAllSessions = async () => {
 		const confirmed = await confirmAction(
-			t('sessions.revoke-all-confirm-title'),
+			t('active-logins.logout-everywhere-title'),
 			managedAccountName
-				? t('sessions.managed-revoke-all-confirm-description', {name: managedAccountName})
-				: t('sessions.revoke-all-confirm-description'),
-			t('sessions.revoke-all'),
+				? t('active-logins.managed-logout-everywhere-description', {name: managedAccountName})
+				: t('active-logins.logout-everywhere-description'),
+			t('active-logins.logout-everywhere'),
 		)
 		if (!confirmed) return
 
@@ -168,9 +168,9 @@ function SessionsView({
 			const result = await revokeAllSessionsMutation()
 			if (result.revokedCurrent) return finishBrowserLogout()
 			await refreshSessions()
-			toast.success(t('sessions.revoked-count', {count: result.revokedCount}))
+			toast.success(t('active-logins.logged-out'))
 		} catch {
-			toast.error(t('sessions.revoke-error'))
+			toast.error(t('active-logins.logout-error'))
 		}
 	}
 
@@ -178,11 +178,11 @@ function SessionsView({
 		<div className='flex flex-col gap-4'>
 			{onBack && backLabel && <BackButton onClick={onBack}>{backLabel}</BackButton>}
 			<div className='space-y-1'>
-				<h2 className='text-17 font-semibold -tracking-2'>{t('sessions.title')}</h2>
+				<h2 className='text-17 font-semibold -tracking-2'>{t('active-logins.title')}</h2>
 				<p className='text-13 leading-tight text-white/45'>
 					{managedAccountName
-						? t('sessions.managed-panel-description', {name: managedAccountName})
-						: t('sessions.panel-description')}
+						? t('active-logins.managed-description', {name: managedAccountName})
+						: t('active-logins.description')}
 				</p>
 			</div>
 
@@ -191,16 +191,16 @@ function SessionsView({
 					<Loading>{t('loading')}</Loading>
 				</div>
 			) : isError ? (
-				<div className='rounded-12 bg-white/6 p-4 text-13 text-white/50'>{t('sessions.load-error')}</div>
+				<div className='rounded-12 bg-white/6 p-4 text-13 text-white/50'>{t('active-logins.load-error')}</div>
 			) : sessions?.length === 0 ? (
-				<div className='rounded-12 bg-white/6 p-4 text-13 text-white/50'>{t('sessions.none')}</div>
+				<div className='rounded-12 bg-white/6 p-4 text-13 text-white/50'>{t('active-logins.empty')}</div>
 			) : (
 				<div className='flex flex-col gap-2'>
 					{sessions?.map((session) => {
 						const deviceType = sessionDeviceType(session.userAgent)
 						const DeviceIcon =
 							deviceType === 'mobile' ? TbDeviceMobile : deviceType === 'desktop' ? TbDeviceDesktop : TbHelp
-						const description = describeSessionUserAgent(session.userAgent) ?? t('sessions.unknown-device')
+						const description = describeSessionUserAgent(session.userAgent) ?? t('active-logins.unknown-device')
 
 						return (
 							<div key={session.id} className='flex items-start gap-3 rounded-12 bg-white/6 p-3.5'>
@@ -212,23 +212,23 @@ function SessionsView({
 										<h3 className='text-13 leading-tight font-medium'>{description}</h3>
 										{session.current && (
 											<span className='text-10 rounded-full bg-brand/20 px-1.5 py-0.5 font-medium text-brand-lightest'>
-												{t('sessions.current')}
+												{t('active-logins.current')}
 											</span>
 										)}
 									</div>
 									<p className='text-11 leading-tight text-white/35'>
-										{t('sessions.created', {
+										{t('active-logins.logged-in', {
 											date: formatDate(session.createdAt, i18n.resolvedLanguage ?? i18n.language),
 										})}
 									</p>
 									<p className='text-11 leading-tight text-white/35'>
-										{t('sessions.last-seen', {
+										{t('active-logins.last-active', {
 											date: formatDate(session.lastSeenAt, i18n.resolvedLanguage ?? i18n.language),
 										})}
 									</p>
 								</div>
 								<Button size='sm' variant='destructive' disabled={isMutating} onClick={() => revokeSession(session)}>
-									{t('sessions.revoke')}
+									{t('active-logins.logout')}
 								</Button>
 							</div>
 						)
@@ -245,7 +245,7 @@ function SessionsView({
 						disabled={isMutating || !sessions || sessions.length <= 1}
 						onClick={revokeOtherSessions}
 					>
-						{t('sessions.revoke-others')}
+						{t('active-logins.logout-other-devices')}
 					</Button>
 				)}
 				<Button
@@ -255,8 +255,7 @@ function SessionsView({
 					disabled={isMutating || !sessions?.length}
 					onClick={revokeAllSessions}
 				>
-					<TbLogout className='size-4' />
-					{t('sessions.revoke-all')}
+					{t('active-logins.logout-everywhere')}
 				</Button>
 			</div>
 		</div>
@@ -276,7 +275,7 @@ export default function SessionsDrawerOrDialog() {
 			<Drawer {...dialogProps}>
 				<DrawerContent fullHeight>
 					<DrawerHeader className='sr-only'>
-						<DrawerTitle>{t('sessions.title')}</DrawerTitle>
+						<DrawerTitle>{t('active-logins.title')}</DrawerTitle>
 					</DrawerHeader>
 					<DrawerScroller>
 						<div className='px-5 py-6'>{panel}</div>
@@ -290,7 +289,7 @@ export default function SessionsDrawerOrDialog() {
 		<Dialog {...dialogProps}>
 			<DialogScrollableContent showClose>
 				<DialogHeader className='sr-only'>
-					<DialogTitle>{t('sessions.title')}</DialogTitle>
+					<DialogTitle>{t('active-logins.title')}</DialogTitle>
 				</DialogHeader>
 				<div className='px-5 py-6'>{panel}</div>
 			</DialogScrollableContent>

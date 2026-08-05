@@ -14,7 +14,6 @@ const FADE_SCROLLER_CLASS_Y = 'umbrel-fade-scroller-y'
 export function useFadeScroller(direction: 'x' | 'y', debug?: boolean) {
 	const ref = useRef<HTMLDivElement>(null)
 
-	// TODO: consider re-running this effect when window is resized
 	// NOTE: useLayoutEffect is used to avoid flicker when fading is rendered
 	useLayoutEffect(() => {
 		// Horizontal scroll in chrome adds fading via scroll-timeline even when it shouldn't. This happens in the 3-up section of the app store
@@ -51,17 +50,50 @@ export function useFadeScroller(direction: 'x' | 'y', debug?: boolean) {
 			}
 		}
 
-		const handleScroll = () => {
-			cancelAnimationFrame(rafId)
-			rafId = requestAnimationFrame(updateFade)
+		const scheduleUpdate = () => {
+			if (rafId) return
+			rafId = requestAnimationFrame(() => {
+				rafId = 0
+				updateFade()
+			})
 		}
 
 		// Run on mount by default
 		updateFade()
 
-		el.addEventListener('scroll', handleScroll, {passive: true})
+		// The scroll range can change without a scroll event. Observe every direct
+		// child, and keep that set synchronized when dynamic lists replace content.
+		const observedChildren = new Set<Element>()
+		const resizeObserver = new ResizeObserver(scheduleUpdate)
+		const syncObservedChildren = () => {
+			const currentChildren = new Set(el.children)
+			for (const child of observedChildren) {
+				if (!currentChildren.has(child)) {
+					resizeObserver.unobserve(child)
+					observedChildren.delete(child)
+				}
+			}
+			for (const child of currentChildren) {
+				if (!observedChildren.has(child)) {
+					resizeObserver.observe(child)
+					observedChildren.add(child)
+				}
+			}
+		}
+
+		resizeObserver.observe(el)
+		syncObservedChildren()
+		const mutationObserver = new MutationObserver(() => {
+			syncObservedChildren()
+			scheduleUpdate()
+		})
+		mutationObserver.observe(el, {childList: true})
+
+		el.addEventListener('scroll', scheduleUpdate, {passive: true})
 		return () => {
-			el.removeEventListener('scroll', handleScroll)
+			el.removeEventListener('scroll', scheduleUpdate)
+			mutationObserver.disconnect()
+			resizeObserver.disconnect()
 			cancelAnimationFrame(rafId)
 		}
 	}, [direction])

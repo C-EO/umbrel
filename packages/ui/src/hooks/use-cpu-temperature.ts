@@ -1,11 +1,12 @@
 import {trpcReact} from '@/trpc/trpc'
 
-export function useCpuTemperature() {
+export function useCpuTemperature({enabled = true}: {enabled?: boolean} = {}) {
 	const cpuTemperatureQ = trpcReact.system.cpuTemperature.useQuery(undefined, {
+		enabled,
 		// Sometimes we won't be able to get CPU temperature, so prevent retry
 		retry: false,
 		// We do want refetching to happen on a schedule though
-		refetchInterval: 5_000,
+		refetchInterval: enabled ? 5_000 : false,
 	})
 
 	const temperature = cpuTemperatureQ.data?.temperature

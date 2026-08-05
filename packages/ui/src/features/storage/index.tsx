@@ -182,7 +182,7 @@ export default function StorageManagerDialog() {
 			open={true}
 			onOpenChange={(isOpen) => {
 				if (!isOpen) {
-					navigate('/settings', {preventScrollReset: true})
+					navigate('/settings')
 				}
 			}}
 		>

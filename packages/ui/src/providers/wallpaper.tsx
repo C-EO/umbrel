@@ -250,6 +250,13 @@ export function useWallpaperCssVars(wallpaperId?: WallpaperId) {
 		el.style.setProperty('--color-brand', brandColorHsl)
 		el.style.setProperty('--color-brand-lighter', brandHslLighter(brandColorHsl))
 		el.style.setProperty('--color-brand-lightest', brandHslLightest(brandColorHsl))
+		const settingsToneLightnesses = [62, 48, 34, 20, 10, 2]
+		settingsToneLightnesses.forEach((lightness, index) => {
+			el.style.setProperty(`--settings-tone-${index + 1}`, brandHslWithLightness(brandColorHsl, lightness))
+		})
+		el.style.setProperty('--settings-tone-cold', brandHslWithLightness(brandColorHsl, 90))
+		el.style.setProperty('--settings-tone-temperature-border', brandHslWithLightness(brandColorHsl, 10))
+		el.style.setProperty('--settings-tone-hot', brandHslWithLightness(brandColorHsl, 10))
 	}, [brandColorHsl])
 }
 
@@ -378,6 +385,11 @@ export function RemoteWallpaperInjector() {
 }
 
 export const LIGHTEN_AMOUNT = 8
+function brandHslWithLightness(hsl: string, lightness: number) {
+	const [h, saturation] = hsl.split(' ')
+	return `${h} ${saturation} ${lightness}%`
+}
+
 function brandHslLighterByAmount(hsl: string, amount: number) {
 	const tokens = hsl.split(' ')
 	const h = tokens[0]

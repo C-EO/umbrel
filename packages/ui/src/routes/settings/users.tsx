@@ -3,17 +3,8 @@ import {matchSorter} from 'match-sorter'
 import {AnimatePresence, motion} from 'motion/react'
 import {lazy, Suspense, useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {
-	TbCheck,
-	TbChevronLeft,
-	TbChevronRight,
-	TbCopy,
-	TbDevices,
-	TbInfoCircle,
-	TbKey,
-	TbTrash,
-	TbX,
-} from 'react-icons/tb'
+import {TbCheck, TbChevronLeft, TbChevronRight, TbCopy, TbInfoCircle, TbTrash, TbX} from 'react-icons/tb'
+import {useSearchParams} from 'react-router-dom'
 import {useCopyToClipboard} from 'react-use'
 
 import {AppIcon} from '@/components/app-icon'
@@ -27,6 +18,7 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {AnimatedHeight} from '@/components/ui/animated-height'
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogDescription, DialogHeader, DialogScrollableContent, DialogTitle} from '@/components/ui/dialog'
 import {
@@ -62,6 +54,7 @@ import {
 	removeUserFromSharedWith,
 } from '@/modules/user-sharing/new-user-access'
 import type {SharedWith} from '@/modules/user-sharing/new-user-access'
+import {OwnerAccountPanel, type OwnerPanel} from '@/routes/settings/_components/owner-account-panel'
 import {useSettingsDialogProps} from '@/routes/settings/_components/shared'
 import {ManagedSessionsPanel} from '@/routes/settings/sessions'
 import {RouterOutput, trpcReact} from '@/trpc/trpc'
@@ -77,58 +70,17 @@ type NewUserInheritedAccess = {
 	appIds: string[]
 	folderPaths: string[]
 }
-type View =
+type LocalView =
 	| {view: 'list'}
 	| {view: 'add'; inheritedAccess: NewUserInheritedAccess}
 	| {view: 'edit'; userId: string}
 	| {view: 'created'; userId: string; name: string; password: string}
+type View = LocalView | {view: 'owner'; panel: OwnerPanel}
 
-function UsersDialogTitle({
-	isMobile,
-	className,
-	children,
-}: {
-	isMobile: boolean
-	className?: string
-	children: React.ReactNode
-}) {
-	if (isMobile) {
-		return (
-			<DrawerTitle asChild className={className}>
-				<h2>{children}</h2>
-			</DrawerTitle>
-		)
-	}
+const ownerPanels = new Set<OwnerPanel>(['overview', 'name', 'password', 'sessions'])
 
-	return (
-		<DialogTitle asChild className={className}>
-			<h2>{children}</h2>
-		</DialogTitle>
-	)
-}
-
-function UsersDialogDescription({
-	isMobile,
-	className,
-	children,
-}: {
-	isMobile: boolean
-	className?: string
-	children: React.ReactNode
-}) {
-	if (isMobile) {
-		return (
-			<DrawerDescription asChild className={className}>
-				<p>{children}</p>
-			</DrawerDescription>
-		)
-	}
-
-	return (
-		<DialogDescription asChild className={className}>
-			<p>{children}</p>
-		</DialogDescription>
-	)
+function isOwnerPanel(value: string | null): value is OwnerPanel {
+	return value !== null && ownerPanels.has(value as OwnerPanel)
 }
 
 function shareCoversUser(sharedWith: SharedWith, userId: string) {
@@ -148,9 +100,9 @@ function settleToastedShareMutation(mutation: Promise<unknown>) {
 
 // Keeps the whole-record sharing mutations and their safety guards in one
 // place. The dialog only needs per-user add/remove operations.
-function useUserShares(memberIds: string[]) {
-	const folders = useMemberShares()
-	const apps = useAppMemberShares()
+function useUserShares(memberIds: string[], enabled: boolean) {
+	const folders = useMemberShares({enabled})
+	const apps = useAppMemberShares({enabled})
 	const folderShares = folders.memberShares ?? []
 	const appShares = apps.appMemberShares ?? []
 	const sharesReady = folders.memberShares !== undefined && apps.appMemberShares !== undefined
@@ -213,8 +165,10 @@ export default function UsersDialog() {
 	const utils = trpcReact.useUtils()
 	const homeDirectoryName = useHomeDirectoryName()
 	const isMobile = useIsMobile()
-
-	const [view, setView] = useState<View>({view: 'list'})
+	const [searchParams, setSearchParams] = useSearchParams()
+	const [localView, setLocalView] = useState<LocalView>({view: 'list'})
+	const ownerPanel = searchParams.get('ownerPanel')
+	const view: View = isOwnerPanel(ownerPanel) ? {view: 'owner', panel: ownerPanel} : localView
 	const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false)
 	const [name, setName] = useState('')
 	const [password, setPassword] = useState('')
@@ -237,6 +191,13 @@ export default function UsersDialog() {
 	const [appQuery, setAppQuery] = useState('')
 	const appQueryInputRef = useRef<HTMLInputElement>(null)
 
+	const setOwnerPanel = (panel: OwnerPanel | null) => {
+		const nextSearchParams = new URLSearchParams(searchParams)
+		if (panel) nextSearchParams.set('ownerPanel', panel)
+		else nextSearchParams.delete('ownerPanel')
+		setSearchParams(nextSearchParams, {replace: true})
+	}
+
 	useEffect(() => {
 		if (!appPickerOpen) return
 		const timer = window.setTimeout(() => {
@@ -252,6 +213,7 @@ export default function UsersDialog() {
 	const members = accounts.filter((account) => account.userId !== OWNER_USER_ID)
 	const memberIds = members.map((member) => member.userId)
 	const editingMember = view.view === 'edit' ? members.find((member) => member.userId === view.userId) : undefined
+	const shouldLoadMemberData = view.view !== 'owner'
 
 	const {
 		folderShares,
@@ -263,15 +225,17 @@ export default function UsersDialog() {
 		addFolderForUser,
 		removeAppForUser,
 		removeFolderForUser,
-	} = useUserShares(memberIds)
-	const appsQ = trpcReact.apps.list.useQuery()
+	} = useUserShares(memberIds, shouldLoadMemberData)
+	const appsQ = trpcReact.apps.list.useQuery(undefined, {enabled: shouldLoadMemberData})
 	const installedApps = appsQ.data ?? []
 
 	const createUser = trpcReact.user.createUser.useMutation()
 	const resetUserPassword = trpcReact.user.resetUserPassword.useMutation()
 	const deleteUser = trpcReact.user.deleteUser.useMutation()
 
-	const loadFailed = accountsQ.isError || sharesFailed || appsQ.isError
+	const memberDataFailed = sharesFailed || appsQ.isError
+	const memberDataLoading = !sharesReady || appsQ.isLoading
+	const loadFailed = accountsQ.isError
 
 	const appNameById = new Map(installedApps.map((app) => [app.id, 'name' in app ? app.name : app.id]))
 	const appIconById = new Map(installedApps.map((app) => [app.id, 'icon' in app ? app.icon : undefined]))
@@ -297,7 +261,7 @@ export default function UsersDialog() {
 		setShareAllFolders(defaults.shareHome)
 		setAllowExternalStorage(false)
 		setAllowNetworkStorage(false)
-		setView({
+		setLocalView({
 			view: 'add',
 			inheritedAccess: {
 				appIds: defaults.inheritedAppIds,
@@ -311,7 +275,12 @@ export default function UsersDialog() {
 		setResetPassword('')
 		setIsResettingPassword(false)
 		setIsManagingSessions(false)
-		setView({view: 'edit', userId})
+		setLocalView({view: 'edit', userId})
+	}
+
+	const openOwnerView = () => {
+		setIsDeleteConfirmOpen(false)
+		setOwnerPanel('overview')
 	}
 
 	const returnToList = () => {
@@ -319,7 +288,8 @@ export default function UsersDialog() {
 		setResetPassword('')
 		setIsResettingPassword(false)
 		setIsManagingSessions(false)
-		setView({view: 'list'})
+		setLocalView({view: 'list'})
+		setOwnerPanel(null)
 	}
 
 	const handleCreate = async (event: React.FormEvent) => {
@@ -351,7 +321,7 @@ export default function UsersDialog() {
 			])
 
 			await utils.user.listAccounts.invalidate()
-			setView({view: 'created', userId: account.userId, name: name.trim(), password})
+			setLocalView({view: 'created', userId: account.userId, name: name.trim(), password})
 		} catch (error) {
 			toast.error(t('users.create-failed'), {
 				description: error instanceof Error ? error.message : String(error),
@@ -496,7 +466,8 @@ export default function UsersDialog() {
 		'/Home',
 		...(view.view === 'add' ? pickedFolders : folderListShares.map((share) => share.path)),
 	]
-	const showListView = view.view === 'list' || (view.view === 'edit' && !editingMember)
+	const showListView =
+		view.view === 'list' || (view.view === 'edit' && !editingMember) || (view.view === 'owner' && !owner)
 
 	const memberShareInfo = (userId: string) => {
 		const folderCount = folderShares.filter(
@@ -655,7 +626,9 @@ export default function UsersDialog() {
 					{folderShareRow(share.path, {onRemove: () => handleRemoveFolder(share)})}
 				</AnimatedRow>
 			))
-	const shareSections = (
+	const shareSections = memberDataFailed ? (
+		<EmptyCard>{t('users.load-failed')}</EmptyCard>
+	) : (
 		<>
 			<ShareSection
 				kind='apps'
@@ -673,7 +646,7 @@ export default function UsersDialog() {
 				kind='folders'
 				compactShareAllLabel={isMobile}
 				shareAll={shareAllFoldersOn}
-				allowAdditionalShares
+				showAdditionalSharesWhenSharingAll
 				disabled={isAddingUser ? undefined : shareControlsDisabled}
 				onShareAllChange={handleToggleAllFolders}
 				addAction={addFolderButton}
@@ -692,14 +665,14 @@ export default function UsersDialog() {
 		</>
 	)
 
-	// Don't render share state from missing data — toggling from an
-	// errored-empty view would write shares computed against nothing
+	// Account loading is independent from member-share loading so the owner can
+	// still manage their own account if app or folder sharing is unavailable.
 	const content = loadFailed ? (
 		<div className='flex flex-col gap-5'>
 			{!isMobile && (
 				<DialogHeader>
-					<DialogTitle>{t('users')}</DialogTitle>
-					<DialogDescription>{t('users.description')}</DialogDescription>
+					<h2 className='text-17 leading-snug font-semibold -tracking-2'>{t('users')}</h2>
+					<p className='text-13 leading-tight text-white/40'>{t('users.description')}</p>
 				</DialogHeader>
 			)}
 			<EmptyCard>{t('users.load-failed')}</EmptyCard>
@@ -709,13 +682,11 @@ export default function UsersDialog() {
 			{showListView && (
 				<div className='flex flex-col gap-5'>
 					{isMobile ? (
-						<UsersDialogDescription isMobile className='text-13 leading-tight -tracking-2 text-white/40 opacity-100'>
-							{t('users.description')}
-						</UsersDialogDescription>
+						<p className='text-13 leading-tight -tracking-2 text-white/40 opacity-100'>{t('users.description')}</p>
 					) : (
 						<DialogHeader>
-							<DialogTitle>{t('users')}</DialogTitle>
-							<DialogDescription>{t('users.description')}</DialogDescription>
+							<h2 className='text-17 leading-snug font-semibold -tracking-2'>{t('users')}</h2>
+							<p className='text-13 leading-tight text-white/40'>{t('users.description')}</p>
 						</DialogHeader>
 					)}
 
@@ -726,13 +697,18 @@ export default function UsersDialog() {
 								<SkeletonRow />
 							) : (
 								owner && (
-									<div className='flex items-center gap-3 p-3'>
+									<button
+										type='button'
+										className='group flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-white/4'
+										onClick={openOwnerView}
+									>
 										<AccountAvatar name={owner.name} userId={owner.userId} size={32} />
 										<span className='min-w-0 flex-1 truncate text-14 font-medium -tracking-2 text-white/90'>
 											{owner.name}
 										</span>
 										<span className='text-12 text-white/30'>{t('users.you')}</span>
-									</div>
+										<TbChevronRight className='-mx-0.5 size-4 shrink-0 text-white/20 transition-transform group-hover:translate-x-0.5' />
+									</button>
 								)
 							)}
 						</div>
@@ -741,12 +717,19 @@ export default function UsersDialog() {
 					<section className='flex flex-col gap-2'>
 						<div className='flex items-center justify-between'>
 							<SectionLabel>{t('users.members')}</SectionLabel>
-							<Button size='sm' aria-label={t('users.add-button')} onClick={openAddView}>
+							<Button
+								size='sm'
+								aria-label={t('users.add-button')}
+								disabled={memberDataFailed || memberDataLoading}
+								onClick={openAddView}
+							>
 								{t('users.add')}
 								<PlusCircle className='h-3 w-3' />
 							</Button>
 						</div>
-						{accountsQ.isLoading ? (
+						{memberDataFailed ? (
+							<EmptyCard>{t('users.load-failed')}</EmptyCard>
+						) : accountsQ.isLoading || memberDataLoading ? (
 							<div className={listClass}>
 								<SkeletonRow />
 								<SkeletonRow />
@@ -802,16 +785,16 @@ export default function UsersDialog() {
 				</div>
 			)}
 
+			{view.view === 'owner' && owner && (
+				<OwnerAccountPanel owner={owner} panel={view.panel} onBack={returnToList} onPanelChange={setOwnerPanel} />
+			)}
+
 			{view.view === 'add' && (
 				<form onSubmit={handleCreate} className='flex flex-col gap-5'>
 					<div className='flex flex-col gap-3'>
 						<BackButton onClick={returnToList}>{t('users')}</BackButton>
-						<UsersDialogTitle isMobile={isMobile} className='text-17 leading-snug font-semibold -tracking-2'>
-							{t('users.add-title')}
-						</UsersDialogTitle>
-						<UsersDialogDescription isMobile={isMobile} className='sr-only'>
-							{t('users.description')}
-						</UsersDialogDescription>
+						<h2 className='text-17 leading-snug font-semibold -tracking-2'>{t('users.add-title')}</h2>
+						<p className='sr-only'>{t('users.description')}</p>
 					</div>
 
 					<div className='flex flex-col items-center gap-4'>
@@ -858,18 +841,12 @@ export default function UsersDialog() {
 						</div>
 					</motion.div>
 					<div className='flex flex-col gap-1'>
-						<UsersDialogTitle
-							isMobile={isMobile}
-							className='text-center text-17 leading-normal font-semibold -tracking-2'
-						>
+						<h2 className='text-center text-17 leading-normal font-semibold -tracking-2'>
 							{t('users.created-title', {name: view.name})}
-						</UsersDialogTitle>
-						<UsersDialogDescription
-							isMobile={isMobile}
-							className='text-center text-13 leading-snug tracking-normal text-white/40 opacity-100'
-						>
+						</h2>
+						<p className='text-center text-13 leading-snug tracking-normal text-white/40 opacity-100'>
 							{t('users.created-subtitle')}
-						</UsersDialogDescription>
+						</p>
 					</div>
 					<InviteMessageCard
 						message={t('users.created-message', {
@@ -899,22 +876,13 @@ export default function UsersDialog() {
 							<div className='flex items-center gap-3 pt-2'>
 								<AccountAvatar name={editingMember.name} userId={editingMember.userId} size={40} />
 								<div className='min-w-0 flex-1'>
-									<UsersDialogTitle
-										isMobile={isMobile}
-										className='truncate text-15 leading-snug font-semibold -tracking-2'
-									>
-										{editingMember.name}
-									</UsersDialogTitle>
-									<UsersDialogDescription
-										isMobile={isMobile}
-										className='text-12 leading-normal tracking-normal text-white/40 opacity-100'
-									>
+									<h2 className='truncate text-15 leading-snug font-semibold -tracking-2'>{editingMember.name}</h2>
+									<p className='text-12 leading-normal tracking-normal text-white/40 opacity-100'>
 										{t('users.member')}
-									</UsersDialogDescription>
+									</p>
 								</div>
 								<Button size='default' className='shrink-0' onClick={() => setIsManagingSessions(true)}>
-									<TbDevices className='size-3.5 text-white/50' />
-									{t('sessions.title')}
+									{t('active-logins.title')}
 								</Button>
 								<Button
 									size='default'
@@ -924,7 +892,6 @@ export default function UsersDialog() {
 										setResetPassword('')
 									}}
 								>
-									<TbKey className='size-3.5 text-white/50' />
 									{t('users.reset-password')}
 								</Button>
 								<IconButton
@@ -1024,18 +991,53 @@ export default function UsersDialog() {
 			)}
 		</Suspense>
 	)
+	const dialogTitle =
+		loadFailed || showListView
+			? t('users')
+			: view.view === 'add'
+				? t('users.add-title')
+				: view.view === 'created'
+					? t('users.created-title', {name: view.name})
+					: view.view === 'edit' && editingMember
+						? isManagingSessions
+							? t('active-logins.title')
+							: editingMember.name
+						: view.view === 'owner'
+							? view.panel === 'name'
+								? t('change-name')
+								: view.panel === 'password'
+									? t('change-password')
+									: view.panel === 'sessions'
+										? t('active-logins.title')
+										: (owner?.name ?? t('users.owner'))
+							: t('users')
+	const dialogDescription = loadFailed
+		? t('users.load-failed')
+		: showListView
+			? t('users.description')
+			: view.view === 'created'
+				? t('users.created-subtitle')
+				: view.view === 'edit' && editingMember
+					? isManagingSessions
+						? t('active-logins.managed-description', {name: editingMember.name})
+						: t('users.member')
+					: view.view === 'owner'
+						? view.panel === 'sessions'
+							? t('active-logins.description')
+							: view.panel === 'overview'
+								? t('users.owner')
+								: t('account')
+						: t('users.description')
 
 	if (isMobile) {
 		return (
 			<>
 				<Drawer {...dialogProps}>
 					<DrawerContent fullHeight>
-						{(showListView || loadFailed) && (
-							<DrawerHeader className={cn(!showListView && 'sr-only')}>
-								<DrawerTitle>{t('users')}</DrawerTitle>
-								{loadFailed && <DrawerDescription className='sr-only'>{t('users.description')}</DrawerDescription>}
-							</DrawerHeader>
-						)}
+						<DrawerHeader className={cn(!showListView && 'sr-only')}>
+							<DrawerTitle>{dialogTitle}</DrawerTitle>
+							<DrawerDescription className='sr-only'>{dialogDescription}</DrawerDescription>
+						</DrawerHeader>
 						<DrawerScroller>{content}</DrawerScroller>
 					</DrawerContent>
 				</Drawer>
@@ -1049,9 +1051,13 @@ export default function UsersDialog() {
 		<>
 			<Dialog {...dialogProps}>
 				<DialogScrollableContent showClose>
-					<AnimateHeight>
+					<DialogHeader className='sr-only'>
+						<DialogTitle>{dialogTitle}</DialogTitle>
+						<DialogDescription>{dialogDescription}</DialogDescription>
+					</DialogHeader>
+					<AnimatedHeight>
 						<div className='px-5 py-6'>{content}</div>
-					</AnimateHeight>
+					</AnimatedHeight>
 				</DialogScrollableContent>
 			</Dialog>
 			{folderPicker}
@@ -1080,33 +1086,6 @@ function AddUserAvatar({name, size = 96}: {name: string; size?: number}) {
 				</motion.div>
 			</AnimatePresence>
 		</div>
-	)
-}
-
-// Smoothly animates the dialog's height when the content changes (view swaps,
-// rows added/removed). A spring retargets mid-flight, so it tracks the row
-// enter/exit animations without fighting them.
-function AnimateHeight({children}: {children: React.ReactNode}) {
-	const contentRef = useRef<HTMLDivElement>(null)
-	const [height, setHeight] = useState<number | 'auto'>('auto')
-
-	useEffect(() => {
-		const element = contentRef.current
-		if (!element) return
-		const observer = new ResizeObserver(() => setHeight(element.offsetHeight))
-		observer.observe(element)
-		return () => observer.disconnect()
-	}, [])
-
-	return (
-		<motion.div
-			initial={false}
-			animate={{height}}
-			transition={{type: 'spring', duration: 0.35, bounce: 0}}
-			className='overflow-hidden'
-		>
-			<div ref={contentRef}>{children}</div>
-		</motion.div>
 	)
 }
 
@@ -1160,7 +1139,7 @@ function ShareSection({
 	kind,
 	compactShareAllLabel,
 	shareAll,
-	allowAdditionalShares = false,
+	showAdditionalSharesWhenSharingAll = false,
 	disabled,
 	onShareAllChange,
 	addAction,
@@ -1169,7 +1148,7 @@ function ShareSection({
 	kind: 'apps' | 'folders'
 	compactShareAllLabel?: boolean
 	shareAll: boolean
-	allowAdditionalShares?: boolean
+	showAdditionalSharesWhenSharingAll?: boolean
 	disabled?: boolean
 	onShareAllChange: (checked: boolean) => void
 	addAction: React.ReactNode
@@ -1208,13 +1187,13 @@ function ShareSection({
 						disabled={disabled}
 						onCheckedChange={onShareAllChange}
 					/>
-					{(!shareAll || allowAdditionalShares) && addAction}
+					{!shareAll && addAction}
 				</div>
 			</div>
 			{shareAll && <EmptyCard>{copy.shareAllActiveMessage}</EmptyCard>}
 			{!shareAll && itemCount === 0 ? (
 				<EmptyCard>{copy.emptyMessage}</EmptyCard>
-			) : (!shareAll || allowAdditionalShares) && itemCount > 0 ? (
+			) : (!shareAll || showAdditionalSharesWhenSharingAll) && itemCount > 0 ? (
 				<div className={shareListClass(itemCount)}>
 					<AnimatePresence initial={false}>{rows}</AnimatePresence>
 				</div>

@@ -25,10 +25,10 @@ function WallpaperItem({
 			ref={ref}
 			onClick={onSelect}
 			className={cn(
-				'h-6 shrink-0 bg-white/10 bg-cover bg-center ring-white/50 outline-hidden transition-all duration-200 hover:brightness-125 focus-visible:ring-1',
+				'h-6 shrink-0 bg-white/10 bg-cover bg-center outline-hidden transition-all duration-200 hover:brightness-125 focus-visible:ring-1 focus-visible:ring-brand',
 				active
 					? // NOTE: `mx-3` or whatever horizontal marging needs to be big enough to not cause the ring to get clipped from scrolling container
-						'mx-3 rounded-5 ring-2 ring-white/50'
+						'mx-3 rounded-5 shadow-[0_0_14px_hsl(var(--color-brand)/0.72)] ring-2 ring-brand'
 					: 'rounded-3',
 				className,
 			)}
@@ -69,7 +69,7 @@ export function WallpaperPicker({maxW}: {maxW?: number}) {
 		<div ref={containerRef} className='flex h-7 max-w-full flex-grow-1 animate-in items-center fade-in'>
 			<div
 				className={cn(
-					'umbrel-hide-scrollbar umbrel-wallpaper-fade-scroller w-full items-center overflow-x-auto bg-red-500/0 py-3',
+					'umbrel-hide-scrollbar umbrel-wallpaper-fade-scroller w-full items-center overflow-x-auto bg-red-500/0 py-5',
 					!maxW && 'md:max-w-[350px]',
 				)}
 				ref={scrollerRef}

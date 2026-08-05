@@ -20,11 +20,11 @@ export function BackupsMobileDrawer() {
 	const {repositories: backupRepositories, isLoadingRepositories: isLoadingBackups} = useBackups()
 
 	const goToSetup = useCallback(() => {
-		navigate('/settings/backups/setup', {preventScrollReset: true})
+		navigate('/settings/backups/setup')
 	}, [navigate])
 
 	const goToConfigure = useCallback(() => {
-		navigate('/settings/backups/configure', {preventScrollReset: true})
+		navigate('/settings/backups/configure')
 	}, [navigate])
 
 	return (
@@ -67,13 +67,13 @@ export function BackupsMobileDrawer() {
 							</Button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align='center' className='min-w-[280px]'>
-							<DropdownMenuItem onSelect={() => navigate('/settings/backups/restore', {preventScrollReset: true})}>
+							<DropdownMenuItem onSelect={() => navigate('/settings/backups/restore')}>
 								<div className='flex flex-col'>
 									<div className='text-14 font-medium'>{t('backups-restore-full')}</div>
 									<div className='text-12 text-white/40'>{t('backups-restore-full-description')}</div>
 								</div>
 							</DropdownMenuItem>
-							<DropdownMenuItem onSelect={() => navigate('/files/Home?rewind=open', {preventScrollReset: true})}>
+							<DropdownMenuItem onSelect={() => navigate('/files/Home?rewind=open')}>
 								<div className='flex flex-col'>
 									<div className='text-14 font-medium'>{t('backups-rewind')}</div>
 									<div className='text-12 text-white/40'>{t('backups-rewind-description')}</div>

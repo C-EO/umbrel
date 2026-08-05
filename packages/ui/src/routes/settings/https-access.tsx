@@ -1,14 +1,13 @@
 import {ChevronDown} from 'lucide-react'
 import React from 'react'
 import {useTranslation} from 'react-i18next'
-import {TbAlertTriangle, TbChevronLeft, TbDownload} from 'react-icons/tb'
+import {TbAlertTriangle, TbChevronLeft} from 'react-icons/tb'
 
 import {FadeScroller} from '@/components/fade-scroller'
 import {Button} from '@/components/ui/button'
 import {CopyButton} from '@/components/ui/copy-button'
 import {Dialog, DialogContent, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
-import {IconButton} from '@/components/ui/icon-button'
 import {toast} from '@/components/ui/toast'
 import androidIcon from '@/features/files/assets/sharing-info-platforms/android.png'
 import iOsIcon from '@/features/files/assets/sharing-info-platforms/ios.png'
@@ -161,9 +160,9 @@ function HttpsCertificateSummary({
 		<>
 			<div className='flex flex-wrap items-center justify-between gap-3 px-1'>
 				<div className='flex flex-wrap items-center gap-2'>
-					<IconButton icon={TbDownload} size='sm' onClick={onDownload} disabled={!canDownload}>
+					<Button size='sm' onClick={onDownload} disabled={!canDownload}>
 						{t('https-access-download-certificate')}
-					</IconButton>
+					</Button>
 					<button
 						type='button'
 						onClick={() => setShowDetails(true)}

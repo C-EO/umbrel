@@ -51,6 +51,7 @@ vi.mock('react-i18next', () => ({
 }))
 vi.mock('motion/react', () => ({
 	AnimatePresence: ({children}: {children: React.ReactNode}) => children,
+	useReducedMotion: () => false,
 	motion: {
 		div: ({children}: {children: React.ReactNode}) => <div>{children}</div>,
 	},

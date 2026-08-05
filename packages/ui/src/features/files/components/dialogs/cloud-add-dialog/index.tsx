@@ -2,6 +2,7 @@ import {AnimatePresence, motion} from 'motion/react'
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 
+import {AnimatedHeight} from '@/components/ui/animated-height'
 import {Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle} from '@/components/ui/dialog'
 import {
 	Drawer,
@@ -488,7 +489,7 @@ export default function CloudAddDialog() {
 
 	const body = (
 		<div className='flex-1 overflow-x-hidden overflow-y-auto'>
-			<AnimatedHeight>
+			<AnimatedHeight transition={{type: 'spring', stiffness: 300, damping: 34}} contentClassName='relative'>
 				<AnimatePresence mode='popLayout' initial={false}>
 					{step === Step.Source && (
 						<motion.div key='source' {...stepFade}>
@@ -661,34 +662,5 @@ export default function CloudAddDialog() {
 				}}
 			/>
 		</>
-	)
-}
-
-// Glides the wizard body to each step's natural height instead of snapping.
-// The popLayout exits above float out of flow, so the measured height is
-// always the incoming step's alone.
-function AnimatedHeight({children}: {children: React.ReactNode}) {
-	const innerRef = useRef<HTMLDivElement>(null)
-	const [height, setHeight] = useState<number | null>(null)
-
-	useEffect(() => {
-		const element = innerRef.current
-		if (!element) return
-		const observer = new ResizeObserver(() => setHeight(element.offsetHeight))
-		observer.observe(element)
-		return () => observer.disconnect()
-	}, [])
-
-	return (
-		<motion.div
-			initial={false}
-			animate={height === null ? undefined : {height}}
-			transition={{type: 'spring', stiffness: 300, damping: 34}}
-			className='overflow-hidden'
-		>
-			<div ref={innerRef} className='relative'>
-				{children}
-			</div>
-		</motion.div>
 	)
 }

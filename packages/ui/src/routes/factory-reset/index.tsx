@@ -52,7 +52,7 @@ export default function FactoryReset() {
 function SplitDialog({children}: {children: React.ReactNode}) {
 	const navigate = useNavigate()
 	return (
-		<ImmersiveDialog defaultOpen onOpenChange={(isOpen) => !isOpen && navigate(backPath, {preventScrollReset: true})}>
+		<ImmersiveDialog defaultOpen onOpenChange={(isOpen) => !isOpen && navigate(backPath)}>
 			<ImmersiveDialogSplitContent side={<SplitLeftContent />}>{children}</ImmersiveDialogSplitContent>
 		</ImmersiveDialog>
 	)
