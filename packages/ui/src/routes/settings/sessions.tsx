@@ -1,3 +1,4 @@
+import {formatDistanceToNowStrict} from 'date-fns'
 import type {ReactNode} from 'react'
 import {useTranslation} from 'react-i18next'
 import {TbChevronLeft, TbDeviceDesktop, TbDeviceMobile, TbHelp} from 'react-icons/tb'
@@ -10,10 +11,11 @@ import {Loading} from '@/components/ui/loading'
 import {toast} from '@/components/ui/toast'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {finishBrowserLogout} from '@/modules/auth/logout'
-import {describeSessionUserAgent, sessionDeviceType} from '@/modules/auth/session-user-agent'
+import {parseSessionUserAgent, SessionClient} from '@/modules/auth/session-user-agent'
 import {useConfirmation} from '@/providers/confirmation'
 import {useSettingsDialogProps} from '@/routes/settings/_components/shared'
 import {RouterOutput, trpcReact} from '@/trpc/trpc'
+import {languageCodeToDateLocale} from '@/utils/date-time'
 
 type Session = RouterOutput['user']['listSessions'][number]
 
@@ -27,7 +29,7 @@ type SessionsViewProps = {
 	refreshSessions: () => Promise<unknown>
 	revokeSession: (sessionId: string) => Promise<{revoked: boolean; revokedCurrent: boolean}>
 	revokeOtherSessions?: () => Promise<{revokedCount: number}>
-	revokeAllSessions: () => Promise<{revokedCount: number; revokedCurrent: boolean}>
+	revokeAllSessions?: () => Promise<{revokedCount: number; revokedCurrent: boolean}>
 	managedAccountName?: string
 }
 
@@ -36,7 +38,6 @@ export function SessionsPanel({onBack, backLabel}: {onBack?: () => void; backLab
 	const sessionsQ = trpcReact.user.listSessions.useQuery()
 	const revokeSessionMut = trpcReact.user.revokeSession.useMutation()
 	const revokeOtherSessionsMut = trpcReact.user.revokeOtherSessions.useMutation()
-	const revokeAllSessionsMut = trpcReact.user.revokeAllSessions.useMutation()
 
 	return (
 		<SessionsView
@@ -45,11 +46,10 @@ export function SessionsPanel({onBack, backLabel}: {onBack?: () => void; backLab
 			sessions={sessionsQ.data}
 			isLoading={sessionsQ.isLoading}
 			isError={sessionsQ.isError}
-			isMutating={revokeSessionMut.isPending || revokeOtherSessionsMut.isPending || revokeAllSessionsMut.isPending}
+			isMutating={revokeSessionMut.isPending || revokeOtherSessionsMut.isPending}
 			refreshSessions={() => utils.user.listSessions.invalidate()}
 			revokeSession={(sessionId) => revokeSessionMut.mutateAsync({sessionId})}
 			revokeOtherSessions={() => revokeOtherSessionsMut.mutateAsync()}
-			revokeAllSessions={() => revokeAllSessionsMut.mutateAsync()}
 		/>
 	)
 }
@@ -154,12 +154,13 @@ function SessionsView({
 		}
 	}
 
+	// Only reachable from the managed panel (owner acting on a member's sessions);
+	// a user's own panel offers per-session revocation and "log out other devices".
 	const revokeAllSessions = async () => {
+		if (!revokeAllSessionsMutation) return
 		const confirmed = await confirmAction(
 			t('active-logins.logout-everywhere-title'),
-			managedAccountName
-				? t('active-logins.managed-logout-everywhere-description', {name: managedAccountName})
-				: t('active-logins.logout-everywhere-description'),
+			t('active-logins.managed-logout-everywhere-description', {name: managedAccountName}),
 			t('active-logins.logout-everywhere'),
 		)
 		if (!confirmed) return
@@ -197,37 +198,32 @@ function SessionsView({
 			) : (
 				<div className='flex flex-col gap-2'>
 					{sessions?.map((session) => {
-						const deviceType = sessionDeviceType(session.userAgent)
-						const DeviceIcon =
-							deviceType === 'mobile' ? TbDeviceMobile : deviceType === 'desktop' ? TbDeviceDesktop : TbHelp
-						const description = describeSessionUserAgent(session.userAgent) ?? t('active-logins.unknown-device')
+						const client = parseSessionUserAgent(session.userAgent)
+						const description = client.label ?? t('active-logins.unknown-device')
+						const language = i18n.resolvedLanguage ?? i18n.language
 
 						return (
-							<div key={session.id} className='flex items-start gap-3 rounded-12 bg-white/6 p-3.5'>
-								<div className='grid size-9 shrink-0 place-items-center rounded-8 bg-white/6'>
-									<DeviceIcon className='size-5 text-white/60' />
-								</div>
+							<div key={session.id} className='flex items-center gap-3 rounded-12 bg-white/6 p-3.5'>
+								<SessionClientIcon client={client} />
 								<div className='min-w-0 flex-1 space-y-1' title={session.userAgent}>
 									<div className='flex flex-wrap items-center gap-1.5'>
 										<h3 className='text-13 leading-tight font-medium'>{description}</h3>
 										{session.current && (
-											<span className='text-10 rounded-full bg-brand/20 px-1.5 py-0.5 font-medium text-brand-lightest'>
+											<span className='rounded-full bg-brand/20 px-1.5 py-[3px] text-11 leading-none font-medium whitespace-nowrap text-brand-lightest'>
 												{t('active-logins.current')}
 											</span>
 										)}
 									</div>
-									<p className='text-11 leading-tight text-white/35'>
-										{t('active-logins.logged-in', {
-											date: formatDate(session.createdAt, i18n.resolvedLanguage ?? i18n.language),
-										})}
-									</p>
-									<p className='text-11 leading-tight text-white/35'>
-										{t('active-logins.last-active', {
-											date: formatDate(session.lastSeenAt, i18n.resolvedLanguage ?? i18n.language),
-										})}
-									</p>
+									<div className='space-y-[2px]'>
+										<p className='text-11 leading-tight text-white/35' title={formatDate(session.lastSeenAt, language)}>
+											{t('active-logins.last-active-ago', {ago: relativeDate(session.lastSeenAt, language)})}
+										</p>
+										<p className='text-11 leading-tight text-white/35'>
+											{t('active-logins.logged-in', {date: formatDate(session.createdAt, language)})}
+										</p>
+									</div>
 								</div>
-								<Button size='sm' variant='destructive' disabled={isMutating} onClick={() => revokeSession(session)}>
+								<Button size='sm' disabled={isMutating} onClick={() => revokeSession(session)}>
 									{t('active-logins.logout')}
 								</Button>
 							</div>
@@ -236,27 +232,20 @@ function SessionsView({
 				</div>
 			)}
 
-			<div className='mt-1 flex flex-col gap-2 border-t border-white/6 pt-4 sm:flex-row'>
-				{revokeOtherSessionsMutation && (
+			<div className='mt-1 flex justify-end'>
+				{revokeOtherSessionsMutation ? (
 					<Button
-						className='flex-1'
-						size='md-squared'
-						variant='default'
+						text='destructive'
 						disabled={isMutating || !sessions || sessions.length <= 1}
 						onClick={revokeOtherSessions}
 					>
-						{t('active-logins.logout-other-devices')}
+						{t('active-logins.logout-everywhere-except')}
 					</Button>
-				)}
-				<Button
-					className='flex-1'
-					size='md-squared'
-					variant='destructive'
-					disabled={isMutating || !sessions?.length}
-					onClick={revokeAllSessions}
-				>
-					{t('active-logins.logout-everywhere')}
-				</Button>
+				) : revokeAllSessionsMutation ? (
+					<Button text='destructive' disabled={isMutating || !sessions?.length} onClick={revokeAllSessions}>
+						{t('active-logins.logout-everywhere')}
+					</Button>
+				) : null}
 			</div>
 		</div>
 	)
@@ -297,6 +286,33 @@ export default function SessionsDrawerOrDialog() {
 	)
 }
 
+// Browser icon with the OS logo overlaid as a small bottom-right badge. Sessions
+// from clients without a recognized browser keep the generic device glyph.
+function SessionClientIcon({client}: {client: SessionClient}) {
+	const DeviceIcon =
+		client.deviceType === 'mobile' ? TbDeviceMobile : client.deviceType === 'desktop' ? TbDeviceDesktop : TbHelp
+
+	return (
+		<div className='relative size-10 shrink-0'>
+			{client.browserIcon ? (
+				<img src={client.browserIcon} alt={client.browser} draggable={false} className='size-10 object-contain' />
+			) : (
+				<div className='grid size-10 place-items-center rounded-8 bg-white/6'>
+					<DeviceIcon className='size-5 text-white/60' />
+				</div>
+			)}
+			{client.osIcon && (
+				<img
+					src={client.osIcon}
+					alt={client.os}
+					draggable={false}
+					className='absolute -right-1.5 -bottom-1.5 size-5 rounded-6 border border-white/10 bg-neutral-800 object-contain p-[3px]'
+				/>
+			)}
+		</div>
+	)
+}
+
 function BackButton({onClick, children}: {onClick: () => void; children: ReactNode}) {
 	return (
 		<button
@@ -315,4 +331,12 @@ function formatDate(timestamp: number, locale: string) {
 	} catch {
 		return new Date(timestamp).toLocaleString()
 	}
+}
+
+// "3 hours ago" / "2 days ago", localized the same way as the Files cloud banner
+function relativeDate(timestamp: number, language: string) {
+	return formatDistanceToNowStrict(new Date(timestamp), {
+		addSuffix: true,
+		locale: languageCodeToDateLocale[language as keyof typeof languageCodeToDateLocale],
+	})
 }

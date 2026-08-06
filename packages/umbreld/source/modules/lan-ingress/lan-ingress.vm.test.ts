@@ -325,7 +325,8 @@ describe.sequential('LAN ingress', () => {
 		expect(secureWebsocket.headers.cookie).toBe('app-cookie=preserved')
 		const secureClosed = new Promise<void>((resolve) => secureWebsocket.socket.once('close', () => resolve()))
 
-		await umbreld.client.user.revokeAllSessions.mutate()
+		// The app sessions belong to other logins, so revoking other sessions closes both sockets
+		await umbreld.client.user.revokeOtherSessions.mutate()
 		await expect(
 			Promise.all([
 				Promise.race([closed, rejectAfter(5000, 'HTTP app WebSocket remained open')]),

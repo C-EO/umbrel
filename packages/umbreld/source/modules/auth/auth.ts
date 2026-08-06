@@ -380,16 +380,6 @@ export default class Auth {
 		return revokedSessionIds.length
 	}
 
-	async revokeAllSessionsForAccount(principal: Principal) {
-		await this.#validateAccountPrincipal(principal)
-		this.#invalidatePendingSessionIssuance(principal.accountId)
-		const revokedSessionIds = await this.#revokeSessions(
-			(session) => session.accountId === principal.accountId,
-			principal,
-		)
-		return revokedSessionIds.length
-	}
-
 	async revokeSessionForOwner(principal: Principal, accountId: string, sessionId: string) {
 		await this.#validateOwnerPrincipal(principal)
 		const revokedSessionIds = await this.#revokeSessions(

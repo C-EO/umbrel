@@ -1,34 +1,143 @@
+import {parseUserAgent} from './vendored-ua-parser.ts'
+
 export type SessionDeviceType = 'desktop' | 'mobile' | 'unknown'
 
-export function sessionDeviceType(userAgent?: string): SessionDeviceType {
-	if (!userAgent) return 'unknown'
-	if (/Android|iPhone|iPad|iPod|Mobile/i.test(userAgent)) return 'mobile'
-	return 'desktop'
+export type SessionClient = {
+	deviceType: SessionDeviceType
+	/** Normalized browser brand name. Brand names are shown as-is, untranslated. */
+	browser?: string
+	/** Normalized OS name, used for the badge and tooltip, not the row label. */
+	os?: string
+	/** Row label: "Browser (OS)", else whichever is known, else the UA's leading product token (e.g. "curl"). */
+	label?: string
+	browserIcon?: string
+	osIcon?: string
 }
 
-export function describeSessionUserAgent(userAgent?: string) {
-	if (!userAgent) return undefined
+// Display-name overrides for raw parser output (keyed lowercase). Raw captures keep
+// the casing of the UA string itself, and a few upstream labels don't match how the
+// brands are known today.
+const browserNames: Record<string, string> = {
+	'mobile safari': 'Safari',
+	ucbrowser: 'UC Browser',
+	ie: 'Internet Explorer',
+	iemobile: 'Internet Explorer',
+	brave: 'Brave',
+	vivaldi: 'Vivaldi',
+	chromium: 'Chromium',
+	duckduckgo: 'DuckDuckGo',
+	whale: 'Whale',
+	ladybird: 'Ladybird',
+	librewolf: 'LibreWolf',
+	waterfox: 'Waterfox',
+	electron: 'Electron',
+}
 
-	let browser: string | undefined
-	if (/Edg\//.test(userAgent)) browser = 'Microsoft Edge'
-	else if (/OPR\//.test(userAgent)) browser = 'Opera'
-	else if (/Firefox\//.test(userAgent)) browser = 'Firefox'
-	else if (/CriOS\//.test(userAgent)) browser = 'Chrome'
-	else if (/FxiOS\//.test(userAgent)) browser = 'Firefox'
-	else if (/Chrome\//.test(userAgent)) browser = 'Chrome'
-	else if (/Safari\//.test(userAgent) && /Version\//.test(userAgent)) browser = 'Safari'
+// Browser icon slugs under public/assets/session-icons/browsers/ (keyed by
+// lowercased *normalized* name). Browsers without an icon fall back to the
+// generic device glyph in the UI. Chromium-fork detection caveats: Brave and Arc
+// deliberately ship Chrome's exact UA, so desktop Brave and all of Arc render as
+// Chrome; Tor Browser ships Firefox's UA on purpose and renders as Firefox.
+const browserIcons: Record<string, string> = {
+	chrome: 'chrome',
+	'chrome headless': 'chrome',
+	'chrome webview': 'chrome',
+	chromium: 'chromium',
+	edge: 'edge',
+	firefox: 'firefox',
+	'firefox focus': 'firefox',
+	safari: 'safari',
+	opera: 'opera',
+	'opera gx': 'opera-gx',
+	'opera mini': 'opera',
+	'opera touch': 'opera',
+	'opera coast': 'opera',
+	vivaldi: 'vivaldi',
+	'samsung internet': 'samsung-internet',
+	duckduckgo: 'duckduckgo',
+	'uc browser': 'uc-browser',
+	yandex: 'yandex',
+	brave: 'brave',
+	'internet explorer': 'internet-explorer',
+	ladybird: 'ladybird',
+}
 
-	let platform: string | undefined
-	if (/iPhone|iPad|iPod/.test(userAgent)) platform = 'iOS'
-	else if (/Android/.test(userAgent)) platform = 'Android'
-	else if (/Windows/.test(userAgent)) platform = 'Windows'
-	else if (/Macintosh|Mac OS X/.test(userAgent)) platform = 'macOS'
-	else if (/Linux/.test(userAgent)) platform = 'Linux'
+const osNames: Record<string, string> = {
+	'mac os': 'macOS',
+	'chromium os': 'ChromeOS',
+	arch: 'Arch Linux',
+}
 
-	if (browser && platform) return `${browser} on ${platform}`
-	if (browser) return browser
-	if (platform) return platform
+const osIcons: Record<string, string> = {
+	macos: 'apple',
+	ios: 'apple',
+	windows: 'windows',
+	android: 'android',
+	chromeos: 'chromeos',
+	ubuntu: 'ubuntu',
+	kubuntu: 'ubuntu',
+	xubuntu: 'ubuntu',
+	lubuntu: 'ubuntu',
+	debian: 'debian',
+	raspbian: 'debian',
+	fedora: 'fedora',
+	'arch linux': 'arch',
+	freebsd: 'freebsd',
+}
 
+// Anything the distro/unix rules emit that has no dedicated icon still gets Tux.
+const linuxFamily = new Set([
+	'linux',
+	'mint',
+	'suse',
+	'opensuse',
+	'gentoo',
+	'slackware',
+	'mandriva',
+	'centos',
+	'pclinuxos',
+	'red hat',
+	'redhat',
+	'zenwalk',
+	'linpus',
+	'deepin',
+	'manjaro',
+	'elementary os',
+	'sabayon',
+	'linspire',
+	'gnu',
+	'hurd',
+])
+
+function iconUrl(kind: 'browsers' | 'os', slug: string) {
+	return `/assets/session-icons/${kind}/${slug}.png`
+}
+
+export function parseSessionUserAgent(userAgent?: string): SessionClient {
+	if (!userAgent) return {deviceType: 'unknown'}
+
+	const deviceType: SessionDeviceType = /Android|iPhone|iPad|iPod|Mobile/i.test(userAgent) ? 'mobile' : 'desktop'
+	const parsed = parseUserAgent(userAgent)
+
+	const browser = parsed.browser && (browserNames[parsed.browser.toLowerCase()] ?? parsed.browser)
+	const os = parsed.os && (osNames[parsed.os.toLowerCase()] ?? parsed.os)
+
+	const browserSlug = browser && browserIcons[browser.toLowerCase()]
+	const osKey = os?.toLowerCase()
+	const osSlug = osKey && (osIcons[osKey] ?? (linuxFamily.has(osKey) ? 'linux' : undefined))
+
+	// Non-browser clients (curl, UmbrelDesktop/1.0, ...) label themselves by their
+	// leading product token rather than showing "unknown device".
 	const product = /^([A-Za-z][A-Za-z0-9 ._-]{0,39})\//.exec(userAgent)?.[1]
-	return product || undefined
+
+	const label = browser && os ? `${browser} (${os})` : (browser ?? os ?? product ?? undefined)
+
+	return {
+		deviceType,
+		browser,
+		os,
+		label,
+		browserIcon: browserSlug ? iconUrl('browsers', browserSlug) : undefined,
+		osIcon: osSlug ? iconUrl('os', osSlug) : undefined,
+	}
 }

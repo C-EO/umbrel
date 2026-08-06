@@ -389,14 +389,25 @@ describe.sequential('Browser authentication', () => {
 		await expectTrpcStatus('user.get', 401, self)
 	})
 
-	test('revoking all sessions clears cookies, closes live sockets, and revokes every session audience', async () => {
+	test('a full logout closes live sockets and revokes every session audience but the system credential', async () => {
+		// The individual flows are asserted above; this test only cares about the end
+		// state after the full logout the sessions UI composes: "log out other
+		// devices" followed by revoking the current session.
 		secondary = await login('UmbrelFinalSecondary/6.0')
 		const trpcClosed = once(trpcSocket!, 'close')
 		const terminalClosed = once(terminalSocket!, 'close')
-		const logout = await trpc('user.revokeAllSessions', {method: 'POST', session: primary, includeAppCookie: true})
-		expect(trpcData<{revokedCount: number; revokedCurrent: boolean}>(logout)).toEqual({
-			revokedCount: 2,
-			revokedCurrent: true,
+
+		await trpc('user.revokeOtherSessions', {method: 'POST', session: primary})
+		const primarySessions = trpcData<Array<{id: string; current: boolean}>>(
+			await trpc('user.listSessions', {session: primary}),
+		)
+		const primaryId = primarySessions.find((session) => session.current)?.id
+		if (!primaryId) throw new Error('Current session was not listed')
+		const logout = await trpc('user.revokeSession', {
+			method: 'POST',
+			session: primary,
+			includeAppCookie: true,
+			input: {sessionId: primaryId},
 		})
 		await Promise.all([trpcClosed, terminalClosed])
 		expectClearedSessionCookies(logout)

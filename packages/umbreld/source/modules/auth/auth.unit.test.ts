@@ -457,7 +457,6 @@ describe('Auth', () => {
 			'Invalid session',
 		)
 		await expect(auth.revokeOtherSessionsForAccount(systemPrincipal)).rejects.toThrow('Invalid session')
-		await expect(auth.revokeAllSessionsForAccount(systemPrincipal)).rejects.toThrow('Invalid session')
 		await expect(auth.listSessions(forgedPrincipal)).rejects.toThrow('Invalid session')
 		await expect(auth.revokeSessionForAccount(forgedPrincipal, session.principal.sessionId)).rejects.toThrow(
 			'Invalid session',

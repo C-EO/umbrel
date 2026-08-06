@@ -208,13 +208,6 @@ export default router({
 		revokedCount: await ctx.umbreld.auth.revokeOtherSessionsForAccount(ctx.principal!),
 	})),
 
-	revokeAllSessions: privateProcedureWithMembers.mutation(async ({ctx}) => {
-		const revokedCount = await ctx.umbreld.auth.revokeAllSessionsForAccount(ctx.principal!)
-		clearAppGatewayCookies(ctx.response!)
-		clearBrowserSessionCookies(ctx.response!)
-		return {revokedCount, revokedCurrent: true}
-	}),
-
 	revokeAccountSession: privateProcedure
 		.input(
 			z.object({
