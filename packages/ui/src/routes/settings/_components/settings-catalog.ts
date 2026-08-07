@@ -648,10 +648,8 @@ export function createSettingsCatalog(
 		},
 	]
 
-	const memberWallpaperItem = pageItems.find(({id}) => id === 'wallpaper')
-	const visiblePageItems = isMember
-		? [...memberPageItems, ...(memberWallpaperItem ? [memberWallpaperItem] : [])]
-		: pageItems
+	const memberPreferenceItems = pageItems.filter(({id}) => id === 'wallpaper' || id === 'language')
+	const visiblePageItems = isMember ? [...memberPageItems, ...memberPreferenceItems] : pageItems
 	const memberCommandIds = new Set<SettingsItemId>([
 		'account',
 		'sessions',

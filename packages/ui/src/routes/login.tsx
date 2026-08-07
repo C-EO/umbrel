@@ -20,6 +20,7 @@ import {cn} from '@/lib/utils'
 import {AccountDock} from '@/modules/auth/account-dock'
 import {OWNER_USER_ID} from '@/modules/auth/constants'
 import {LoginForm} from '@/modules/auth/login-form'
+import {useAccountLanguage} from '@/modules/auth/use-account-language'
 import {useAccountPicker, type Account} from '@/modules/auth/use-account-picker'
 import {useAuth} from '@/modules/auth/use-auth'
 import {getWallpaperThumbUrl, Wallpaper, wallpapersKeyed, type WallpaperId} from '@/providers/wallpaper'
@@ -60,6 +61,7 @@ export default function Login() {
 
 	// The account being authenticated. On a single-user device this is the owner.
 	const userId = account?.userId ?? OWNER_USER_ID
+	useAccountLanguage(account?.language)
 	const selectedUserIdRef = useRef(userId)
 	selectedUserIdRef.current = userId
 	// This ref closes the small gap between mutate() and the React Query render

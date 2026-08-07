@@ -325,7 +325,7 @@ export default router({
 			role: 'owner' as const,
 			homePath: '/Home',
 			wallpaper: user.wallpaper,
-			language: user.language,
+			language: user.language ?? 'en',
 			temperatureUnit: user.temperatureUnit,
 		}
 	}),
@@ -364,7 +364,6 @@ export default router({
 
 	language: publicProcedure.query(async ({ctx}) => {
 		const accountId = await resolveOptionalAccountId(ctx)
-		if (accountId !== OWNER_USER_ID) return (await ctx.user.getMember(accountId))?.language ?? null
-		return (await ctx.user.get())?.language ?? null
+		return (await ctx.user.getAccountLanguage(accountId)) ?? null
 	}),
 })

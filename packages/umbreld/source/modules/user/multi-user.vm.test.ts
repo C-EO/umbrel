@@ -268,7 +268,7 @@ describe('Multi-user accounts', () => {
 
 	test('listAccounts() initially returns just the owner', async () => {
 		await expect(umbreld.client.user.listAccounts.query()).resolves.toStrictEqual([
-			{userId: '0', name: ownerCredentials.name, wallpaper: '22'},
+			{userId: '0', name: ownerCredentials.name, wallpaper: '22', language: 'en'},
 		])
 	})
 
@@ -311,8 +311,8 @@ describe('Multi-user accounts', () => {
 
 	test('listAccounts() returns the owner and the member', async () => {
 		const accounts = [
-			{userId: '0', name: ownerCredentials.name, wallpaper: '22'},
-			{userId: memberUserId, name: memberCredentials.name, wallpaper: '22'},
+			{userId: '0', name: ownerCredentials.name, wallpaper: '22', language: 'en'},
+			{userId: memberUserId, name: memberCredentials.name, wallpaper: '22', language: 'en'},
 		]
 		await expect(umbreld.client.user.listAccounts.query()).resolves.toStrictEqual(accounts)
 
@@ -349,6 +349,47 @@ describe('Multi-user accounts', () => {
 		const account = await umbreld.client.user.get.query()
 		expect(account.name).toBe(memberCredentials.name)
 		expect(account.role).toBe('member')
+	})
+
+	test("member starts with the owner's language at creation", async () => {
+		// The member copied English when it was created. Later owner changes are independent.
+		await loginAs(ownerToken)
+		await umbreld.client.user.set.mutate({language: 'fr'})
+
+		await loginAs(memberToken)
+		await expect(umbreld.client.user.get.query()).resolves.toMatchObject({language: 'en'})
+		await expect(umbreld.client.user.language.query()).resolves.toBe('en')
+		await expect(umbreld.client.user.listAccounts.query()).resolves.toContainEqual({
+			userId: memberUserId,
+			name: memberCredentials.name,
+			wallpaper: '22',
+			language: 'en',
+		})
+	})
+
+	test('member language preference overrides the owner without changing it', async () => {
+		await loginAs(memberToken)
+		await umbreld.client.user.set.mutate({language: 'de'})
+		await expect(umbreld.client.user.get.query()).resolves.toMatchObject({language: 'de'})
+		await expect(umbreld.client.user.language.query()).resolves.toBe('de')
+
+		// The legacy unauthenticated endpoint remains owner-scoped, while the
+		// account picker payload exposes the selected member's effective language.
+		await expect(umbreld.unauthenticatedClient.user.language.query()).resolves.toBe('fr')
+		await expect(umbreld.unauthenticatedClient.user.listAccounts.query()).resolves.toContainEqual({
+			userId: memberUserId,
+			name: memberCredentials.name,
+			wallpaper: '22',
+			language: 'de',
+		})
+
+		// Later owner changes do not replace the member's explicit preference.
+		await loginAs(ownerToken)
+		await umbreld.client.user.set.mutate({language: 'es'})
+		await expect(umbreld.client.user.language.query()).resolves.toBe('es')
+
+		await loginAs(memberToken)
+		await expect(umbreld.client.user.language.query()).resolves.toBe('de')
 	})
 
 	test("member's home has the default skeleton at /Users/<slug>", async () => {
@@ -557,6 +598,7 @@ describe('Multi-user accounts', () => {
 			userId: memberUserId,
 			name: memberCredentials.name,
 			wallpaper: '3',
+			language: 'de',
 		})
 
 		// Members can't take an existing account's name
@@ -1623,7 +1665,7 @@ mkdir -p '${umbreld.vm.dataDirectory}/network/future-nas/media'
 		memberWsCloseCountBeforeDeletion = memberWsCloseCount
 		await expect(umbreld.client.user.deleteUser.mutate({userId: memberUserId})).resolves.toBe(true)
 		await expect(umbreld.client.user.listAccounts.query()).resolves.toStrictEqual([
-			{userId: '0', name: ownerCredentials.name, wallpaper: '22'},
+			{userId: '0', name: ownerCredentials.name, wallpaper: '22', language: 'es'},
 		])
 	})
 

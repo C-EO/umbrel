@@ -76,9 +76,11 @@ describe('settings catalog search', () => {
 		expect(page.items).not.toHaveLength(0)
 		expect(page.items.every(({category}) => category === 'account')).toBe(true)
 		expect(page.items.find(({id}) => id === 'change-name')?.description).toBe('Alice Member')
+		expect(page.items.map(({id}) => id)).toContain('language')
 		expect(commandIds).not.toContain('advanced')
 		expect(getSettingsCommandItems(memberCatalog, 'restart')).toEqual([])
 		expect(getSettingsCommandItems(memberCatalog, 'change-password').map(({id}) => id)).toContain('change-password')
+		expect(getSettingsCommandItems(memberCatalog, 'settings.language').map(({id}) => id)).toContain('language')
 	})
 
 	it('filters by category without changing row categories', () => {

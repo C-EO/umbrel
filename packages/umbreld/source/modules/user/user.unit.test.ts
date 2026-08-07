@@ -112,6 +112,27 @@ describe('member lifecycle', () => {
 		expect((await umbreld.user.listMembers()).filter((member) => member.name === 'Shared name')).toHaveLength(1)
 	})
 
+	test("copies the owner's language when creating a member, then keeps both preferences independent", async () => {
+		await umbreld.user.setAccountLanguage('0', 'fr')
+		const member = await umbreld.user.createUser('Alice', 'passwordpassword')
+		await expect(umbreld.user.getAccountLanguage(member.userId)).resolves.toBe('fr')
+		await expect(umbreld.user.listAccounts()).resolves.toEqual([
+			{userId: '0', name: 'Owner', wallpaper: undefined, language: 'fr'},
+			{userId: member.userId, name: 'Alice', wallpaper: undefined, language: 'fr'},
+		])
+
+		await umbreld.user.setAccountLanguage('0', 'es')
+		await expect(umbreld.user.getAccountLanguage(member.userId)).resolves.toBe('fr')
+
+		await umbreld.user.setAccountLanguage(member.userId, 'de')
+		await expect(umbreld.user.getAccountLanguage(member.userId)).resolves.toBe('de')
+		await expect(umbreld.user.getAccountLanguage('0')).resolves.toBe('es')
+		await expect(umbreld.user.listAccounts()).resolves.toEqual([
+			{userId: '0', name: 'Owner', wallpaper: undefined, language: 'es'},
+			{userId: member.userId, name: 'Alice', wallpaper: undefined, language: 'de'},
+		])
+	})
+
 	test('does not issue a session from password and MFA state verified before an account reset', async () => {
 		await umbreld.auth.start()
 		const member = await umbreld.user.createUser('Satoshi', 'old-password')

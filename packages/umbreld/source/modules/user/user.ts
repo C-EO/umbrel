@@ -15,7 +15,7 @@ export type Member = {
 	// Per-member profile settings, mirroring the owner's user object
 	totpUri?: string
 	wallpaper?: string
-	language?: string
+	language: string
 	temperatureUnit?: string
 	viewPreferences?: Partial<ViewPreferences>
 }
@@ -240,12 +240,18 @@ export default class User {
 	}
 
 	// List all accounts on this device (no password hashes)
-	async listAccounts(): Promise<{userId: string; name: string; wallpaper?: string}[]> {
+	async listAccounts(): Promise<{userId: string; name: string; wallpaper?: string; language: string}[]> {
 		const owner = await this.get()
 		const members = await this.listMembers()
+		const ownerLanguage = owner?.language ?? 'en'
 		return [
-			{userId: OWNER_USER_ID, name: owner?.name ?? '', wallpaper: owner?.wallpaper},
-			...members.map((member) => ({userId: member.id, name: member.name, wallpaper: member.wallpaper})),
+			{userId: OWNER_USER_ID, name: owner?.name ?? '', wallpaper: owner?.wallpaper, language: ownerLanguage},
+			...members.map((member) => ({
+				userId: member.id,
+				name: member.name,
+				wallpaper: member.wallpaper,
+				language: member.language,
+			})),
 		]
 	}
 
@@ -277,7 +283,7 @@ export default class User {
 			let id = capitalise(base)
 			for (let suffix = 2; takenIds.has(id); suffix++) id = capitalise(`${base}-${suffix}`)
 
-			member = {id, name, hashedPassword}
+			member = {id, name, hashedPassword, language: owner?.language ?? 'en'}
 			await set('members', [...memberRecords, member])
 		})
 		if (!member) throw new Error('User creation failed')
@@ -493,6 +499,17 @@ export default class User {
 	async setAccountLanguage(userId: string, language: string) {
 		if (userId === OWNER_USER_ID) return this.setLanguage(language)
 		return this.#updateMember(userId, {language})
+	}
+
+	// Each account has an explicit language. Members copy the owner's current
+	// language when created, then both preferences remain independent.
+	async getAccountLanguage(userId: string) {
+		if (userId !== OWNER_USER_ID) {
+			const member = await this.getMember(userId)
+			return member?.language
+		}
+		const owner = await this.get()
+		return owner ? (owner.language ?? 'en') : undefined
 	}
 
 	// Set any account's temperature unit preference

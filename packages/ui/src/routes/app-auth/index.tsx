@@ -12,6 +12,7 @@ import {cn} from '@/lib/utils'
 import {AccountDock} from '@/modules/auth/account-dock'
 import {OWNER_USER_ID} from '@/modules/auth/constants'
 import {LoginForm} from '@/modules/auth/login-form'
+import {useAccountLanguage} from '@/modules/auth/use-account-language'
 import {useAccountPicker, type Account} from '@/modules/auth/use-account-picker'
 import {useWallpaperCssVars, WallpaperId, wallpaperIds} from '@/providers/wallpaper'
 import {firstNameFromFullName} from '@/utils/misc'
@@ -63,6 +64,7 @@ export default function LoginWithUmbrel() {
 		setHoveredIndex,
 	} = useAccountPicker(rawAccounts)
 	const userId = account?.userId ?? OWNER_USER_ID
+	useAccountLanguage(account?.language)
 	const selectedUserIdRef = useRef(userId)
 	selectedUserIdRef.current = userId
 	const activeLoginAttemptRef = useRef<LoginAttempt | undefined>(undefined)
