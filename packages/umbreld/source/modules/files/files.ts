@@ -444,15 +444,14 @@ export default class Files {
 	// exact call created it.
 	async createDirectory(virtualPath: string, userId: string = OWNER_USER_ID) {
 		virtualPath = normalizePath(virtualPath)
-		await this.assertCloudMutablePath(virtualPath, userId)
+		const path = await this.virtualToSystemPath(virtualPath, userId)
+		if ((await fse.lstat(path).catch(() => undefined))?.isDirectory()) return {created: false as const}
+		if (this.isCloudPathOverlap(virtualPath)) throw new Error('[cloud-read-only]')
 
 		// Check if operation is allowed
 		const containingDirectory = nodePath.dirname(virtualPath)
 		const containingDirectoryAllowedOperations = await this.getAllowedOperations(containingDirectory, userId)
 		if (!containingDirectoryAllowedOperations.includes('writable')) throw new Error('[operation-not-allowed]')
-
-		// Get system path
-		const path = await this.virtualToSystemPath(virtualPath, userId)
 
 		// Create the directory
 		try {

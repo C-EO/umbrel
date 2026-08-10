@@ -275,7 +275,11 @@ printf '%s' 'local junk' > '${destinationSystemPath}/.DS_Store'
 		expect(listing.operations).toEqual(expect.arrayContaining(['copy', 'favorite', 'share']))
 		expect(listing.operations).not.toEqual(expect.arrayContaining(['writable', 'move', 'rename', 'trash', 'delete']))
 
+		await expect(createDirectory('/Home/Cloud')).resolves.toEqual({created: false})
+		await expect(createDirectory(destination)).resolves.toEqual({created: false})
+		await expect(createDirectory(`${destination}/nested`)).resolves.toEqual({created: false})
 		await expectCloudReadOnly(createDirectory(`${destination}/new-directory`))
+		await expectCloudReadOnly(createDirectory(`${destination}/hello.txt`))
 		await expectCloudReadOnly(
 			umbreld.client.files.rename.mutate({path: `${destination}/hello.txt`, newName: 'renamed.txt'}),
 		)
