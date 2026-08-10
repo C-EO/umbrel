@@ -73,8 +73,9 @@ export function getDeviceHealth(device: StorageDevice) {
 // Hook to detect storage devices
 export function useDetectStorageDevices() {
 	const query = trpcReact.hardware.internalStorage.getDevices.useQuery(undefined, {
-		// Poll every 10 seconds to keep temperature and health status up to date
-		refetchInterval: 10_000,
+		// Poll every 3 seconds so newly attached drives show up quickly during onboarding
+		// (also keeps temperature and health status up to date)
+		refetchInterval: 3_000,
 	})
 
 	return {

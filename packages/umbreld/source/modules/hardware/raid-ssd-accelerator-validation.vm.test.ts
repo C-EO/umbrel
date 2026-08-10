@@ -76,13 +76,13 @@ describe('RAID SSD accelerator validation', () => {
 		)
 	})
 
-	test('rejects replacing a storage device with an accelerator device already in the array', async () => {
+	test('rejects replacing a healthy storage device with itself', async () => {
 		await expect(
 			umbreld.client.hardware.raid.replaceDevice.mutate({
 				oldDevice: ssdDeviceId1,
 				newDevice: ssdDeviceId1,
 			}),
-		).rejects.toThrow('Cannot replace with a device that is already in the RAID array')
+		).rejects.toThrow('Cannot replace a healthy device with itself')
 	})
 
 	test('can still see spare SSDs after the rejection paths', async () => {

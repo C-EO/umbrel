@@ -20,9 +20,11 @@ type InstallSsdDialogProps = {
 	open: boolean
 	onOpenChange: (open: boolean) => void
 	isUmbrelPro: boolean
+	/** Use generic drive wording instead of SSD (list-based manager on HDD pools) */
+	isHdd?: boolean
 }
 
-export function InstallSsdDialog({open, onOpenChange, isUmbrelPro}: InstallSsdDialogProps) {
+export function InstallSsdDialog({open, onOpenChange, isUmbrelPro, isHdd = false}: InstallSsdDialogProps) {
 	const {t} = useTranslation()
 	const [showInstallTips, setShowInstallTips] = useState(false)
 	const [showShutdownConfirmation, setShowShutdownConfirmation] = useState(false)
@@ -39,15 +41,22 @@ export function InstallSsdDialog({open, onOpenChange, isUmbrelPro}: InstallSsdDi
 		}
 	}, [open])
 
+	// dv('storage-manager.install-ssd.foo') resolves to '...foo-drive' for HDD pools
+	const dv = (key: string) => t(isHdd ? `${key}-drive` : key)
+
 	const deviceName = isUmbrelPro ? 'Umbrel Pro' : 'device'
-	const steps = [
-		t('storage-manager.install-ssd.step-shut-down', {deviceName}),
-		...(isUmbrelPro ? [t('storage-manager.install-ssd.step-remove-bottom-cover')] : []),
-		t('storage-manager.install-ssd.step-insert'),
-		...(isUmbrelPro ? [t('storage-manager.install-ssd.step-replace-bottom-cover')] : []),
-		t('storage-manager.install-ssd.step-power-on', {deviceName}),
-		t('storage-manager.install-ssd.step-return'),
-	]
+	// HDDs sit in drive bays which are hot-swappable on most NAS hardware, so the shutdown
+	// steps become an "only if your bays aren't hot-swappable" note
+	const steps = isHdd
+		? [dv('storage-manager.install-ssd.step-insert'), dv('storage-manager.install-ssd.step-return')]
+		: [
+				t('storage-manager.install-ssd.step-shut-down', {deviceName}),
+				...(isUmbrelPro ? [t('storage-manager.install-ssd.step-remove-bottom-cover')] : []),
+				dv('storage-manager.install-ssd.step-insert'),
+				...(isUmbrelPro ? [t('storage-manager.install-ssd.step-replace-bottom-cover')] : []),
+				t('storage-manager.install-ssd.step-power-on', {deviceName}),
+				dv('storage-manager.install-ssd.step-return'),
+			]
 
 	return (
 		<>
@@ -55,8 +64,8 @@ export function InstallSsdDialog({open, onOpenChange, isUmbrelPro}: InstallSsdDi
 				<DialogScrollableContent>
 					<div className='flex flex-col gap-5 p-5'>
 						<DialogHeader>
-							<DialogTitle>{t('storage-manager.install-ssd.title')}</DialogTitle>
-							<DialogDescription>{t('storage-manager.install-ssd.description')}</DialogDescription>
+							<DialogTitle>{dv('storage-manager.install-ssd.title')}</DialogTitle>
+							<DialogDescription>{dv('storage-manager.install-ssd.description')}</DialogDescription>
 						</DialogHeader>
 
 						{/* Instruction steps */}
@@ -70,6 +79,8 @@ export function InstallSsdDialog({open, onOpenChange, isUmbrelPro}: InstallSsdDi
 								</div>
 							))}
 						</div>
+
+						{isHdd && <p className='text-12 text-white/40'>{t('storage-manager.swap.hot-swap-note')}</p>}
 
 						{/* Collapsible installation tips - Umbrel Pro only */}
 						{isUmbrelPro && (

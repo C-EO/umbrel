@@ -69,7 +69,6 @@ export default router({
 			if (isUmbrelPro && !hasRaidDetails) {
 				throw new TRPCError({code: 'BAD_REQUEST', message: 'RAID devices are required for Umbrel Pro'})
 			}
-
 			if (hasRaidDetails) {
 				await ctx.umbreld.hardware.raid.triggerInitialRaidSetupBootFlow(
 					input.raidDevices!,

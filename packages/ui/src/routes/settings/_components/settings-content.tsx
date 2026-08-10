@@ -17,7 +17,6 @@ import {useBackups} from '@/features/backups/hooks/use-backups'
 import {getDeviceHealth} from '@/features/storage/hooks/use-storage'
 import {useCpuTemperature} from '@/hooks/use-cpu-temperature'
 import {useIsHomeOrPro} from '@/hooks/use-is-home-or-pro'
-import {useIsUmbrelPro} from '@/hooks/use-is-umbrel-pro'
 import {cn} from '@/lib/utils'
 import {DesktopPreviewConnected, DesktopPreviewFrame} from '@/modules/desktop/desktop-preview'
 import {WifiListRowConnectedDescription} from '@/modules/wifi/wifi-list-row-connected-description'
@@ -56,7 +55,6 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 	const rowsScrollRef = useRef<HTMLDivElement>(null)
 
 	const cpuTemp = useCpuTemperature({enabled: !isMember})
-	const {isUmbrelPro} = useIsUmbrelPro({enabled: !isMember})
 	const {deviceName} = useIsHomeOrPro()
 	const {wallpaper} = useWallpaper()
 
@@ -64,8 +62,8 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 		t.user.get(),
 		t.wifi.supported(undefined, {enabled: !isMember}),
 		t.user.is2faEnabled(undefined, {enabled: isMember}),
-		t.hardware.raid.getStatus(undefined, {enabled: !isMember && isUmbrelPro}),
-		t.hardware.internalStorage.getDevices(undefined, {enabled: !isMember && isUmbrelPro}),
+		t.hardware.raid.getStatus(undefined, {enabled: !isMember}),
+		t.hardware.internalStorage.getDevices(undefined, {enabled: !isMember}),
 	])
 	const wifiQ = trpcReact.wifi.connected.useQuery(undefined, {enabled: !isMember && wifiSupportedQ.data === true})
 	const {repositories: backupRepositories, isLoadingRepositories: isLoadingBackups} = useBackups({

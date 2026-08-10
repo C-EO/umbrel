@@ -13,7 +13,6 @@ import {SETTINGS_SYSTEM_CARDS_ID} from '@/constants'
 import {getDeviceHealth} from '@/features/storage/hooks/use-storage'
 import {useCpuTemperature} from '@/hooks/use-cpu-temperature'
 import {useIsHomeOrPro} from '@/hooks/use-is-home-or-pro'
-import {useIsUmbrelPro} from '@/hooks/use-is-umbrel-pro'
 import {useQueryParams} from '@/hooks/use-query-params'
 import {cn} from '@/lib/utils'
 import {DesktopPreviewConnected, DesktopPreviewFrame} from '@/modules/desktop/desktop-preview'
@@ -51,13 +50,12 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 	const wifiSupportedQ = trpcReact.wifi.supported.useQuery(undefined, {enabled: !isMember})
 	const wifiQ = trpcReact.wifi.connected.useQuery(undefined, {enabled: !isMember && wifiSupportedQ.data === true})
 	const is2faEnabledQ = trpcReact.user.is2faEnabled.useQuery(undefined, {enabled: isMember})
-	const {isUmbrelPro} = useIsUmbrelPro({enabled: !isMember})
 	const {deviceName} = useIsHomeOrPro()
 	const {wallpaper} = useWallpaper()
 	const {setHideCloseButton} = useSheetStickyHeader()
-	const raidStatusQ = trpcReact.hardware.raid.getStatus.useQuery(undefined, {enabled: !isMember && isUmbrelPro})
+	const raidStatusQ = trpcReact.hardware.raid.getStatus.useQuery(undefined, {enabled: !isMember})
 	const devicesQ = trpcReact.hardware.internalStorage.getDevices.useQuery(undefined, {
-		enabled: !isMember && isUmbrelPro,
+		enabled: !isMember,
 	})
 
 	const [searchQuery, setSearchQuery] = useState('')

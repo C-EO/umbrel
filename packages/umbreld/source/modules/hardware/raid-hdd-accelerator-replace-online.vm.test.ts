@@ -89,6 +89,15 @@ describe('RAID HDD accelerator replacement with an online device', () => {
 		})
 	})
 
+	test('rejects replacing an accelerator with another device already in the accelerator', async () => {
+		await expect(
+			umbreld.client.hardware.raid.replaceDevice.mutate({
+				oldDevice: acceleratorDeviceId1,
+				newDevice: acceleratorDeviceId2,
+			}),
+		).rejects.toThrow('Cannot replace with a device that is already in the accelerator')
+	})
+
 	test('replaces one accelerator SSD while it is online', async () => {
 		replaceSubscription = umbreld.subscribeToEvents<ReplaceStatus>('raid:replace-progress')
 

@@ -44,6 +44,8 @@ const CreateAccount = React.lazy(() => import('./routes/onboarding/create-accoun
 const AccountCreated = React.lazy(() => import('./routes/onboarding/account-created'))
 const Raid = React.lazy(() => import('./routes/onboarding/raid'))
 const RaidSetup = React.lazy(() => import('./routes/onboarding/raid/setup'))
+const HddRaid = React.lazy(() => import('./routes/onboarding/hdd-raid'))
+const HddRaidSetup = React.lazy(() => import('./routes/onboarding/hdd-raid/setup'))
 const FactoryReset = React.lazy(() => import('./routes/factory-reset'))
 const OnboardingRestore = React.lazy(() => import('./routes/onboarding/restore'))
 const RaidError = React.lazy(() => import('./routes/raid-error'))
@@ -261,6 +263,22 @@ export const router = createBrowserRouter([
 						<RaidSetup />
 					</EnsureProDevice>
 				),
+			},
+			// HDD RAID setup flow (generic devices with internal hard drives)
+			{
+				path: 'hdd-raid',
+				element: (
+					<EnsureUserDoesntExist>
+						<HddRaid />
+					</EnsureUserDoesntExist>
+				),
+			},
+			{
+				// No EnsureUserDoesntExist guard for the same reason as raid/setup above:
+				// setup spans the reboot that creates the user. The component protects itself
+				// by checking for credentials in location.state and redirecting if missing.
+				path: 'hdd-raid/setup',
+				element: <HddRaidSetup />,
 			},
 			{
 				path: 'account-created',

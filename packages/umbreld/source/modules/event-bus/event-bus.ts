@@ -30,6 +30,7 @@ export const events = [
 	'raid:failsafe-transition-progress',
 	'raid:rebuild-progress',
 	'raid:replace-progress',
+	'raid:status-change',
 ] as const satisfies readonly (keyof EventTypes)[]
 
 // Statically define event types
@@ -68,6 +69,9 @@ export type EventTypes = {
 	'raid:rebuild-progress': RebuildStatus
 	// Fires when RAID replace progress changes
 	'raid:replace-progress': ReplaceStatus
+	// Fires when the RAID pool's user-visible state changes: pool status, data or
+	// accelerator membership, per-member status, raid type or topology
+	'raid:status-change': undefined
 }
 
 export default class EventBus {

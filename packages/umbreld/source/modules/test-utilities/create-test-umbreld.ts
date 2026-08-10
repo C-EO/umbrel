@@ -155,7 +155,12 @@ function createTestHelpers(port: number) {
 		raidType?: 'storage' | 'failsafe'
 		acceleratorDevices?: string[]
 	} = {}) {
-		await unauthenticatedClient.user.register.mutate({...userCredentials, raidDevices, raidType, acceleratorDevices})
+		await unauthenticatedClient.user.register.mutate({
+			...userCredentials,
+			raidDevices,
+			raidType,
+			acceleratorDevices,
+		})
 	}
 
 	async function login() {
@@ -578,6 +583,14 @@ export async function createTestVm({
 		await $({env})`${vmScript} nvme disconnect ${slot}`
 	}
 
+	async function disconnectSata({slot}: {slot: number}) {
+		await $({env})`${vmScript} sata disconnect ${slot}`
+	}
+
+	async function connectSata({slot}: {slot: number}) {
+		await $({env})`${vmScript} sata connect ${slot}`
+	}
+
 	async function connectNvme({slot}: {slot: number}) {
 		await $({env})`${vmScript} nvme connect ${slot}`
 	}
@@ -725,6 +738,8 @@ printf '\\n${authFailureMarker}\\n'
 		removeNvme,
 		disconnectNvme,
 		connectNvme,
+		disconnectSata,
+		connectSata,
 		moveNvme,
 		addHdd,
 		addSataSsd,

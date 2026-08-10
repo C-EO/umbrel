@@ -61,6 +61,7 @@ export function ReplaceFailedDriveDialog({
 	const isDeviceTooSmall = minRoundedDriveSize > 0 && (newDevice.roundedSize ?? newDevice.size) < minRoundedDriveSize
 
 	const {hasWarning} = getDeviceHealth(newDevice)
+	const isHdd = newDevice.type === 'hdd'
 
 	const handleReplace = () => {
 		if (!newDevice?.id || !failedDevice?.id) return
@@ -89,8 +90,14 @@ export function ReplaceFailedDriveDialog({
 			<DialogScrollableContent>
 				<div className='flex flex-col gap-5 p-5'>
 					<DialogHeader>
-						<DialogTitle>{t('storage-manager.replace-failed.title')}</DialogTitle>
-						<DialogDescription>{t('storage-manager.replace-failed.description')}</DialogDescription>
+						<DialogTitle>
+							{isHdd ? t('storage-manager.replace-failed.title-drive') : t('storage-manager.replace-failed.title')}
+						</DialogTitle>
+						<DialogDescription>
+							{isHdd
+								? t('storage-manager.replace-failed.description-drive')
+								: t('storage-manager.replace-failed.description')}
+						</DialogDescription>
 					</DialogHeader>
 
 					{/* Degraded warning banner */}
@@ -100,11 +107,16 @@ export function ReplaceFailedDriveDialog({
 							<span className='text-13 font-semibold text-destructive2'>
 								{t('storage-manager.replace-failed.degraded')}
 							</span>
-							<span className='text-12 text-white/60'>{t('storage-manager.replace-failed.degraded-description')}</span>
+							<span className='text-12 text-white/60'>
+								{isHdd
+									? t('storage-manager.replace-failed.degraded-description-drive')
+									: t('storage-manager.replace-failed.degraded-description')}
+							</span>
 						</div>
 					</div>
 
-					{/* New SSD summary */}
+					{/* New device summary - "SSD" and "Slot" labels are not translated as they match physical
+					    device markings. Devices without physical slots (non-Pro) show model and size instead. */}
 					<div className='flex flex-col divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
 						<div className='flex items-center justify-between gap-2 px-3 py-2.5'>
 							<div className='flex items-center gap-2'>
@@ -113,14 +125,19 @@ export function ReplaceFailedDriveDialog({
 								) : (
 									<TbCircleCheckFilled className='size-5 text-brand' />
 								)}
-								{/* "SSD" and "Slot" labels are not translated as they match physical device markings */}
 								<span className='text-[13px] font-medium text-white/60'>
-									<Trans
-										t={t}
-										i18nKey='storage-manager.replace-failed.ssd-in-slot'
-										values={{size: formatStorageSize(newDevice.size), slot: newDevice.slot}}
-										components={{highlight: <Highlight />}}
-									/>
+									{newDevice.slot ? (
+										<Trans
+											t={t}
+											i18nKey='storage-manager.replace-failed.ssd-in-slot'
+											values={{size: formatStorageSize(newDevice.size), slot: newDevice.slot}}
+											components={{highlight: <Highlight />}}
+										/>
+									) : (
+										<>
+											<Highlight>{formatStorageSize(newDevice.size)}</Highlight> · {newDevice.model}
+										</>
+									)}
 								</span>
 							</div>
 						</div>
@@ -132,13 +149,20 @@ export function ReplaceFailedDriveDialog({
 							<TbAlertTriangle className='mt-0.5 size-5 shrink-0 text-[#F5A623]' />
 							<div className='flex flex-col gap-1'>
 								<span className='text-13 font-semibold text-[#F5A623]'>
-									{t('storage-manager.replace-failed.too-small')}
+									{isHdd
+										? t('storage-manager.replace-failed.too-small-drive')
+										: t('storage-manager.replace-failed.too-small')}
 								</span>
 								<span className='text-12 text-white/60'>
-									{t('storage-manager.replace-failed.too-small-description', {
-										deviceSize: formatStorageSize(newDevice.size),
-										minSize: formatStorageSize(minRoundedDriveSize),
-									})}
+									{t(
+										isHdd
+											? 'storage-manager.replace-failed.too-small-description-drive'
+											: 'storage-manager.replace-failed.too-small-description',
+										{
+											deviceSize: formatStorageSize(newDevice.size),
+											minSize: formatStorageSize(minRoundedDriveSize),
+										},
+									)}
 								</span>
 							</div>
 						</div>
@@ -150,7 +174,9 @@ export function ReplaceFailedDriveDialog({
 							</span>
 							<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
 								{[
-									t('storage-manager.replace-failed.step-rebuild'),
+									isHdd
+										? t('storage-manager.replace-failed.step-rebuild-drive')
+										: t('storage-manager.replace-failed.step-rebuild'),
 									t('storage-manager.replace-failed.step-time'),
 									t('storage-manager.replace-failed.step-protected'),
 								].map((step, index) => (

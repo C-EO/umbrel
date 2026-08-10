@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react'
+import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {TbAlertTriangleFilled, TbCircleCheckFilled, TbDatabase} from 'react-icons/tb'
 
@@ -14,12 +14,11 @@ import {
 } from '@/components/ui/alert-dialog'
 import {Layout, primaryButtonProps, secondaryButtonClasss} from '@/layouts/bare/shared'
 import {Progress} from '@/modules/bare/progress'
-import {useGlobalSystemState} from '@/providers/global-system-state/index'
-import {trpcClient, trpcReact} from '@/trpc/trpc'
 
 import {SsdHealthDialog, useSsdHealthDialog} from './ssd-health-dialog'
 import {SsdSlot, SsdTray} from './ssd-tray'
 import {formatSize, getDeviceHealth, StorageDevice} from './use-raid-setup'
+import {useRecoverExistingInstall} from './use-recover-existing-install'
 
 type RecoverExistingInstallProps = {
 	devices: StorageDevice[]
@@ -28,49 +27,10 @@ type RecoverExistingInstallProps = {
 
 export function RecoverExistingInstall({devices, onSetUpAsNew}: RecoverExistingInstallProps) {
 	const {t} = useTranslation()
-	const {suppressErrors} = useGlobalSystemState()
 	const healthDialog = useSsdHealthDialog()
-	const [restoreRequested, setRestoreRequested] = useState(false)
-	const [restoreFailed, setRestoreFailed] = useState(false)
 	const [showSetUpAsNewDialog, setShowSetUpAsNewDialog] = useState(false)
 
-	const recoverMut = trpcReact.hardware.raid.recoverExistingInstall.useMutation()
-
-	// Poll system status with the vanilla client to detect when the recovery reboot has completed.
-	// The backend sets status to 'restarting' before the mutation resolves, so polls from here on
-	// return 'restarting' until the device goes down, then fail while it reboots — a fresh 'running'
-	// can only mean the reboot finished. We deliberately avoid the shared react-query cache here: it
-	// already holds a stale pre-reboot 'running' from the global system state provider's background
-	// polling, which would trigger the redirect before the reboot even starts.
-	const rebootStarted = recoverMut.data === true
-	useEffect(() => {
-		if (!rebootStarted) return
-		const interval = setInterval(async () => {
-			try {
-				const status = await trpcClient.system.status.query()
-				// Land on `/` and let the router guards route the outcome: login on a successful
-				// recovery, or the RAID error screen if the pool failed to mount.
-				if (status === 'running') window.location.href = '/'
-			} catch {
-				// Expected while the device is down mid-reboot — keep polling
-			}
-		}, 2000)
-		return () => clearInterval(interval)
-	}, [rebootStarted])
-
-	const handleRestore = async () => {
-		suppressErrors()
-		setRestoreRequested(true)
-		setRestoreFailed(false)
-		recoverMut.reset()
-
-		try {
-			const recovered = await recoverMut.mutateAsync()
-			if (!recovered) setRestoreFailed(true)
-		} catch {
-			setRestoreFailed(true)
-		}
-	}
+	const {handleRestore, restoreRequested, restoreFailed, errorMessage} = useRecoverExistingInstall()
 
 	const slots: (SsdSlot | null)[] = [null, null, null, null]
 	devices.forEach((device) => {
@@ -128,7 +88,7 @@ export function RecoverExistingInstall({devices, onSetUpAsNew}: RecoverExistingI
 	}
 
 	if (restoreFailed) {
-		const errorMessage = recoverMut.error?.message ?? t('onboarding.raid.recovery.failed.description')
+		const failedMessage = errorMessage ?? t('onboarding.raid.recovery.failed.description')
 
 		return (
 			<>
@@ -140,7 +100,7 @@ export function RecoverExistingInstall({devices, onSetUpAsNew}: RecoverExistingI
 					>
 						{t('onboarding.raid.recovery.failed.title')}
 					</h1>
-					<p className='max-w-[360px] text-center text-[15px] text-white/70'>{errorMessage}</p>
+					<p className='max-w-[360px] text-center text-[15px] text-white/70'>{failedMessage}</p>
 					<div className='flex flex-col gap-3 sm:flex-row'>
 						<button onClick={handleRestore} {...primaryButtonProps}>
 							{t('onboarding.raid.try-again')}

@@ -11,7 +11,7 @@
 		"build": "vite build",
 		"lint": "eslint .",
 		"test": "vitest run --exclude '**/*.unit.test.ts'",
-		"test:unit": "node --experimental-strip-types --test src/modules/auth/*.unit.test.ts src/routes/settings/terminal/*.unit.test.ts",
+		"test:unit": "node --experimental-strip-types --test src/modules/auth/*.unit.test.ts src/routes/settings/terminal/*.unit.test.ts src/features/storage/*.unit.test.ts src/routes/onboarding/hdd-raid/*.unit.test.ts",
 		"typecheck": "tsc --noEmit",
 		"preview": "vite preview",
 		"format": "prettier --write .",

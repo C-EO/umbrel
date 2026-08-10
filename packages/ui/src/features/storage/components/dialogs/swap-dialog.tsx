@@ -28,7 +28,10 @@ type SwapDialogProps = {
 	open: boolean
 	onOpenChange: (open: boolean) => void
 	raidType?: 'storage' | 'failsafe'
-	slot: number | null
+	/** Umbrel Pro slot of the device being swapped */
+	slot?: number | null
+	/** Device id of the device being swapped - used on devices without physical slots */
+	oldDeviceId?: string | null
 	isUmbrelPro: boolean
 	raidDriveCount: number
 	availableDevices: StorageDevice[]
@@ -40,7 +43,8 @@ export function SwapDialog({
 	open,
 	onOpenChange,
 	raidType,
-	slot,
+	slot = null,
+	oldDeviceId = null,
 	isUmbrelPro,
 	raidDriveCount,
 	availableDevices,
@@ -60,11 +64,35 @@ export function SwapDialog({
 
 	const deviceName = isUmbrelPro ? 'Umbrel Pro' : 'device'
 	const isStorageMode = raidType === 'storage'
-	const maxSlots = isUmbrelPro ? 4 : 4 // TODO: Make configurable for custom devices later
-	const hasFreeSlot = raidDriveCount < maxSlots
+	const maxSlots = 4
+	// Only Umbrel Pro has a fixed number of physical slots
+	const hasFreeSlot = isUmbrelPro ? raidDriveCount < maxSlots : true
 
 	// Get the device being replaced (needed for size validation)
-	const oldDevice = slot ? allDevices.find((d) => d.slot === slot) : null
+	const oldDevice = slot
+		? allDevices.find((d) => d.slot === slot)
+		: oldDeviceId
+			? allDevices.find((d) => d.id === oldDeviceId)
+			: null
+
+	// Copy variants: dialogs opened via slot describe SSDs (Umbrel Pro), otherwise word
+	// choice follows the swapped device's type (HDD pools say drive, accelerator SSDs and
+	// SSD pools keep SSD wording).
+	// dv('storage-manager.swap.foo') resolves to 'storage-manager.swap.foo-drive' when generic.
+	const isGenericDrive = !slot && oldDevice?.type !== 'ssd'
+	const dv = (key: string) => t(isGenericDrive ? `${key}-drive` : key)
+	// "SSD" slot labels are not translated - they match the physical device markings
+	const swappedLabel = slot ? `SSD ${slot}` : isGenericDrive ? t('storage-manager.swap.drive-label') : 'SSD'
+	const swappedLabelDefinite = slot
+		? `SSD ${slot}`
+		: isGenericDrive
+			? t('storage-manager.swap.the-old-drive')
+			: t('storage-manager.swap.the-old-ssd')
+
+	// SATA devices sit in drive bays which are hot-swappable on most NAS hardware, so the
+	// shutdown steps become an "only if your bays aren't hot-swappable" note. NVMe devices
+	// (and Umbrel Pro's slots) keep the explicit shutdown steps.
+	const canHotSwap = !isUmbrelPro && oldDevice?.transport === 'sata'
 
 	// Filter available devices to only show those large enough for replacement.
 	// ZFS requires replacement devices to be at least as large as the device being replaced.
@@ -94,7 +122,7 @@ export function SwapDialog({
 		const selectedDevice = validReplacementDevices.find((d) => d.id === selectedReplacementId)
 
 		const handleReplace = () => {
-			if (!selectedDevice?.id || !selectedDevice?.slot || !oldDevice?.id) return
+			if (!selectedDevice?.id || !oldDevice?.id) return
 
 			// Replace is non-blocking - we show island immediately
 			setPendingOperation({
@@ -120,11 +148,10 @@ export function SwapDialog({
 				<DialogScrollableContent onOpenAutoFocus={(e) => e.preventDefault()}>
 					<div className='flex flex-col gap-5 p-5'>
 						<DialogHeader>
-							{/* "SSD" slot labels are not translated - they match the physical device markings */}
 							<DialogTitle>
-								{t('storage-manager.replace')} {slot ? `SSD ${slot}` : 'SSD'}
+								{t('storage-manager.replace')} {swappedLabel}
 							</DialogTitle>
-							<DialogDescription>{t('storage-manager.swap.description-replace')}</DialogDescription>
+							<DialogDescription>{dv('storage-manager.swap.description-replace')}</DialogDescription>
 						</DialogHeader>
 
 						{/* Info banner */}
@@ -132,13 +159,13 @@ export function SwapDialog({
 							<TbInfoCircle className='mt-0.5 size-5 shrink-0 text-brand' />
 							<div className='flex flex-col gap-1'>
 								<span className='text-13 font-semibold text-brand'>{t('storage-manager.swap.no-data-loss')}</span>
-								<span className='text-12 text-white/60'>{t('storage-manager.swap.no-data-loss-description')}</span>
+								<span className='text-12 text-white/60'>{dv('storage-manager.swap.no-data-loss-description')}</span>
 							</div>
 						</div>
 
 						{/* Drive selection - show all available, disable those too small */}
 						<div className='flex flex-col gap-2'>
-							<span className='text-13 font-medium text-white/60'>{t('storage-manager.swap.select-new-ssd')}</span>
+							<span className='text-13 font-medium text-white/60'>{dv('storage-manager.swap.select-new-ssd')}</span>
 							<div className='flex flex-col gap-2'>
 								{availableDevices.map((device) => {
 									const isSelected = selectedReplacementId === device.id
@@ -169,12 +196,15 @@ export function SwapDialog({
 												{isSelected && !isTooSmall && <div className='size-2 rounded-full bg-white' />}
 											</div>
 											<div className='flex flex-1 flex-col gap-0.5'>
-												{/* "SSD" and "Slot" labels are not translated - they match the physical device markings */}
+												{/* "SSD" and "Slot" labels are not translated - they match the physical device markings.
+												    Devices without physical slots show size and model instead. */}
 												<span className={cn('text-13 font-medium', isTooSmall ? 'text-white/50' : 'text-white')}>
-													{t('storage-manager.swap.ssd-in-slot', {
-														size: formatStorageSize(device.size),
-														slot: device.slot,
-													})}
+													{device.slot
+														? t('storage-manager.swap.ssd-in-slot', {
+																size: formatStorageSize(device.size),
+																slot: device.slot,
+															})
+														: `${formatStorageSize(device.size)} · ${device.model}`}
 												</span>
 												{device.name && (
 													<span className={cn('text-12', isTooSmall ? 'text-white/30' : 'text-white/40')}>
@@ -200,9 +230,11 @@ export function SwapDialog({
 							<span className='text-13 font-medium text-white/60'>{t('storage-manager.swap.what-happens-next')}</span>
 							<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
 								{[
-									t('storage-manager.swap.step-data-copied'),
+									dv('storage-manager.swap.step-data-copied'),
 									t('storage-manager.swap.step-may-take-while'),
-									t('storage-manager.swap.step-remove-old', {ssd: slot ? `SSD ${slot}` : 'the old SSD'}),
+									canHotSwap
+										? t('storage-manager.swap.step-remove-old-hot-swap', {ssd: swappedLabelDefinite})
+										: t('storage-manager.swap.step-remove-old', {ssd: swappedLabelDefinite}),
 								].map((step, index) => (
 									<div key={index} className='flex items-center gap-3 p-3 text-12 font-medium -tracking-3'>
 										<span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold'>
@@ -212,6 +244,7 @@ export function SwapDialog({
 									</div>
 								))}
 							</div>
+							{canHotSwap && <p className='text-12 text-white/40'>{t('storage-manager.swap.hot-swap-note')}</p>}
 						</div>
 
 						{isOperationInProgress && <OperationInProgressBanner variant='wait' />}
@@ -236,14 +269,17 @@ export function SwapDialog({
 
 	// Storage mode with free slot but NO available devices - we show "add a drive first" instructions
 	if (isStorageMode && hasFreeSlot) {
-		const steps = [
-			t('storage-manager.swap.step-shut-down', {deviceName}),
-			...(isUmbrelPro ? [t('storage-manager.swap.step-remove-bottom-cover')] : []),
-			t('storage-manager.swap.step-insert-new-ssd'),
-			...(isUmbrelPro ? [t('storage-manager.swap.step-replace-bottom-cover')] : []),
-			t('storage-manager.swap.step-power-on', {deviceName}),
-			t('storage-manager.swap.step-return-to-swap'),
-		]
+		// Hot-swappable bays skip the shutdown/power-on steps in favor of a note
+		const steps = canHotSwap
+			? [dv('storage-manager.swap.step-insert-new-ssd'), t('storage-manager.swap.step-return-to-swap')]
+			: [
+					t('storage-manager.swap.step-shut-down', {deviceName}),
+					...(isUmbrelPro ? [t('storage-manager.swap.step-remove-bottom-cover')] : []),
+					dv('storage-manager.swap.step-insert-new-ssd'),
+					...(isUmbrelPro ? [t('storage-manager.swap.step-replace-bottom-cover')] : []),
+					t('storage-manager.swap.step-power-on', {deviceName}),
+					t('storage-manager.swap.step-return-to-swap'),
+				]
 
 		return (
 			<>
@@ -251,9 +287,8 @@ export function SwapDialog({
 					<DialogScrollableContent onOpenAutoFocus={(e) => e.preventDefault()}>
 						<div className='flex flex-col gap-5 p-5'>
 							<DialogHeader>
-								{/* "SSD" slot labels are not translated - they match the physical device markings */}
 								<DialogTitle>
-									{t('storage-manager.swap')} {slot ? `SSD ${slot}` : 'SSD'}
+									{t('storage-manager.swap')} {swappedLabel}
 								</DialogTitle>
 								<DialogDescription>{t('storage-manager.swap.description-full-storage')}</DialogDescription>
 							</DialogHeader>
@@ -265,7 +300,7 @@ export function SwapDialog({
 									<span className='text-13 font-semibold text-brand'>
 										{t('storage-manager.swap.safe-swap-available')}
 									</span>
-									<span className='text-12 text-white/60'>{t('storage-manager.swap.safe-swap-description')}</span>
+									<span className='text-12 text-white/60'>{dv('storage-manager.swap.safe-swap-description')}</span>
 								</div>
 							</div>
 
@@ -280,6 +315,8 @@ export function SwapDialog({
 									</div>
 								))}
 							</div>
+
+							{canHotSwap && <p className='text-12 text-white/40'>{t('storage-manager.swap.hot-swap-note')}</p>}
 
 							{/* Collapsible installation tips - Umbrel Pro only */}
 							{isUmbrelPro && (
@@ -385,16 +422,20 @@ export function SwapDialog({
 		)
 	}
 
-	// FailSafe mode
-	const ssdLabel = slot ? `SSD ${slot}` : 'the SSD'
-	const steps = [
-		t('storage-manager.swap.step-shut-down', {deviceName}),
-		...(isUmbrelPro ? [t('storage-manager.swap.step-remove-bottom-cover')] : []),
-		t('storage-manager.swap.step-swap-ssd', {ssd: ssdLabel}),
-		...(isUmbrelPro ? [t('storage-manager.swap.step-replace-bottom-cover')] : []),
-		t('storage-manager.swap.step-power-on', {deviceName}),
-		t('storage-manager.swap.step-return-to-storage-manager'),
-	]
+	// FailSafe mode. Hot-swappable bays skip the shutdown/power-on steps in favor of a note.
+	const steps = canHotSwap
+		? [
+				t('storage-manager.swap.step-swap-ssd', {ssd: swappedLabelDefinite}),
+				dv('storage-manager.swap.step-return-to-storage-manager'),
+			]
+		: [
+				t('storage-manager.swap.step-shut-down', {deviceName}),
+				...(isUmbrelPro ? [t('storage-manager.swap.step-remove-bottom-cover')] : []),
+				t('storage-manager.swap.step-swap-ssd', {ssd: swappedLabelDefinite}),
+				...(isUmbrelPro ? [t('storage-manager.swap.step-replace-bottom-cover')] : []),
+				t('storage-manager.swap.step-power-on', {deviceName}),
+				dv('storage-manager.swap.step-return-to-storage-manager'),
+			]
 
 	return (
 		<>
@@ -402,9 +443,8 @@ export function SwapDialog({
 				<DialogScrollableContent>
 					<div className='flex flex-col gap-5 p-5'>
 						<DialogHeader>
-							{/* "SSD" slot labels are not translated - they match the physical device markings */}
 							<DialogTitle>
-								{t('storage-manager.swap')} {slot ? `SSD ${slot}` : 'SSD'}
+								{t('storage-manager.swap')} {swappedLabel}
 							</DialogTitle>
 							<DialogDescription>{t('storage-manager.swap.description-failsafe')}</DialogDescription>
 						</DialogHeader>
@@ -414,7 +454,7 @@ export function SwapDialog({
 							<IoShieldHalf className='mt-0.5 size-5 shrink-0 text-brand' />
 							<div className='flex flex-col gap-1'>
 								<span className='text-13 font-semibold text-brand'>{t('storage-manager.swap.data-protected')}</span>
-								<span className='text-12 text-white/60'>{t('storage-manager.swap.data-protected-description')}</span>
+								<span className='text-12 text-white/60'>{dv('storage-manager.swap.data-protected-description')}</span>
 							</div>
 						</div>
 
@@ -429,6 +469,8 @@ export function SwapDialog({
 								</div>
 							))}
 						</div>
+
+						{canHotSwap && <p className='text-12 text-white/40'>{t('storage-manager.swap.hot-swap-note')}</p>}
 
 						{/* Collapsible installation tips - Umbrel Pro only */}
 						{isUmbrelPro && (

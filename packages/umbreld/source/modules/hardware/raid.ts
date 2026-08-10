@@ -94,6 +94,40 @@ export function isFailsafeRebuildComplete(status: FailsafeRebuildPoolStatus): bo
 	)
 }
 
+type RaidStatusSignatureInput = {
+	exists: boolean
+	status?: State
+	raidType?: RaidType
+	topology?: Topology
+	devices?: Array<{id: string; status: State}>
+	accelerator?: {
+		exists: boolean
+		devices?: Array<{id: string; status: State}>
+	}
+}
+
+// Build a stable signature of the pool's user-visible state so the pool monitor can detect
+// changes and emit a raid:status-change event. Covers pool existence and status, raid type
+// and topology, and data/accelerator membership with per-member status. Excludes progress
+// fields (dedicated events exist), error counters (too noisy) and space values (implied by
+// membership and topology). Device lists are sorted so vdev enumeration order doesn't matter.
+export function getRaidStatusSignature(pool: RaidStatusSignatureInput): string {
+	const sortById = (devices: Array<{id: string; status: State}> = []) =>
+		devices.map(({id, status}) => ({id, status})).sort((a, b) => a.id.localeCompare(b.id))
+
+	return JSON.stringify({
+		exists: pool.exists,
+		status: pool.status,
+		raidType: pool.raidType,
+		topology: pool.topology,
+		devices: sortById(pool.devices),
+		accelerator: {
+			exists: pool.accelerator?.exists ?? false,
+			devices: sortById(pool.accelerator?.devices),
+		},
+	})
+}
+
 type Vdev = {
 	vdev_type: 'root' | 'raidz' | 'mirror' | 'disk' | 'file'
 	path?: string
@@ -242,6 +276,7 @@ export default class Raid {
 	configStore: FileStore<ConfigStore>
 	isTransitioningToFailsafe = false
 	isReplacing = false
+	isInitialSetupInProgress = false
 	failsafeTransitionStatus?: FailsafeTransitionStatus
 	replaceStatus?: ReplaceStatus
 	initialRaidSetupError?: Error
@@ -252,6 +287,7 @@ export default class Raid {
 	#stopPoolMonitor?: () => void
 	#lastEmittedExpansion?: ExpansionStatus
 	#lastEmittedRebuild?: RebuildStatus
+	#lastStatusSignature?: string
 	#lastEmittedReplace?: ReplaceStatus
 
 	constructor(umbreld: Umbreld) {
@@ -411,6 +447,15 @@ export default class Raid {
 							this.#umbreld.eventBus.emit('raid:rebuild-progress', pool.rebuild)
 						}
 					}
+
+					// Emit an event when the pool's user-visible state changes (status, membership,
+					// per-member status, raid type, topology). The first tick primes the signature
+					// silently so booting doesn't fire a spurious event.
+					const statusSignature = getRaidStatusSignature(pool)
+					if (this.#lastStatusSignature !== undefined && statusSignature !== this.#lastStatusSignature) {
+						this.#umbreld.eventBus.emit('raid:status-change')
+					}
+					this.#lastStatusSignature = statusSignature
 				} catch {
 					// Silently ignore errors during monitoring
 				}
@@ -543,7 +588,10 @@ export default class Raid {
 
 		const devices = diskVdevs.map((device) => ({
 			id: toDeviceId(device.path!),
-			size: device.phys_space,
+			// phys_space disappears on missing/removed members but rep_dev_size remains and is
+			// stable (same behavior the raidz totalSpace calculation relies on), so capacity
+			// reporting doesn't lurch while a pool is degraded
+			size: device.phys_space || device.rep_dev_size,
 			status: device.state,
 			readErrors: device.read_errors,
 			writeErrors: device.write_errors,
@@ -739,17 +787,30 @@ export default class Raid {
 		acceleratorDevices: string[] | undefined,
 		user: {name: string; password: string; language: string},
 	) {
-		// Setup the RAID array and optional accelerator before rebooting into it.
-		await this.setup(raidDevices, raidType, acceleratorDevices)
+		if (this.isInitialSetupInProgress) throw new Error('Initial RAID setup is already in progress')
+		this.isInitialSetupInProgress = true
 
-		// Temporarily store the user setup details
-		// We handle setting up the user on the next boot
-		await this.configStore.set('user', user)
+		try {
+			// Setup the RAID array and optional accelerator before rebooting into it.
+			await this.setup(raidDevices, raidType, acceleratorDevices)
 
-		// Reboot the system into the RAID array
-		setTimeout(1000).then(() => reboot()) // Schedule in 1 second so the api response has time to be sent
+			// Temporarily store the user setup details. We create the user on the next boot.
+			await this.configStore.set('user', user)
 
-		return true
+			// Keep the guard set until reboot so registration cannot start setup again in
+			// the gap between this response and the process exiting.
+			setTimeout(1000)
+				.then(() => reboot())
+				.catch((error) => {
+					this.isInitialSetupInProgress = false
+					this.logger.error('Failed to reboot after initial RAID setup', error)
+				})
+
+			return true
+		} catch (error) {
+			this.isInitialSetupInProgress = false
+			throw error
+		}
 	}
 
 	// Handle initial RAID setup after first boot with the new array
@@ -1093,6 +1154,7 @@ export default class Raid {
 	async setup(deviceIds: string[], raidType: RaidType, acceleratorDeviceIds?: string[]): Promise<boolean> {
 		if (deviceIds.length === 0) throw new Error('At least one device is required')
 		if (raidType === 'failsafe' && deviceIds.length < 2) throw new Error('Failsafe mode requires at least two devices')
+		await this.#assertNotSystemDrives([...deviceIds, ...(acceleratorDeviceIds ?? [])])
 
 		const devices = deviceIds.map((id) => `/dev/disk/by-umbrel-id/${id}`)
 		for (const device of devices) {
@@ -1203,9 +1265,29 @@ export default class Raid {
 		if (device.type !== 'ssd') throw new Error('Accelerator devices must be SSDs')
 	}
 
+	// Refuse to touch disks that back the running system (defense in depth - the UI never
+	// offers them, but a repartitioned boot drive is an unrecoverable mistake)
+	async #assertNotSystemDrives(deviceIds: Array<string | undefined>): Promise<void> {
+		for (const deviceId of deviceIds) {
+			if (!deviceId) continue
+			const devicePath = `/dev/disk/by-umbrel-id/${deviceId}`
+			if (!(await fse.pathExists(devicePath))) throw new Error(`Device not found: ${devicePath}`)
+		}
+
+		const devices = await this.#umbreld.hardware.internalStorage.getDevices()
+		for (const deviceId of deviceIds) {
+			if (!deviceId) continue
+			const device = devices.find((d) => d.id === deviceId)
+			if (!device) throw new Error(`Cannot verify that device is not the system drive: ${deviceId}`)
+			if (device.isSystemDrive !== false) throw new Error(`Cannot use the system drive for RAID: ${deviceId}`)
+		}
+	}
+
 	// Add one device to a stripe (storage) or raidz (failsafe SSD) array.
 	// Mirror failsafe arrays must use addMirror().
 	async addDevice(deviceId: string): Promise<boolean> {
+		await this.#assertNotSystemDrives([deviceId])
+
 		// Get the pool status
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error("RAID array doesn't exist")
@@ -1250,6 +1332,8 @@ export default class Raid {
 
 	// Add one mirror pair to a mirror (failsafe HDD) array.
 	async addMirror(deviceIds: [string, string]): Promise<boolean> {
+		await this.#assertNotSystemDrives(deviceIds)
+
 		// Get the pool status
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error("RAID array doesn't exist")
@@ -1305,6 +1389,8 @@ export default class Raid {
 	// bulk data on HDDs. On a 2TB Umbrel dataset this is ~15GB. 64k would jump to ~150GB which is
 	// unpredictable on larger/different workloads, so we stay conservative.
 	async addAccelerator(deviceIds: string[]): Promise<boolean> {
+		await this.#assertNotSystemDrives(deviceIds)
+
 		// Accelerators are layered on an existing HDD pool, never on SSD RAID.
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error("RAID array doesn't exist")
@@ -1425,7 +1511,12 @@ export default class Raid {
 		const oldDataPartition = `${oldDevice}-part2`
 
 		this.logger.log(`Replacing ${oldDataPartition} with ${newDataPartition} in pool '${pool.name}'`)
-		await $`zpool replace -f ${pool.name} ${oldDataPartition} ${newDataPartition}`
+		if (oldDataPartition === newDataPartition) {
+			// In-place replacement of the same disk uses the single-device form of zpool replace
+			await $`zpool replace -f ${pool.name} ${oldDataPartition}`
+		} else {
+			await $`zpool replace -f ${pool.name} ${oldDataPartition} ${newDataPartition}`
+		}
 
 		const currentDevices = (await this.configStore.get('raid.devices')) ?? []
 		const updatedDevices = currentDevices.map((device: string) => (device === oldDevice ? newDevice : device))
@@ -1479,7 +1570,12 @@ export default class Raid {
 		this.logger.log(
 			`Replacing accelerator special partition ${acceleratorToReplace.specialPartition} with ${specialPartition} in pool '${pool.name}'`,
 		)
-		await $`zpool replace -f ${pool.name} ${acceleratorToReplace.specialPartition} ${specialPartition}`
+		if (acceleratorToReplace.specialPartition === specialPartition) {
+			// In-place replacement of the same disk uses the single-device form of zpool replace
+			await $`zpool replace -f ${pool.name} ${acceleratorToReplace.specialPartition}`
+		} else {
+			await $`zpool replace -f ${pool.name} ${acceleratorToReplace.specialPartition} ${specialPartition}`
+		}
 
 		// Simply throw away the old l2arc vdev and add a new one, we don't need to resilver the data is volatile
 		this.logger.log(
@@ -1511,6 +1607,8 @@ export default class Raid {
 
 	// Replace a storage or accelerator device in the RAID array.
 	async replaceDevice(oldDeviceId: string, newDeviceId: string): Promise<boolean> {
+		await this.#assertNotSystemDrives([newDeviceId])
+
 		const newDevice = `/dev/disk/by-umbrel-id/${newDeviceId}`
 		if (!(await fse.pathExists(newDevice))) throw new Error(`New device not found: ${newDevice}`)
 
@@ -1520,10 +1618,19 @@ export default class Raid {
 		const poolDeviceIds = pool.devices?.map((d) => d.id) ?? []
 		const acceleratorDeviceIds = pool.accelerator?.devices?.map((device) => device.id) ?? []
 
-		if (poolDeviceIds.includes(newDeviceId))
+		// A device that's already a healthy member can't be a replacement, but replacing a
+		// member with its own physical disk is the documented ZFS recovery for a drive whose
+		// labels were wiped or corrupted (the disk is attached but the pool can't use it).
+		if (poolDeviceIds.includes(newDeviceId) && newDeviceId !== oldDeviceId)
 			throw new Error('Cannot replace with a device that is already in the RAID array')
-		if (acceleratorDeviceIds.includes(newDeviceId))
+		if (acceleratorDeviceIds.includes(newDeviceId) && newDeviceId !== oldDeviceId)
 			throw new Error('Cannot replace with a device that is already in the accelerator')
+		if (newDeviceId === oldDeviceId) {
+			const memberStatus =
+				pool.devices?.find((device) => device.id === oldDeviceId)?.status ??
+				pool.accelerator?.devices?.find((device) => device.id === oldDeviceId)?.status
+			if (memberStatus === 'ONLINE') throw new Error('Cannot replace a healthy device with itself')
+		}
 
 		if (this.isReplacing) throw new Error('Already replacing device')
 		this.isReplacing = true
@@ -1542,6 +1649,8 @@ export default class Raid {
 	// Transition an SSD storage array to a failsafe (raidz1) array.
 	// This creates a degraded raidz1 pool with the new disk and syncs data from the old pool.
 	async transitionToFailsafeRaidz(newDeviceId: string): Promise<boolean> {
+		await this.#assertNotSystemDrives([newDeviceId])
+
 		// Verify we're in a state that can be migrated
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error('No RAID array exists')
@@ -1713,6 +1822,7 @@ export default class Raid {
 		acceleratorDeviceId?: string,
 	): Promise<boolean> {
 		if (pairs.length === 0) throw new Error('At least one mirror pair is required')
+		await this.#assertNotSystemDrives([...pairs.map((pair) => pair.newDeviceId), acceleratorDeviceId])
 
 		// Verify we're in a state that can be migrated
 		const pool = await this.getStatus()

@@ -48,6 +48,8 @@ export default function CreateAccount() {
 	const isPro = deviceInfo?.umbrelHostEnvironment === 'umbrel-pro'
 	const isRaspberryPi = deviceInfo?.umbrelHostEnvironment === 'raspberry-pi'
 	const externalDevicesQ = trpcReact.files.externalDevices.useQuery(undefined, {enabled: isRaspberryPi})
+	// Generic devices with internal hard drives get the HDD RAID onboarding flow
+	const internalStorageQ = trpcReact.hardware.internalStorage.getDevices.useQuery(undefined, {enabled: !isPro})
 
 	const loginMut = trpcReact.user.login.useMutation({
 		onSuccess: async (token) => {
@@ -60,7 +62,7 @@ export default function CreateAccount() {
 		onSuccess: async () => loginMut.mutate({password, totpToken: ''}),
 	})
 
-	const completeAccountSetup = () => {
+	const completeAccountSetup = async () => {
 		if (isPro) {
 			// For Umbrel Pro we navigate to RAID setup
 			setIsNavigating(true)
@@ -68,10 +70,22 @@ export default function CreateAccount() {
 
 			// Pass credentials to RAID setup page
 			navigate('/onboarding/raid', {state: {credentials}})
-		} else {
-			// For non-Pro devices we do standard registration flow
-			registerMut.mutate({name, password, language})
+			return
 		}
+
+		// Devices with internal hard drives get the HDD RAID setup flow. If detection
+		// fails we fall back to the standard registration flow.
+		const internalDevices = internalStorageQ.data ?? (await internalStorageQ.refetch()).data
+		const hasHdds = internalDevices?.some((device) => device.type === 'hdd' && !device.isSystemDrive && device.id)
+		if (hasHdds) {
+			setIsNavigating(true)
+			const credentials: AccountCredentials = {name, password, language}
+			navigate('/onboarding/hdd-raid', {state: {credentials}})
+			return
+		}
+
+		// Otherwise we do standard registration flow
+		registerMut.mutate({name, password, language})
 	}
 
 	const onSubmit = async (e: React.FormEvent<HTMLFormElement>) => {

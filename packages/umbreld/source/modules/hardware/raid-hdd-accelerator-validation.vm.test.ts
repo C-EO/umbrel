@@ -142,13 +142,13 @@ describe('RAID HDD accelerator validation in storage mode', () => {
 		expectSizeToBeWithinTenPercentOfGb(status.accelerator?.specialSize, expectedSingleAcceleratorSpecialSizeGb)
 	})
 
-	test('rejects replacing an accelerator with a device already in the accelerator', async () => {
+	test('rejects replacing a healthy accelerator with itself', async () => {
 		await expect(
 			umbreld.client.hardware.raid.replaceDevice.mutate({
 				oldDevice: acceleratorDeviceId1,
 				newDevice: acceleratorDeviceId1,
 			}),
-		).rejects.toThrow('Cannot replace with a device that is already in the accelerator')
+		).rejects.toThrow('Cannot replace a healthy device with itself')
 	})
 
 	test('rejects replacing an accelerator with a device already in the RAID array', async () => {

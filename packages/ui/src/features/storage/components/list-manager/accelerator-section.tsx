@@ -1,0 +1,317 @@
+import {useTranslation} from 'react-i18next'
+import {TbPlus} from 'react-icons/tb'
+
+import {cn} from '@/lib/utils'
+
+import {RaidDeviceStatus, raidStatusLabels, RaidType, StorageDevice} from '../../hooks/use-storage'
+import {formatStorageSize} from '../../utils'
+import {AddIcon, DriveActionButton, ReplaceIcon} from './drive-card'
+import {SsdChip} from './drive-visuals'
+import {PairCard, PairPlaceholderCell} from './mirror-pair-card'
+
+export type AcceleratorMember = {
+	id: string
+	status: RaidDeviceStatus
+	device?: StorageDevice
+}
+
+// Centered cell for one accelerator SSD inside a pair card
+function AcceleratorCell({
+	member,
+	inactiveDevice,
+	onClick,
+	action,
+}: {
+	/** Accelerator member that is part of the pool */
+	member?: AcceleratorMember
+	/** Unpooled SSD shown as an inactive candidate */
+	inactiveDevice?: StorageDevice
+	onClick?: () => void
+	action?: React.ReactNode
+}) {
+	const {t} = useTranslation()
+	const device = member?.device ?? inactiveDevice
+	const isFailed = member && member.status !== 'ONLINE'
+
+	return (
+		<div
+			onClick={onClick}
+			className={cn(
+				'relative flex flex-1 flex-col items-center justify-center gap-2.5 px-10 py-6',
+				onClick && 'cursor-pointer transition-colors hover:bg-white/5',
+			)}
+		>
+			{inactiveDevice && (
+				<span className='absolute top-2 left-2 rounded-[6px] bg-[#FF3434]/15 px-2 py-0.5 text-[11px] font-medium text-[#FF3434]'>
+					{t('storage-manager.inactive')}
+				</span>
+			)}
+			<SsdChip sizeLabel={device ? formatStorageSize(device.size) : '—'} className={cn(!device && 'opacity-40')} />
+			<div className='flex flex-col items-center gap-0.5 text-center'>
+				<span className='max-w-full truncate text-[15px] font-medium text-white'>
+					{device ? device.name : t('storage-manager.missing-drive')}
+				</span>
+				{/* Missing members show their id truncated from the start so the serial stays visible */}
+				<span
+					dir={device ? undefined : 'rtl'}
+					className={cn('truncate text-13 text-white/50', device ? 'max-w-full' : 'max-w-[200px]')}
+					title={device ? undefined : member?.id}
+				>
+					{device ? device.serial : member?.id}
+				</span>
+				{isFailed && member && (
+					<span className='text-[12px] font-medium text-[#FF3434]'>
+						{raidStatusLabels[member.status] ? t(raidStatusLabels[member.status]) : member.status}
+					</span>
+				)}
+			</div>
+			{action}
+		</div>
+	)
+}
+
+// Row layout for a single accelerator SSD (Full Storage mode)
+function AcceleratorRow({
+	device,
+	subtitle,
+	inactive,
+	onClick,
+	action,
+}: {
+	device: StorageDevice
+	subtitle?: string
+	inactive?: boolean
+	onClick?: () => void
+	action?: React.ReactNode
+}) {
+	const {t} = useTranslation()
+	return (
+		<div
+			onClick={onClick}
+			className={cn(
+				'flex w-full items-center gap-4 rounded-12 bg-white/5 p-4',
+				onClick && 'cursor-pointer transition-colors hover:bg-white/10',
+			)}
+		>
+			<SsdChip sizeLabel={formatStorageSize(device.size)} />
+			<div className='min-w-0 flex-1'>
+				<div className='truncate text-[15px] font-medium text-white'>{device.name}</div>
+				<div className='truncate text-13 text-white/50'>{subtitle ?? device.serial}</div>
+			</div>
+			{inactive && (
+				<span className='rounded-full bg-white/10 px-2.5 py-0.5 text-[12px] font-medium text-white/60'>
+					{t('storage-manager.inactive')}
+				</span>
+			)}
+			{action}
+		</div>
+	)
+}
+
+// Empty state prompting the user to power off and install SSD(s)
+function AcceleratorEmptyState({failsafe}: {failsafe: boolean}) {
+	const {t} = useTranslation()
+	return (
+		<div className='flex w-full items-center gap-4 rounded-12 bg-white/5 p-4'>
+			{failsafe ? (
+				<div className='flex shrink-0 gap-1.5'>
+					{/* "SSD" is not translated - matches physical device markings */}
+					<div className='flex size-11 items-center justify-center rounded-full bg-white/8 text-[11px] font-semibold text-white/50'>
+						SSD1
+					</div>
+					<div className='flex size-11 items-center justify-center rounded-full bg-white/8 text-[11px] font-semibold text-white/50'>
+						SSD2
+					</div>
+				</div>
+			) : (
+				<div className='flex size-11 shrink-0 items-center justify-center rounded-full bg-white/8'>
+					<TbPlus className='size-5 text-white/60' strokeWidth={2.5} />
+				</div>
+			)}
+			<div className='min-w-0 flex-1'>
+				<div className='text-[15px] font-medium text-white'>
+					{failsafe
+						? t('storage-manager.ssd-acceleration.empty-failsafe')
+						: t('storage-manager.ssd-acceleration.empty-storage')}
+				</div>
+				<div className='text-13 text-white/50'>
+					{failsafe
+						? t('storage-manager.ssd-acceleration.min-size-each')
+						: t('storage-manager.ssd-acceleration.min-size')}
+				</div>
+			</div>
+		</div>
+	)
+}
+
+export function AcceleratorSection({
+	raidType,
+	acceleratorDevices,
+	candidateSsds,
+	canReplaceFailed,
+	onAdd,
+	onReplaceFailed,
+	onSwap,
+	onHealthClick,
+}: {
+	raidType: RaidType
+	/** Accelerator SSDs that are part of the pool (empty when no accelerator exists) */
+	acceleratorDevices: AcceleratorMember[]
+	/** Unpooled SSDs that could become (or mirror) the accelerator */
+	candidateSsds: StorageDevice[]
+	/** Whether a failed accelerator member can currently be replaced (a candidate SSD is attached) */
+	canReplaceFailed: boolean
+	onAdd: (devices: StorageDevice[]) => void
+	onReplaceFailed: (member: AcceleratorMember) => void
+	onSwap: (member: AcceleratorMember) => void
+	onHealthClick: (device: StorageDevice) => void
+}) {
+	const {t} = useTranslation()
+	const isFailsafe = raidType === 'failsafe'
+	const acceleratorExists = acceleratorDevices.length > 0
+
+	// Largest candidates first so we always suggest the most useful SSDs
+	const candidates = [...candidateSsds].sort((a, b) => b.roundedSize - a.roundedSize)
+
+	// Healthy members can be proactively swapped; failed members get a replace flow
+	// (direct replacement when a candidate SSD is attached, swap instructions otherwise)
+	const replaceAction = (member: AcceleratorMember) => {
+		const isFailed = member.status !== 'ONLINE'
+		if (isFailed && canReplaceFailed) {
+			return (
+				<DriveActionButton icon={ReplaceIcon} variant='destructive' onClick={() => onReplaceFailed(member)}>
+					{t('storage-manager.replace')}
+				</DriveActionButton>
+			)
+		}
+		return (
+			<DriveActionButton
+				icon={ReplaceIcon}
+				variant={isFailed ? 'destructive' : 'default'}
+				onClick={() => onSwap(member)}
+			>
+				{isFailed ? t('storage-manager.replace') : t('storage-manager.swap')}
+			</DriveActionButton>
+		)
+	}
+
+	let content: React.ReactNode
+	if (acceleratorExists && !isFailsafe) {
+		// Single accelerator SSD
+		const member = acceleratorDevices[0]
+		content = member.device ? (
+			<AcceleratorRow
+				device={member.device}
+				onClick={() => onHealthClick(member.device!)}
+				action={replaceAction(member)}
+			/>
+		) : (
+			<div className='flex w-full items-center gap-4 rounded-12 border border-[#FF3434]/40 bg-[#FF3434]/10 p-4'>
+				<SsdChip sizeLabel='—' className='opacity-40' />
+				<div className='min-w-0 flex-1'>
+					<div className='truncate text-[15px] font-medium text-white'>{t('storage-manager.missing-drive')}</div>
+					<div className='truncate text-13 text-white/50'>{member.id}</div>
+				</div>
+				{replaceAction(member)}
+			</div>
+		)
+	} else if (acceleratorExists && isFailsafe) {
+		// Mirrored accelerator pair
+		const [left, right] = acceleratorDevices
+		const anyFailed = acceleratorDevices.some((member) => member.status !== 'ONLINE' || !member.device)
+		content = (
+			<PairCard
+				badge={anyFailed ? 'broken' : 'protected'}
+				left={
+					<AcceleratorCell
+						member={left}
+						onClick={left?.device ? () => onHealthClick(left.device!) : undefined}
+						action={left && replaceAction(left)}
+					/>
+				}
+				right={
+					right ? (
+						<AcceleratorCell
+							member={right}
+							onClick={right.device ? () => onHealthClick(right.device!) : undefined}
+							action={replaceAction(right)}
+						/>
+					) : (
+						<PairPlaceholderCell
+							title={t('storage-manager.ssd-acceleration.pair-placeholder', {
+								size: left?.device ? formatStorageSize(left.device.size) : '',
+							})}
+							description={t('storage-manager.ssd-acceleration.pair-note')}
+						/>
+					)
+				}
+			/>
+		)
+	} else if (!isFailsafe) {
+		// No accelerator yet, storage mode: one SSD can be added directly
+		content =
+			candidates.length === 0 ? (
+				<AcceleratorEmptyState failsafe={false} />
+			) : (
+				<div className='flex flex-col gap-3'>
+					{candidates.map((ssd) => (
+						<AcceleratorRow
+							key={ssd.id}
+							device={ssd}
+							inactive
+							onClick={() => onHealthClick(ssd)}
+							action={
+								<DriveActionButton icon={AddIcon} variant='primary' onClick={() => onAdd([ssd])}>
+									{t('storage-manager.add')}
+								</DriveActionButton>
+							}
+						/>
+					))}
+				</div>
+			)
+	} else {
+		// No accelerator yet, failsafe mode: needs two SSDs added together
+		if (candidates.length === 0) {
+			content = <AcceleratorEmptyState failsafe />
+		} else if (candidates.length === 1) {
+			const ssd = candidates[0]
+			content = (
+				<PairCard
+					broken
+					badge='broken'
+					left={<AcceleratorCell inactiveDevice={ssd} onClick={() => onHealthClick(ssd)} />}
+					right={
+						<PairPlaceholderCell
+							title={t('storage-manager.ssd-acceleration.pair-placeholder', {size: formatStorageSize(ssd.size)})}
+							description={t('storage-manager.ssd-acceleration.pair-note')}
+						/>
+					}
+				/>
+			)
+		} else {
+			const [first, second] = candidates
+			content = (
+				<div className='flex flex-col items-center gap-3'>
+					<PairCard
+						badge='add'
+						left={<AcceleratorCell inactiveDevice={first} onClick={() => onHealthClick(first)} />}
+						right={<AcceleratorCell inactiveDevice={second} onClick={() => onHealthClick(second)} />}
+					/>
+					<DriveActionButton icon={AddIcon} variant='primary' onClick={() => onAdd([first, second])}>
+						{t('storage-manager.ssd-acceleration.add-ssds')}
+					</DriveActionButton>
+				</div>
+			)
+		}
+	}
+
+	return (
+		<div className='flex flex-col gap-2.5'>
+			<div className='flex flex-col gap-1'>
+				<span className='text-13 font-semibold text-white/50'>{t('storage-manager.ssd-acceleration')}</span>
+				<p className='text-13 leading-snug text-white/40'>{t('storage-manager.ssd-acceleration.description')}</p>
+			</div>
+			{content}
+		</div>
+	)
+}

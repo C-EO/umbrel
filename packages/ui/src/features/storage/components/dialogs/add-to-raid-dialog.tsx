@@ -40,6 +40,7 @@ const WastedText = ({children}: {children?: React.ReactNode}) => <span className
 type InfoTextProps = {
 	showFailSafeOption: boolean
 	effectiveMode: 'storage' | 'failsafe' | undefined
+	isHdd: boolean
 	newDrivesRawBytes: number
 	newToAvailable: number
 	newToProtection: number
@@ -52,6 +53,7 @@ type InfoTextProps = {
 function InfoText({
 	showFailSafeOption,
 	effectiveMode,
+	isHdd,
 	newDrivesRawBytes,
 	newToAvailable,
 	newToProtection,
@@ -77,7 +79,11 @@ function InfoText({
 				<p className='text-[13px] text-white/50'>
 					<Trans
 						t={t}
-						i18nKey='storage-manager.add-to-raid.info-capacity-added'
+						i18nKey={
+							isHdd
+								? 'storage-manager.add-to-raid.info-capacity-added-drive'
+								: 'storage-manager.add-to-raid.info-capacity-added'
+						}
 						values={{size: availableSize}}
 						components={transComponents}
 					/>
@@ -288,7 +294,7 @@ export function AddToRaidDialog({
 	// Execute the actual add operation
 	// All modes use the floating island for consistent UX
 	const executeAddDevice = (useFailsafe: boolean) => {
-		if (!device?.id || !device.slot) return
+		if (!device?.id) return
 
 		setShowRestartConfirmation(false)
 
@@ -318,9 +324,14 @@ export function AddToRaidDialog({
 
 			addDeviceAsync({deviceId: device.id}).catch((error) => {
 				clearPendingOperation()
-				toast.error(t('storage-manager.add-to-raid.failed-add'), {
-					description: error instanceof Error ? error.message : t('unknown-error'),
-				})
+				toast.error(
+					device.type === 'hdd'
+						? t('storage-manager.add-to-raid.failed-add-drive')
+						: t('storage-manager.add-to-raid.failed-add'),
+					{
+						description: error instanceof Error ? error.message : t('unknown-error'),
+					},
+				)
 			})
 		} else {
 			// Storage mode add: blocking RPC with no progress events.
@@ -346,15 +357,20 @@ export function AddToRaidDialog({
 				})
 				.catch((error) => {
 					clearPendingOperation()
-					toast.error(t('storage-manager.add-to-raid.failed-add'), {
-						description: error instanceof Error ? error.message : t('unknown-error'),
-					})
+					toast.error(
+						device.type === 'hdd'
+							? t('storage-manager.add-to-raid.failed-add-drive')
+							: t('storage-manager.add-to-raid.failed-add'),
+						{
+							description: error instanceof Error ? error.message : t('unknown-error'),
+						},
+					)
 				})
 		}
 	}
 
 	const handleAddDevice = () => {
-		if (!device?.id || !device.slot) return
+		if (!device?.id) return
 
 		// If failsafe is enabled (canChooseMode), show confirmation dialog first
 		if (canChooseMode && failSafeEnabled) {
@@ -367,6 +383,7 @@ export function AddToRaidDialog({
 	}
 
 	const {hasWarning} = getDeviceHealth(device)
+	const isHdd = device.type === 'hdd'
 
 	return (
 		<>
@@ -374,11 +391,18 @@ export function AddToRaidDialog({
 				<DialogScrollableContent>
 					<div className='flex flex-col gap-5 p-5'>
 						<DialogHeader>
-							<DialogTitle>{t('storage-manager.add-to-raid.title')}</DialogTitle>
-							<DialogDescription>{t('storage-manager.add-to-raid.description')}</DialogDescription>
+							<DialogTitle>
+								{isHdd ? t('storage-manager.add-to-raid.title-drive') : t('storage-manager.add-to-raid.title')}
+							</DialogTitle>
+							<DialogDescription>
+								{isHdd
+									? t('storage-manager.add-to-raid.description-drive')
+									: t('storage-manager.add-to-raid.description')}
+							</DialogDescription>
 						</DialogHeader>
 
-						{/* SSD summary - "SSD" and "Slot" labels are not translated as they match physical device markings */}
+						{/* Device summary - "SSD" and "Slot" labels are not translated as they match physical device markings.
+						    Devices without physical slots (non-Pro) show model and size instead. */}
 						<div className='flex flex-col divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
 							<div className='flex items-center justify-between gap-2 px-3 py-2.5'>
 								<div className='flex items-center gap-2'>
@@ -388,12 +412,18 @@ export function AddToRaidDialog({
 										<TbCircleCheckFilled className='size-5 text-brand' />
 									)}
 									<span className='text-[13px] font-medium text-white/60'>
-										<Trans
-											t={t}
-											i18nKey='storage-manager.add-to-raid.ssd-in-slot'
-											values={{size: formatStorageSize(device.size), slot: device.slot}}
-											components={{highlight: <Highlight />}}
-										/>
+										{device.slot ? (
+											<Trans
+												t={t}
+												i18nKey='storage-manager.add-to-raid.ssd-in-slot'
+												values={{size: formatStorageSize(device.size), slot: device.slot}}
+												components={{highlight: <Highlight />}}
+											/>
+										) : (
+											<>
+												<Highlight>{formatStorageSize(device.size)}</Highlight> · {device.model}
+											</>
+										)}
 									</span>
 								</div>
 							</div>
@@ -427,11 +457,21 @@ export function AddToRaidDialog({
 								</div>
 							)}
 
+							{/* Erase warning for devices without physical slots (non-Pro devices where the
+							    drive may have been used elsewhere before) */}
+							{!device.slot && (
+								<p className='text-[13px] text-yellow-500'>
+									<TbAlertTriangle className='mr-1 mb-0.5 inline size-4 align-middle' />
+									{t('storage-manager.add-drive-erase-warning')}
+								</p>
+							)}
+
 							{/* Info text and donut chart - hidden when size validation fails */}
 							{!isBlockedBySize && (
 								<InfoText
 									showFailSafeOption={showFailSafeOption}
 									effectiveMode={effectiveMode}
+									isHdd={isHdd}
 									newDrivesRawBytes={newDeviceRoundedSize}
 									newToAvailable={newToAvailable}
 									newToProtection={newToProtection}
@@ -509,7 +549,7 @@ export function AddToRaidDialog({
 
 						<DialogFooter>
 							<Button variant='primary' onClick={handleAddDevice} disabled={isBlockedBySize || isOperationInProgress}>
-								{t('storage-manager.add-to-raid.add-ssd')}
+								{isHdd ? t('storage-manager.add-to-raid.add-drive') : t('storage-manager.add-to-raid.add-ssd')}
 							</Button>
 							<Button variant='default' onClick={() => onOpenChange(false)}>
 								{t('cancel')}

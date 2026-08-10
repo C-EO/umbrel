@@ -117,6 +117,15 @@ describe('RAID storage mode', () => {
 		expect(deviceIds).toEqual([firstDeviceId, secondDeviceId].sort())
 	})
 
+	test('rejects replacing a storage device with another device already in the RAID array', async () => {
+		await expect(
+			umbreld.client.hardware.raid.replaceDevice.mutate({
+				oldDevice: firstDeviceId,
+				newDevice: secondDeviceId,
+			}),
+		).rejects.toThrow('Cannot replace with a device that is already in the RAID array')
+	})
+
 	test('total space increased after adding second device', async () => {
 		const status = await umbreld.client.hardware.raid.getStatus.query()
 		expect(status.totalSpace!).toBeGreaterThan(initialTotalSpace)

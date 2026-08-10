@@ -6,7 +6,7 @@ export type StorageDevice = RouterOutput['hardware']['internalStorage']['getDevi
 export type RaidType = 'storage' | 'failsafe'
 
 // RAID device status from ZFS pool
-export type RaidDeviceStatus = 'ONLINE' | 'DEGRADED' | 'FAULTED' | 'OFFLINE' | 'UNAVAIL' | 'REMOVED'
+export type RaidDeviceStatus = 'ONLINE' | 'DEGRADED' | 'FAULTED' | 'OFFLINE' | 'UNAVAIL' | 'REMOVED' | 'CANT_OPEN'
 
 // i18n translation keys for RAID device statuses - call t() with these at render time
 // t('storage-manager.raid-status.online')
@@ -22,6 +22,7 @@ export const raidStatusLabels: Record<RaidDeviceStatus, string> = {
 	OFFLINE: 'storage-manager.raid-status.offline',
 	UNAVAIL: 'storage-manager.raid-status.unavailable',
 	REMOVED: 'storage-manager.raid-status.removed',
+	CANT_OPEN: 'storage-manager.raid-status.unavailable',
 }
 
 // Threshold % for lifetime usage warning (100 = the rated endurance being fully used)
@@ -68,7 +69,7 @@ export function getDeviceHealth(device: StorageDevice) {
 // Device in RAID with merged health info from internal storage
 export type RaidDevice = StorageDevice & {
 	// From RAID status
-	raidStatus: 'ONLINE' | 'DEGRADED' | 'FAULTED' | 'OFFLINE' | 'UNAVAIL' | 'REMOVED'
+	raidStatus: RaidDeviceStatus
 	readErrors: number
 	writeErrors: number
 	checksumErrors: number
@@ -108,6 +109,30 @@ export function useStorage(options: UseStorageOptions = {}) {
 
 	// Mutation: Transition from single-disk SSD storage to failsafe (raidz) mode
 	const transitionToFailsafeMut = trpcReact.hardware.raid.transitionToFailsafeRaidz.useMutation({
+		onSuccess: () => {
+			raidStatusQ.refetch()
+			devicesQ.refetch()
+		},
+	})
+
+	// Mutation: Add a mirror pair to an HDD failsafe array
+	const addMirrorMut = trpcReact.hardware.raid.addMirror.useMutation({
+		onSuccess: () => {
+			raidStatusQ.refetch()
+			devicesQ.refetch()
+		},
+	})
+
+	// Mutation: Add SSD accelerator device(s) to an HDD array
+	const addAcceleratorMut = trpcReact.hardware.raid.addAccelerator.useMutation({
+		onSuccess: () => {
+			raidStatusQ.refetch()
+			devicesQ.refetch()
+		},
+	})
+
+	// Mutation: Transition an HDD storage array to failsafe (mirror) mode
+	const transitionToFailsafeMirrorMut = trpcReact.hardware.raid.transitionToFailsafeMirror.useMutation({
 		onSuccess: () => {
 			raidStatusQ.refetch()
 			devicesQ.refetch()
@@ -176,6 +201,27 @@ export function useStorage(options: UseStorageOptions = {}) {
 		},
 	)
 
+	// Live-reload when block devices appear or disappear (throttled by the backend)
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'system:disk:change'},
+		{
+			onData() {
+				refetchAll()
+			},
+		},
+	)
+
+	// Live-reload when the pool's user-visible state changes (status, membership,
+	// per-member status, raid type, topology) - emitted by the backend pool monitor
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'raid:status-change'},
+		{
+			onData() {
+				refetchAll()
+			},
+		},
+	)
+
 	// Derived: All detected devices
 	const allDevices = devicesQ.data ?? []
 
@@ -202,10 +248,22 @@ export function useStorage(options: UseStorageOptions = {}) {
 		})
 		.filter((d): d is RaidDevice => d !== null)
 
-	// Derived: Available devices (not in RAID, can be added)
+	// Derived: Accelerator device IDs - these live outside raidStatus.devices (data vdevs only)
+	// so they must be excluded from "available" devices separately
+	const acceleratorDeviceIds = new Set(raidStatus?.accelerator?.devices?.map((d) => d.id) ?? [])
+
+	// Derived: Available devices (not in RAID, can be added). System drives are excluded -
+	// they're shown in their own section and must never be offered as RAID candidates.
 	// TODO: Currently UI is limited to adding 1 SSD at a time due to ZFS raidz expansion limitations.
 	// When backend supports adding multiple SSDs at once, the UI can show all available devices.
-	const availableDevices = allDevices.filter((device) => device.id && !raidDeviceIds.has(device.id))
+	const availableDevices = allDevices.filter(
+		(device) =>
+			device.id && !raidDeviceIds.has(device.id) && !acceleratorDeviceIds.has(device.id) && !device.isSystemDrive,
+	)
+
+	// Derived: Disks that back the running system (boot drive). Shown for health visibility
+	// on custom hardware but never usable for storage.
+	const systemDrives = allDevices.filter((device) => device.isSystemDrive)
 
 	// Derived: Failed/missing RAID devices that need replacement
 	// A device needs replacement if:
@@ -221,6 +279,41 @@ export function useStorage(options: UseStorageOptions = {}) {
 	// Derived: Can we replace a failed device? (degraded array + failed device + available replacement)
 	const isDegraded = raidStatus?.status === 'DEGRADED'
 	const canReplaceFailedDevice = isDegraded && failedRaidDevices.length > 0 && availableDevices.length > 0
+
+	// Derived: Whether the pool is made of HDDs or SSDs. Falls back to topology/accelerator
+	// hints when no pool device is physically attached (mirror topology and accelerators
+	// only exist on HDD pools).
+	let poolDeviceType: 'ssd' | 'hdd' | undefined
+	if (raidStatus?.exists) {
+		if (raidDevices.length > 0) poolDeviceType = raidDevices[0].type
+		else if (raidStatus.topology === 'mirror' || raidStatus.accelerator?.exists) poolDeviceType = 'hdd'
+		else poolDeviceType = 'ssd'
+	}
+
+	// Derived: Mirror pairs for HDD failsafe pools. Members keep their pool status even when
+	// the physical device is missing so the UI can render a failed/removed drive.
+	const mirrorPairs = (raidStatus?.mirrors ?? []).map((memberIds) =>
+		memberIds.map((id) => ({
+			id,
+			raidDevice: raidDevices.find((d) => d.id === id),
+			status: raidStatus?.devices?.find((d) => d.id === id)?.status,
+		})),
+	)
+
+	// Derived: Unpooled devices split by type. On HDD pools the SSDs are accelerator
+	// candidates and the HDDs are data drive candidates.
+	const availableHdds = availableDevices.filter((device) => device.type === 'hdd')
+	const availableSsds = availableDevices.filter((device) => device.type === 'ssd')
+
+	// Derived: Accelerator devices with their physical info merged in (undefined when detached)
+	const acceleratorDevices = (raidStatus?.accelerator?.devices ?? []).map((acceleratorDevice) => ({
+		id: acceleratorDevice.id,
+		status: acceleratorDevice.status,
+		device: allDevices.find((d) => d.id === acceleratorDevice.id),
+	}))
+
+	// Derived: Total size of attached drives that aren't part of the pool or accelerator
+	const inactiveBytes = availableDevices.reduce((sum, device) => sum + device.size, 0)
 
 	// Derived: Loading state
 	const isLoading = raidStatusQ.isLoading || devicesQ.isLoading
@@ -247,27 +340,51 @@ export function useStorage(options: UseStorageOptions = {}) {
 	const raidDeviceRoundedSizes = getRaidDeviceRoundedSizes()
 	const minRoundedDriveSize = raidDeviceRoundedSizes.length > 0 ? Math.min(...raidDeviceRoundedSizes) : 0
 
-	// Calculate wasted space in failsafe mode (when drives have different roundedSize values)
-	// In RAIDZ1, all drives can only contribute as much as the smallest drive
-	// Since backend partitions drives using roundedSize, wasted space only occurs when
-	// roundedSize values differ (e.g., mixing 2TB and 4TB drives)
+	// Calculate wasted space in failsafe mode (when drives have different roundedSize values).
+	// The topologies waste space differently: in raidz1 all drives can only contribute as much
+	// as the smallest drive in the array, while in mirror pairs each drive is only limited by
+	// its own partner. Since backend partitions drives using roundedSize, wasted space only
+	// occurs when roundedSize values differ (e.g., mixing 2TB and 4TB drives)
 	const calculateWastedSpace = (): number => {
-		if (!raidStatus?.exists || raidStatus.raidType !== 'failsafe' || raidDeviceRoundedSizes.length < 2) {
-			return 0
+		if (!raidStatus?.exists || raidStatus.raidType !== 'failsafe') return 0
+
+		if (raidStatus.topology === 'raidz') {
+			if (raidDeviceRoundedSizes.length < 2) return 0
+			const totalRoundedSize = raidDeviceRoundedSizes.reduce((sum, size) => sum + size, 0)
+			const usableRoundedSize = minRoundedDriveSize * raidDeviceRoundedSizes.length
+			return Math.max(0, totalRoundedSize - usableRoundedSize)
 		}
 
-		const totalRoundedSize = raidDeviceRoundedSizes.reduce((sum, size) => sum + size, 0)
-		const usableRoundedSize = minRoundedDriveSize * raidDeviceRoundedSizes.length
-		return Math.max(0, totalRoundedSize - usableRoundedSize)
+		if (raidStatus.topology === 'mirror') {
+			return (raidStatus.mirrors ?? []).reduce((wasted, memberIds) => {
+				const sizes = memberIds
+					.map((id) => allDevices.find((d) => d.id === id)?.roundedSize)
+					.filter((size): size is number => size !== undefined)
+				if (sizes.length < 2) return wasted
+				const smallest = Math.min(...sizes)
+				return wasted + sizes.reduce((sum, size) => sum + (size - smallest), 0)
+			}, 0)
+		}
+
+		return 0
 	}
 
-	// Calculate chart data from RAID status (works with both mock and real data)
+	// Calculate chart data from RAID status (works with both mock and real data).
+	// Accelerator capacity (the special vdev) is included in ZFS usable space but is presented
+	// to the user as acceleration rather than storage, so it's excluded from these numbers.
 	const wastedBytes = calculateWastedSpace()
-	const availableBytes = raidStatus?.usableSpace ?? 0
-	const failsafeOverheadBytes =
-		raidStatus?.raidType === 'failsafe' && raidStatus.totalSpace && raidStatus.usableSpace
-			? raidStatus.totalSpace - raidStatus.usableSpace
-			: 0
+	const acceleratorSpecialBytes = raidStatus?.accelerator?.exists ? (raidStatus.accelerator.specialSize ?? 0) : 0
+	const availableBytes = Math.max(0, (raidStatus?.usableSpace ?? 0) - acceleratorSpecialBytes)
+	let failsafeOverheadBytes = 0
+	if (raidStatus?.raidType === 'failsafe' && raidStatus.totalSpace && raidStatus.usableSpace) {
+		// Mirror pools duplicate every stored byte, so the overhead is whatever remains of the
+		// raw data-drive capacity after available and wasted space (totalSpace only covers the
+		// data drives). raidz keeps the original total - usable calculation.
+		failsafeOverheadBytes =
+			raidStatus.topology === 'mirror'
+				? Math.max(0, raidStatus.totalSpace - availableBytes - wastedBytes)
+				: raidStatus.totalSpace - raidStatus.usableSpace
+	}
 	const totalCapacityBytes = availableBytes + failsafeOverheadBytes + wastedBytes
 
 	// Chart data in TB (for donut chart proportions)
@@ -317,6 +434,14 @@ export function useStorage(options: UseStorageOptions = {}) {
 		raidDevices,
 		raidDriveCount,
 		availableDevices,
+		availableHdds,
+		availableSsds,
+		systemDrives,
+		poolDeviceType,
+		mirrorPairs,
+		acceleratorDevices,
+		accelerator: raidStatus?.accelerator,
+		inactiveBytes,
 		// Map devices to 4 slots (Umbrel Pro has 4 SSD slots)
 		ssdSlots: Array.from({length: 4}, (_, i) => allDevices.find((d) => d.slot === i + 1) ?? null),
 		// Set of device IDs that are detected but not in RAID (ready to add)
@@ -353,6 +478,15 @@ export function useStorage(options: UseStorageOptions = {}) {
 		replaceDeviceAsync: replaceDeviceMut.mutateAsync,
 		isReplacingDevice: replaceDeviceMut.isPending,
 		replaceDeviceError: replaceDeviceMut.error,
+
+		addMirrorAsync: addMirrorMut.mutateAsync,
+		isAddingMirror: addMirrorMut.isPending,
+
+		addAcceleratorAsync: addAcceleratorMut.mutateAsync,
+		isAddingAccelerator: addAcceleratorMut.isPending,
+
+		transitionToFailsafeMirrorAsync: transitionToFailsafeMirrorMut.mutateAsync,
+		isTransitioningToFailsafeMirror: transitionToFailsafeMirrorMut.isPending,
 
 		// Refetch
 		refetch: () => {

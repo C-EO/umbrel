@@ -1,15 +1,8 @@
 import {DialogPortal} from '@radix-ui/react-dialog'
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {
-	TbActivityHeartbeat,
-	TbAlertTriangle,
-	TbAlertTriangleFilled,
-	TbCircleCheckFilled,
-	TbPlus,
-	TbRefreshDot,
-} from 'react-icons/tb'
-import {useNavigate} from 'react-router-dom'
+import {TbActivityHeartbeat, TbAlertTriangle, TbCircleCheckFilled, TbPlus, TbRefreshDot} from 'react-icons/tb'
+import {Navigate, useNavigate} from 'react-router-dom'
 
 import {
 	ImmersiveDialog,
@@ -21,97 +14,37 @@ import {Spinner} from '@/components/ui/loading'
 import {useIsUmbrelPro} from '@/hooks/use-is-umbrel-pro'
 import {useTemperatureUnit} from '@/hooks/use-temperature-unit'
 import {cn} from '@/lib/utils'
+import {trpcReact} from '@/trpc/trpc'
 
 import {AddToRaidDialog} from './components/dialogs/add-to-raid-dialog'
 import {InstallSsdDialog} from './components/dialogs/install-ssd-dialog'
 import {ReplaceFailedDriveDialog} from './components/dialogs/replace-failed-drive-dialog'
 import {SsdHealthDialog, useSsdHealthDialog} from './components/dialogs/ssd-health-dialog'
 import {SwapDialog} from './components/dialogs/swap-dialog'
+import {ListStorageManager} from './components/list-manager'
 import {SsdShape} from './components/ssd-shape'
 import {StorageDonutChart} from './components/storage-donut-chart'
 import {StorageModeDisplay} from './components/storage-mode-display'
+import {StorageStats} from './components/storage-stats'
 import {StorageDevice, useStorage} from './hooks/use-storage'
 import {formatStorageSize} from './utils'
-
-// Simple divider for storage info section
-const StorageDivider = () => <div className='h-px w-2/3 bg-linear-to-r from-transparent via-white/15 to-transparent' />
-
-// Storage stats display - shared between mobile and desktop layouts
-function StorageStats({
-	isLoading,
-	totalCapacityBytes,
-	availableBytes,
-	failsafeOverheadBytes,
-	wastedBytes,
-}: {
-	isLoading: boolean
-	totalCapacityBytes: number
-	availableBytes: number
-	failsafeOverheadBytes: number
-	wastedBytes: number
-}) {
-	const {t} = useTranslation()
-	return (
-		<div className='flex w-full flex-col items-center'>
-			{/* Total capacity */}
-			<div className='py-2.5 text-center'>
-				<div className={cn('text-[16px] font-semibold text-white', isLoading && 'animate-pulse text-white/30')}>
-					{isLoading ? '—' : formatStorageSize(totalCapacityBytes)}
-				</div>
-				<div className='text-[13px] font-semibold text-white/50'>{t('storage-manager.total-capacity-added')}</div>
-			</div>
-
-			<StorageDivider />
-
-			{/* Available storage */}
-			<div className='py-2.5 text-center'>
-				<div className={cn('text-[16px] font-semibold text-white', isLoading && 'animate-pulse text-white/30')}>
-					{isLoading ? '—' : formatStorageSize(availableBytes)}
-				</div>
-				<div className='flex items-center justify-center gap-1.5'>
-					<span className='size-2 rounded-full bg-brand' />
-					<span className='text-[13px] font-semibold text-white/50'>{t('storage-manager.available-storage')}</span>
-				</div>
-			</div>
-
-			{/* FailSafe - hide entirely when loading */}
-			{!isLoading && failsafeOverheadBytes > 0 && (
-				<>
-					<StorageDivider />
-					<div className='py-2.5 text-center'>
-						<div className='text-[16px] font-semibold text-white'>{formatStorageSize(failsafeOverheadBytes)}</div>
-						<div className='flex items-center justify-center gap-1.5'>
-							<span
-								className='size-2 rounded-full'
-								style={{backgroundColor: 'color-mix(in srgb, hsl(var(--color-brand)), white 60%)'}}
-							/>
-							<span className='text-[13px] font-semibold text-white/50'>{t('storage-manager.for-failsafe')}</span>
-						</div>
-					</div>
-				</>
-			)}
-
-			{/* Wasted - hide entirely when loading */}
-			{!isLoading && wastedBytes > 0 && (
-				<>
-					<StorageDivider />
-					<div className='py-2.5 text-center'>
-						<div className='text-[16px] font-semibold text-white'>{formatStorageSize(wastedBytes)}</div>
-						<div className='flex items-center justify-center gap-1.5'>
-							<TbAlertTriangleFilled className='size-3.5 text-[#F5A623]' />
-							<span className='text-[13px] font-semibold text-white/50'>{t('storage-manager.wasted')}</span>
-						</div>
-					</div>
-				</>
-			)}
-		</div>
-	)
-}
 
 // Umbrel Pro has 4 SSD slots
 const SLOT_INDICES = [0, 1, 2, 3] as const
 
+// Umbrel Pro gets the physical tray visualization; any other device with a RAID pool gets
+// the list-based manager. Devices without a pool have nothing to manage here.
 export default function StorageManagerDialog() {
+	const {isUmbrelPro, isLoading: isLoadingUmbrelPro} = useIsUmbrelPro()
+	const raidStatusQ = trpcReact.hardware.raid.getStatus.useQuery()
+
+	if (isLoadingUmbrelPro || raidStatusQ.isLoading) return null
+	if (isUmbrelPro) return <ProStorageManager />
+	if (raidStatusQ.data?.exists) return <ListStorageManager />
+	return <Navigate to='/settings' replace />
+}
+
+function ProStorageManager() {
 	const {t} = useTranslation()
 	const navigate = useNavigate()
 	const [temperatureUnit] = useTemperatureUnit()

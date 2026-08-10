@@ -18,7 +18,8 @@ type Warning = {
 
 type SsdHealthDialogProps = {
 	device: StorageDevice
-	slotNumber: number
+	/** Umbrel Pro SSD slot - omit on devices without physical slots to hide the slot depiction */
+	slotNumber?: number
 	open: boolean
 	onOpenChange: (open: boolean) => void
 	/** RAID device info - undefined if device is not in RAID */
@@ -84,36 +85,38 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 						</div>
 					</DialogHeader>
 
-					{/* SSD Depiction */}
-					<div
-						className='relative -mr-5'
-						style={{
-							maskImage: 'linear-gradient(to right, black 60%, transparent 100%)',
-							WebkitMaskImage: 'linear-gradient(to right, black 60%, transparent 100%)',
-						}}
-					>
-						<img src='/assets/onboarding/ssd-info.webp' alt='SSD' draggable={false} className='ml-auto w-[95%]' />
-						<div className='absolute flex flex-col' style={{left: '20%', top: '50%', transform: 'translateY(-50%)'}}>
+					{/* SSD Depiction - Umbrel Pro only (devices with physical slots) */}
+					{slotNumber !== undefined && (
+						<div
+							className='relative -mr-5'
+							style={{
+								maskImage: 'linear-gradient(to right, black 60%, transparent 100%)',
+								WebkitMaskImage: 'linear-gradient(to right, black 60%, transparent 100%)',
+							}}
+						>
+							<img src='/assets/onboarding/ssd-info.webp' alt='SSD' draggable={false} className='ml-auto w-[95%]' />
+							<div className='absolute flex flex-col' style={{left: '20%', top: '50%', transform: 'translateY(-50%)'}}>
+								<span
+									className='leading-tight font-bold'
+									style={{
+										fontSize: 'clamp(20px, 5vw, 30px)',
+										textShadow: '0 0 8px rgba(255, 255, 255, 0.2), 0 0 16px rgba(255, 255, 255, 0.15)',
+									}}
+								>
+									{formatStorageSize(device.size)}
+								</span>
+								<span className='text-white/50' style={{fontSize: 'clamp(12px, 2.5vw, 14px)'}}>
+									SSD {slotNumber}
+								</span>
+							</div>
 							<span
-								className='leading-tight font-bold'
-								style={{
-									fontSize: 'clamp(20px, 5vw, 30px)',
-									textShadow: '0 0 8px rgba(255, 255, 255, 0.2), 0 0 16px rgba(255, 255, 255, 0.15)',
-								}}
+								className='absolute font-medium text-white/90'
+								style={{right: '5%', top: '70%', transform: 'translateY(-50%)', fontSize: 'clamp(12px, 2.5vw, 15px)'}}
 							>
-								{formatStorageSize(device.size)}
-							</span>
-							<span className='text-white/50' style={{fontSize: 'clamp(12px, 2.5vw, 14px)'}}>
-								SSD {slotNumber}
+								{device.model}
 							</span>
 						</div>
-						<span
-							className='absolute font-medium text-white/90'
-							style={{right: '5%', top: '70%', transform: 'translateY(-50%)', fontSize: 'clamp(12px, 2.5vw, 15px)'}}
-						>
-							{device.model}
-						</span>
-					</div>
+					)}
 
 					{/* RAID Status Section - shown when drive status is not ONLINE */}
 					{isRaidFailed && raidDevice && (
@@ -290,7 +293,7 @@ const listItemClass = tw`flex items-center gap-3 px-3 h-[42px] text-14 font-medi
 // Hook to manage SSD health dialog state
 // Stores deviceId instead of device object so parent can look up fresh data
 export function useSsdHealthDialog() {
-	const [selectedDevice, setSelectedDevice] = useState<{deviceId: string; slotNumber: number} | null>(null)
+	const [selectedDevice, setSelectedDevice] = useState<{deviceId: string; slotNumber?: number} | null>(null)
 
 	return {
 		selectedDevice,
@@ -298,7 +301,7 @@ export function useSsdHealthDialog() {
 		onOpenChange: (open: boolean) => {
 			if (!open) setSelectedDevice(null)
 		},
-		openDialog: (device: StorageDevice, slotNumber: number) => {
+		openDialog: (device: StorageDevice, slotNumber?: number) => {
 			if (!device.id) return
 			setSelectedDevice({deviceId: device.id, slotNumber})
 		},

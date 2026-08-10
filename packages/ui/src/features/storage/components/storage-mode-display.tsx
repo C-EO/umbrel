@@ -12,12 +12,16 @@ import {RaidType} from '../hooks/use-storage'
 // i18n keys used dynamically via modeOptions[].titleKey, descriptionKey, etc:
 // t('storage-manager.mode.full-storage')
 // t('storage-manager.mode.full-storage.description')
+// t('storage-manager.mode.full-storage.description-drive')
 // t('storage-manager.mode.full-storage.info-title')
 // t('storage-manager.mode.full-storage.info-description')
+// t('storage-manager.mode.full-storage.info-description-drive')
 // t('storage-manager.mode.failsafe')
 // t('storage-manager.mode.failsafe.description')
+// t('storage-manager.mode.failsafe.description-drive')
 // t('storage-manager.mode.failsafe.info-title')
 // t('storage-manager.mode.failsafe.info-description')
+// t('storage-manager.mode.failsafe.info-description-drive')
 
 type ModeOption = {
 	id: RaidType
@@ -28,33 +32,40 @@ type ModeOption = {
 	infoDescriptionKey: string
 }
 
-const modeOptions: ModeOption[] = [
-	{
-		id: 'storage',
-		icon: <TbServer className='size-5' />,
-		titleKey: 'storage-manager.mode.full-storage',
-		descriptionKey: 'storage-manager.mode.full-storage.description',
-		infoTitleKey: 'storage-manager.mode.full-storage.info-title',
-		infoDescriptionKey: 'storage-manager.mode.full-storage.info-description',
-	},
-	{
-		id: 'failsafe',
-		icon: <IoShieldHalf className='size-5' />,
-		titleKey: 'storage-manager.mode.failsafe',
-		descriptionKey: 'storage-manager.mode.failsafe.description',
-		infoTitleKey: 'storage-manager.mode.failsafe.info-title',
-		infoDescriptionKey: 'storage-manager.mode.failsafe.info-description',
-	},
-]
+const getModeOptions = (copyVariant: 'ssd' | 'drive'): ModeOption[] => {
+	// The default copy is written for SSDs (Umbrel Pro); the 'drive' variant swaps in
+	// generic wording for HDD/mixed devices
+	const variantSuffix = copyVariant === 'drive' ? '-drive' : ''
+	return [
+		{
+			id: 'storage',
+			icon: <TbServer className='size-5' />,
+			titleKey: 'storage-manager.mode.full-storage',
+			descriptionKey: `storage-manager.mode.full-storage.description${variantSuffix}`,
+			infoTitleKey: 'storage-manager.mode.full-storage.info-title',
+			infoDescriptionKey: `storage-manager.mode.full-storage.info-description${variantSuffix}`,
+		},
+		{
+			id: 'failsafe',
+			icon: <IoShieldHalf className='size-5' />,
+			titleKey: 'storage-manager.mode.failsafe',
+			descriptionKey: `storage-manager.mode.failsafe.description${variantSuffix}`,
+			infoTitleKey: 'storage-manager.mode.failsafe.info-title',
+			infoDescriptionKey: `storage-manager.mode.failsafe.info-description${variantSuffix}`,
+		},
+	]
+}
 
 type StorageModeDisplayProps = {
 	value: RaidType
 	canEnableFailsafe: boolean
+	copyVariant?: 'ssd' | 'drive'
 }
 
-export function StorageModeDisplay({value, canEnableFailsafe}: StorageModeDisplayProps) {
+export function StorageModeDisplay({value, canEnableFailsafe, copyVariant = 'ssd'}: StorageModeDisplayProps) {
 	const {t} = useTranslation()
 	const [infoDialogOption, setInfoDialogOption] = useState<ModeOption | null>(null)
+	const modeOptions = getModeOptions(copyVariant)
 
 	// Dynamic "why not available" messages based on current state
 	const getWhyNotAvailable = (optionId: RaidType): string | null => {
