@@ -2,6 +2,7 @@ import {expect, beforeAll, afterAll, describe, test} from 'vitest'
 import pRetry from 'p-retry'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
+import {bootMarkerPath, hookPath, installPreStartHook} from './custom-hooks.vm-test-helpers.js'
 import {createLegacyUsbInstall} from './pi-storage-test-helpers.js'
 
 type LsblkDevice = {
@@ -130,14 +131,39 @@ describe('Pi VM boot from SD card with USB external storage', () => {
 	)
 
 	test(
-		'mounts the legacy USB installation through the normal boot path',
+		'mounts the legacy USB installation before running its pre-start hook',
 		async () => {
+			// Store the hook on the USB-backed Umbrel data directory. It records the
+			// effective mount source it sees when systemd runs it during the next boot.
+			await installPreStartHook(
+				umbreld,
+				`#!/bin/sh
+set -eu
+
+findmnt -n -o SOURCE --target '${hookPath}' | tail -n 1 > '${bootMarkerPath}'
+`,
+			)
+
 			const uuidBeforeReboot = (await umbreld.vm.ssh('lsblk -no UUID /dev/disk/by-label/umbrel')).trim()
 
 			await umbreld.vm.powerOff()
 			await umbreld.vm.powerOn()
 			await ensureBootSawUsbStorage()
 			await expectUsbSystemMounts()
+
+			// The Pi storage unit must explicitly finish before the generic custom
+			// hook unit; merely ordering both before umbrel.service leaves a race.
+			const externalStorageBefore = (
+				await umbreld.vm.ssh('systemctl show -p Before --value umbrel-external-storage.service')
+			)
+				.trim()
+				.split(/\s+/)
+			expect(externalStorageBefore).toContain('umbrel-custom-pre-start.service')
+
+			// Prove the hook was found on the USB installation and observed that
+			// installation already bind-mounted over /home/umbrel/umbrel.
+			const hookMountSource = (await umbreld.vm.ssh(`cat '${bootMarkerPath}' 2>/dev/null || true`)).trim()
+			expect(hookMountSource).toMatch(/^\/dev\/sd[a-z]\d/)
 
 			expect((await umbreld.vm.ssh('lsblk -no UUID /dev/disk/by-label/umbrel')).trim()).toBe(uuidBeforeReboot)
 		},

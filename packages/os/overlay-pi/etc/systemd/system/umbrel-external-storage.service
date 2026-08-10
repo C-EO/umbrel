@@ -3,7 +3,7 @@
 
 [Unit]
 Description=External Storage Mounter
-Before=docker.service umbrel.service
+Before=docker.service umbrel-custom-pre-start.service umbrel.service
 
 [Service]
 Type=oneshot
