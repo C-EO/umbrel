@@ -20,6 +20,10 @@ ARG KOPIA_VERSION=0.19.0
 ARG KOPIA_SHA256_amd64=c07843822c82ec752e5ee749774a18820b858215aabd7da448ce665b9b9107aa
 ARG KOPIA_SHA256_arm64=632db9d72f2116f1758350bf7c20aa57c22c220480aaccb5f839e75669210ed9
 
+ARG RTL8127_VERSION=11.015.00
+ARG RTL8127_COMMIT=d4efe6050041f7d794d6f31b288abbacef11ff63
+ARG RTL8127_SHA256=7ef27a4b5845ed011271217a8d5824f97ef6f1720ae304661b57bf0714010080
+
 ARG RCLONE_RELEASE=1.74.4
 ARG RCLONE_SHA256_amd64=fe435e0c36228e7c2f116a8701f01127bb1f694005fc11d1f27186c8bca4115d
 ARG RCLONE_SHA256_arm64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c358de419
@@ -71,7 +75,8 @@ RUN apt-get install --yes \
     firmware-linux
 
 # Install amd64-specific microcode and firmware
-RUN if [ "${TARGETARCH}" = "amd64" ]; then \
+RUN set -e; \
+    if [ "${TARGETARCH}" = "amd64" ]; then \
     apt-get install --yes \
         intel-microcode \
         amd64-microcode \
@@ -209,6 +214,9 @@ ARG NODE_SHA256_arm64
 ARG KOPIA_VERSION
 ARG KOPIA_SHA256_amd64
 ARG KOPIA_SHA256_arm64
+ARG RTL8127_VERSION
+ARG RTL8127_COMMIT
+ARG RTL8127_SHA256
 ARG RCLONE_RELEASE
 ARG RCLONE_SHA256_amd64
 ARG RCLONE_SHA256_arm64
@@ -234,6 +242,31 @@ RUN apt-get install --yes sudo nano vim less man iproute2 iputils-ping curl wget
 # Install umbreld dependencies
 # (many of these can be remove after the apps refactor)
 RUN apt-get install --yes python3 fswatch jq rsync git gettext-base gnupg procps dmidecode unar imagemagick ffmpeg samba wsdd2 cifs-utils smbclient nvme-cli smartmontools pciutils
+
+# Install the Realtek RTL8127 10GbE driver on amd64 systems. Build against the
+# kernels in the image rather than the kernel running the Docker builder.
+RUN set -e; \
+    if [ "${TARGETARCH}" = "amd64" ]; then \
+        curl -fsSL "https://github.com/openwrt/rtl8127/archive/${RTL8127_COMMIT}.tar.gz" -o /tmp/rtl8127.tar.gz && \
+        echo "${RTL8127_SHA256}  /tmp/rtl8127.tar.gz" | sha256sum -c - && \
+        mkdir -p /tmp/rtl8127 && \
+        tar -xzf /tmp/rtl8127.tar.gz -C /tmp/rtl8127 --strip-components=1 && \
+        module_built=false && \
+        for modules_dir in /lib/modules/*; do \
+            if [ ! -d "${modules_dir}/build" ]; then \
+                continue; \
+            fi; \
+            kernel_version="$(basename "${modules_dir}")"; \
+            make -C "${modules_dir}/build" M=/tmp/rtl8127 clean; \
+            make -C "${modules_dir}/build" M=/tmp/rtl8127 modules; \
+            make -C "${modules_dir}/build" M=/tmp/rtl8127 INSTALL_MOD_DIR=kernel/drivers/net/ethernet/realtek modules_install; \
+            depmod -a "${kernel_version}"; \
+            test "$(modinfo -k "${kernel_version}" -F version r8127)" = "${RTL8127_VERSION}-NAPI"; \
+            module_built=true; \
+        done && \
+        test "${module_built}" = "true" && \
+        rm -rf /tmp/rtl8127 /tmp/rtl8127.tar.gz; \
+    fi
 
 # Disable automatically starting smbd and wsdd2 at boot so umbreld can initialize them only when they're needed
 RUN systemctl disable smbd wsdd2
