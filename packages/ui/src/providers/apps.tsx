@@ -105,6 +105,25 @@ export function AppsProvider({children}: {children: React.ReactNode}) {
 		},
 	)
 
+	// Refresh the owner's app queries on every server-side state transition so
+	// installs, uninstalls and lifecycle changes made by other actors (e.g. MCP
+	// agents) appear without a manual refresh. Once a transition is visible the
+	// existing poll-states UI takes over. Owner-only event; members get the
+	// scoped shares event above.
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'apps:state:change'},
+		{
+			enabled: userQ.data?.role === 'owner',
+			onData() {
+				utils.apps.state.invalidate()
+				utils.apps.list.invalidate()
+			},
+			onError(err) {
+				console.error('eventBus.listen(apps:state:change) subscription error', err)
+			},
+		},
+	)
+
 	// Remove apps that have an error
 	// TODO: consider passing these down in some places (like the desktop)
 	const userApps = filter(appsQ.data ?? [], (app): app is UserApp => !('error' in app))

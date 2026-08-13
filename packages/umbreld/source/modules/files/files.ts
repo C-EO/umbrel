@@ -944,6 +944,7 @@ export default class Files {
 			await move(sourceSystemPath, destinationSystemPath)
 		}
 		await this.memberShares.removeWithin(sourceVirtualPath)
+		await this.#umbreld.mcp.removeFileGrantsWithin(sourceVirtualPath)
 
 		// Return the virtual path of the new location
 		return this.systemToVirtualPath(destinationSystemPath)
@@ -977,6 +978,7 @@ export default class Files {
 		// Perform the renaming operation by moving the file/directory.
 		await move(sourceSystemPath, targetSystemPath)
 		await this.memberShares.removeWithin(sourceVirtualPath)
+		await this.#umbreld.mcp.removeFileGrantsWithin(sourceVirtualPath)
 
 		// Convert the target system path back into a virtual path and return it.
 		return this.systemToVirtualPath(targetSystemPath)
@@ -1018,7 +1020,6 @@ export default class Files {
 				shouldRetry: (error) => error.message === '[destination-already-exists]',
 			},
 		)
-		await this.memberShares.removeWithin(virtualPath)
 
 		// Write the meta data for the trashed file or directory
 		// TODO: Migrate this to SQLite
@@ -1026,6 +1027,9 @@ export default class Files {
 		await fse.ensureDir(trashMetaDirectory).catch(() => {})
 		const trashMetaSystemPath = nodePath.join(trashMetaDirectory, `${nodePath.basename(uniqueTrashSystemPath)}.json`)
 		await fse.writeFile(trashMetaSystemPath, JSON.stringify({path: virtualPath} satisfies Trashmeta))
+
+		await this.memberShares.removeWithin(virtualPath)
+		await this.#umbreld.mcp.removeFileGrantsWithin(virtualPath)
 
 		// Return the virtual path of the trashed file or directory
 		return this.systemToVirtualPath(uniqueTrashSystemPath)
@@ -1161,6 +1165,7 @@ export default class Files {
 				await fse.remove(systemPath)
 			}
 			await this.memberShares.removeWithin(virtualPath)
+			await this.#umbreld.mcp.removeFileGrantsWithin(virtualPath)
 			return true
 		} catch (error) {
 			this.logger.error(`Failed to delete '${systemPath}'`, error)

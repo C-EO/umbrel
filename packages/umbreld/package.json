@@ -26,6 +26,7 @@
 		"test:umbrel-dev": "cd ../../; npm run dev exec:noninteractive -- npm --prefix /umbrel-dev/packages/umbreld test"
 	},
 	"devDependencies": {
+		"@modelcontextprotocol/client": "2.0.0",
 		"@types/ssh2": "^1.15.1",
 		"@tryjsky/v9u-smb2": "^1.1.0",
 		"@types/adm-zip": "^0.5.7",
@@ -62,6 +63,8 @@
 	},
 	"dependencies": {
 		"@homebridge/dbus-native": "github:getumbrel/dbus-native#types",
+		"@modelcontextprotocol/node": "2.0.0",
+		"@modelcontextprotocol/server": "2.0.0",
 		"@parcel/watcher": "^2.5.1",
 		"@trpc/client": "^11.1.1",
 		"@trpc/server": "^11.1.1",
@@ -114,6 +117,7 @@
 		"tsx": "^4.7.1",
 		"valid-filename": "^4.0.0",
 		"ws": "^8.16.0",
-		"zod": "^3.21.4"
+		"zod": "^3.21.4",
+		"zod4": "npm:zod@4.4.3"
 	}
 }

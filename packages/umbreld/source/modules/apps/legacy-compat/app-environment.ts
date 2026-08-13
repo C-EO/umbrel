@@ -20,6 +20,9 @@ export default async function appEnvironment(umbreld: Umbreld, command: string) 
 		env: {
 			UMBREL_DATA_DIR: umbreld.dataDirectory,
 			// TODO: Load these from somewhere more appropriate
+			// GATEWAY_IP is also baked into the MCP connect UI
+			// (INSTALLED_AGENT_MCP_URL in ui/src/routes/settings/mcp/agents.ts) —
+			// keep them in sync if this ever changes
 			NETWORK_IP: '10.21.0.0',
 			GATEWAY_IP: '10.21.0.1',
 			TOR_PROXY_IP: '10.21.21.11',

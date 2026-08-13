@@ -30,7 +30,7 @@ export async function readManifestInDirectory(dataDirectory: string) {
 	return parseYaml.then(validateManifest)
 }
 
-type AppState =
+export type AppState =
 	| 'unknown'
 	| 'installing'
 	| 'starting'
@@ -52,7 +52,7 @@ export default class App {
 	logger: Umbreld['logger']
 	id: string
 	dataDirectory: string
-	state: AppState = 'unknown'
+	#state: AppState = 'unknown'
 	stateProgress = 0
 	store: FileStore<AppSettings>
 
@@ -66,6 +66,19 @@ export default class App {
 		const {name} = this.constructor
 		this.logger = umbreld.logger.createChildLogger(name.toLowerCase())
 		this.store = new FileStore({filePath: `${this.dataDirectory}/settings.yml`})
+	}
+
+	get state() {
+		return this.#state
+	}
+
+	// An accessor so every transition is announced, no matter which actor
+	// triggered it (dashboard, MCP, CLI) — dashboards react to the event
+	// instead of only to their own mutations
+	set state(state: AppState) {
+		if (state === this.#state) return
+		this.#state = state
+		this.#umbreld.eventBus.emit('apps:state:change', {appId: this.id, state})
 	}
 
 	readManifest() {
@@ -404,9 +417,9 @@ export default class App {
 		}
 	}
 
-	async getLogs() {
+	async getLogs(maxOutputBytes?: number) {
 		const inheritStdio = false
-		const result = await appScript(this.#umbreld, 'logs', this.id, inheritStdio)
+		const result = await appScript(this.#umbreld, 'logs', this.id, inheritStdio, {maxOutputBytes})
 		return stripAnsi(result.stdout)
 	}
 

@@ -47,6 +47,27 @@ export function setSystemStatus(status: SystemStatus) {
 	systemStatus = status
 }
 
+async function getSystemLogs(type: 'umbrelos' | 'system', lines = 1500, maxOutputBytes?: number) {
+	if (!maxOutputBytes) {
+		const process =
+			type === 'umbrelos'
+				? await $`journalctl --unit umbrel --unit umbreld-production --unit umbreld --unit ui --lines ${lines}`
+				: await $`journalctl --lines ${lines}`
+		return stripAnsi(process.stdout)
+	}
+
+	const journal =
+		type === 'umbrelos'
+			? $({buffer: false})`journalctl --unit umbrel --unit umbreld-production --unit umbreld --unit ui --lines ${lines}`
+			: $({buffer: false})`journalctl --lines ${lines}`
+	// umbreld has no inherited stdin under systemd, so execa's default stdin is
+	// unavailable. The second process needs an explicit pipe for journalctl.
+	const tail = $({stdin: 'pipe'})`tail --bytes ${maxOutputBytes}`
+	journal.pipeStdout!(tail)
+	const [, process] = await Promise.all([journal, tail])
+	return stripAnsi(process.stdout)
+}
+
 // Fold the per-app usage of apps a member can't see into a single 'other'
 // entry. The full breakdown is computed as normal first, this only
 // post-processes the result for member accounts.
@@ -213,18 +234,11 @@ export default router({
 		.input(
 			z.object({
 				type: z.enum(['umbrelos', 'system']),
+				lines: z.number().int().min(1).max(1500).default(1500),
+				maxOutputBytes: z.number().int().positive().max(1_000_000).optional(),
 			}),
 		)
-		.query(async ({input}) => {
-			let process
-			if (input.type === 'umbrelos') {
-				process = await $`journalctl --unit umbrel --unit umbreld-production --unit umbreld --unit ui --lines 1500`
-			}
-			if (input.type === 'system') {
-				process = await $`journalctl --lines 1500`
-			}
-			return stripAnsi(process!.stdout)
-		}),
+		.query(async ({input}) => getSystemLogs(input.type, input.lines, input.maxOutputBytes)),
 	//
 	// Public during onboarding and recovery mode - password required unless in recovery mode
 	factoryReset: publicProcedureWhenNoUserExists

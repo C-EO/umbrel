@@ -3,7 +3,7 @@ import {matchSorter} from 'match-sorter'
 import {AnimatePresence, motion} from 'motion/react'
 import {lazy, Suspense, useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {TbCheck, TbChevronLeft, TbChevronRight, TbCopy, TbInfoCircle, TbTrash, TbX} from 'react-icons/tb'
+import {TbCheck, TbCopy, TbInfoCircle, TbTrash} from 'react-icons/tb'
 import {useSearchParams} from 'react-router-dom'
 import {useCopyToClipboard} from 'react-use'
 
@@ -37,7 +37,6 @@ import {ScrollArea} from '@/components/ui/scroll-area'
 import {Separator} from '@/components/ui/separator'
 import {toast} from '@/components/ui/toast'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
-import {FolderIcon} from '@/features/files/components/shared/file-item-icon/folder-icon'
 import {useHomeDirectoryName} from '@/features/files/hooks/use-home-directory-name'
 import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useAppMemberShares} from '@/hooks/use-app-member-shares'
@@ -45,7 +44,16 @@ import {useIsMobile} from '@/hooks/use-is-mobile'
 import {cn} from '@/lib/utils'
 import {AccountAvatar} from '@/modules/auth/account-avatar'
 import {OWNER_USER_ID} from '@/modules/auth/constants'
-import {EmptyCard, ShareAllToggle, ShareEveryoneRow, shareListClass} from '@/modules/user-sharing'
+import {
+	AnimatedRow,
+	EmptyCard,
+	GrantSummary,
+	RowChevron,
+	RowRemoveButton,
+	ShareAllToggle,
+	ShareEveryoneRow,
+	shareListClass,
+} from '@/modules/user-sharing'
 import {
 	getNewUserAccessDefaults,
 	isCoveredByHomeShare,
@@ -55,7 +63,7 @@ import {
 } from '@/modules/user-sharing/new-user-access'
 import type {SharedWith} from '@/modules/user-sharing/new-user-access'
 import {OwnerAccountPanel, type OwnerPanel} from '@/routes/settings/_components/owner-account-panel'
-import {useSettingsDialogProps} from '@/routes/settings/_components/shared'
+import {BackButton, SectionLabel, useSettingsDialogProps} from '@/routes/settings/_components/shared'
 import {ManagedSessionsPanel} from '@/routes/settings/sessions'
 import {RouterOutput, trpcReact} from '@/trpc/trpc'
 import {sleep} from '@/utils/misc'
@@ -708,7 +716,7 @@ export default function UsersDialog() {
 											{owner.name}
 										</span>
 										<span className='text-12 text-white/30'>{t('users.you')}</span>
-										<TbChevronRight className='-mx-0.5 size-4 shrink-0 text-white/20 transition-transform group-hover:translate-x-0.5' />
+										<RowChevron />
 									</button>
 								)
 							)}
@@ -752,31 +760,14 @@ export default function UsersDialog() {
 											<span className='min-w-0 flex-1 truncate text-14 font-medium -tracking-2 text-white/90'>
 												{member.name}
 											</span>
-											{folderCount > 0 && (
-												<span className='flex shrink-0 items-center gap-1.25 text-12 text-white/60'>
-													{!isMobile && <FolderIcon className='h-6 w-7' />}
-													{t('users.folder-count', {count: folderCount})}
-												</span>
-											)}
+											{folderCount > 0 && <GrantSummary folder label={t('users.folder-count', {count: folderCount})} />}
 											{(allApps || appCount > 0) && (
-												<span className='flex shrink-0 items-center gap-1.25 text-12 text-white/60'>
-													{!isMobile && appIds.length > 0 && (
-														<span className='flex -space-x-3'>
-															{appIds.slice(0, 3).map((appId, index) => (
-																<AppIcon
-																	key={appId}
-																	size={24}
-																	src={appIconById.get(appId)}
-																	className='relative rounded-6'
-																	style={{zIndex: 3 - index}}
-																/>
-															))}
-														</span>
-													)}
-													{allApps ? t('users.all-apps') : t('users.app-count', {count: appCount})}
-												</span>
+												<GrantSummary
+													icons={appIds.map((appId) => appIconById.get(appId))}
+													label={allApps ? t('users.all-apps') : t('users.app-count', {count: appCount})}
+												/>
 											)}
-											<TbChevronRight className='-mx-0.5 size-4 shrink-0 text-white/20 transition-transform group-hover:translate-x-0.5' />
+											<RowChevron />
 										</button>
 									)
 								})}
@@ -1090,19 +1081,6 @@ function AddUserAvatar({name, size = 96}: {name: string; size?: number}) {
 	)
 }
 
-function BackButton({onClick, children}: {onClick: () => void; children: React.ReactNode}) {
-	return (
-		<button
-			type='button'
-			onClick={onClick}
-			className='-ml-1 flex items-center gap-0.5 self-start text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70'
-		>
-			<TbChevronLeft className='size-4' />
-			{children}
-		</button>
-	)
-}
-
 // The pre-composed invite message shown after creating a user — the whole
 // card is one big copy button
 function InviteMessageCard({message}: {message: string}) {
@@ -1130,10 +1108,6 @@ function InviteMessageCard({message}: {message: string}) {
 			</span>
 		</button>
 	)
-}
-
-function SectionLabel({children}: {children: React.ReactNode}) {
-	return <div className='text-12 font-semibold tracking-wide text-white/40 uppercase'>{children}</div>
 }
 
 function ShareSection({
@@ -1249,34 +1223,6 @@ function InfoNote({children}: {children: React.ReactNode}) {
 			<TbInfoCircle className='mt-0.5 size-3.5 shrink-0 text-white/30' />
 			<span className='text-11 leading-snug text-white/35'>{children}</span>
 		</div>
-	)
-}
-
-function RowRemoveButton({label, onClick, disabled}: {label: string; onClick: () => void; disabled?: boolean}) {
-	return (
-		<button
-			type='button'
-			aria-label={label}
-			disabled={disabled}
-			onClick={onClick}
-			className='rounded-full p-1.5 text-white/30 transition-colors hover:bg-white/10 hover:text-white/70 disabled:pointer-events-none disabled:opacity-40'
-		>
-			<TbX className='size-4' />
-		</button>
-	)
-}
-
-function AnimatedRow({children}: {children: React.ReactNode}) {
-	return (
-		<motion.div
-			initial={{opacity: 0, height: 0}}
-			animate={{opacity: 1, height: 'auto'}}
-			exit={{opacity: 0, height: 0}}
-			transition={{duration: 0.2}}
-			className='overflow-hidden'
-		>
-			{children}
-		</motion.div>
 	)
 }
 

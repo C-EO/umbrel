@@ -5,8 +5,12 @@ import * as React from 'react'
 import {cn} from '@/lib/utils'
 
 const buttonVariants = cva(
-	// `bg-clip-padding` to make button bg (especially in progress button) not be clipped by invisible border
-	'inline-flex items-center justify-center font-medium transition-[color,background-color,scale,box-shadow,opacity] disabled:pointer-events-none disabled:opacity-50 -tracking-2 leading-inter-trimmed gap-1.5 focus:outline-hidden focus-visible:ring-3 shrink-0 disabled:shadow-none duration-300 umbrel-button bg-clip-padding',
+	// `bg-clip-padding` to make button bg (especially in progress button) not be clipped by invisible border.
+	// `pt-[1.5px]` optically re-centers the label: Chrome rounds Inter's font
+	// metrics so text sits ~0.75px above true center (measured 6.25px top vs
+	// 7.75px bottom gap in a 30px button), and padding-top shifts flex-centered
+	// content down by half its value.
+	'inline-flex items-center justify-center font-medium transition-[color,background-color,scale,box-shadow,opacity] disabled:pointer-events-none disabled:opacity-50 -tracking-2 leading-inter-trimmed gap-1.5 focus:outline-hidden focus-visible:ring-3 shrink-0 disabled:shadow-none duration-300 umbrel-button bg-clip-padding pt-[1.5px]',
 	{
 		variants: {
 			variant: {

@@ -1,10 +1,14 @@
 import * as TooltipPrimitive from '@radix-ui/react-tooltip'
+import {motion, useReducedMotion} from 'motion/react'
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {TbInfoCircle} from 'react-icons/tb'
+import {TbChevronRight, TbInfoCircle, TbX} from 'react-icons/tb'
 
+import {AppIcon} from '@/components/app-icon'
 import {Switch} from '@/components/ui/switch'
 import {Tooltip, TooltipContent, TooltipTrigger} from '@/components/ui/tooltip'
+import {FolderIcon} from '@/features/files/components/shared/file-item-icon/folder-icon'
+import {useIsMobile} from '@/hooks/use-is-mobile'
 import {cn} from '@/lib/utils'
 import {AccountAvatar} from '@/modules/auth/account-avatar'
 import {OWNER_USER_ID} from '@/modules/auth/constants'
@@ -99,6 +103,77 @@ export function ShareEveryoneRow({
 			</div>
 			<Switch checked={checked} disabled={disabled} onCheckedChange={onCheckedChange} />
 		</label>
+	)
+}
+
+// Inline grant summary shown at the trailing edge of list rows: an
+// overlapping app-icon stack or a folder icon, plus a short count label.
+// Icons hide on mobile where the rows are tighter.
+export function GrantSummary({
+	icons,
+	folder,
+	label,
+}: {
+	icons?: (string | undefined)[]
+	folder?: boolean
+	label: string
+}) {
+	const isMobile = useIsMobile()
+	return (
+		<span className='flex shrink-0 items-center gap-1.25 text-12 text-white/60'>
+			{!isMobile && folder && <FolderIcon className='h-6 w-7' />}
+			{!isMobile && !!icons?.length && (
+				<span className='flex -space-x-3'>
+					{icons.slice(0, 3).map((src, index) => (
+						<AppIcon key={index} size={24} src={src} className='relative rounded-6' style={{zIndex: 3 - index}} />
+					))}
+				</span>
+			)}
+			{label}
+		</span>
+	)
+}
+
+// Trailing chevron for drill-in list rows; nudges right when the row (a
+// `group` element) is hovered
+export function RowChevron() {
+	return (
+		<TbChevronRight className='-mx-0.5 size-4 shrink-0 text-white/20 transition-transform group-hover:translate-x-0.5' />
+	)
+}
+
+// Remove control at the end of a share-list row (granted app/folder)
+export function RowRemoveButton({label, onClick, disabled}: {label: string; onClick: () => void; disabled?: boolean}) {
+	return (
+		<button
+			type='button'
+			aria-label={label}
+			disabled={disabled}
+			onClick={onClick}
+			className='rounded-full p-1.5 text-white/30 transition-colors hover:bg-white/10 hover:text-white/70 disabled:pointer-events-none disabled:opacity-40'
+		>
+			<TbX className='size-4' />
+		</button>
+	)
+}
+
+// Height-animated wrapper for share-list rows entering/leaving inside an
+// AnimatePresence. With reorder on, rows also glide to their new slot when the
+// list re-sorts around them — position-only, so the glide never fights the
+// height animation.
+export function AnimatedRow({children, reorder = false}: {children: React.ReactNode; reorder?: boolean}) {
+	const reducedMotion = useReducedMotion() ?? false
+	return (
+		<motion.div
+			layout={reorder ? 'position' : undefined}
+			initial={{opacity: 0, height: 0}}
+			animate={{opacity: 1, height: 'auto'}}
+			exit={{opacity: 0, height: 0}}
+			transition={{duration: reducedMotion ? 0 : 0.2}}
+			className='overflow-hidden'
+		>
+			{children}
+		</motion.div>
 	)
 }
 

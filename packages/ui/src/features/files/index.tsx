@@ -15,6 +15,7 @@ import {RewindOverlayProvider} from '@/features/files/components/rewind/overlay-
 import {Sidebar} from '@/features/files/components/sidebar'
 import {MobileSidebarWrapper} from '@/features/files/components/sidebar/mobile-sidebar-wrapper'
 import {useIsMember} from '@/features/files/hooks/use-home-path'
+import {useWatcherRefetch} from '@/features/files/hooks/use-watcher-refetch'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import {useIsMobile} from '@/hooks/use-is-mobile'
@@ -39,6 +40,10 @@ export default function FilesLayout() {
 	const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
 	const isReadOnly = useIsFilesReadOnly()
 	const isMember = useIsMember()
+
+	// One subscription for the whole Files surface: refreshes every mounted
+	// listing (main view, /Apps, /Trash, sidebar trash) on external changes
+	useWatcherRefetch()
 
 	useEffect(() => {
 		// TODO: Find a better place to do this

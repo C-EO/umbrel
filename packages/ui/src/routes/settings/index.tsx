@@ -27,6 +27,7 @@ const SettingsContentMobile = React.lazy(() =>
 )
 
 const FileSharingDrawerOrDialog = React.lazy(() => import('@/routes/settings/file-sharing'))
+const McpDialog = React.lazy(() => import('@/routes/settings/mcp'))
 const AppStorePreferencesDialog = React.lazy(() => import('@/routes/settings/app-store-preferences'))
 const ChangeNameDialog = React.lazy(() => import('@/routes/settings/change-name'))
 const ChangePasswordDialog = React.lazy(() => import('@/routes/settings/change-password'))
@@ -163,6 +164,7 @@ export function Settings() {
 							{isMobile && <Route path='/software-update' Component={SoftwareUpdateDrawer} />}
 							<Route path='/software-update/confirm' Component={SoftwareUpdateConfirmDialog} />
 							<Route path='/file-sharing' Component={FileSharingDrawerOrDialog} />
+							{!isMember && <Route path='/mcp' Component={McpDialog} />}
 							<Route path='/advanced/:advancedSelection?' Component={AdvancedSettingsDrawerOrDialog} />
 							<Route path='/storage/*' Component={StorageManagerDialog} />
 						</Routes>

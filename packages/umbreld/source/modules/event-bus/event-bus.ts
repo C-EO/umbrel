@@ -1,6 +1,7 @@
 import Emittery from 'emittery'
 
 import type Umbreld from '../../index.js'
+import type {AppState} from '../apps/app.js'
 import type {CloudSyncActivity} from '../files/cloud-types.js'
 import type {FileChangeEvent} from '../files/watcher.js'
 import type {OperationsInProgress} from '../files/files.js'
@@ -22,6 +23,7 @@ export const events = [
 	'files:cloud-progress',
 	'files:member-shares:change',
 	'apps:member-shares:change',
+	'apps:state:change',
 	'backups:backup-progress',
 	'backups:restore-progress',
 	'system:disk:change',
@@ -49,6 +51,9 @@ export type EventTypes = {
 	// Fires when the apps shared with members change, with the accounts the
 	// affected share was or is now shared with
 	'apps:member-shares:change': MemberSharesChangeEvent
+	// Fires when an app's lifecycle state changes, with 'not-installed' when
+	// an app disappears (uninstall or failed install)
+	'apps:state:change': {appId: string; state: AppState | 'not-installed'}
 	// Fires repeatedly while backup operations are in progress
 	// with the current progress of each backup
 	'backups:backup-progress': BackupsInProgress

@@ -3,6 +3,7 @@ import {AnimatePresence, motion, useReducedMotion} from 'motion/react'
 import {useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 
+import {PitchPoints} from '@/components/ui/pitch-points'
 import {CLOUD_PROVIDER_LOGOS} from '@/features/files/constants'
 import type {CloudProvider} from '@/features/files/hooks/use-cloud'
 import {CLOUD_SELF_TILE_BRANDS, CLOUD_WEBDAV_FLAVORS, type CloudWebDavFlavorId} from '@/features/files/utils/cloud'
@@ -126,45 +127,29 @@ export function CloudLogoPlate({
 // The pitch, said in three glances: what it does, how it runs, and why it is
 // private. Shared by the add wizard's first run, the manage dialog's empty
 // state, and the /Cloud landing view so the promise reads the same everywhere.
-const PITCH_POINTS = [
-	{
-		icon: FolderDown,
-		titleTKey: 'files-cloud.pitch-point-download-title',
-		descriptionTKey: 'files-cloud.pitch-point-download-description',
-	},
-	{
-		icon: RefreshCw,
-		titleTKey: 'files-cloud.pitch-point-modes-title',
-		descriptionTKey: 'files-cloud.pitch-point-modes-description',
-	},
-	{
-		icon: ShieldCheck,
-		titleTKey: 'files-cloud.pitch-point-private-title',
-		descriptionTKey: 'files-cloud.pitch-point-private-description',
-	},
-]
-
 export function CloudPitchPoints({delay = 0.1}: {delay?: number}) {
 	const {t} = useTranslation()
-	const reducedMotion = useReducedMotion() ?? false
 	return (
-		<div className='mx-auto flex w-full max-w-[360px] flex-col gap-2 text-left'>
-			{PITCH_POINTS.map(({icon: Icon, titleTKey, descriptionTKey}, index) => (
-				<motion.div
-					key={titleTKey}
-					initial={reducedMotion ? false : {opacity: 0, y: 4}}
-					animate={{opacity: 1, y: 0}}
-					transition={{duration: 0.4, delay: delay + index * 0.08}}
-					className='flex items-start gap-3 rounded-xl bg-white/5 px-3.5 py-3'
-				>
-					<Icon className='mt-0.5 size-[18px] shrink-0 text-brand-lighter' />
-					<div className='min-w-0'>
-						<p className='text-13 font-medium'>{t(titleTKey)}</p>
-						<p className='text-12 leading-relaxed text-white/50'>{t(descriptionTKey)}</p>
-					</div>
-				</motion.div>
-			))}
-		</div>
+		<PitchPoints
+			delay={delay}
+			points={[
+				{
+					icon: FolderDown,
+					title: t('files-cloud.pitch-point-download-title'),
+					description: t('files-cloud.pitch-point-download-description'),
+				},
+				{
+					icon: RefreshCw,
+					title: t('files-cloud.pitch-point-modes-title'),
+					description: t('files-cloud.pitch-point-modes-description'),
+				},
+				{
+					icon: ShieldCheck,
+					title: t('files-cloud.pitch-point-private-title'),
+					description: t('files-cloud.pitch-point-private-description'),
+				},
+			]}
+		/>
 	)
 }
 

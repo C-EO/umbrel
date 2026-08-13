@@ -113,40 +113,8 @@ function requireFileApiAuth(umbreld: Umbreld) {
 	}
 }
 
-export default function api(umbreld: Umbreld) {
-	const api = express.Router()
-	api.use(requireFileApiAuth(umbreld))
-
-	// Serve thumbnails from the thumbnails directory
-	// GET /api/files/thumbnail/:thumbnail
-	// Serve the thumbnail assets
-	// Thumbnail assets are named with a hash that only changes when the file is modified
-	// so a browser can cache them for the session without a shared cache retaining private data.
-	// A thumbnail is served only while this account can still resolve its source
-	// path. Revalidation keeps revocations effective while the hash remains the
-	// stable cache key for unchanged content.
-	api.get('/thumbnail/:thumbnail', async (request, response) => {
-		try {
-			if (typeof request.query.path !== 'string') throw new Error('[thumbnail-not-found]')
-			const thumbnailSystemPath = await umbreld.files.thumbnails.resolveThumbnailRequest(
-				request.params.thumbnail,
-				request.query.path,
-				accountId(response),
-			)
-			response.setHeader('Cache-Control', 'private, no-cache')
-			response.setHeader('X-Content-Type-Options', 'nosniff')
-			return response.sendFile(thumbnailSystemPath, {cacheControl: false, dotfiles: 'deny'})
-		} catch {
-			return response.status(404).json({error: 'not found'})
-		}
-	})
-	// Don't serve directory indexes
-	// If we don't get a file hit, return a 404
-	api.get('/thumbnail', (_request, response) => response.status(404).json({error: 'not found'}))
-
-	// Downloads a file, directory or multiple files
-	// GET /api/files/download?path=/Home/file.txt&path=/Home/file-2.txt
-	api.get('/download', async (request, response) => {
+export function downloadFiles(umbreld: Umbreld) {
+	return async (request: express.Request, response: express.Response) => {
 		// Normalise a single path or multiple paths into an array
 		const requestedPaths = virtualPaths(request)
 		// Check that at least one path is provided
@@ -189,44 +157,11 @@ export default function api(umbreld: Umbreld) {
 			}
 			throw error
 		}
-	})
+	}
+}
 
-	// Views a file
-	// GET /api/files/view?path=/Home/file.txt
-	api.get('/view', async (request, response) => {
-		try {
-			if (typeof request.query.path !== 'string') return response.status(400).json({error: 'path is required'})
-			const systemPath = await umbreld.files.virtualToSystemPath(request.query.path, accountId(response))
-			const status = await umbreld.files.status(systemPath, accountId(response))
-			if (status.type === 'directory') return response.status(400).json({error: 'cannot view a directory'})
-			response.setHeader(
-				'Content-Security-Policy',
-				"sandbox; default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'",
-			)
-			response.setHeader('X-Content-Type-Options', 'nosniff')
-			const mimeType = mime.lookup(systemPath)
-			const isImageEmbed = acceptsEmbeddedSvg(request)
-			// Files are user-controlled but served same-origin, so only low-risk preview types render inline.
-			// All others download, with CSP sandbox and nosniff as defense-in-depth if a browser renders anyway.
-			if (
-				mimeType &&
-				(inlineViewMimeTypes.has(mimeType) || (isImageEmbed && embedOnlyInlineViewMimeTypes.has(mimeType)))
-			) {
-				response.setHeader('Content-Type', mimeType)
-			} else {
-				const filename = nodePath.basename(systemPath)
-				response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
-				response.setHeader('Content-Type', 'application/octet-stream')
-			}
-			response.sendFile(systemPath, {dotfiles: 'allow'})
-		} catch {
-			return response.status(404).json({error: 'not found'})
-		}
-	})
-
-	// Uploads a file
-	// POST /api/files/upload?path=/Home/file.txt&collision=error|keep-both|replace
-	api.post('/upload', async (request, response) => {
+export function uploadFile(umbreld: Umbreld) {
+	return async (request: express.Request, response: express.Response) => {
 		// Note: We must set the `Connection: close` header on error to prevent the XHR upload logic
 		// from uploading the entire file before checking for errors in the response. cURL handles this
 		// without the extra header, I'm not sure why it's only needed in the browser.
@@ -334,6 +269,79 @@ export default function api(umbreld: Umbreld) {
 			// Clean up the temporary file
 			if (!promoted) await fse.remove(temporarySystemPath).catch(() => {})
 		}
+	}
+}
+
+export default function api(umbreld: Umbreld) {
+	const api = express.Router()
+	api.use(requireFileApiAuth(umbreld))
+
+	// Serve thumbnails from the thumbnails directory
+	// GET /api/files/thumbnail/:thumbnail
+	// Serve the thumbnail assets
+	// Thumbnail assets are named with a hash that only changes when the file is modified
+	// so a browser can cache them for the session without a shared cache retaining private data.
+	// A thumbnail is served only while this account can still resolve its source
+	// path. Revalidation keeps revocations effective while the hash remains the
+	// stable cache key for unchanged content.
+	api.get('/thumbnail/:thumbnail', async (request, response) => {
+		try {
+			if (typeof request.query.path !== 'string') throw new Error('[thumbnail-not-found]')
+			const thumbnailSystemPath = await umbreld.files.thumbnails.resolveThumbnailRequest(
+				request.params.thumbnail,
+				request.query.path,
+				accountId(response),
+			)
+			response.setHeader('Cache-Control', 'private, no-cache')
+			response.setHeader('X-Content-Type-Options', 'nosniff')
+			return response.sendFile(thumbnailSystemPath, {cacheControl: false, dotfiles: 'deny'})
+		} catch {
+			return response.status(404).json({error: 'not found'})
+		}
 	})
+	// Don't serve directory indexes
+	// If we don't get a file hit, return a 404
+	api.get('/thumbnail', (_request, response) => response.status(404).json({error: 'not found'}))
+
+	// Downloads a file, directory or multiple files
+	// GET /api/files/download?path=/Home/file.txt&path=/Home/file-2.txt
+	api.get('/download', downloadFiles(umbreld))
+
+	// Views a file
+	// GET /api/files/view?path=/Home/file.txt
+	api.get('/view', async (request, response) => {
+		try {
+			if (typeof request.query.path !== 'string') return response.status(400).json({error: 'path is required'})
+			const systemPath = await umbreld.files.virtualToSystemPath(request.query.path, accountId(response))
+			const status = await umbreld.files.status(systemPath, accountId(response))
+			if (status.type === 'directory') return response.status(400).json({error: 'cannot view a directory'})
+			response.setHeader(
+				'Content-Security-Policy',
+				"sandbox; default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'",
+			)
+			response.setHeader('X-Content-Type-Options', 'nosniff')
+			const mimeType = mime.lookup(systemPath)
+			const isImageEmbed = acceptsEmbeddedSvg(request)
+			// Files are user-controlled but served same-origin, so only low-risk preview types render inline.
+			// All others download, with CSP sandbox and nosniff as defense-in-depth if a browser renders anyway.
+			if (
+				mimeType &&
+				(inlineViewMimeTypes.has(mimeType) || (isImageEmbed && embedOnlyInlineViewMimeTypes.has(mimeType)))
+			) {
+				response.setHeader('Content-Type', mimeType)
+			} else {
+				const filename = nodePath.basename(systemPath)
+				response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
+				response.setHeader('Content-Type', 'application/octet-stream')
+			}
+			response.sendFile(systemPath, {dotfiles: 'allow'})
+		} catch {
+			return response.status(404).json({error: 'not found'})
+		}
+	})
+
+	// Uploads a file
+	// POST /api/files/upload?path=/Home/file.txt&collision=error|keep-both|replace
+	api.post('/upload', uploadFile(umbreld))
 	return api
 }

@@ -3,7 +3,7 @@ import {AnimatePresence, motion} from 'motion/react'
 import React, {useEffect, useRef, useState} from 'react'
 import {Trans, useTranslation} from 'react-i18next'
 import {BsEthernet} from 'react-icons/bs'
-import {TbAlertTriangle, TbCheck, TbChevronLeft, TbChevronRight, TbInfoCircle, TbPencil, TbWifi} from 'react-icons/tb'
+import {TbAlertTriangle, TbCheck, TbChevronRight, TbInfoCircle, TbPencil, TbWifi} from 'react-icons/tb'
 
 import {AlertDialog, AlertDialogContent} from '@/components/ui/alert-dialog'
 import {Button} from '@/components/ui/button'
@@ -26,6 +26,7 @@ import {
 import {cn} from '@/lib/utils'
 import {useConfirmation} from '@/providers/confirmation'
 import {useGlobalSystemState} from '@/providers/global-system-state'
+import {BackButton, Divider, SectionLabel} from '@/routes/settings/_components/shared'
 import {HttpsAccessInstructions} from '@/routes/settings/https-access'
 import {linkClass} from '@/utils/element-classes'
 
@@ -880,26 +881,6 @@ function InterfaceDetail({iface, onBack}: {iface: NetworkInterface; onBack: () =
 }
 
 // ─── Shared ─────────────────────────────────────────────────────────
-
-function BackButton({onClick, children}: {onClick: () => void; children: React.ReactNode}) {
-	return (
-		<button
-			onClick={onClick}
-			className='-ml-1 flex items-center gap-0.5 self-start text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70'
-		>
-			<TbChevronLeft className='size-4' />
-			{children}
-		</button>
-	)
-}
-
-function SectionLabel({children}: {children: React.ReactNode}) {
-	return <div className='text-12 font-semibold tracking-wide text-white/40 uppercase'>{children}</div>
-}
-
-function Divider() {
-	return <div className='h-px bg-white/5' />
-}
 
 function InfoRow({
 	label,

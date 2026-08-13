@@ -200,6 +200,10 @@ class Server {
 		// Every file endpoint is mounted beneath an authentication-first subrouter.
 		this.app.use('/api/files', fileApi(this.umbreld))
 
+		// MCP has its own static bearer authentication and is deliberately
+		// mounted before the dashboard SPA fallback.
+		this.app.use('/mcp', this.umbreld.mcp.router)
+
 		// Handle log file downloads
 		this.app.get('/logs/', async (request, response) => {
 			try {

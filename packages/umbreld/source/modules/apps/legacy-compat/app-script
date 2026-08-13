@@ -6,6 +6,10 @@ set -euo pipefail
 
 # TODO: Hardcoding these for now since they used to be read from .env
 # Figure out what other stuff we need from the old .env and how to pass it through.
+# GATEWAY_IP is also baked into the MCP connect UI as the endpoint URL that
+# agents installed as apps use to reach umbreld from inside their containers
+# (INSTALLED_AGENT_MCP_URL in ui/src/routes/settings/mcp/agents.ts) — keep
+# them in sync if this ever changes, e.g. when this script is refactored away.
 export NETWORK_IP='10.21.0.0'
 export GATEWAY_IP='10.21.0.1'
 
@@ -654,7 +658,11 @@ fi
 
 # Get logs for an app
 if [[ "$command" = "logs" ]]; then
-  compose "${app}" logs --tail 500
+  if [[ -n "${3:-}" ]]; then
+    compose "${app}" logs --tail 500 | tail --bytes "${3}"
+  else
+    compose "${app}" logs --tail 500
+  fi
 
   exit
 fi

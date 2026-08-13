@@ -1,4 +1,4 @@
-import {AnimatePresence, motion} from 'motion/react'
+import {AnimatePresence, motion, useReducedMotion} from 'motion/react'
 import {useCallback, useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 
@@ -482,11 +482,12 @@ export default function CloudAddDialog() {
 	// Steps crossfade concurrently (popLayout floats the leaving step) so the
 	// shared logo plate has both its origin and destination mounted and flies
 	// between them without a stutter; the body height glides underneath.
+	const reducedMotion = useReducedMotion() ?? false
 	const stepFade = {
 		initial: {opacity: 0},
 		animate: {opacity: 1},
 		exit: {opacity: 0},
-		transition: {duration: 0.18},
+		transition: {duration: reducedMotion ? 0 : 0.18},
 	}
 
 	const body = (

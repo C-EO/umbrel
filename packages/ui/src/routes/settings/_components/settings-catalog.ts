@@ -13,6 +13,7 @@ import {
 	PiUsersThreeFill,
 	PiWrenchFill,
 } from 'react-icons/pi'
+import {TbSparkles} from 'react-icons/tb'
 
 import {links} from '@/constants/links'
 
@@ -29,6 +30,7 @@ export type SettingsItemId =
 	| 'storage'
 	| 'migration'
 	| 'device-info'
+	| 'mcp'
 	| 'file-sharing'
 	| 'backups'
 	| 'advanced'
@@ -67,6 +69,7 @@ const SETTINGS_PAGE_ITEM_ORDER: SettingsItemId[] = [
 	'software-update',
 	'wifi',
 	'device-info',
+	'mcp',
 	'advanced',
 	'troubleshoot',
 	'support',
@@ -271,6 +274,25 @@ export function createSettingsCatalog(
 				t('device-info.cpu'),
 				t('device-info.memory'),
 				t('device-info.storage'),
+			],
+		},
+		{
+			kind: 'page',
+			id: 'mcp',
+			category: 'system',
+			command: {},
+			icon: TbSparkles,
+			title: t('mcp'),
+			description: t('mcp-description'),
+			to: '/settings/mcp',
+			keywords: [
+				'mcp',
+				t('mcp-connected-agents'),
+				t('mcp-permissions'),
+				t('mcp-apps'),
+				t('mcp-folders'),
+				t('mcp-app-store'),
+				t('mcp-manage-system'),
 			],
 		},
 		{

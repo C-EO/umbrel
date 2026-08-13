@@ -1,7 +1,7 @@
 import {ChevronDown} from 'lucide-react'
 import React from 'react'
 import {useTranslation} from 'react-i18next'
-import {TbAlertTriangle, TbChevronLeft} from 'react-icons/tb'
+import {TbAlertTriangle} from 'react-icons/tb'
 
 import {FadeScroller} from '@/components/fade-scroller'
 import {Button} from '@/components/ui/button'
@@ -17,6 +17,7 @@ import {InlineCopyableField} from '@/features/files/components/dialogs/share-inf
 import {formatFilesystemDateOnly} from '@/features/files/utils/format-filesystem-date'
 import {authorizedHttpUrl} from '@/modules/auth/http-auth'
 import {useConfirmation} from '@/providers/confirmation'
+import {BackButton} from '@/routes/settings/_components/shared'
 import {trpcReact} from '@/trpc/trpc'
 import {SupportedLanguageCode} from '@/utils/language'
 import {tw} from '@/utils/tw'
@@ -414,18 +415,6 @@ function InstructionStep({children}: {children: React.ReactNode}) {
 		<div className='flex flex-col gap-2 p-3 text-12 font-medium -tracking-3 sm:flex-row sm:items-center sm:justify-between sm:gap-3'>
 			<span className='min-w-0 leading-tight'>{children}</span>
 		</div>
-	)
-}
-
-function BackButton({onClick, children}: {onClick: () => void; children: React.ReactNode}) {
-	return (
-		<button
-			onClick={onClick}
-			className='-ml-1 flex items-center gap-0.5 self-start text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70'
-		>
-			<TbChevronLeft className='size-4' />
-			{children}
-		</button>
 	)
 }
 

@@ -100,6 +100,7 @@ export const apps = router({
 						port,
 						path,
 						state: app.state,
+						progress: app.stateProgress,
 						credentials: {
 							defaultUsername,
 							defaultPassword,
@@ -173,6 +174,34 @@ export const apps = router({
 			} as const
 		}),
 
+	// Complete app-owned details for consumers that need more than the desktop
+	// list DTO. Resource usage outside the app's own data directory remains in
+	// the System module and can be aggregated by the caller.
+	details: privateProcedure.input(z.object({appId: z.string()})).query(async ({ctx, input}) => {
+		const app = ctx.apps.getApp(input.appId)
+		const [manifest, diskUsage, dependents] = await Promise.all([
+			app.readManifest(),
+			app.getDiskUsage(),
+			ctx.apps.getDependents(input.appId),
+		])
+		const password = manifest.deterministicPassword ? await app.deriveDeterministicPassword() : manifest.defaultPassword
+		return {
+			id: app.id,
+			name: manifest.name,
+			version: manifest.version,
+			tagline: manifest.tagline,
+			description: manifest.description,
+			state: app.state,
+			progress: app.stateProgress,
+			port: manifest.port,
+			path: manifest.path,
+			requiresHttps: manifest.requiresHttps === true,
+			credentials: {username: manifest.defaultUsername, password},
+			diskUsage,
+			dependents,
+		}
+	}),
+
 	// Uninstall an app
 	uninstall: privateProcedure
 		.input(
@@ -223,9 +252,10 @@ export const apps = router({
 		.input(
 			z.object({
 				appId: z.string(),
+				maxOutputBytes: z.number().int().positive().max(1_000_000).optional(),
 			}),
 		)
-		.query(async ({ctx, input}) => ctx.apps.getApp(input.appId).getLogs()),
+		.query(async ({ctx, input}) => ctx.apps.getApp(input.appId).getLogs(input.maxOutputBytes)),
 
 	trackOpen: privateProcedure
 		.input(

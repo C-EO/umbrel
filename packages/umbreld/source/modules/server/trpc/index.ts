@@ -18,6 +18,7 @@ import eventBus from '../../event-bus/routes.js'
 import backups from '../../backups/routes.js'
 import shortcuts from '../../shortcuts/routes.js'
 import lanIngress from '../../lan-ingress/routes.js'
+import mcp from '../../mcp/routes.js'
 
 import {type WebSocketServer} from 'ws'
 import type Umbreld from '../../../index.js'
@@ -38,9 +39,28 @@ const appRouter = router({
 	backups,
 	shortcuts,
 	lanIngress,
+	mcp,
 })
 
 export type AppRouter = typeof appRouter
+export type InternalTrpcCaller = ReturnType<typeof appRouter.createCaller>
+
+// Trusted in-process consumers use the same procedures as external clients
+// without paying for an HTTP round trip. Procedure input validation and
+// middleware still run; the existing internal bypass supplies the owner-level
+// system principal that the root-only CLI token would authenticate as.
+export function createInternalTrpcCaller(umbreld: Umbreld): InternalTrpcCaller {
+	return appRouter.createCaller({
+		umbreld,
+		server: umbreld.server,
+		user: umbreld.user,
+		appStore: umbreld.appStore,
+		apps: umbreld.apps,
+		logger: umbreld.logger,
+		transport: 'express',
+		dangerouslyBypassAuthentication: true,
+	})
+}
 
 export const trpcExpressHandler = createExpressMiddleware({
 	router: appRouter,

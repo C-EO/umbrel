@@ -1,3 +1,5 @@
+import nodePath from 'node:path'
+
 import z from 'zod'
 
 import {OWNER_USER_ID} from '../user/constants.js'
@@ -10,6 +12,16 @@ import {
 	publicProcedureWhenNoUserExistsWithMembers,
 } from '../server/trpc/trpc.js'
 import {CLOUD_SYNC_MODE_IDS, CLOUD_WEBDAV_FLAVOR_IDS} from './cloud-types.js'
+import {getDirectoryStream} from './files.js'
+
+// Numeric collation matches the Files UI. Distinct names can collate equally
+// (for example 1.txt and 01.txt), so use the raw name as a tie-breaker to make
+// cursor pagination a total, stable order.
+const fileNameCollator = new Intl.Collator('en-US', {numeric: true})
+
+function compareFileNames(first: string, second: string) {
+	return fileNameCollator.compare(first, second) || (first < second ? -1 : first > second ? 1 : 0)
+}
 
 const accountId = z.string().uuid()
 const oauthProvider = z.enum(['google-drive', 'dropbox', 'onedrive'])
@@ -91,6 +103,68 @@ export default router({
 				files: paginatedFiles,
 				totalFiles,
 				hasMore,
+			}
+		}),
+
+	// Resolve a single owner-visible virtual path without listing its children.
+	status: privateProcedure.input(z.object({path: z.string()})).query(async ({ctx, input}) => {
+		const userId = ctx.principal?.accountId ?? OWNER_USER_ID
+		const path = ctx.umbreld.files.normalizeVirtualPath(input.path)
+		const systemPath = await ctx.umbreld.files.virtualToSystemPath(path, userId)
+		return ctx.umbreld.files.status(systemPath, userId)
+	}),
+
+	// Efficient name-cursor listing for consumers that only need one page. The
+	// regular Files UI route supports arbitrary sort fields and therefore stats
+	// every entry; this route stats only the returned page.
+	listDirectoryPage: privateProcedure
+		.input(
+			z.object({
+				path: z.string(),
+				lastFile: z.string().optional(),
+				limit: z.number().int().min(1).max(250).default(100),
+			}),
+		)
+		.query(async ({ctx, input}) => {
+			const userId = ctx.principal?.accountId ?? OWNER_USER_ID
+			const path = ctx.umbreld.files.normalizeVirtualPath(input.path)
+			const systemPath = await ctx.umbreld.files.virtualToSystemPath(path, userId)
+			const directory = await ctx.umbreld.files.status(systemPath, userId).catch((error) => {
+				if (error?.message?.includes('ENOENT')) throw new Error('[does-not-exist]')
+				throw error
+			})
+
+			const entries: {name: string; systemPath: string}[] = []
+			let truncatedAt: number | undefined
+			for await (const entrySystemPath of getDirectoryStream(systemPath)) {
+				const name = nodePath.basename(entrySystemPath)
+				if (ctx.umbreld.files.isHidden(name)) continue
+				entries.push({name, systemPath: entrySystemPath})
+				if (entries.length >= ctx.umbreld.files.maxDirectoryListing) {
+					truncatedAt = ctx.umbreld.files.maxDirectoryListing
+					break
+				}
+			}
+
+			entries.sort((first, second) => compareFileNames(first.name, second.name))
+			const start = input.lastFile ? entries.findIndex(({name}) => compareFileNames(name, input.lastFile!) > 0) : 0
+			const startIndex = start === -1 ? entries.length : start
+			const page = entries.slice(startIndex, startIndex + input.limit)
+			const files = await Promise.all(
+				page.map(({systemPath}) =>
+					ctx.umbreld.files.status(systemPath, userId).catch((error) => {
+						ctx.umbreld.files.logger.error(`Failed to get status for '${systemPath}'`, error)
+						return undefined
+					}),
+				),
+			)
+
+			return {
+				...directory,
+				files: files.filter((file) => file !== undefined),
+				totalFiles: entries.length,
+				hasMore: startIndex + input.limit < entries.length,
+				...(truncatedAt ? {truncatedAt} : {}),
 			}
 		}),
 

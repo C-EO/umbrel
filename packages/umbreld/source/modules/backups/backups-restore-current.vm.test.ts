@@ -31,7 +31,14 @@ describe.sequential('Backup restore on current install', () => {
 	let cloudAccountId: string
 	let syncId: string
 	let cloudLastSuccessfulAt: number
+	let restoredMcpToken: string
 	const cloudDestination = '/Home/current-restore-cloud'
+	const restoredMcpPermissions = {
+		apps: [] as string[],
+		appStore: false,
+		files: [] as string[],
+		manageSystem: false,
+	}
 
 	beforeAll(async () => {
 		umbreld = await createTestVm({device: 'umbrel-home'})
@@ -72,6 +79,13 @@ describe.sequential('Backup restore on current install', () => {
 			timeout: 120_000,
 		})
 		cloudLastSuccessfulAt = completed.lastSuccessfulAt!
+		const mcpCredential = await umbreld.client.mcp.enable.mutate({
+			label: 'Backup restore test',
+			agentType: 'generic',
+		})
+		if (!mcpCredential) throw new Error('Initial MCP enable did not issue a credential')
+		restoredMcpToken = mcpCredential.token
+		await umbreld.client.mcp.setPermissions.mutate(restoredMcpPermissions)
 
 		repositoryId = await umbreld.client.backups.createRepository.mutate({
 			path: externalPath,
@@ -150,5 +164,20 @@ describe.sequential('Backup restore on current install', () => {
 
 		await waitForExternalStorage(umbreld)
 		await waitForBackupsKopiaReady(umbreld)
+	})
+
+	test('resets MCP and rejects the token restored from backup', async () => {
+		await expect(umbreld.client.mcp.getSettings.query()).resolves.toMatchObject({
+			enabled: false,
+			permissions: restoredMcpPermissions,
+		})
+		await expect(umbreld.client.mcp.listTokens.query()).resolves.toStrictEqual([])
+
+		const endpoint = new URL(`http://127.0.0.1:${umbreld.vm.httpPort}/mcp`)
+		const response = await fetch(endpoint, {
+			method: 'POST',
+			headers: {authorization: `Bearer ${restoredMcpToken}`},
+		})
+		expect(response.status).toBe(401)
 	})
 })

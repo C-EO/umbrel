@@ -21,6 +21,7 @@ import Backups from './modules/backups/backups.js'
 import SystemNg from './modules/system-ng/system-ng.js'
 import LanIngress from './modules/lan-ingress/lan-ingress.js'
 import Auth from './modules/auth/auth.js'
+import Mcp, {type McpStoreSettings} from './modules/mcp/mcp.js'
 
 import type {CloudStore} from './modules/files/cloud-types.js'
 
@@ -126,6 +127,7 @@ type StoreSchema = {
 	migration: {
 		menderToRugixAttempt?: number
 	}
+	mcp?: McpStoreSettings
 }
 
 export type UmbreldOptions = {
@@ -158,6 +160,7 @@ export default class Umbreld {
 	systemNg: SystemNg
 	lanIngress: LanIngress
 	auth: Auth
+	mcp: Mcp
 	isBackupRestoreFirstStart = false
 
 	constructor({
@@ -189,6 +192,7 @@ export default class Umbreld {
 		this.systemNg = new SystemNg(this)
 		this.lanIngress = new LanIngress(this)
 		this.auth = new Auth(this)
+		this.mcp = new Mcp(this)
 	}
 
 	async start() {
@@ -255,9 +259,10 @@ export default class Umbreld {
 		// nftables rules are in place before app proxies begin accepting traffic.
 		await this.lanIngress.start()
 
-		// Cloud must record restored entries as paused before routes or its
-		// scheduler can observe them. Consume the marker only after that write succeeds.
+		// Revoke restored credentials and pause restored Cloud entries before routes
+		// or schedulers can observe them. Consume the marker only after both writes succeed.
 		if (this.isBackupRestoreFirstStart) {
+			await this.mcp.reset()
 			await this.files.cloud.pauseRestoredSyncs()
 			await this.consumeBackupRestoreFirstStartFlag()
 		}
@@ -285,6 +290,10 @@ export default class Umbreld {
 
 		// Start backups last because it depends on files
 		this.backups.start()
+
+		// Start mcp after the other modules because its startup work (file grant
+		// cleanup and the files watcher listener) depends on them being started
+		this.mcp.start().catch((error) => this.logger.error('Failed to start MCP', error))
 	}
 
 	private async setBackupRestoreFirstStartFlag() {
@@ -325,6 +334,7 @@ export default class Umbreld {
 				this.dbus.stop(),
 				this.systemNg.stop(),
 				this.auth.stop(),
+				this.mcp.stop(),
 			])
 			return true
 		} catch (error) {

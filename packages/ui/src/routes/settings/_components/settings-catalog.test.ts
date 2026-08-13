@@ -33,6 +33,18 @@ describe('settings catalog search', () => {
 		expect(page.items.every(({category}) => category === 'system')).toBe(true)
 	})
 
+	it('places MCP in the owner System section and command search', () => {
+		const ownerCatalog = catalog()
+		const systemPage = getSettingsPage(ownerCatalog, {filter: 'system'})
+
+		expect(systemPage.items.map(({id}) => id)).toContain('mcp')
+		expect(getSettingsCommandItems(ownerCatalog, 'mcp').map(({id}) => id)).toContain('mcp')
+
+		const memberCatalog = createSettingsCatalog(t, {deviceName: 'Umbrel Home', isMember: true})
+		expect(getSettingsPage(memberCatalog).items.map(({id}) => id)).not.toContain('mcp')
+		expect(getSettingsCommandItems(memberCatalog, 'mcp').map(({id}) => id)).not.toContain('mcp')
+	})
+
 	it('matches accentless and compact fuzzy queries', () => {
 		const localizedT = ((key: string) => {
 			if (key === 'network.hostname') return 'Nom d’hôte sécurisé'

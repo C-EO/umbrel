@@ -2,6 +2,7 @@ import {motion, useReducedMotion} from 'motion/react'
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {RiAlarmWarningFill} from 'react-icons/ri'
+import {TbChevronLeft} from 'react-icons/tb'
 import {Link, useNavigate} from 'react-router-dom'
 
 import {ErrorAlert} from '@/components/ui/alert'
@@ -39,6 +40,27 @@ export function SettingsAccountAvatarLink({name, userId, isMember}: {name: strin
 export function ChangePasswordWarning() {
 	const {t} = useTranslation()
 	return <ErrorAlert icon={RiAlarmWarningFill} description={t('change-password.callout')} />
+}
+
+export function BackButton({onClick, children}: {onClick: () => void; children: React.ReactNode}) {
+	return (
+		<button
+			type='button'
+			onClick={onClick}
+			className='-ml-1 flex items-center gap-0.5 self-start text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70'
+		>
+			<TbChevronLeft className='size-4' />
+			{children}
+		</button>
+	)
+}
+
+export function SectionLabel({children}: {children: React.ReactNode}) {
+	return <div className='text-12 font-semibold tracking-wide text-white/40 uppercase'>{children}</div>
+}
+
+export function Divider() {
+	return <div className='h-px bg-white/5' />
 }
 
 export function useSettingsDialogProps({closeTo = '/settings'}: {closeTo?: string} = {}) {

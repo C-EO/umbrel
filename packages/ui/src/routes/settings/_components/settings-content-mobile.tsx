@@ -5,6 +5,7 @@ import {useTranslation} from 'react-i18next'
 import {PiCircuitryBold, PiHardDriveFill, PiPulseBold, PiThermometerSimpleBold} from 'react-icons/pi'
 import {Link, useNavigate} from 'react-router-dom'
 
+import {BetaPill} from '@/components/ui/beta-pill'
 import {Button} from '@/components/ui/button'
 import {ButtonLink} from '@/components/ui/button-link'
 import {Card} from '@/components/ui/card'
@@ -156,6 +157,13 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 							<span className='absolute inset-0 animate-ping rounded-full bg-[#FF3434] opacity-75' />
 						</span>
 					)}
+				</span>
+			)
+		} else if (item.id === 'mcp') {
+			title = (
+				<span className='flex items-center gap-1.5'>
+					{item.title}
+					<BetaPill />
 				</span>
 			)
 		}

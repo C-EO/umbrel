@@ -6,6 +6,7 @@ import {Link, useNavigate, useParams} from 'react-router-dom'
 
 import {ChevronDown} from '@/components/chevron-down'
 import {FadeScroller} from '@/components/fade-scroller'
+import {BetaPill} from '@/components/ui/beta-pill'
 import {Button} from '@/components/ui/button'
 import {ButtonLink} from '@/components/ui/button-link'
 import {Card} from '@/components/ui/card'
@@ -325,6 +326,22 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 						title={item.title}
 						description={item.description}
 						onClick={() => window.open(item.to, '_blank', 'noopener,noreferrer')}
+					>
+						<RowChevron />
+					</ListRow>
+				)
+			case 'mcp':
+				return (
+					<ListRow
+						icon={item.icon}
+						title={
+							<span className='flex items-center gap-1.5'>
+								{item.title}
+								<BetaPill />
+							</span>
+						}
+						description={item.description}
+						onClick={() => navigate(item.to)}
 					>
 						<RowChevron />
 					</ListRow>

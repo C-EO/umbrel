@@ -433,6 +433,7 @@ export default class Apps {
 		} catch (error) {
 			this.logger.error(`Failed to install app ${appId}`, error)
 			this.instances = this.instances.filter((app) => app.id !== appId)
+			this.#umbreld.eventBus.emit('apps:state:change', {appId, state: 'not-installed'})
 			await this.#umbreld.lanIngress
 				.refresh()
 				.catch((refreshError) =>
@@ -466,15 +467,23 @@ export default class Apps {
 		// and a crash partway through uninstall cannot leave a stale grant. The '*'
 		// share is intentionally retained because it covers future installations.
 		await this.removeMemberShare(appId)
+		// MCP bookkeeping is best effort, a failure here must never abort the uninstall
+		await this.#umbreld.mcp
+			.removeAppGrant(appId)
+			.catch((error) => this.logger.error(`Failed to remove MCP grant for app ${appId}`, error))
 
 		const uninstalled = await app.uninstall()
 		if (uninstalled) {
 			// Remove app instance
 			this.instances = this.instances.filter((app) => app.id !== appId)
+			this.#umbreld.eventBus.emit('apps:state:change', {appId, state: 'not-installed'})
 
 			// Close a concurrent share added while uninstall was in progress. Once the
 			// instance is removed, addMemberShare() will reject further direct shares.
 			await this.removeMemberShare(appId)
+			await this.#umbreld.mcp
+				.removeAppGrant(appId)
+				.catch((error) => this.logger.error(`Failed to remove MCP grant for app ${appId}`, error))
 		}
 		return uninstalled
 	}
