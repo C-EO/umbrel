@@ -19,7 +19,7 @@ export function RaidError({title, instructions, image}: RaidErrorProps) {
 	const {t} = useTranslation()
 	const shutdownMut = trpcReact.system.shutdown.useMutation({
 		onError: (error) => {
-			toast.error(t('shut-down.failed', {message: error.message}))
+			toast.error(t('shut-down.failed', {message: error.message}), {area: 'umbrelos'})
 		},
 	})
 

@@ -213,7 +213,7 @@ export function useFilesOperations() {
 	// Rename item
 	const renameItemMutation = trpcReact.files.rename.useMutation({
 		onError: (error) => {
-			toast.error(t('files-error.rename', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.rename', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => {
 			utils.files.list.invalidate()
@@ -295,7 +295,8 @@ export function useFilesOperations() {
 			operationType: 'move',
 			getOperationArgsFn: (path) => ({path, toDirectory}),
 			targetDirectory: toDirectory,
-			onErrorToastFn: (message) => toast.error(t('files-error.move', {message: getFilesErrorMessage(message)})),
+			onErrorToastFn: (message) =>
+				toast.error(t('files-error.move', {message: getFilesErrorMessage(message)}), {area: 'files'}),
 			onSuccessAll: () => {},
 			onItemError: (sourcePath) => {
 				removePendingPaths([sourcePath])
@@ -319,6 +320,7 @@ export function useFilesOperations() {
 				t('files-error.move', {
 					message: getFilesErrorMessage('[operation-not-allowed]'),
 				}),
+				{area: 'files'},
 			)
 		}
 		clearDraggedItems()
@@ -352,7 +354,8 @@ export function useFilesOperations() {
 			operationType: 'copy',
 			getOperationArgsFn: (path) => ({path, toDirectory}),
 			targetDirectory: toDirectory,
-			onErrorToastFn: (message) => toast.error(t('files-error.copy', {message: getFilesErrorMessage(message)})),
+			onErrorToastFn: (message) =>
+				toast.error(t('files-error.copy', {message: getFilesErrorMessage(message)}), {area: 'files'}),
 			onSuccessAll: () => {},
 		})
 		return true
@@ -379,7 +382,7 @@ export function useFilesOperations() {
 			useFilesStore.getState().removePendingPaths([path])
 		},
 		onError: (error) => {
-			toast.error(t('files-error.extract', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.extract', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 	}).mutateAsync
 
@@ -411,7 +414,7 @@ export function useFilesOperations() {
 		},
 		onError: (error, {paths}) => {
 			useFilesStore.getState().removePendingPaths(paths)
-			toast.error(t('files-error.compress', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.compress', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 	}).mutateAsync
 
@@ -437,7 +440,7 @@ export function useFilesOperations() {
 		},
 		onError: (error) => {
 			if (error.message !== 'ALREADY_IN_TRASH') {
-				toast.error(t('files-error.trash', {message: getFilesErrorMessage(error.message)}))
+				toast.error(t('files-error.trash', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 			}
 		},
 		onSettled: () => {
@@ -492,7 +495,8 @@ export function useFilesOperations() {
 			operationAsyncFn: restoreFromTrash,
 			operationType: 'restore',
 			getOperationArgsFn: (path) => ({path}),
-			onErrorToastFn: (message) => toast.error(t('files-error.restore', {message: getFilesErrorMessage(message)})),
+			onErrorToastFn: (message) =>
+				toast.error(t('files-error.restore', {message: getFilesErrorMessage(message)}), {area: 'files'}),
 			onSuccessAll: () => {},
 			onItemError: (path) => removePendingPaths([path]),
 		})
@@ -522,7 +526,7 @@ export function useFilesOperations() {
 			}
 		},
 		onError: (error) => {
-			toast.error(t('files-error.delete', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.delete', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 	}).mutateAsync
 
@@ -538,7 +542,7 @@ export function useFilesOperations() {
 	// Empty trash
 	const emptyTrashMutation = trpcReact.files.emptyTrash.useMutation({
 		onError: (error) => {
-			toast.error(t('files-error.empty-trash', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.empty-trash', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => {
 			// invalidate the trash directory

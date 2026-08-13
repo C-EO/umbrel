@@ -2,6 +2,8 @@ import {useEffect} from 'react'
 import {NavigationType, useLocation, useNavigation, useNavigationType} from 'react-router-dom'
 import {usePrevious} from 'react-use'
 
+import {trpcReact} from '@/trpc/trpc'
+
 /** Whether to restore, reset to zero or ignore scroll position. */
 export type ScrollRestorationAction = 'restore' | 'reset' | 'ignore'
 
@@ -27,10 +29,14 @@ export function useScrollRestoration(
 	const location = useLocation()
 	const thisPathname = location.pathname
 	const prevPathname = usePrevious(thisPathname)
+	// Scroll positions are per-user state: scope the key by account id so
+	// signing in as another user in the same tab doesn't restore someone
+	// else's positions.
+	const userId = trpcReact.user.get.useQuery().data?.userId
 	// `location.pathname` is used in the cache key, not `location.key`. This
 	// means that query strings do not affect scroll restoration. This is mainly
 	// to avoid scrolling for the `dialog` query param.
-	const cacheKey = `scroll-position-${thisPathname}`
+	const cacheKey = `scroll-position-${userId ?? 'anon'}:${thisPathname}`
 	const {state} = useNavigation()
 	const navigationType = useNavigationType()
 

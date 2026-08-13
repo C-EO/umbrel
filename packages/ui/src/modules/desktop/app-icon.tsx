@@ -9,18 +9,16 @@ import {arrayIncludes} from 'ts-extras'
 import {ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger} from '@/components/ui/context-menu'
 import {FadeInImg} from '@/components/ui/fade-in-img'
 import {contextMenuClasses} from '@/components/ui/shared/menu'
-import {useAppInstall} from '@/hooks/use-app-install'
+import {canRestart, canStart, canStop, useAppInstall} from '@/hooks/use-app-install'
 import {useLaunchApp} from '@/hooks/use-launch-app'
 import {cn} from '@/lib/utils'
 import {UMBREL_APP_STORE_ID} from '@/modules/app-store/constants'
+import {useAppUninstall} from '@/modules/apps/use-app-uninstall'
 import {useHasMembers} from '@/modules/user-sharing'
 import {useUserApp} from '@/providers/apps'
 import {AppStateOrLoading, progressBarStates, progressStates, trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
 import {assertUnreachable} from '@/utils/misc'
-
-import {UninstallConfirmationDialog} from './uninstall-confirmation-dialog'
-import {UninstallTheseFirstDialog} from './uninstall-these-first-dialog'
 
 export const APP_ICON_PLACEHOLDER_SRC = '/assets/app-icon-placeholder.svg'
 
@@ -153,9 +151,7 @@ export function AppIconConnected({appId}: {appId: string}) {
 	const navigate = useNavigate()
 	const userApp = useUserApp(appId)
 	const appInstall = useAppInstall(appId)
-	const [openDepsDialog, setOpenDepsDialog] = useState(false)
-	const [toUninstallFirstIds, setToUninstallFirstIds] = useState<string[]>([])
-	const [showUninstallDialog, setShowUninstallDialog] = useState(false)
+	const {promptUninstall, dialogs: uninstallDialogs} = useAppUninstall(appId, appInstall)
 	const launchApp = useLaunchApp()
 	const linkToDialog = useLinkToDialog()
 	const hasMembers = useHasMembers()
@@ -164,38 +160,15 @@ export function AppIconConnected({appId}: {appId: string}) {
 	const userQ = trpcReact.user.get.useQuery()
 	const isMember = userQ.data?.role === 'member'
 
-	const uninstall = async () => {
-		const res = await appInstall.uninstall()
-		if (res?.uninstallTheseFirst) {
-			setToUninstallFirstIds(res.uninstallTheseFirst)
-			setOpenDepsDialog(true)
-		} else {
-			setShowUninstallDialog(false)
-		}
-	}
-
-	const uninstallPrecheck = async () => {
-		const apps = await appInstall.getAppsToUninstallFirst()
-		if (apps.length > 0) {
-			setToUninstallFirstIds(apps)
-			setOpenDepsDialog(true)
-		} else {
-			setShowUninstallDialog(true)
-		}
-	}
-
 	if (!userApp || !userApp.app) return <AppIcon label='' src='' />
 
 	const state = appInstall.state
 
-	// Start is disabled if the app is not stopped or unknown
-	const startDisabled = !arrayIncludes(['stopped', 'unknown'], state)
-	// Stop is disabled if the app is not running or ready
-	const stopDisabled = !arrayIncludes(['running', 'ready'], state)
-	// Restart is disabled if the app is not running or ready or unknown
-	const restartDisabled = !arrayIncludes(['running', 'ready', 'unknown'], state)
-	// Troubleshoot is disabled if the app is not running or ready or unknown
-	const troubleshootDisabled = !arrayIncludes(['running', 'ready', 'unknown'], state)
+	const startDisabled = !canStart(state)
+	const stopDisabled = !canStop(state)
+	const restartDisabled = !canRestart(state)
+	// Troubleshoot is available whenever restart is
+	const troubleshootDisabled = !canRestart(state)
 	// Uninstall is never disabled just so the user can always retry uninstalling if the app
 	// ever gets stuck in an uninstalling state.
 	const uninstallDisabled = false
@@ -299,30 +272,14 @@ export function AppIconConnected({appId}: {appId: string}) {
 					<ContextMenuItem
 						className={contextMenuClasses.item.rootDestructive}
 						disabled={uninstallDisabled}
-						onSelect={uninstallDisabled ? undefined : uninstallPrecheck}
+						onSelect={uninstallDisabled ? undefined : promptUninstall}
 					>
 						{t('desktop.app.context.uninstall')}
 					</ContextMenuItem>
 				</ContextMenuContent>
 			</ContextMenu>
 
-			{/* Dialogs */}
-			{toUninstallFirstIds.length > 0 && (
-				<UninstallTheseFirstDialog
-					appId={appId}
-					toUninstallFirstIds={toUninstallFirstIds}
-					open={openDepsDialog}
-					onOpenChange={setOpenDepsDialog}
-				/>
-			)}
-			{showUninstallDialog && (
-				<UninstallConfirmationDialog
-					appId={appId}
-					open={showUninstallDialog}
-					onOpenChange={setShowUninstallDialog}
-					onConfirm={uninstall}
-				/>
-			)}
+			{uninstallDialogs}
 		</>
 	)
 }

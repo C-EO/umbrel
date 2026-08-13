@@ -1,7 +1,7 @@
 import {useMutation} from '@tanstack/react-query'
 import {useEffect} from 'react'
 import {useTranslation} from 'react-i18next'
-import {useInterval, usePrevious} from 'react-use'
+import {usePrevious} from 'react-use'
 import {arrayIncludes} from 'ts-extras'
 
 import {toast} from '@/components/ui/toast'
@@ -18,6 +18,39 @@ export const pollStates = [
 	'stopping',
 ] as const satisfies readonly AppState[]
 
+// Which actions make sense for an app in a given state, shared by the desktop
+// icon context menu and the live-usage row menu
+export const canStart = (state: AppStateOrLoading) => arrayIncludes(['stopped', 'unknown'], state)
+export const canStop = (state: AppStateOrLoading) => arrayIncludes(['running', 'ready'], state)
+export const canRestart = (state: AppStateOrLoading) => arrayIncludes(['running', 'ready', 'unknown'], state)
+
+/**
+ * Light per-app state that adds zero requests no matter how many icons or rows
+ * mount it: reads the already-cached apps list, plus a fetch-less peek at the
+ * per-app state cache so optimistic transition states seeded by useAppInstall
+ * mutations show instantly everywhere. Freshness comes from the usual
+ * invalidations; the transition polling itself lives in useAppInstall.
+ */
+export function useAppState(appId: string): AppStateOrLoading {
+	const listQ = trpcReact.apps.list.useQuery(undefined, {
+		select: (apps): AppState | 'not-installed' => {
+			const app = apps.find((app) => app.id === appId)
+			if (!app) return 'not-installed'
+			// Apps the backend failed to load report an error instead of a state
+			return 'state' in app ? app.state : 'unknown'
+		},
+	})
+	const perAppQ = trpcReact.apps.state.useQuery({appId}, {enabled: false})
+	// The per-app cache wins whenever it's fresher than the list: optimistic
+	// seeds (setData bumps dataUpdatedAt) show instantly, and a poll's terminal
+	// state ends a transition the moment it lands rather than waiting on the
+	// list refresh that very flip is what triggers — deferring to a stale list
+	// here would deadlock a transition observed from a non-mutating tab in
+	// permanent "installing" (and flicker through stale states in the owner tab)
+	if (perAppQ.data && perAppQ.dataUpdatedAt > listQ.dataUpdatedAt) return perAppQ.data.state
+	return listQ.isLoading ? 'loading' : (listQ.data ?? 'not-installed')
+}
+
 export function useUninstallAllApps() {
 	const {t} = useTranslation()
 	const apps = trpcReact.apps.list.useQuery().data
@@ -32,7 +65,7 @@ export function useUninstallAllApps() {
 		},
 
 		onSuccess: () => {
-			toast(t('apps.uninstalled-all.success'))
+			toast(t('apps.uninstalled-all.success'), {area: 'app-store'})
 			utils.invalidate()
 		},
 	})
@@ -44,7 +77,17 @@ export function useUninstallAllApps() {
 export function useAppInstall(id: string) {
 	const {t} = useTranslation()
 	const utils = trpcReact.useUtils()
-	const appStateQ = trpcReact.apps.state.useQuery({appId: id})
+	const state = useAppState(id)
+	const isTransitioning = state !== 'loading' && arrayIncludes(pollStates, state)
+
+	// The per-app state endpoint only matters while the app is transitioning: it
+	// carries progress and needs seconds-fresh data. The query is enabled (and
+	// polled) only then; refetchInterval is shared across all observers of the
+	// key, so any number of mounted icons/rows produce a single 2s poll.
+	const appStateQ = trpcReact.apps.state.useQuery(
+		{appId: id},
+		{enabled: isTransitioning, refetchInterval: isTransitioning ? 2000 : false},
+	)
 
 	const refreshAppStates = () => {
 		// Invalidate this app's state
@@ -70,12 +113,12 @@ export function useAppInstall(id: string) {
 
 	const startMut = trpcReact.apps.start.useMutation({
 		onMutate: makeOptimisticOnMutate('starting'),
-		onError: (error) => toast.error(t('app.toast.start-failed'), {description: error.message}),
+		onError: (error) => toast.error(t('app.toast.start-failed'), {area: 'app-store', description: error.message}),
 		onSettled: refreshAppStates,
 	})
 	const stopMut = trpcReact.apps.stop.useMutation({
 		onMutate: makeOptimisticOnMutate('stopping'),
-		onError: (error) => toast.error(t('app.toast.stop-failed'), {description: error.message}),
+		onError: (error) => toast.error(t('app.toast.stop-failed'), {area: 'app-store', description: error.message}),
 		onSettled: refreshAppStates,
 	})
 	const installMut = trpcReact.apps.install.useMutation({
@@ -88,25 +131,20 @@ export function useAppInstall(id: string) {
 	})
 	const restartMut = trpcReact.apps.restart.useMutation({
 		onMutate: makeOptimisticOnMutate('restarting'),
-		onError: (error) => toast.error(t('app.toast.restart-failed'), {description: error.message}),
+		onError: (error) => toast.error(t('app.toast.restart-failed'), {area: 'app-store', description: error.message}),
 		onSettled: refreshAppStates,
 	})
 
-	const appState = appStateQ.data?.state
 	const progress = appStateQ.data?.progress
-
-	// Poll for install status if we're installing or uninstalling
-	const shouldPollForStatus = appState && arrayIncludes(pollStates, appState)
-	useInterval(appStateQ.refetch, shouldPollForStatus ? 2000 : null)
 
 	// Also refresh app states when polling ends in case this tab isn't the one
 	// owning the mutation and hence isn't notified when it settles
-	const prevShouldPollForStatus = usePrevious(shouldPollForStatus)
+	const prevIsTransitioning = usePrevious(isTransitioning)
 	useEffect(() => {
-		if (!shouldPollForStatus && prevShouldPollForStatus === true) {
+		if (!isTransitioning && prevIsTransitioning === true) {
 			refreshAppStates()
 		}
-	}, [shouldPollForStatus, prevShouldPollForStatus])
+	}, [isTransitioning, prevIsTransitioning])
 
 	const start = async () => startMut.mutate({appId: id})
 	const stop = async () => stopMut.mutate({appId: id})
@@ -127,9 +165,6 @@ export function useAppInstall(id: string) {
 		uninstallMut.mutate({appId: id})
 	}
 	const restart = async () => restartMut.mutate({appId: id})
-
-	// Ready means the app can be installed
-	const state: AppStateOrLoading = appStateQ.isLoading ? 'loading' : (appState ?? 'not-installed')
 
 	return {
 		start,

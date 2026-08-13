@@ -67,7 +67,9 @@ export function useNetworkStorage(options?: {suppressNavigateOnAdd?: boolean}) {
 			utils.files.list.invalidate({path: NETWORK_STORAGE_PATH})
 		},
 		onError: (error: RouterError) =>
-			toast.error(t('files-network-storage-error.add-share', {message: getFilesErrorMessage(error.message)})),
+			toast.error(t('files-network-storage-error.add-share', {message: getFilesErrorMessage(error.message)}), {
+				area: 'files',
+			}),
 	})
 
 	// Remove a share
@@ -118,7 +120,9 @@ export function useNetworkStorage(options?: {suppressNavigateOnAdd?: boolean}) {
 			if (ctx?.mountPath) {
 				useFilesStore.getState().removePendingPaths([ctx.mountPath])
 			}
-			toast.error(t('files-network-storage-error.remove-share', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-network-storage-error.remove-share', {message: getFilesErrorMessage(error.message)}), {
+				area: 'files',
+			})
 		},
 		onSettled: invalidateShares,
 	})
@@ -153,6 +157,7 @@ export function useNetworkStorage(options?: {suppressNavigateOnAdd?: boolean}) {
 				t('files-network-storage-error.discover-servers', {
 					message: getFilesErrorMessage((res.error as RouterError).message),
 				}),
+				{area: 'files'},
 			)
 		}
 		return res.data
@@ -171,6 +176,7 @@ export function useNetworkStorage(options?: {suppressNavigateOnAdd?: boolean}) {
 				t('files-network-storage-error.discover-shares', {
 					message: getFilesErrorMessage((error as RouterError).message),
 				}),
+				{area: 'files'},
 			)
 			throw error
 		}

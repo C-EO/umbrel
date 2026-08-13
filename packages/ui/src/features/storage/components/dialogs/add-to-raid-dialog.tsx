@@ -310,6 +310,7 @@ export function AddToRaidDialog({
 			transitionToFailsafeAsync({newDeviceId: device.id}).catch((error) => {
 				clearPendingOperation()
 				toast.error(t('storage-manager.add-to-raid.failed-enable-failsafe'), {
+					area: 'settings',
 					description: error instanceof Error ? error.message : t('unknown-error'),
 				})
 			})
@@ -329,6 +330,7 @@ export function AddToRaidDialog({
 						? t('storage-manager.add-to-raid.failed-add-drive')
 						: t('storage-manager.add-to-raid.failed-add'),
 					{
+						area: 'settings',
 						description: error instanceof Error ? error.message : t('unknown-error'),
 					},
 				)
@@ -362,6 +364,7 @@ export function AddToRaidDialog({
 							? t('storage-manager.add-to-raid.failed-add-drive')
 							: t('storage-manager.add-to-raid.failed-add'),
 						{
+							area: 'settings',
 							description: error instanceof Error ? error.message : t('unknown-error'),
 						},
 					)

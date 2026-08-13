@@ -129,9 +129,8 @@ function SessionsView({
 			if (result.revokedCurrent) return finishBrowserLogout()
 			if (!result.revoked) throw new Error('Session no longer exists')
 			await refreshSessions()
-			toast.success(t('active-logins.logged-out'))
 		} catch {
-			toast.error(t('active-logins.logout-error'))
+			toast.error(t('active-logins.logout-error'), {area: 'settings'})
 			await refreshSessions()
 		}
 	}
@@ -148,9 +147,8 @@ function SessionsView({
 		try {
 			await revokeOtherSessionsMutation()
 			await refreshSessions()
-			toast.success(t('active-logins.logged-out'))
 		} catch {
-			toast.error(t('active-logins.logout-error'))
+			toast.error(t('active-logins.logout-error'), {area: 'settings'})
 		}
 	}
 
@@ -169,9 +167,8 @@ function SessionsView({
 			const result = await revokeAllSessionsMutation()
 			if (result.revokedCurrent) return finishBrowserLogout()
 			await refreshSessions()
-			toast.success(t('active-logins.logged-out'))
 		} catch {
-			toast.error(t('active-logins.logout-error'))
+			toast.error(t('active-logins.logout-error'), {area: 'settings'})
 		}
 	}
 

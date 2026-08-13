@@ -33,7 +33,7 @@ export function useAppMemberShares({enabled = true}: {enabled?: boolean} = {}) {
 		{
 			onSuccess: invalidate,
 			onError: (error: RouterError) => {
-				toast.error(t('app-share-users.share-failed'), {description: error.message})
+				toast.error(t('app-share-users.share-failed'), {area: 'app-store', description: error.message})
 			},
 		},
 	)
@@ -42,7 +42,7 @@ export function useAppMemberShares({enabled = true}: {enabled?: boolean} = {}) {
 		trpcReact.apps.removeMemberShare.useMutation({
 			onSuccess: invalidate,
 			onError: (error: RouterError) => {
-				toast.error(t('app-share-users.unshare-failed'), {description: error.message})
+				toast.error(t('app-share-users.unshare-failed'), {area: 'app-store', description: error.message})
 			},
 		})
 

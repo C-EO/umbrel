@@ -324,6 +324,7 @@ export default function UsersDialog() {
 			setLocalView({view: 'created', userId: account.userId, name: name.trim(), password})
 		} catch (error) {
 			toast.error(t('users.create-failed'), {
+				area: 'settings',
 				description: error instanceof Error ? error.message : String(error),
 			})
 		} finally {
@@ -368,9 +369,9 @@ export default function UsersDialog() {
 			await resetUserPassword.mutateAsync({userId: editingMember.userId, password: resetPassword})
 			setResetPassword('')
 			setIsResettingPassword(false)
-			toast.success(t('users.reset-password-success'))
 		} catch (error) {
 			toast.error(t('users.reset-password-failed'), {
+				area: 'settings',
 				description: error instanceof Error ? error.message : String(error),
 			})
 		}
@@ -388,10 +389,10 @@ export default function UsersDialog() {
 				utils.files.memberShares.invalidate(),
 				utils.apps.memberShares.invalidate(),
 			])
-			toast.success(t('users.delete-success'))
 			returnToList()
 		} catch (error) {
 			toast.error(t('users.delete-failed'), {
+				area: 'settings',
 				description: error instanceof Error ? error.message : String(error),
 			})
 		} finally {

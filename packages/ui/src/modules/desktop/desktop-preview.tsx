@@ -1,6 +1,7 @@
 import {useEffect, useState} from 'react'
 
 import {FadeInImg} from '@/components/ui/fade-in-img'
+import {GlassFrostedContext} from '@/components/ui/glass'
 import {useWidgets} from '@/hooks/use-widgets'
 import {LoadingWidget} from '@/modules/widgets'
 import {BackdropBlurVariantContext} from '@/modules/widgets/shared/backdrop-blur-context'
@@ -86,12 +87,19 @@ export function DesktopPreviewConnected() {
 					}
 				>
 					{show && (
-						<div className='flex h-full flex-col items-center justify-between overflow-hidden'>
-							<DesktopPreviewContent />
-							<div className='pb-5'>
-								<DockPreview />
+						// It's a preview, not the real thing: frosted blur instead of the
+						// refraction lens. At scale3d(0.18) the refraction is a couple of
+						// pixels wide, but each lens costs a canvas build, a PNG
+						// encode/decode and — in Chromium — a live backdrop-filter: url()
+						// filter graph that re-runs whenever the sidebar scrolls.
+						<GlassFrostedContext value={true}>
+							<div className='flex h-full flex-col items-center justify-between overflow-hidden'>
+								<DesktopPreviewContent />
+								<div className='pb-5'>
+									<DockPreview />
+								</div>
 							</div>
-						</div>
+						</GlassFrostedContext>
 					)}
 				</div>
 			</div>

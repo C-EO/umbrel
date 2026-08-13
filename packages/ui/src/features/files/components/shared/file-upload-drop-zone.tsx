@@ -30,7 +30,7 @@ export function FileUploadDropZone({children}: FileUploadDropZoneProps) {
 			startUpload(acceptedFiles, destination)
 		} catch (error) {
 			const message = error instanceof Error ? error.message : '[operation-not-allowed]'
-			toast.error(t('files-error.upload', {message: getFilesErrorMessage(message)}))
+			toast.error(t('files-error.upload', {message: getFilesErrorMessage(message)}), {area: 'files'})
 		}
 	}
 

@@ -142,6 +142,7 @@ export function CloudActivityProvider({children}: {children: React.ReactNode}) {
 							files
 								? t('files-cloud.downloaded-toast-files', {folder: cloudSyncName(known), count: files})
 								: t('files-cloud.downloaded-toast', {folder: cloudSyncName(known)}),
+							{area: 'files'},
 						)
 					}
 					knownCloudsRef.current.delete(id)

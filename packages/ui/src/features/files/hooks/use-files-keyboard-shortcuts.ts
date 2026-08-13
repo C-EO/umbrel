@@ -8,7 +8,13 @@ import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {getFileViewer} from '@/features/files/utils/get-file-viewer'
-import {getGridColumnCount} from '@/features/files/utils/get-grid-column-count'
+import {
+	getGridColumnCount,
+	getGridItemWidth,
+	getGridScrollerPadding,
+	GRID_ITEM_HEIGHT,
+	GRID_ROW_GAP,
+} from '@/features/files/utils/get-grid-column-count'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useLinkToDialog} from '@/utils/dialog'
 
@@ -195,7 +201,9 @@ export function useFilesKeyboardShortcuts({
 					let step = 1
 					if (currentView === 'icons' && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
 						const scrollEl = scrollAreaRef.current
-						const columnCount = scrollEl ? getGridColumnCount(scrollEl.clientWidth - 24) : 1
+						const columnCount = scrollEl
+							? getGridColumnCount(scrollEl.clientWidth - getGridScrollerPadding(isMobile), getGridItemWidth(isMobile))
+							: 1
 						step = columnCount
 					}
 
@@ -265,7 +273,9 @@ export function useFilesKeyboardShortcuts({
 					else if (e.key === 'ArrowRight') step = 1
 					else {
 						const scrollEl = scrollAreaRef.current
-						const columnCount = scrollEl ? getGridColumnCount(scrollEl.clientWidth - 24) : 1
+						const columnCount = scrollEl
+							? getGridColumnCount(scrollEl.clientWidth - getGridScrollerPadding(isMobile), getGridItemWidth(isMobile))
+							: 1
 						if (e.key === 'ArrowUp') step = -columnCount
 						else step = columnCount
 					}
@@ -338,9 +348,12 @@ export function useFilesKeyboardShortcuts({
 				itemTop = index * itemHeight
 				itemBottom = itemTop + itemHeight
 			} else {
-				const columnCount = getGridColumnCount(scrollEl.clientWidth - 24)
+				const columnCount = getGridColumnCount(
+					scrollEl.clientWidth - getGridScrollerPadding(isMobile),
+					getGridItemWidth(isMobile),
+				)
 				const row = Math.floor(index / columnCount)
-				const rowHeight = 144 // 120px item + 24px gap
+				const rowHeight = GRID_ITEM_HEIGHT + GRID_ROW_GAP
 				itemTop = row * rowHeight
 				itemBottom = itemTop + rowHeight
 			}

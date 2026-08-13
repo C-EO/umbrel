@@ -634,11 +634,12 @@ function InterfaceDetail({iface, onBack}: {iface: NetworkInterface; onBack: () =
 
 		// Basic client-side validation matching the backend's zod schema.
 		// First error stops — keeps it simple for an advanced settings form.
-		if (!ip || !isValidIpv4(ip)) return toast.error(t('network.invalid-ip'))
+		if (!ip || !isValidIpv4(ip)) return toast.error(t('network.invalid-ip'), {area: 'settings'})
 		if (Number.isNaN(subnetPrefix) || subnetPrefix < 0 || subnetPrefix > 32)
-			return toast.error(t('network.invalid-subnet'))
-		if (!gateway || !isValidIpv4(gateway)) return toast.error(t('network.invalid-gateway'))
-		if (dnsServers.length === 0 || dnsServers.some((s) => !isValidIpv4(s))) return toast.error(t('network.invalid-dns'))
+			return toast.error(t('network.invalid-subnet'), {area: 'settings'})
+		if (!gateway || !isValidIpv4(gateway)) return toast.error(t('network.invalid-gateway'), {area: 'settings'})
+		if (dnsServers.length === 0 || dnsServers.some((s) => !isValidIpv4(s)))
+			return toast.error(t('network.invalid-dns'), {area: 'settings'})
 
 		// Always use the new-tab confirmation flow, even if the IP matches the current one.
 		// The backend bounces the interface (nmcli down/up) which breaks the current tab's

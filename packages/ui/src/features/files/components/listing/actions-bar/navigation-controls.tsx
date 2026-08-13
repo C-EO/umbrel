@@ -7,7 +7,9 @@ import {ChevronRightIcon} from '@/features/files/assets/chevron-right'
 import {BASE_ROUTE_PATH, SEARCH_PATH} from '@/features/files/constants'
 import {useNavigate as useFilesNavigate} from '@/features/files/hooks/use-navigate'
 import {useIsFilesEmbedded} from '@/features/files/providers/files-capabilities-context'
+import {setLastFilesPath} from '@/features/files/utils/last-files-path'
 import {cn} from '@/lib/utils'
+import {trpcReact} from '@/trpc/trpc'
 
 /**
  * File browser navigation controls that track visited folder paths.
@@ -19,6 +21,7 @@ export function NavigationControls() {
 	const navigate = useNavigate()
 	const {uiPath, navigateToDirectory} = useFilesNavigate()
 	const isEmbedded = useIsFilesEmbedded()
+	const userId = trpcReact.user.get.useQuery().data?.userId
 
 	// Track visited paths and current position
 	const [navigation, setNavigation] = useState({
@@ -36,7 +39,7 @@ export function NavigationControls() {
 
 			// Save the latest path to session storage so the Dock and Cmdk
 			// can restore the last visited path when Files is reopened
-			sessionStorage.setItem('lastFilesPath', newPath)
+			setLastFilesPath(userId, newPath)
 
 			setNavigation((current) => {
 				const lastPath = current.paths[current.currentPathIndex]
@@ -76,7 +79,7 @@ export function NavigationControls() {
 				}
 			})
 		}
-	}, [isEmbedded, location.pathname, location.search, uiPath])
+	}, [isEmbedded, location.pathname, location.search, uiPath, userId])
 
 	// Navigation handlers
 	const handleBack = () => {

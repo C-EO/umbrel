@@ -42,7 +42,7 @@ export function useMemberShares({enabled = true}: {enabled?: boolean} = {}) {
 	const {mutateAsync: addMemberShare, isPending: isAddingMemberShare} = trpcReact.files.addMemberShare.useMutation({
 		onSuccess: invalidate,
 		onError: (error: RouterError) => {
-			toast.error(t('files-share-users.share-failed', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-share-users.share-failed', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 	})
 
@@ -50,7 +50,9 @@ export function useMemberShares({enabled = true}: {enabled?: boolean} = {}) {
 		trpcReact.files.removeMemberShare.useMutation({
 			onSuccess: invalidate,
 			onError: (error: RouterError) => {
-				toast.error(t('files-share-users.unshare-failed', {message: getFilesErrorMessage(error.message)}))
+				toast.error(t('files-share-users.unshare-failed', {message: getFilesErrorMessage(error.message)}), {
+					area: 'files',
+				})
 			},
 		})
 

@@ -131,7 +131,7 @@ export function SidebarExternalStorageItem({item}: SidebarExternalStorageItemPro
 											'flex items-center gap-1.5 rounded-lg border border-transparent from-white/[0.04] to-white/[0.08] px-2 py-1.5 text-12 hover:bg-linear-to-b',
 											currentPath === partition.mountpoints[0]
 												? selectedClass
-												: 'text-white/60 transition-colors hover:bg-white/10 hover:text-white',
+												: 'text-white/60 hover:bg-white/10 hover:text-white',
 										)}
 										role='button'
 									>
@@ -174,7 +174,7 @@ export function SidebarExternalStorageItem({item}: SidebarExternalStorageItemPro
 					path={item.partitions[0]?.mountpoints[0]}
 					className={cn(
 						'flex w-full rounded-lg border border-transparent from-white/[0.04] to-white/[0.08] text-12 hover:bg-linear-to-b',
-						isDiskActive ? selectedClass : 'text-white/60 transition-colors hover:bg-white/10 hover:text-white',
+						isDiskActive ? selectedClass : 'text-white/60 hover:bg-white/10 hover:text-white',
 					)}
 				>
 					{ExternalStorageDisk}

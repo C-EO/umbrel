@@ -125,7 +125,7 @@ export function useCloudActions() {
 			),
 		onError: (error, _variables, previous) => {
 			rollback(previous)
-			toast.error(t('files-cloud-error.pause', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-cloud-error.pause', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => utils.files.cloud.syncs.invalidate(),
 	})
@@ -149,7 +149,7 @@ export function useCloudActions() {
 			),
 		onError: (error, _variables, previous) => {
 			rollback(previous)
-			toast.error(t('files-cloud-error.resume', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-cloud-error.resume', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => utils.files.cloud.syncs.invalidate(),
 	})
@@ -158,7 +158,7 @@ export function useCloudActions() {
 	// backend simply returns the current state
 	const runMutation = trpcReact.files.cloud.run.useMutation({
 		onError: (error) => {
-			toast.error(t('files-cloud-error.run', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-cloud-error.run', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => utils.files.cloud.syncs.invalidate(),
 	})
@@ -171,7 +171,7 @@ export function useCloudActions() {
 		onError: (error, {syncId}, previous) => {
 			removedSyncIds.delete(syncId)
 			rollback(previous)
-			toast.error(t('files-cloud-error.remove', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-cloud-error.remove', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => utils.files.cloud.syncs.invalidate(),
 	})
@@ -182,7 +182,9 @@ export function useCloudActions() {
 		},
 		onError: (error, {confirmedSyncIds}) => {
 			for (const syncId of confirmedSyncIds) removedSyncIds.delete(syncId)
-			toast.error(t('files-cloud-error.remove-account', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-cloud-error.remove-account', {message: getFilesErrorMessage(error.message)}), {
+				area: 'files',
+			})
 		},
 		onSettled: () => {
 			utils.files.cloud.accounts.invalidate()
@@ -235,7 +237,7 @@ export function useCloudConnect() {
 			// An untrusted certificate is a question, not a failure: the connect
 			// form answers it with a confirmation dialog and retries insecurely
 			if (error.message.includes('[cloud-webdav-untrusted-certificate]')) return
-			toast.error(t('files-cloud-error.connect', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-cloud-error.connect', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 	})
 
@@ -248,7 +250,7 @@ export function useCloudConnect() {
 			}
 		},
 		onError: (error: RouterError) =>
-			toast.error(t('files-cloud-error.connect', {message: getFilesErrorMessage(error.message)})),
+			toast.error(t('files-cloud-error.connect', {message: getFilesErrorMessage(error.message)}), {area: 'files'}),
 	})
 
 	// Errors surface through the PinInput failure state, not a toast
@@ -330,6 +332,7 @@ export function useCloudOAuth({
 				variables.accountId
 					? t('files-cloud-error.reauthenticate', {message: getFilesErrorMessage(error.message)})
 					: t('files-cloud-error.connect', {message: getFilesErrorMessage(error.message)}),
+				{area: 'files'},
 			),
 	})
 

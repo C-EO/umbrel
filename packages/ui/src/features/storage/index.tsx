@@ -2,7 +2,7 @@ import {DialogPortal} from '@radix-ui/react-dialog'
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {TbActivityHeartbeat, TbAlertTriangle, TbCircleCheckFilled, TbPlus, TbRefreshDot} from 'react-icons/tb'
-import {Navigate, useNavigate} from 'react-router-dom'
+import {useNavigate} from 'react-router-dom'
 
 import {
 	ImmersiveDialog,
@@ -32,16 +32,15 @@ import {formatStorageSize} from './utils'
 // Umbrel Pro has 4 SSD slots
 const SLOT_INDICES = [0, 1, 2, 3] as const
 
-// Umbrel Pro gets the physical tray visualization; any other device with a RAID pool gets
-// the list-based manager. Devices without a pool have nothing to manage here.
+// Umbrel Pro gets the physical tray visualization; any other device gets the
+// list-based manager (its empty state offers installing the first drives)
 export default function StorageManagerDialog() {
 	const {isUmbrelPro, isLoading: isLoadingUmbrelPro} = useIsUmbrelPro()
 	const raidStatusQ = trpcReact.hardware.raid.getStatus.useQuery()
 
 	if (isLoadingUmbrelPro || raidStatusQ.isLoading) return null
 	if (isUmbrelPro) return <ProStorageManager />
-	if (raidStatusQ.data?.exists) return <ListStorageManager />
-	return <Navigate to='/settings' replace />
+	return <ListStorageManager />
 }
 
 function ProStorageManager() {

@@ -1,11 +1,11 @@
 import {useEffect, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useNavigate} from 'react-router-dom'
-import {ExternalToast} from 'sonner'
 
-import {toast} from '@/components/ui/toast'
+import {toast, type ToastOptions} from '@/components/ui/toast'
 import {getDeviceHealth} from '@/features/storage/hooks/use-storage'
 import {trpcReact} from '@/trpc/trpc'
+import {sleep} from '@/utils/misc'
 import {isCpuTooHot, isTrpcDiskFull, isTrpcMemoryLow} from '@/utils/system'
 
 function useMounted() {
@@ -33,7 +33,8 @@ export function useSettingsNotificationCount() {
 		if (!mounted || !isOwner) return
 
 		const res = Promise.allSettled([
-			utils.system.checkUpdate.fetch(),
+			// Deferred so it doesn't compete with the page-load requests
+			sleep(500).then(() => utils.system.checkUpdate.fetch()),
 			utils.system.cpuTemperature.fetch(),
 			utils.system.systemMemoryUsage.fetch(),
 			utils.system.systemDiskUsage.fetch(),
@@ -59,7 +60,8 @@ export function useSettingsNotificationCount() {
 
 			let currCount = 0
 
-			const liveUsageToastOptions: ExternalToast = {
+			const liveUsageToastOptions: ToastOptions = {
+				area: 'live-usage',
 				action: {
 					label: t('notifications.view'),
 					onClick: () => {
@@ -68,9 +70,12 @@ export function useSettingsNotificationCount() {
 				},
 				// Don't auto-close
 				duration: Infinity,
+				// Single "View" action, so the whole toast is tappable
+				fullClick: true,
 			}
 
-			const cpuTempToastOptions: ExternalToast = {
+			const cpuTempToastOptions: ToastOptions = {
+				area: 'settings',
 				action: {
 					label: t('notifications.view'),
 					onClick: () => {
@@ -79,9 +84,12 @@ export function useSettingsNotificationCount() {
 				},
 				// Don't auto-close
 				duration: Infinity,
+				// Single "View" action, so the whole toast is tappable
+				fullClick: true,
 			}
 
-			const softwareUpdateToastOptions: ExternalToast = {
+			const softwareUpdateToastOptions: ToastOptions = {
+				area: 'umbrelos',
 				action: {
 					label: t('notifications.view'),
 					onClick: () => {
@@ -90,9 +98,12 @@ export function useSettingsNotificationCount() {
 				},
 				// Don't auto-close
 				duration: Infinity,
+				// Single "View" action, so the whole toast is tappable
+				fullClick: true,
 			}
 
-			const storageManagerToastOptions: ExternalToast = {
+			const storageManagerToastOptions: ToastOptions = {
+				area: 'settings',
 				action: {
 					label: t('notifications.view'),
 					onClick: () => {
@@ -101,6 +112,8 @@ export function useSettingsNotificationCount() {
 				},
 				// Don't auto-close
 				duration: Infinity,
+				// Single "View" action, so the whole toast is tappable
+				fullClick: true,
 			}
 
 			if (checkUpdateResult.status === 'fulfilled') {

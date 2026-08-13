@@ -1,7 +1,8 @@
 import {ChevronRight, Loader2} from 'lucide-react'
-import {Fragment, useEffect, useMemo, useRef, useState} from 'react'
+import {motion, useReducedMotion} from 'motion/react'
+import {Fragment, ReactNode, useEffect, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {useNavigate, useParams} from 'react-router-dom'
+import {Link, useNavigate, useParams} from 'react-router-dom'
 
 import {ChevronDown} from '@/components/chevron-down'
 import {FadeScroller} from '@/components/fade-scroller'
@@ -17,6 +18,7 @@ import {useBackups} from '@/features/backups/hooks/use-backups'
 import {getDeviceHealth} from '@/features/storage/hooks/use-storage'
 import {useCpuTemperature} from '@/hooks/use-cpu-temperature'
 import {useIsHomeOrPro} from '@/hooks/use-is-home-or-pro'
+import {useQueryParams} from '@/hooks/use-query-params'
 import {cn} from '@/lib/utils'
 import {DesktopPreviewConnected, DesktopPreviewFrame} from '@/modules/desktop/desktop-preview'
 import {WifiListRowConnectedDescription} from '@/modules/wifi/wifi-list-row-connected-description'
@@ -41,6 +43,41 @@ import {WallpaperPicker} from './wallpaper-picker'
 
 function RowChevron() {
 	return <ChevronRight className='size-4 text-white/55' aria-hidden='true' />
+}
+
+function LiveUsageCardLink({
+	tab,
+	id,
+	className,
+	children,
+}: {
+	tab: 'storage' | 'memory' | 'cpu'
+	id?: string
+	className?: string
+	children: ReactNode
+}) {
+	const {addLinkSearchParams} = useQueryParams()
+	const reduceMotion = Boolean(useReducedMotion())
+
+	return (
+		<Link
+			to={{search: addLinkSearchParams({dialog: 'live-usage', tab})}}
+			id={id}
+			className={cn(
+				'block shrink-0 rounded-24 outline-hidden focus-visible:ring-2 focus-visible:ring-white/20',
+				className,
+			)}
+		>
+			<motion.div
+				className='will-change-transform'
+				whileHover={reduceMotion ? undefined : {scale: 1.02, filter: 'brightness(1.15)'}}
+				whileTap={reduceMotion ? undefined : {scale: 0.97}}
+				transition={{type: 'spring', duration: 0.2, bounce: 0.15}}
+			>
+				<Card className='settings-edge-material rounded-24 !p-5'>{children}</Card>
+			</motion.div>
+		</Link>
+	)
 }
 
 export function SettingsContent({isMember = false}: {isMember?: boolean}) {
@@ -374,16 +411,16 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 							{!isMember && (
 								<>
 									<Separator />
-									<Card className='settings-edge-material mt-3 shrink-0 rounded-24 !p-5'>
+									<LiveUsageCardLink tab='storage' className='mt-3'>
 										<StorageCardContent />
-									</Card>
-									<Card id={SETTINGS_SYSTEM_CARDS_ID} className='settings-edge-material shrink-0 rounded-24 !p-5'>
+									</LiveUsageCardLink>
+									<LiveUsageCardLink tab='memory' id={SETTINGS_SYSTEM_CARDS_ID}>
 										<MemoryCardContent />
-									</Card>
-									<Card className='settings-edge-material shrink-0 rounded-24 !p-5'>
+									</LiveUsageCardLink>
+									<LiveUsageCardLink tab='cpu'>
 										<CpuCardContent />
-									</Card>
-									<Card className='settings-edge-material shrink-0 rounded-24 !p-5'>
+									</LiveUsageCardLink>
+									<Card className='group/temperature-card settings-edge-material shrink-0 rounded-24 !p-5'>
 										<CpuTemperatureCardContent warning={cpuTemp.warning} temperatureInCelcius={cpuTemp.temperature} />
 									</Card>
 

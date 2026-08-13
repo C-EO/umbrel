@@ -60,7 +60,7 @@ export function useLaunchApp() {
 		if (app.credentials?.showBeforeOpen && !options?.direct) {
 			navigate(linkToDialog('default-credentials', {for: appId, direct: 'true'}))
 		} else if (app.torOnly && !isOnionPage()) {
-			toast.warning(t('app-only-over-tor', {app: app.name}))
+			toast.warning(t('app-only-over-tor', {app: app.name}), {area: 'app-store'})
 		} else if (
 			app.requiresHttps &&
 			!isOnionPage() &&

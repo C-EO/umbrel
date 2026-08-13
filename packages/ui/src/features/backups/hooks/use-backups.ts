@@ -62,7 +62,7 @@ export function useBackups(options?: {repositoriesEnabled?: boolean}) {
 			return {repositoryId, path}
 		} catch (error: any) {
 			const userFriendlyMessage = getUserFriendlyErrorMessage(error)
-			toast.error(userFriendlyMessage)
+			toast.error(userFriendlyMessage, {area: 'settings'})
 			throw error
 		} finally {
 			setIsSettingUpBackup(false)
@@ -85,7 +85,7 @@ export function useBackups(options?: {repositoriesEnabled?: boolean}) {
 			return {repositoryId, path}
 		} catch (error: any) {
 			const userFriendlyMessage = getUserFriendlyErrorMessage(error)
-			toast.error(userFriendlyMessage)
+			toast.error(userFriendlyMessage, {area: 'settings'})
 			throw error
 		}
 	}
@@ -98,7 +98,7 @@ export function useBackups(options?: {repositoriesEnabled?: boolean}) {
 			// No success toast since we show progress indicators throughout the UI (floating island, wizards, etc.)
 		} catch (error: any) {
 			const userFriendlyMessage = getUserFriendlyErrorMessage(error)
-			toast.error(userFriendlyMessage)
+			toast.error(userFriendlyMessage, {area: 'settings'})
 			throw error
 		}
 	}
@@ -112,7 +112,7 @@ export function useBackups(options?: {repositoriesEnabled?: boolean}) {
 			// No success toast since we show progress indicators throughout the UI (floating island, wizards, etc.)
 		} catch (error: any) {
 			const userFriendlyMessage = getUserFriendlyErrorMessage(error)
-			toast.error(userFriendlyMessage)
+			toast.error(userFriendlyMessage, {area: 'settings'})
 			throw error
 		} finally {
 			setIsForgettingRepository(false)
@@ -218,7 +218,7 @@ export function useRestoreBackup() {
 			return await mutation.mutateAsync({backupId})
 		} catch (error: any) {
 			const userFriendlyMessage = getUserFriendlyErrorMessage(error)
-			toast.error(userFriendlyMessage)
+			toast.error(userFriendlyMessage, {area: 'settings'})
 			throw error
 		}
 	}
@@ -239,7 +239,7 @@ export function useConnectToRepository() {
 			return await mutation.mutateAsync(input)
 		} catch (error: any) {
 			const userFriendlyMessage = getUserFriendlyErrorMessage(error)
-			toast.error(userFriendlyMessage)
+			toast.error(userFriendlyMessage, {area: 'settings'})
 			throw error
 		} finally {
 			setIsConnecting(false)
@@ -261,7 +261,7 @@ export function useMountBackup() {
 			return await mutation.mutateAsync({backupId})
 		} catch (error: any) {
 			const userFriendlyMessage = getUserFriendlyErrorMessage(error)
-			toast.error(userFriendlyMessage)
+			toast.error(userFriendlyMessage, {area: 'settings'})
 			throw error
 		}
 	}
@@ -302,7 +302,7 @@ export function useTriggerBackupForRepo(repositoryId: string) {
 		},
 		onError: (error: any) => {
 			const userFriendlyMessage = getUserFriendlyErrorMessage(error)
-			toast.error(userFriendlyMessage)
+			toast.error(userFriendlyMessage, {area: 'settings'})
 		},
 	})
 

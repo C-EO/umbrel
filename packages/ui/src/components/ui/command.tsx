@@ -11,7 +11,12 @@ import {Dialog} from '@/components/ui/dialog'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {cn} from '@/lib/utils'
 
-import {dialogContentAnimationClass, dialogContentClass, dialogOverlayClass} from './shared/dialog'
+import {
+	dialogContentAnimationClass,
+	dialogContentClass,
+	dialogOverlayClass,
+	preventDialogDismissForToasts,
+} from './shared/dialog'
 
 function Command({
 	className,
@@ -32,6 +37,7 @@ const CommandDialog = ({children, ...props}: CommandDialogProps) => {
 		<Dialog {...props}>
 			<BlurOverlay />
 			<DialogPrimitive.Content
+				onPointerDownOutside={preventDialogDismissForToasts}
 				className={cn(
 					dialogContentClass,
 					dialogContentAnimationClass,

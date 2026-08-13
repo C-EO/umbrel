@@ -52,7 +52,7 @@ export function MobileSidebarWrapper({children, isOpen, onClose}: MobileSidebarP
 						className='fixed inset-y-0 left-0 z-50 -ml-10 w-[256px] border-r border-white/10 bg-black pl-14 md:-ml-3'
 					>
 						{/* Close button */}
-						<div className='absolute top-8 right-3 sm:top-10 md:top-12'>
+						<div className='absolute top-4 right-3'>
 							<ChevronLeft role='button' className='h-4 w-4 text-white/60 transition-colors' onClick={onClose} />
 						</div>
 						<div className='h-12 sm:h-16 md:h-20' /> {/* Spacer for top padding */}

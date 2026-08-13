@@ -173,7 +173,7 @@ export function CloudBanner({path}: {path: string}) {
 
 	return (
 		<>
-			<div className={cn('mb-3 rounded-xl px-3 py-2 transition-colors', isFailed ? 'bg-yellow-400/10' : 'bg-white/5')}>
+			<div className={cn('mb-3 rounded-xl px-3 py-2 transition-colors', isFailed ? 'bg-yellow-400/10' : 'bg-white/4')}>
 				<div className='flex items-center gap-3'>
 					<img src={logo} alt={provider} className='size-6 shrink-0 object-contain' draggable={false} />
 					<MarqueeText

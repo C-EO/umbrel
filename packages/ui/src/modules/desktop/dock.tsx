@@ -4,6 +4,7 @@ import {ErrorBoundary} from 'react-error-boundary'
 import {useLocation, useNavigate} from 'react-router-dom'
 
 import {Glass} from '@/components/ui/glass'
+import {getLastFilesPath} from '@/features/files/utils/last-files-path'
 import {useAppsWithUpdates} from '@/hooks/use-apps-with-updates'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useQueryParams} from '@/hooks/use-query-params'
@@ -81,7 +82,7 @@ export function Dock() {
 	// may cache the render-time read and return a stale value.
 	const navigateToLastFilesPath = (e: React.MouseEvent) => {
 		e.preventDefault()
-		const lastFilesPath = sessionStorage.getItem('lastFilesPath')
+		const lastFilesPath = getLastFilesPath(user?.userId)
 		navigate(lastFilesPath || systemAppsKeyed['UMBREL_files'].systemAppTo)
 	}
 

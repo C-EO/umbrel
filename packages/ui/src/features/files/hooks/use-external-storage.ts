@@ -92,7 +92,7 @@ export function useExternalStorage() {
 			if (context?.ejectedPaths?.length) {
 				useFilesStore.getState().removePendingPaths(context.ejectedPaths)
 			}
-			toast.error(t('files-error.eject-disk', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.eject-disk', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => {
 			utils.files.externalDevices.invalidate()
@@ -103,7 +103,7 @@ export function useExternalStorage() {
 	const {mutateAsync: formatExternalStorageDevice, isPending: isFormatting} =
 		trpcReact.files.formatExternalDevice.useMutation({
 			onError: (error: RouterError) => {
-				toast.error(error.message || t('files-format.error'))
+				toast.error(error.message || t('files-format.error'), {area: 'files'})
 			},
 			onSettled: () => {
 				utils.files.externalDevices.invalidate()

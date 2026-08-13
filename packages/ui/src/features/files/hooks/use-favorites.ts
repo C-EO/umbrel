@@ -40,7 +40,7 @@ export function useFavorites() {
 			if (context?.previous) {
 				utils.files.favorites.setData(undefined, context.previous)
 			}
-			toast.error(t('files-error.add-favorite', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.add-favorite', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => {
 			utils.files.favorites.invalidate()
@@ -59,7 +59,7 @@ export function useFavorites() {
 			if (context?.previous) {
 				utils.files.favorites.setData(undefined, context.previous)
 			}
-			toast.error(t('files-error.remove-favorite', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.remove-favorite', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => {
 			utils.files.favorites.invalidate()

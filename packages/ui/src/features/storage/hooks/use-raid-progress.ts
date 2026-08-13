@@ -99,7 +99,7 @@ export function useRaidProgress(): RaidProgress | null {
 				const status = data as FailsafeTransitionStatus
 				// On error: show toast and clear immediately
 				if (status.state === 'error') {
-					toast.error(status.error || t('storage-manager.failsafe-transition-failed'))
+					toast.error(status.error || t('storage-manager.failsafe-transition-failed'), {area: 'settings'})
 					setFailsafeTransition(null)
 					return
 				}

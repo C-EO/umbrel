@@ -55,7 +55,7 @@ export function EmbeddedFiles({
 					mode === 'read-only' ? {network: true, external: true, trash: true, rewind: true, cloud: true} : undefined,
 			}}
 		>
-			<div className={['grid grid-cols-1 lg:grid-cols-[188px_1fr]', className].join(' ')}>
+			<div className={['grid grid-cols-1 lg:grid-cols-[224px_1fr]', className].join(' ')}>
 				{/* We still render viewer so you can see past files easily (read-only safe) */}
 				<FileViewer />
 				{isMobile ? (

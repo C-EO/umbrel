@@ -4,7 +4,13 @@ import InfiniteLoader from 'react-window-infinite-loader'
 
 import {FileItem} from '@/features/files/components/listing/file-item'
 import type {FileSystemItem} from '@/features/files/types'
-import {getGridColumnCount} from '@/features/files/utils/get-grid-column-count'
+import {
+	getGridColumnCount,
+	getGridItemWidth,
+	getGridScrollerPadding,
+	GRID_ITEM_HEIGHT,
+	GRID_ROW_GAP,
+} from '@/features/files/utils/get-grid-column-count'
 import {getItemKey} from '@/features/files/utils/get-item-key'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 
@@ -164,6 +170,20 @@ interface GridItemData {
 	totalWidth: number
 }
 
+// Trailing scroll room inside the virtualized content so the last row can be
+// scrolled up past the bottom fade and read comfortably. Extends the scrollable
+// height without shrinking the viewport (which must stay flush with the card edge).
+const SCROLL_END_SPACER_PX = 28
+const InnerElementWithEndSpacer = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+	function InnerElementWithEndSpacer({style, ...rest}, ref) {
+		const height =
+			typeof style?.height === 'number'
+				? style.height + SCROLL_END_SPACER_PX
+				: `calc(${style?.height} + ${SCROLL_END_SPACER_PX}px)`
+		return <div ref={ref} style={{...style, height}} {...rest} />
+	},
+)
+
 export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 	items,
 	hasMore,
@@ -239,53 +259,59 @@ export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 
 	// Calculate grid dimensions based on container width
 	// We cannot use simple flexbox css because we are using react-window for virtualization
-	const getGridDimensions = useCallback((width: number) => {
-		const itemWidth = 112 // Fixed item width of 112px
-		const minGap = 8 // Prevents borders overlapping at certain screen sizes
-		const borderAllowance = 2 // Extra space on each side for selection borders
-		const fixedVerticalGap = 24 // Prevents multi-line file name items from overlapping
+	const getGridDimensions = useCallback(
+		(width: number) => {
+			const itemWidth = getGridItemWidth(isMobile) // Fixed item width (100px mobile / 112px desktop)
+			const minGap = 8 // Prevents borders overlapping at certain screen sizes
+			const borderAllowance = 2 // Extra space on each side for selection borders
+			const fixedVerticalGap = GRID_ROW_GAP // Visual breathing room between rows (cells fully contain their item)
 
-		// Adjust item width to include border allowance
-		const containerWidth = itemWidth + borderAllowance * 2
+			// Adjust item width to include border allowance
+			const containerWidth = itemWidth + borderAllowance * 2
 
-		// Calculate how many columns can fit with minimum gap enforced
-		const columnCount = getGridColumnCount(width)
+			// Calculate how many columns can fit with minimum gap enforced
+			const columnCount = getGridColumnCount(width, itemWidth)
 
-		// Now calculate the actual horizontal gap that will be used
-		// We'll ensure this is at least minGap
-		let horizontalGap = minGap
+			// Now calculate the actual horizontal gap that will be used
+			// We'll ensure this is at least minGap
+			let horizontalGap = minGap
 
-		if (columnCount > 1) {
-			// Calculate the total width available for gaps
-			const totalItemsWidth = columnCount * containerWidth
-			const availableSpaceForGaps = width - totalItemsWidth
+			if (columnCount > 1) {
+				// Calculate the total width available for gaps
+				const totalItemsWidth = columnCount * containerWidth
+				const availableSpaceForGaps = width - totalItemsWidth
 
-			// Calculate gap size that would evenly distribute items
-			const calculatedGap = availableSpaceForGaps / (columnCount - 1)
+				// Calculate gap size that would evenly distribute items
+				const calculatedGap = availableSpaceForGaps / (columnCount - 1)
 
-			// Use the calculated gap if it's larger than our minimum
-			horizontalGap = Math.max(minGap, calculatedGap)
-		}
+				// Use the calculated gap if it's larger than our minimum
+				horizontalGap = Math.max(minGap, calculatedGap)
+			}
 
-		// Use a larger fixed vertical gap to prevent wrapped text from overlapping
-		const verticalGap = fixedVerticalGap
+			// Use a larger fixed vertical gap to prevent wrapped text from overlapping
+			const verticalGap = fixedVerticalGap
 
-		// Set item height and row height separately - row height includes the gap
-		const itemHeight = 120 // Height of each item itself
-		const rowHeight = itemHeight + verticalGap // Row height includes vertical gap
+			// Set item height and row height separately - row height includes the gap.
+			// The item boxes fill the cell (h-full) so every box in a row is equal-height;
+			// the cell must therefore fully contain a 2-line-filename item: 12px cell top
+			// padding + 134px content (icon + two name lines + type/size label + paddings)
+			const itemHeight = GRID_ITEM_HEIGHT
+			const rowHeight = itemHeight + verticalGap // Row height includes vertical gap
 
-		return {
-			columnCount,
-			columnWidth: containerWidth, // Column width includes border allowance
-			itemWidth, // The actual item width without border allowance
-			rowHeight,
-			itemHeight,
-			horizontalGap,
-			verticalGap,
-			totalWidth: width,
-			borderAllowance,
-		}
-	}, [])
+			return {
+				columnCount,
+				columnWidth: containerWidth, // Column width includes border allowance
+				itemWidth, // The actual item width without border allowance
+				rowHeight,
+				itemHeight,
+				horizontalGap,
+				verticalGap,
+				totalWidth: width,
+				borderAllowance,
+			}
+		},
+		[isMobile],
+	)
 
 	// Render cell for grid view
 	const renderGridCell = useCallback(
@@ -377,7 +403,8 @@ export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 				<FixedSizeList
 					ref={ref as React.Ref<FixedSizeList>}
 					height={height}
-					width={width + 24} // Add 24px to push scrollbar into parent padding
+					width={width + getGridScrollerPadding(isMobile)} // Push scrollbar into parent padding (px-3 mobile / px-6 desktop)
+					innerElementType={InnerElementWithEndSpacer}
 					itemCount={itemCount}
 					itemSize={isMobile ? 50 : 40}
 					itemData={width} // Pass the actual width for fixed row width
@@ -413,7 +440,8 @@ export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 					<FixedSizeGrid
 						ref={ref as React.Ref<FixedSizeGrid>}
 						height={height}
-						width={width + 24}
+						width={width + getGridScrollerPadding(isMobile)}
+						innerElementType={InnerElementWithEndSpacer}
 						rowCount={rowCount}
 						columnCount={columnCount}
 						rowHeight={rowHeight}
@@ -436,7 +464,7 @@ export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 	return (
 		<div
 			ref={containerRef}
-			className={`umbrel-files-fade-scroller h-full w-full overflow-auto p-6 pt-0 ${isScrolled ? 'scrolled' : ''}`}
+			className={`umbrel-files-fade-scroller h-full w-full overflow-auto px-3 lg:px-6 ${isScrolled ? 'scrolled' : ''}`}
 		>
 			{/* Containment wrapper: the FixedSizeList is rendered wider than the content area
 			    (width + 24) to push its scrollbar into parent padding. Without this wrapper,

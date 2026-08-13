@@ -115,7 +115,7 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 	// Directory creation mutation
 	const createDirectory = trpcReact.files.createDirectory.useMutation({
 		onError: (error) => {
-			toast.error(t('files-error.upload', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.upload', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 			throw error // Re-throw to handle in the calling function
 		},
 	})
@@ -343,6 +343,7 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 							t('files-error.upload', {
 								message: `${item.name}: ${xhr.statusText || t('files-backend-error.upload-failed')}`,
 							}),
+							{area: 'files'},
 						)
 					}
 				}
@@ -352,7 +353,7 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 				activeXHRsRef.current.delete(tempId)
 				// Network error or similar
 				updateItemState(tempId, {status: 'error', isUploading: false, progress: 0, speed: 0})
-				toast.error(t('files-error.upload-network-error', {name: item.name}))
+				toast.error(t('files-error.upload-network-error', {name: item.name}), {area: 'files'})
 			}
 
 			xhr.onabort = () => {
@@ -563,7 +564,7 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 		} catch (error: any) {
 			// Error during directory creation or initial setup
 			setUploadingItems([]) // Clear queue on setup failure
-			toast.error(t('files-error.upload', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.upload', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		}
 	}
 

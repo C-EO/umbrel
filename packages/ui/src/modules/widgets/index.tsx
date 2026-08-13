@@ -74,7 +74,7 @@ export function Widget({appId, config: manifestConfig}: {appId: string; config: 
 			// Users will likely open the app by clicking the icon before adding a widget associated with the app
 			launchApp(appId, {path: link, direct: true})
 		} else {
-			toast.error(t('app-not-found', {app: appId}))
+			toast.error(t('app-not-found', {app: appId}), {area: 'widgets'})
 		}
 	}
 

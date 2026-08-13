@@ -1,7 +1,7 @@
 import React, {Suspense, useState} from 'react'
 import {ErrorBoundary} from 'react-error-boundary'
 import {useTranslation} from 'react-i18next'
-import {Navigate, Route, Routes, useLocation, useParams} from 'react-router-dom'
+import {Navigate, Route, Routes, useParams} from 'react-router-dom'
 import {keys} from 'remeda'
 import {arrayIncludes} from 'ts-extras'
 
@@ -17,15 +17,6 @@ import AdvancedSettingsDrawerOrDialog from '@/routes/settings/advanced'
 import {SoftwareUpdateConfirmDialog} from '@/routes/settings/software-update-confirm'
 import {trpcReact} from '@/trpc/trpc'
 import {IS_ANDROID} from '@/utils/misc'
-
-// Routes that should bypass the Sheet and render fullscreen with their own backdrop
-// Add paths here to have them render outside the Settings sheet
-export const SETTINGS_FULLSCREEN_PATHS = ['/settings/storage'] as const
-// export const SETTINGS_FULLSCREEN_PATHS = [] as const
-
-export function isFullscreenSettingsPath(pathname: string) {
-	return SETTINGS_FULLSCREEN_PATHS.some((path) => pathname.includes(path))
-}
 
 // import {SettingsContent} from './_components/settings-content'
 const SettingsContent = React.lazy(() =>
@@ -108,8 +99,12 @@ function QueryStringDialog({isMember}: {isMember: boolean}) {
 	// Prevent breaking if there's a dialog that is rendered somewhere else and not in this map ("logout", for example)
 	const isRestrictedMemberAction = isMember && (dialog === 'restart' || dialog === 'shutdown')
 	const has = dialog && !isRestrictedMemberAction && arrayIncludes(dialogKeys, dialog)
-	const Component = has && dialog ? routeToDialog[dialog] : () => null
+	// Early return rather than rendering a placeholder component: an inline
+	// `() => null` would be a new component type each render, so React would
+	// drop and recreate the fiber every time.
+	if (!has || !dialog) return null
 
+	const Component = routeToDialog[dialog]
 	return <Component />
 }
 
@@ -126,24 +121,12 @@ function OwnerSessionsRedirect() {
 export function Settings() {
 	const {t} = useTranslation()
 	const title = t('settings')
-	const location = useLocation()
 	const isMobile = useIsMobile() && !IS_ANDROID
 
 	// Wait for the role before mounting the settings content so role-restricted
 	// queries and rows never flash while the current account is resolving.
 	const userQ = trpcReact.user.get.useQuery()
 	const isMember = userQ.data?.role === 'member'
-
-	// When on a fullscreen route, Sheet is bypassed so we can't use Sheet components
-	if (isFullscreenSettingsPath(location.pathname)) {
-		return (
-			<Suspense fallback={<div className='fixed inset-0 z-50 bg-black/30 backdrop-blur-xl' />}>
-				<Routes>
-					<Route path='/storage/*' Component={StorageManagerDialog} />
-				</Routes>
-			</Suspense>
-		)
-	}
 
 	return (
 		<div className='contents lg:flex lg:h-full lg:min-h-0 lg:flex-col'>

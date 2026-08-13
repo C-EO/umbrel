@@ -119,7 +119,7 @@ describe('Files command capabilities', () => {
 
 		expect(mocks.pathOperations).not.toHaveBeenCalled()
 		expect(mocks.move).not.toHaveBeenCalled()
-		expect(mocks.toastError).toHaveBeenCalledWith('files-error.move')
+		expect(mocks.toastError).toHaveBeenCalledWith('files-error.move', {area: 'files'})
 		expect(useFilesStore.getState().draggedItems).toEqual([])
 	})
 

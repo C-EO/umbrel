@@ -70,6 +70,7 @@ export function useDiskForUi(options: {poll?: boolean} = {}) {
 		isDiskLow,
 		isDiskFull,
 		apps,
+		size,
 	} as const
 }
 

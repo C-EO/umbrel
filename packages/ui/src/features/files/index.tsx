@@ -70,24 +70,24 @@ export default function FilesLayout() {
 								onClick={() => setIsMobileSidebarOpen(true)}
 							/>
 						) : null}
-						<SheetTitle className='mr-2 leading-none lg:mr-0 lg:min-w-[188px]'>{t('files')}</SheetTitle>
+						<SheetTitle className='mr-2 leading-none lg:mr-0 lg:min-w-[224px] lg:text-36'>{t('files')}</SheetTitle>
 					</div>
 				</SheetHeader>
 				<ErrorBoundary FallbackComponent={ErrorBoundaryCardFallback}>
 					{/* FileViewer renders the viewerItem from the store */}
 					<FileViewer />
 
-					<div className='mt-[-0.5rem] grid grid-cols-1 lg:mt-0 lg:grid-cols-[188px_1fr]'>
+					<div className='mt-[-0.5rem] grid grid-cols-1 lg:grid-cols-[224px_1fr]'>
 						{/* Sidebar */}
 						{isMobile ? (
 							<MobileSidebarWrapper isOpen={isMobileSidebarOpen} onClose={() => setIsMobileSidebarOpen(false)}>
 								<Sidebar className='h-[calc(100svh-140px)]' />
 							</MobileSidebarWrapper>
 						) : (
-							<Sidebar className='h-[calc(100vh-300px)]' />
+							<Sidebar className='h-[calc(100vh-176px)]' />
 						)}
 
-						<div className='flex flex-col gap-3 lg:gap-6'>
+						<div className='flex flex-col gap-3 lg:gap-5'>
 							<ActionsBarProvider>
 								<ActionsBar />
 								{/* Renders either DirectoryListing, AppsListing, RecentsListing, or TrashListing */}

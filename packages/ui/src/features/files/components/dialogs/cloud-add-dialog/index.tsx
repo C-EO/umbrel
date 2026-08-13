@@ -176,7 +176,7 @@ export default function CloudAddDialog() {
 				else if (message.includes('[cloud-account-auth-required]')) setFolderState('auth')
 				else {
 					setFolderState('error')
-					toast.error(t('files-cloud-error.browse', {message: getFilesErrorMessage(message)}))
+					toast.error(t('files-cloud-error.browse', {message: getFilesErrorMessage(message)}), {area: 'files'})
 				}
 			}
 		},
@@ -311,7 +311,9 @@ export default function CloudAddDialog() {
 					)
 				})
 			} catch (error) {
-				toast.error(t('files-cloud-error.browse', {message: getFilesErrorMessage((error as RouterError).message)}))
+				toast.error(t('files-cloud-error.browse', {message: getFilesErrorMessage((error as RouterError).message)}), {
+					area: 'files',
+				})
 				return []
 			}
 		},
@@ -441,7 +443,7 @@ export default function CloudAddDialog() {
 			}
 			const message = (error as RouterError).message ?? ''
 			if (message.includes('[cloud-account-busy]')) setCreateBusy(true)
-			else toast.error(t('files-cloud-error.create', {message: getFilesErrorMessage(message)}))
+			else toast.error(t('files-cloud-error.create', {message: getFilesErrorMessage(message)}), {area: 'files'})
 		} finally {
 			setIsStarting(false)
 		}

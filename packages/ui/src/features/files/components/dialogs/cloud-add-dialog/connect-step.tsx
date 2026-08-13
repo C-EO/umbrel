@@ -560,6 +560,7 @@ function ICloudConnect({
 							: t('files-cloud-error.verify-code', {
 									message: getFilesErrorMessage((error as RouterError).message),
 								}),
+						{area: 'files'},
 					)
 					restartAfterFailure()
 				}

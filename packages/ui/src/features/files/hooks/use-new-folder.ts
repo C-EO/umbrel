@@ -41,7 +41,7 @@ export function useNewFolder() {
 	const createFolderMutation = trpcReact.files.createDirectory.useMutation({
 		onError: (error, {path}) => {
 			removeIncomingItems([path])
-			toast.error(t('files-error.create-folder', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.create-folder', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 		onSettled: () => {
 			utils.files.list.invalidate()
@@ -59,7 +59,7 @@ export function useNewFolder() {
 
 		if (listingRef.current?.items) {
 			if (!isNameAvailable(name, listingRef.current.items)) {
-				toast.error(t('files-error.folder-already-exists'))
+				toast.error(t('files-error.folder-already-exists'), {area: 'files'})
 				return
 			}
 		}

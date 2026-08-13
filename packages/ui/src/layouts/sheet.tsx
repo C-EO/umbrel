@@ -10,7 +10,6 @@ import {cn} from '@/lib/utils'
 import {DockSpacer} from '@/modules/desktop/dock'
 import {SheetFixedTarget} from '@/modules/sheet-top-fixed'
 import {SheetStickyHeaderProvider, SheetStickyHeaderTarget, useSheetStickyHeader} from '@/providers/sheet-sticky-header'
-import {isFullscreenSettingsPath} from '@/routes/settings'
 import {useAfterDelayedClose} from '@/utils/dialog'
 
 import {getSheetScrollRestorationAction} from './sheet-scroll-restoration'
@@ -26,9 +25,10 @@ export function SheetLayout() {
 
 	useScrollRestoration(scrollRef, getSheetScrollRestorationAction)
 
-	// For fullscreen settings routes, render content outside the Sheet
-	const isFullscreenRoute = isFullscreenSettingsPath(location.pathname)
 	const isSettingsRoute = /^\/settings(\/|$)/.test(location.pathname)
+	// Desktop Files manages its own viewport-relative heights (sidebar reaches
+	// below the dock line), so the dock spacer would only add phantom scroll
+	const isFilesRoute = /^\/files(\/|$)/.test(location.pathname)
 
 	// The Sheet layout persists between Files, App Store, and Settings. Clear a
 	// stale outer offset before paint when entering Settings. Desktop Settings
@@ -38,26 +38,12 @@ export function SheetLayout() {
 	}, [isSettingsRoute])
 
 	useAfterDelayedClose(open, () => {
-		// Don't navigate away if we're on a fullscreen route
-		if (!isFullscreenRoute) {
-			navigate('/')
-		}
+		navigate('/')
 	})
 
 	return (
 		<>
-			{/* Render fullscreen content outside the Sheet */}
-			{isFullscreenRoute && (
-				<>
-					{/* Immediate blur backdrop - renders before lazy component loads */}
-					<div className='fixed inset-0 z-50 transform-gpu bg-black/30 backdrop-blur-xl' />
-					<Suspense fallback={null}>
-						<Outlet />
-					</Suspense>
-				</>
-			)}
-			{/* Keep Sheet mounted but closed when on fullscreen route */}
-			<Sheet open={open && !isFullscreenRoute} onOpenChange={setOpen} modal={false}>
+			<Sheet open={open} onOpenChange={setOpen} modal={false}>
 				<SheetStickyHeaderProvider scrollRef={scrollRef}>
 					{/* NOTE: If you change these width/max-width values, also update the
 					   text editor width in features/files/components/file-viewer/text-viewer/index.tsx
@@ -83,6 +69,7 @@ export function SheetLayout() {
 						<SheetStickyHeaderTarget />
 						<ScrollArea
 							className='umbrel-window-surface-top h-full'
+							fade={!isFilesRoute}
 							viewportRef={scrollRef}
 							viewportClassName={cn(isSettingsRoute && 'lg:!overflow-hidden lg:[&>div]:!h-full')}
 							scrollbarClassName={cn(isSettingsRoute && 'lg:hidden')}
@@ -90,13 +77,17 @@ export function SheetLayout() {
 							<div
 								className={cn(
 									'flex flex-col gap-5 px-3 pt-6 md:px-[40px] md:pt-12',
-									isSettingsRoute ? 'lg:h-full lg:min-h-0 lg:gap-0 lg:pt-0 xl:px-[60px]' : 'xl:px-[70px]',
+									isSettingsRoute
+										? 'lg:h-full lg:min-h-0 lg:gap-0 lg:pt-0 xl:px-[60px]'
+										: isFilesRoute
+											? 'xl:px-[60px]'
+											: 'xl:px-[70px]',
 								)}
 							>
 								<Suspense fallback={<SheetTitle className='sr-only'>{t('loading')}</SheetTitle>}>
 									<Outlet />
 								</Suspense>
-								<DockSpacer className={cn('mt-4', isSettingsRoute && 'lg:hidden')} />
+								<DockSpacer className={cn('mt-4', (isSettingsRoute || isFilesRoute) && 'lg:hidden')} />
 							</div>
 						</ScrollArea>
 					</SheetContent>

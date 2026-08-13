@@ -90,6 +90,7 @@ export default function RaidErrorScreen() {
 	const factoryResetMut = trpcReact.system.factoryReset.useMutation({
 		onError: (error) => {
 			toast.error(t('raid-error.factory-reset-failed'), {
+				area: 'umbrelos',
 				description: error.message,
 			})
 		},

@@ -1,4 +1,13 @@
-import React, {Fragment, useEffect, useId, useRef, useState, useSyncExternalStore} from 'react'
+import React, {
+	createContext,
+	Fragment,
+	useContext,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from 'react'
 
 import {attachBackdropLens, resolveBevelPx, type GlassLensParams} from '@/lib/glass-webgl'
 import {cn} from '@/lib/utils'
@@ -41,6 +50,19 @@ export const REFRACT =
 	/Chrom(e|ium)/.test(navigator.userAgent) &&
 	!/iP(hone|ad|od)/.test(navigator.userAgent) &&
 	CSS.supports('backdrop-filter', 'url(#g)')
+
+/**
+ * Opts a subtree out of both lenses (the Chromium SVG one and the WebGL
+ * fallback), leaving plain frosted blur — what Safari already shows everywhere.
+ *
+ * For glass that is only ever drawn tiny or scaled down, the refraction is
+ * invisible but the cost is not: each lens is a per-instance canvas build plus
+ * a PNG encode/decode, and in Chromium a live `backdrop-filter: url()` filter
+ * graph that re-runs whenever anything behind it moves. The Settings desktop
+ * preview renders the real dock and widgets at scale3d(0.18), so it doubled the
+ * page's live lenses to draw refraction a few pixels wide.
+ */
+export const GlassFrostedContext = createContext(false)
 
 // The map ships as a blob: URL, not canvas.toDataURL() — umbreld's CSP is
 // `img-src * blob:`, so data: URIs are blocked and feImage would load nothing.
@@ -180,9 +202,10 @@ export function Glass({
 	const hrefRef = useRef<string | null>(null)
 	const [lens, setLens] = useState<Lens | null>(null)
 	const filterId = 'glass-' + useId().replace(/[^a-zA-Z0-9_-]/g, '')
+	const frosted = useContext(GlassFrostedContext)
 
 	useEffect(() => {
-		if (!REFRACT) return
+		if (!REFRACT || frosted) return
 		const host = hostRef.current
 		if (!host) return
 		let frame = 0
@@ -253,7 +276,7 @@ export function Glass({
 			// blob URL instead of publishing after cleanup
 			verRef.current++
 		}
-	}, [bevel])
+	}, [bevel, frosted])
 
 	useEffect(() => {
 		return () => {
@@ -276,7 +299,7 @@ export function Glass({
 		lensParamsRef.current = {scale, chroma, bevel, saturate, brightness, blur}
 	})
 	useEffect(() => {
-		if (REFRACT || REDUCED || contrast || !refractionTarget) return
+		if (REFRACT || REDUCED || contrast || frosted || !refractionTarget) return
 		const canvas = canvasRef.current
 		if (!canvas) return
 		const detach = attachBackdropLens(
@@ -290,7 +313,7 @@ export function Glass({
 			detach()
 			setCanvasLens(false)
 		}
-	}, [refractionTarget, contrast])
+	}, [refractionTarget, contrast, frosted])
 
 	// Non-Chromium edge blur: a backdrop-blur overlay masked to the bevel band
 	// (four per-edge gradients fading over the bevel width — their union is a
@@ -298,7 +321,7 @@ export function Glass({
 	// fraction bevels track the element size without re-rendering per frame.
 	const edgeRef = useRef<HTMLDivElement>(null)
 	useEffect(() => {
-		if (REFRACT || contrast || edgeBlur <= 0) return
+		if (REFRACT || contrast || frosted || edgeBlur <= 0) return
 		const el = edgeRef.current
 		const host = hostRef.current
 		if (!el || !host) return
@@ -314,7 +337,7 @@ export function Glass({
 		const ro = new ResizeObserver(apply)
 		ro.observe(host)
 		return () => ro.disconnect()
-	}, [bevel, edgeBlur, contrast])
+	}, [bevel, edgeBlur, contrast, frosted])
 
 	// Fresh id per rebuild (and per edgeBlur — it lives inside the filter as
 	// stdDeviation) — Chromium caches filter output by id.
@@ -322,7 +345,7 @@ export function Glass({
 	const backdropFilter =
 		contrast || canvasLens
 			? undefined
-			: REFRACT && lens
+			: REFRACT && lens && !frosted
 				? `url("#${id}") blur(${blur}px) saturate(${saturate}) brightness(${brightness})`
 				: `blur(${blur * 3}px) saturate(${saturate}) brightness(${brightness})`
 
@@ -339,7 +362,7 @@ export function Glass({
 	const Host = as
 	return (
 		<Host ref={hostRef} className={cn(!positioned && 'relative', 'isolate', className)} {...rest}>
-			{!REFRACT && refractionTarget && (
+			{!REFRACT && !frosted && refractionTarget && (
 				<canvas
 					ref={canvasRef}
 					aria-hidden
@@ -358,7 +381,7 @@ export function Glass({
 					background: tint,
 				}}
 			/>
-			{!REFRACT && !contrast && edgeBlur > 0 && (
+			{!REFRACT && !frosted && !contrast && edgeBlur > 0 && (
 				<div
 					ref={edgeRef}
 					aria-hidden
@@ -376,7 +399,7 @@ export function Glass({
 				/>
 			)}
 			{children}
-			{REFRACT && lens && (
+			{REFRACT && lens && !frosted && (
 				<svg width={0} height={0} aria-hidden className='pointer-events-none fixed'>
 					<filter
 						id={id}

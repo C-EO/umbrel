@@ -80,6 +80,7 @@ export function ReplaceFailedDriveDialog({
 		}).catch((error) => {
 			clearPendingOperation()
 			toast.error(t('storage-manager.replace-failed.error'), {
+				area: 'settings',
 				description: error instanceof Error ? error.message : t('unknown-error'),
 			})
 		})

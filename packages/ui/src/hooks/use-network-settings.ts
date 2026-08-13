@@ -30,7 +30,7 @@ export function useHostname({onSuccess}: {onSuccess?: () => void} = {}) {
 			onSuccess?.()
 		},
 		onError: (err) => {
-			toast.error(t('network.hostname-change-error', {message: err.message}))
+			toast.error(t('network.hostname-change-error', {message: err.message}), {area: 'settings'})
 		},
 	})
 
@@ -56,7 +56,7 @@ export function useStaticIp(mac: string, {onSettled}: {onSettled?: () => void} =
 			// WebSocket). Only toast actual backend errors like the 30s timeout revert.
 			// Server errors have `data`, network errors don't.
 			if (err.data) {
-				toast.error(t('network.apply-error', {message: err.message}))
+				toast.error(t('network.apply-error', {message: err.message}), {area: 'settings'})
 			}
 		},
 		// Navigate back regardless of outcome. We can't reliably distinguish "succeeded
@@ -77,7 +77,7 @@ export function useStaticIp(mac: string, {onSettled}: {onSettled?: () => void} =
 			setTimeout(() => utils.system.getNetworkInterfaces.invalidate(), 3000)
 		},
 		onError: (err) => {
-			toast.error(t('network.apply-error', {message: err.message}))
+			toast.error(t('network.apply-error', {message: err.message}), {area: 'settings'})
 		},
 	})
 

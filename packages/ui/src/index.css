@@ -78,6 +78,7 @@ html {
 	--material-popover-radius: 20px;
 	--material-modal-radius: 24px;
 	--material-item-radius: 16px;
+	--material-toast-radius: 18px;
 
 	/* Window surface recipe */
 	--window-radius: 40px;
@@ -97,6 +98,14 @@ html {
 	   static blur — keep their radius on its own knob so retuning the (free)
 	   sheet blur can never inflate a per-frame filter. */
 	--immersive-blur: 0px;
+}
+
+/* Window surfaces (sheet, drawer, immersive dialogs) tighten on mobile.
+   Breakpoint matches useIsMobile's lg boundary, where dialogs swap to drawers. */
+@media (width < 1024px) {
+	html {
+		--window-radius: 24px;
+	}
 }
 
 @layer components {
@@ -130,6 +139,25 @@ html {
 
 	.umbrel-material-modal {
 		border-radius: var(--material-modal-radius);
+	}
+
+	.umbrel-material-toast {
+		border-radius: var(--material-toast-radius);
+		/* Lighter, airier surface than menus: softer tint, gentler blur and a
+		   tighter shadow so toasts sit quietly over any wallpaper */
+		--material-blur: 10px;
+		--material-brightness: 100%;
+		--material-tint-opacity: 0.25;
+		--material-shadow-y: 6px;
+		--material-shadow-blur: 16px;
+		--material-shadow-opacity: 0.3;
+	}
+
+	/* Radix modals set pointer-events: none on the body while open; keep
+	   individual toasts interactive so they can still be clicked/dismissed
+	   (the toaster list itself stays transparent so gaps don't eat clicks) */
+	[data-sonner-toast] {
+		pointer-events: auto;
 	}
 
 	.umbrel-material-menu-item {
@@ -241,6 +269,14 @@ html {
 
 	.umbrel-material.umbrel-window-surface-all {
 		background-color: rgb(var(--window-background-tint-rgb) / 0.9);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	/* Collapse sonner's mount/exit keyframes; the stack repositioning uses
+	   transitions and stays functional */
+	[data-sonner-toast] {
+		animation-duration: 0.01ms !important;
 	}
 }
 
@@ -369,14 +405,30 @@ html {
 	mask-image: linear-gradient(to bottom, transparent, red 20px calc(100% - 20px), transparent);
 }
 
-/* Targets the correct div inside the react-window component */
+/* Targets the correct div inside the react-window component. The generous bottom
+   fade also keeps the item/selected-count label legible over scrolled rows; the
+   extra stop drops most of the visibility by 60% into the ramp so the last ~40%
+   is close to fully faded */
 .umbrel-files-fade-scroller > div > div {
-	mask-image: linear-gradient(to bottom, red 0, red calc(100% - 24px), transparent);
+	mask-image: linear-gradient(
+		to bottom,
+		red 0,
+		red calc(100% - 48px),
+		rgb(255 0 0 / 0.25) calc(100% - 20px),
+		transparent
+	);
 }
 
 /* Only fade the top when a user has scrolled */
 .umbrel-files-fade-scroller.scrolled > div > div {
-	mask-image: linear-gradient(to bottom, transparent 0, red 24px, red calc(100% - 24px), transparent 100%);
+	mask-image: linear-gradient(
+		to bottom,
+		transparent 0,
+		red 24px,
+		red calc(100% - 48px),
+		rgb(255 0 0 / 0.25) calc(100% - 20px),
+		transparent 100%
+	);
 }
 
 .umbrel-divide-y > * {

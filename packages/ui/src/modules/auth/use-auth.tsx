@@ -35,7 +35,7 @@ export function useAuth() {
 			finishBrowserLogout()
 		},
 		onError() {
-			toast.error(t('logout-error-generic'))
+			toast.error(t('logout-error-generic'), {area: 'umbrelos'})
 		},
 	})
 

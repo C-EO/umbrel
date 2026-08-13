@@ -59,6 +59,7 @@ export function AddMirrorDialog({open, onOpenChange, devices, addMirrorAsync}: A
 			.catch((error) => {
 				clearPendingOperation()
 				toast.error(t('storage-manager.add-mirror.failed'), {
+					area: 'settings',
 					description: error instanceof Error ? error.message : t('unknown-error'),
 				})
 			})

@@ -25,7 +25,7 @@ export function ErrorBoundaryCardFallback({error, resetErrorBoundary}: Partial<F
 	return (
 		// Wrap div to prevent flex parent from sizing this element inappropriately
 		<div className='relative w-full'>
-			<Card className='grid w-full animate-in place-items-center fade-in zoom-in-150 md:h-60'>
+			<Card className='grid w-full animate-in place-items-center rounded-24 fade-in zoom-in-150 md:h-60'>
 				<div className='flex flex-col items-center gap-2'>
 					<GenericErrorText />
 					{resetErrorBoundary && (

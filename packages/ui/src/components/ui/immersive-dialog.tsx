@@ -9,6 +9,7 @@ import {
 	dialogContentAnimationSlideClass,
 	dialogContentClass,
 	dialogOverlayClass,
+	preventDialogDismissForToasts,
 } from '@/components/ui/shared/dialog'
 import {cn} from '@/lib/utils'
 import {useImmersiveDialogCounter} from '@/providers/immersive-dialog'
@@ -77,6 +78,11 @@ export function ImmersiveDialogContent({
 				'p-0',
 			)}
 			{...contentProps}
+			// Compose after the spread so a caller's handler adds to the toast guard
+			onPointerDownOutside={(event) => {
+				preventDialogDismissForToasts(event)
+				contentProps.onPointerDownOutside?.(event)
+			}}
 		>
 			{showScroll ? (
 				<ScrollArea dialogInset className='h-full'>
@@ -114,6 +120,11 @@ export function ImmersiveDialogSplitContent({
 					'flex flex-row justify-between gap-0 p-0',
 				)}
 				{...contentProps}
+				// Compose after the spread so a caller's handler adds to the toast guard
+				onPointerDownOutside={(event) => {
+					preventDialogDismissForToasts(event)
+					contentProps.onPointerDownOutside?.(event)
+				}}
 			>
 				<section className='hidden w-[210px] flex-col items-center justify-center bg-black/40 md:flex md:[border-top-left-radius:var(--window-radius)] md:[border-bottom-left-radius:var(--window-radius)]'>
 					{side}
@@ -132,7 +143,7 @@ export function ImmersiveDialogSplitContent({
 
 const immersiveContentShortClass = tw`w-[calc(100%-40px)] max-w-[800px] max-h-[calc(100dvh-90px)]`
 const immersiveContentTallClass = tw`top-[calc(50%-30px)] max-h-[800px] w-[calc(100%-40px)] max-w-[800px] h-[calc(100dvh-90px)]`
-const immersiveScrollAreaContentsClass = tw`flex h-full flex-col gap-6 p-4 md:p-8`
+const immersiveScrollAreaContentsClass = tw`flex h-full flex-col gap-6 px-6 py-4 md:p-8`
 
 export function ImmersiveDialogOverlay({ref}: {ref?: React.Ref<HTMLDivElement>}) {
 	return (

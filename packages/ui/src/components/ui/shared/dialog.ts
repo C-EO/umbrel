@@ -9,3 +9,14 @@ export const dialogContentAnimationClass = tw`data-[state=open]:animate-in data-
 export const dialogContentAnimationSlideClass = tw``
 
 export const dialogFooterClass = tw`flex flex-col gap-2.5 md:flex-row`
+
+/**
+ * Radix modals treat any pointerdown outside their content as a dismiss
+ * request, and toasts always render outside dialog content — without this
+ * guard, clicking a toast closes the dialog instead of reaching the toast.
+ */
+export function preventDialogDismissForToasts(event: {target: EventTarget | null; preventDefault: () => void}) {
+	if (event.target instanceof Element && event.target.closest('[data-sonner-toaster]')) {
+		event.preventDefault()
+	}
+}

@@ -1,19 +1,29 @@
 import {useTranslation} from 'react-i18next'
 
 import {SidebarItem} from '@/features/files/components/sidebar/sidebar-item'
+import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
+import {AccountAvatar} from '@/modules/auth/account-avatar'
 
 // The owner's Umbrel as a single folder entry in a member's sidebar. It roots
 // at /Home, members can navigate down from there but only see the whitelisted
 // paths leading to what's been shared with them.
 export function SidebarOwnersUmbrel({name}: {name: string}) {
 	const {navigateToDirectory, currentPath} = useNavigate()
+	const {sharedWithMe} = useMemberShares()
 
 	return (
 		<SidebarItem
 			item={{name, path: '/Home', type: 'directory'}}
 			isActive={currentPath === '/Home' || currentPath.startsWith('/Home/')}
 			onClick={() => navigateToDirectory('/Home')}
+			icon={
+				sharedWithMe ? (
+					// The owner's account id is the system-wide constant '0' (OWNER_USER_ID
+					// in umbreld), giving the same deterministic gradient as login/settings
+					<AccountAvatar name={sharedWithMe.ownerName} userId='0' size={20} />
+				) : undefined
+			}
 		/>
 	)
 }

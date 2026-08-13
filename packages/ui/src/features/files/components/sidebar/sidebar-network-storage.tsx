@@ -102,7 +102,7 @@ function NetworkRootItem() {
 			<div
 				className={cn(
 					'flex flex-1 items-center gap-1.5 rounded-l-lg border border-r-0 border-transparent from-white/[0.04] to-white/[0.08] px-2 py-1.5 group-hover:bg-linear-to-b',
-					isActive ? selectedClass : 'text-white/60 transition-colors group-hover:bg-white/10 group-hover:text-white',
+					isActive ? selectedClass : 'text-white/60 group-hover:bg-white/10 group-hover:text-white',
 				)}
 			>
 				<img src={networkIcon} alt='' className='h-5 w-auto flex-shrink-0' />
@@ -113,7 +113,7 @@ function NetworkRootItem() {
 			<div
 				className={cn(
 					'group/plus flex items-center justify-center rounded-r-lg border border-l-0 border-transparent from-white/[0.04] to-white/[0.08] px-2 py-1.5 group-hover:bg-linear-to-b',
-					isActive ? selectedClass : 'transition-colors group-hover:bg-white/10',
+					isActive ? selectedClass : 'group-hover:bg-white/10',
 				)}
 				onClick={(e) => {
 					// prevent navigating into /Network
@@ -123,7 +123,7 @@ function NetworkRootItem() {
 					navigate({search: addLinkSearchParams({dialog: 'files-add-network-share'})})
 				}}
 			>
-				<button className='flex items-center justify-center text-white/60 transition-colors group-hover/plus:text-white'>
+				<button className='flex items-center justify-center text-white/60 group-hover/plus:text-white'>
 					<FaPlus className='size-3' strokeWidth={5} />
 				</button>
 			</div>

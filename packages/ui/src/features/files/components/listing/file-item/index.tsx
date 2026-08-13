@@ -202,7 +202,9 @@ export const FileItem = ({item, items}: FileItemProps) => {
 			data-selection-position={selectionPosition}
 			className={cn(
 				`files-${view}-view-file-item`, // .files-list-view-file-item styles are applied via CSS using combinator classes
-				'rounded-lg transition-colors duration-100',
+				// Icons view fills the fixed grid cell so all boxes in a row share the same height
+				view === 'icons' ? 'h-full rounded-12' : 'rounded-lg',
+				'transition-colors duration-100',
 				isPendingProcessing && 'pointer-events-none animate-pulse',
 				isSelected && !isPendingProcessing && 'bg-brand/10 shadow-[0_0_0_1px_hsl(var(--color-brand))]', // selected item styles for list view are overwritten by CSS
 				!isSelected && !isUploading && !isPendingProcessing && 'md:hover:!border-white/6 md:hover:!bg-white/5', // don't show hover state for selected items, uploading items, or processing items
@@ -219,11 +221,12 @@ export const FileItem = ({item, items}: FileItemProps) => {
 					!item.operations.includes('writable') ||
 					!isItemInteractive
 				}
-				className='rounded-lg'
+				className={view === 'icons' ? 'h-full rounded-12' : 'rounded-lg'}
 			>
 				<Draggable
 					id={`${view}-view-file-item-${item.path}`}
 					item={item}
+					className={view === 'icons' ? 'h-full' : undefined}
 					disabled={isReadOnly || !!isUploading || !item.operations.includes('move') || !isItemInteractive}
 				>
 					<div
@@ -244,7 +247,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 						onPointerUp={whenTouchOrPen(clearLongPress)}
 						// Prevent native iOS context menu/callout
 						style={{WebkitTouchCallout: 'none'}}
-						className={cn(isItemCut && 'opacity-50')}
+						className={cn(view === 'icons' && 'h-full', isItemCut && 'opacity-50')}
 						role='button'
 					>
 						{/* If the item is a dotfile, we decrease the brightness and opacity for the icon and text for a faded look */}

@@ -21,7 +21,7 @@ export function useIsExternalDns({onSuccess}: {onSuccess?: (enabled: boolean) =>
 		onError: (err, _newValue, context) => {
 			// Roll back to the previous cached value if the mutation fails
 			if (context?.previous !== undefined) utils.system.isExternalDns.setData(undefined, context.previous)
-			toast.error(t('external-dns-error', {message: err.message}))
+			toast.error(t('external-dns-error', {message: err.message}), {area: 'settings'})
 		},
 		onSettled: () => utils.system.isExternalDns.invalidate(),
 		onSuccess: (enabled) => onSuccess?.(enabled),

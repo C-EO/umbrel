@@ -144,7 +144,7 @@ export function MiniBrowser({
 			setSelected({path, isDirectory: true})
 		},
 		onError: (error) => {
-			toast.error(t('files-error.create-folder', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.create-folder', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 			setNewFolder(null)
 		},
 	})

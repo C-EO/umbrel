@@ -1,4 +1,5 @@
 import {Progress} from '@/components/ui/progress'
+import {cn} from '@/lib/utils'
 
 export function ProgressStatCardContent({
 	title,
@@ -23,7 +24,7 @@ export function ProgressStatCardContent({
 	)
 
 	return (
-		<div className='flex flex-col gap-3'>
+		<div className={cn('flex flex-col', headerIcon ? 'gap-3' : 'gap-4')}>
 			{headerIcon ? (
 				<>
 					<div className='flex min-w-0 items-start justify-between gap-3 text-13 -tracking-2'>

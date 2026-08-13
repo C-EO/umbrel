@@ -70,10 +70,19 @@ export function Sidebar({className}: {className?: string}) {
 				{/* Hardcoded home link */}
 				<SidebarSection>
 					<SidebarHome />
-					{isMember && homeShares.length > 0 && <SidebarOwnersUmbrel name={sharedWithMeLabel} />}
 					{!isMember && <SidebarRecents />}
 					{(!isMember || hasSharedApps) && <SidebarApps />}
 				</SidebarSection>
+
+				{/* Owner's Umbrel, shown to members only when the owner has shared something from their home */}
+				{isMember && homeShares.length > 0 && (
+					<>
+						<SidebarDivider />
+						<SidebarSection label={t('files-sidebar.shared-with-you')}>
+							<SidebarOwnersUmbrel name={sharedWithMeLabel} />
+						</SidebarSection>
+					</>
+				)}
 				{/* Favorites */}
 				<AnimatePresence initial={!isLoadingFavorites}>
 					{showFavorites && (
@@ -169,7 +178,7 @@ export function Sidebar({className}: {className?: string}) {
 
 const SidebarSection = ({children, label = ''}: {children: React.ReactNode; label?: string}) => {
 	return (
-		<section className='flex flex-col gap-0.5 pr-4' aria-label={label}>
+		<section className='flex flex-col pr-4' aria-label={label}>
 			{label && <div className='px-2 py-1 text-[11px] font-medium text-white/40'>{label}</div>}
 			{children}
 		</section>
@@ -179,7 +188,7 @@ const SidebarSection = ({children, label = ''}: {children: React.ReactNode; labe
 const SidebarDivider = () => {
 	return (
 		<div
-			className='my-3 h-px w-full bg-[radial-gradient(35%_35%_at_35%_35%,rgba(255,255,255,0.35)_0%,transparent_70%)]'
+			className='my-2.5 h-px w-full bg-[radial-gradient(35%_35%_at_35%_35%,rgba(255,255,255,0.35)_0%,transparent_70%)]'
 			role='separator'
 		/>
 	)

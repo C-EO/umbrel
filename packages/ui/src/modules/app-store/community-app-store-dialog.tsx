@@ -46,7 +46,7 @@ export function CommunityAppStoreDialog() {
 			utils.appStore.registry.invalidate()
 		},
 		onError: (err) => {
-			toast.error(t('community-app-store.add-error', {message: err.message}))
+			toast.error(t('community-app-store.add-error', {message: err.message}), {area: 'app-store'})
 		},
 	})
 
@@ -56,7 +56,7 @@ export function CommunityAppStoreDialog() {
 			utils.appStore.registry.invalidate()
 		},
 		onError: (err) => {
-			toast.error(t('community-app-store.remove-error', {message: err.message}))
+			toast.error(t('community-app-store.remove-error', {message: err.message}), {area: 'app-store'})
 		},
 	})
 

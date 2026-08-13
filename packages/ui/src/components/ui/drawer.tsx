@@ -2,6 +2,7 @@ import * as React from 'react'
 import {Drawer as DrawerPrimitive} from 'vaul'
 
 import {FadeScroller} from '@/components/fade-scroller'
+import {preventDialogDismissForToasts} from '@/components/ui/shared/dialog'
 import {cn} from '@/lib/utils'
 
 const Drawer = ({shouldScaleBackground = false, ...props}: React.ComponentProps<typeof DrawerPrimitive.Root>) => (
@@ -30,6 +31,7 @@ function DrawerContent({
 	children,
 	fullHeight,
 	withScroll,
+	onPointerDownOutside,
 	...props
 }: React.ComponentPropsWithoutRef<typeof DrawerPrimitive.Content> & {
 	fullHeight?: boolean
@@ -47,6 +49,12 @@ function DrawerContent({
 					className,
 				)}
 				{...props}
+				// Compose after the spread so a caller's handler adds to the toast
+				// guard instead of replacing it
+				onPointerDownOutside={(event) => {
+					preventDialogDismissForToasts(event)
+					onPointerDownOutside?.(event)
+				}}
 			>
 				{/* -mb-[4px] so height is effectively zero */}
 				<div className='top-6 mx-auto -mb-[4px] h-[4px] w-[40px] shrink-0 rounded-full bg-white/10' />

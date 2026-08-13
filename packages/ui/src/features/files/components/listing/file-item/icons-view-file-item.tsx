@@ -35,8 +35,8 @@ export const IconsViewFileItem = ({
 
 	return (
 		<div
-			// w-28 is 112px and corresponds to the fixed width of the icons view item
-			className='relative flex h-full w-28 flex-col items-center gap-1 overflow-hidden p-2 text-center break-all text-ellipsis'
+			// 100px (w-25) below lg / 112px (w-28) at lg+ — must match getGridItemWidth()
+			className='relative flex h-full w-25 flex-col items-center gap-1 overflow-hidden p-2 text-center break-all text-ellipsis lg:w-28'
 			onMouseEnter={() => setIsHovered(true)}
 			onMouseLeave={() => setIsHovered(false)}
 		>
@@ -74,7 +74,7 @@ export const IconsViewFileItem = ({
 			</div>
 
 			{!!isUploading && (
-				<div className='absolute inset-0 rounded-lg bg-black/35'>
+				<div className='absolute inset-0 rounded-12 bg-black/35'>
 					<CircularProgress progress={uploadingProgress} />
 				</div>
 			)}

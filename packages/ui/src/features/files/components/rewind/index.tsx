@@ -49,7 +49,7 @@ export function SidebarRewind() {
 			<div
 				className={cn(
 					'flex w-full items-center gap-1.5 rounded-lg border border-transparent from-white/[0.04] to-white/[0.08] text-12',
-					'text-white/60 transition-colors hover:bg-white/10 hover:bg-linear-to-b hover:text-white',
+					'text-white/60 hover:bg-white/10 hover:bg-linear-to-b hover:text-white',
 				)}
 			>
 				<button className='flex w-full items-center gap-[0.45rem] px-2 py-1.5' onClick={() => setRepoOpen(true)}>

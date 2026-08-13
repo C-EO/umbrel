@@ -87,6 +87,6 @@ describe('FileUploadDropZone', () => {
 		await act(() => mocks.onDrop!([new File(['report'], 'report.txt')]))
 
 		expect(mocks.startUpload).not.toHaveBeenCalled()
-		expect(mocks.toastError).toHaveBeenCalledWith('files-error.upload')
+		expect(mocks.toastError).toHaveBeenCalledWith('files-error.upload', {area: 'files'})
 	})
 })

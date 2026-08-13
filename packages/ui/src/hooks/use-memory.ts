@@ -105,5 +105,6 @@ export function useMemoryForUi(options: {poll?: boolean} = {}) {
 			.toNumber(),
 		isMemoryLow,
 		apps,
+		size,
 	} as const
 }

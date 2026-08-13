@@ -28,7 +28,7 @@ export function useSoftwareUpdate() {
 				throw new Error(t('software-update.failed-to-check'))
 			}
 		} catch {
-			toast.error(t('software-update.failed-to-check'))
+			toast.error(t('software-update.failed-to-check'), {area: 'umbrelos'})
 		}
 	}, [utils.system.checkUpdate])
 

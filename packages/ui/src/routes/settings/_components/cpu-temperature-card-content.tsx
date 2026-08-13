@@ -10,8 +10,9 @@ import {
 	DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {temperatureDescriptionsKeyed, TemperatureUnit, useTemperatureUnit} from '@/hooks/use-temperature-unit'
+import {cn} from '@/lib/utils'
 import {isCpuTooHot} from '@/utils/system'
-import {celciusToFahrenheit, temperatureWarningToMessage} from '@/utils/temperature'
+import {celciusToFahrenheit, formatTemperature, temperatureWarningToMessage} from '@/utils/temperature'
 
 import {cardErrorClass} from './shared'
 
@@ -35,11 +36,20 @@ export function CpuTemperatureCardContent({
 
 	const isUnknown = temperatureNumber === undefined
 
+	const scaleMinCelcius = 35
+	const scaleMaxCelcius = 100
 	const indicatorPosition =
-		temperatureInCelcius === undefined ? undefined : Math.max(5, Math.min(95, ((temperatureInCelcius - 35) / 65) * 100))
+		temperatureInCelcius === undefined
+			? undefined
+			: Math.max(
+					5,
+					Math.min(95, ((temperatureInCelcius - scaleMinCelcius) / (scaleMaxCelcius - scaleMinCelcius)) * 100),
+				)
 
 	const compactValue = (
 		<span className='-mr-2 flex shrink-0 items-center gap-1 font-medium'>
+			<span className='text-white/45'>{temperatureMessage}</span>
+			<span className='text-white/30'>•</span>
 			<DropdownMenu>
 				<DropdownMenuTrigger asChild>
 					<button
@@ -65,12 +75,11 @@ export function CpuTemperatureCardContent({
 					</DropdownMenuCheckboxItem>
 				</DropdownMenuContent>
 			</DropdownMenu>
-			<span className='text-white/45'>{temperatureMessage}</span>
 		</span>
 	)
 
 	return (
-		<div className='flex flex-col gap-3'>
+		<div className={cn('flex flex-col', headerIcon ? 'gap-3' : 'gap-4')}>
 			{headerIcon ? (
 				<>
 					<div className='flex min-w-0 items-start justify-between gap-3 text-13 -tracking-2'>
@@ -100,6 +109,13 @@ export function CpuTemperatureCardContent({
 						borderColor: 'hsl(var(--settings-tone-temperature-border))',
 					}}
 				/>
+				<div
+					aria-hidden='true'
+					className='pointer-events-none absolute inset-x-0 bottom-full -mb-[3px] text-11 -tracking-2 text-white/30 opacity-0 transition-opacity duration-200 group-hover/temperature-card:opacity-100 motion-reduce:transition-none'
+				>
+					<span className='absolute bottom-0 left-0 -translate-x-1/2'>{formatTemperature(scaleMinCelcius, unit)}</span>
+					<span className='absolute right-0 bottom-0 translate-x-1/2'>{formatTemperature(scaleMaxCelcius, unit)}</span>
+				</div>
 			</div>
 			{isCpuTooHot(warning) && <span className={cardErrorClass}>{t('temperature.too-hot-suggestion')}</span>}
 		</div>

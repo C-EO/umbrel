@@ -21,7 +21,7 @@ export function ActionsBar() {
 	const showSortUi = isEmbedded || !isReadOnly
 
 	return (
-		<nav className={cn('flex h-8 w-full min-w-0 gap-3', !isEmbedded && 'lg:-mt-14')} aria-label='File browser actions'>
+		<nav className={cn('flex h-8 w-full min-w-0 gap-3', !isEmbedded && 'lg:-mt-11')} aria-label='File browser actions'>
 			{/* Left side: Navigation and Path */}
 			<div className='flex min-w-0 flex-1 items-center gap-2 overflow-hidden'>
 				<NavigationControls />

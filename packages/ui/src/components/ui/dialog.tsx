@@ -11,6 +11,7 @@ import {
 	dialogContentClass,
 	dialogFooterClass,
 	dialogOverlayClass,
+	preventDialogDismissForToasts,
 } from './shared/dialog'
 
 const Dialog = DialogPrimitive.Root
@@ -34,6 +35,7 @@ function DialogContent({
 	className,
 	children,
 	slide = true,
+	onPointerDownOutside,
 	ref,
 	...props
 }: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {slide?: boolean} & {
@@ -52,6 +54,12 @@ function DialogContent({
 					className,
 				)}
 				{...props}
+				// Compose after the spread so a caller's handler adds to the toast
+				// guard instead of replacing it
+				onPointerDownOutside={(event) => {
+					preventDialogDismissForToasts(event)
+					onPointerDownOutside?.(event)
+				}}
 			>
 				{children}
 				{/* <DialogPrimitive.Close className="absolute right-4 top-4 rounded-xs opacity-70 ring-offset-white transition-opacity hover:opacity-100 focus:outline-hidden focus:ring-2 focus:ring-neutral-950 focus:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-neutral-100 data-[state=open]:text-neutral-500 dark:ring-offset-neutral-950 dark:focus:ring-neutral-300 dark:data-[state=open]:bg-neutral-800 dark:data-[state=open]:text-neutral-400">

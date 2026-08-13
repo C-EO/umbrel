@@ -13,10 +13,11 @@ import {useFilesKeyboardShortcuts} from '@/features/files/hooks/use-files-keyboa
 import {useIsTouchDevice} from '@/features/files/hooks/use-is-touch-device'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {usePreferences} from '@/features/files/hooks/use-preferences'
-import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
+import {useIsFilesEmbedded, useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
+import {cn} from '@/lib/utils'
 import {formatNumberI18n} from '@/utils/number'
 
 export interface ListingProps {
@@ -61,7 +62,7 @@ function ListingContent({
 	const {t, i18n} = useTranslation()
 	const selectedItems = useFilesStore((s) => s.selectedItems)
 	return (
-		<Card className='h-[calc(100svh-214px)] !p-0 !pt-4 lg:h-[calc(100vh-300px)]'>
+		<Card className='relative min-h-0 flex-1 rounded-24 bg-white/4 !p-0 !pt-4'>
 			{(() => {
 				if (isLoading) return <LoadingView />
 				if (error) return <ErrorView error={error} />
@@ -134,10 +135,21 @@ export function Listing({
 	useFilesKeyboardShortcuts({items: selectableItems, scrollAreaRef, view: preferences?.view ?? 'list'})
 
 	const isEmpty = !isLoading && items.length === 0
+	const isEmbedded = useIsFilesEmbedded()
 
 	const content = (
-		// Wrap in a flex column to ensure the context menu works
-		<div className='flex flex-col'>
+		// Wrap in a flex column to ensure the context menu works. The column carries the
+		// listing height budget so a top banner shrinks the card instead of pushing it
+		// below the dock. The embedded (Rewind) explorer keeps the original height so
+		// snapshots render unchanged.
+		<div
+			className={cn(
+				'flex flex-col',
+				isEmbedded
+					? 'h-[calc(100svh-214px)] lg:h-[calc(100vh-300px)]'
+					: 'h-[calc(100svh-209px)] lg:h-[calc(100vh-262px)]',
+			)}
+		>
 			{topBanner}
 			<ListingContent
 				items={items}

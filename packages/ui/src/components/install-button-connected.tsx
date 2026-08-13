@@ -103,7 +103,7 @@ export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: Reac
 
 	const install = () => {
 		if (isMember) {
-			toast(t('app-store.ask-owner-to-install'))
+			toast(t('app-store.ask-owner-to-install'), {area: 'app-store'})
 			return
 		}
 		if (!compatible) {

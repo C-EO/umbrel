@@ -101,7 +101,7 @@ export function HttpsCertificateSettingsPanel({onBack}: {onBack: () => void}) {
 			await invalidate()
 		} catch (error) {
 			const message = error instanceof Error ? error.message : t('unknown-error')
-			toast.error(t('https-access-reset-error', {message}))
+			toast.error(t('https-access-reset-error', {message}), {area: 'settings'})
 		}
 	}
 

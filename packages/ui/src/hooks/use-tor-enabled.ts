@@ -15,7 +15,7 @@ export function useTorEnabled({onSuccess}: {onSuccess?: (enabled: boolean) => vo
 			onSuccess?.(enabled)
 		},
 		onError: (err) => {
-			toast.error(t('tor-error', {message: err.message}))
+			toast.error(t('tor-error', {message: err.message}), {area: 'settings'})
 		},
 	})
 

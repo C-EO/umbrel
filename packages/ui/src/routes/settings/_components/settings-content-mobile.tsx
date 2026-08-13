@@ -1,4 +1,5 @@
 import {ChevronRight} from 'lucide-react'
+import {motion, useReducedMotion} from 'motion/react'
 import {ComponentType, Fragment, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {PiCircuitryBold, PiHardDriveFill, PiPulseBold, PiThermometerSimpleBold} from 'react-icons/pi'
@@ -234,21 +235,27 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 			{!isMember && (
 				<div className='grid grid-cols-2 gap-2.5'>
 					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', tab: 'storage'})}}>
-						<Card className={statCardClass}>
-							<StorageCardContent headerIcon={<MobileStatIcon icon={PiHardDriveFill} />} />
-						</Card>
+						<MobileStatCardTap>
+							<Card className={statCardClass}>
+								<StorageCardContent headerIcon={<MobileStatIcon icon={PiHardDriveFill} />} />
+							</Card>
+						</MobileStatCardTap>
 					</Link>
 					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', tab: 'memory'})}}>
-						<Card id={SETTINGS_SYSTEM_CARDS_ID} className={statCardClass}>
-							<MemoryCardContent headerIcon={<MobileStatIcon icon={PiCircuitryBold} />} />
-						</Card>
+						<MobileStatCardTap>
+							<Card id={SETTINGS_SYSTEM_CARDS_ID} className={statCardClass}>
+								<MemoryCardContent headerIcon={<MobileStatIcon icon={PiCircuitryBold} />} />
+							</Card>
+						</MobileStatCardTap>
 					</Link>
 					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', tab: 'cpu'})}}>
-						<Card className={statCardClass}>
-							<CpuCardContent headerIcon={<MobileStatIcon icon={PiPulseBold} />} />
-						</Card>
+						<MobileStatCardTap>
+							<Card className={statCardClass}>
+								<CpuCardContent headerIcon={<MobileStatIcon icon={PiPulseBold} />} />
+							</Card>
+						</MobileStatCardTap>
 					</Link>
-					<Card className={statCardClass}>
+					<Card className={cn('group/temperature-card', statCardClass)}>
 						<CpuTemperatureCardContent
 							headerIcon={<MobileStatIcon icon={PiThermometerSimpleBold} />}
 							warning={cpuTemperature.warning}
@@ -301,6 +308,20 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 
 function MobileChevron() {
 	return <ChevronRight className='size-4 text-white/45' aria-hidden='true' />
+}
+
+// Tap-only feedback: hover states stick on touch, so no whileHover here
+function MobileStatCardTap({children}: {children: ReactNode}) {
+	const reduceMotion = Boolean(useReducedMotion())
+	return (
+		<motion.div
+			className='h-full will-change-transform'
+			whileTap={reduceMotion ? undefined : {scale: 0.96}}
+			transition={{type: 'spring', duration: 0.2, bounce: 0.15}}
+		>
+			{children}
+		</motion.div>
+	)
 }
 
 function MobileStatIcon({icon: Icon}: {icon: ComponentType<{className?: string}>}) {

@@ -1,6 +1,15 @@
 import {useCommandState} from 'cmdk'
 import {TFunction} from 'i18next'
-import {ComponentPropsWithoutRef, createContext, SetStateAction, useContext, useEffect, useRef, useState} from 'react'
+import {
+	ComponentPropsWithoutRef,
+	createContext,
+	SetStateAction,
+	useContext,
+	useEffect,
+	useLayoutEffect,
+	useRef,
+	useState,
+} from 'react'
 import {ErrorBoundary} from 'react-error-boundary'
 import {useTranslation} from 'react-i18next'
 import {useNavigate} from 'react-router-dom'
@@ -17,6 +26,7 @@ import {
 	RECENTS_PATH as FILES_RECENTS_PATH,
 	TRASH_PATH as FILES_TRASH_PATH,
 } from '@/features/files/constants'
+import {getLastFilesPath} from '@/features/files/utils/last-files-path'
 import {useDebugInstallRandomApps} from '@/hooks/use-debug-install-random-apps'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useLaunchApp} from '@/hooks/use-launch-app'
@@ -89,6 +99,13 @@ function CmdkContent() {
 	// The current search query from the command input. We pass this down to all
 	// external search providers so they can surface their own results.
 	const searchQuery = useCommandState((state) => state.search)
+
+	// cmdk only auto-scrolls when the selected value changes, which no-ops while
+	// typing keeps the same best match, so the list can stay stuck mid-scroll.
+	// Reset before paint on every query change so results always start from the top.
+	useLayoutEffect(() => {
+		scrollRef.current?.scrollTo({top: 0})
+	}, [searchQuery])
 	const userQ = trpcReact.user.get.useQuery()
 	const launchApp = useLaunchApp()
 	const debugInstallRandomApps = useDebugInstallRandomApps()
@@ -177,7 +194,7 @@ function CmdkContent() {
 					// We need a better approach to track the last visited path (possibly scroll position too?)
 					// inside every page. We do this right now for the File app because it's has the most
 					// UX-advantage (eg. user accidentally clicking close while they're in a deeply nested path)
-					const lastFilesPath = sessionStorage.getItem('lastFilesPath')
+					const lastFilesPath = getLastFilesPath(userQ.data?.userId)
 
 					navigate(lastFilesPath || systemAppsKeyed['UMBREL_files'].systemAppTo)
 					setOpen(false)

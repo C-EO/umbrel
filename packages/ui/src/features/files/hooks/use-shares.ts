@@ -58,7 +58,7 @@ export function useShares() {
 			await utils.files.shares.invalidate()
 		},
 		onError: (error: RouterError) => {
-			toast.error(t('files-error.add-share', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.add-share', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 	})
 
@@ -68,7 +68,7 @@ export function useShares() {
 			await utils.files.shares.invalidate()
 		},
 		onError: (error: RouterError) => {
-			toast.error(t('files-error.remove-share', {message: getFilesErrorMessage(error.message)}))
+			toast.error(t('files-error.remove-share', {message: getFilesErrorMessage(error.message)}), {area: 'files'})
 		},
 	})
 
