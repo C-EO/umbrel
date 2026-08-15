@@ -1,0 +1,65 @@
+#!/bin/sh
+
+PREREQ=""
+
+prereqs() {
+	echo "${PREREQ}"
+}
+
+case "${1:-}" in
+	prereqs)
+		prereqs
+		exit 0
+		;;
+esac
+
+proc_root="${PROC_ROOT:-/proc}"
+
+mem_total_kib=""
+while read -r field value unit; do
+	if [ "${field}" = "MemTotal:" ] && [ "${unit}" = "kB" ]; then
+		mem_total_kib="${value}"
+		break
+	fi
+done < "${proc_root}/meminfo"
+
+page_size_kib=""
+while read -r field value unit; do
+	if [ "${field}" = "KernelPageSize:" ] && [ "${unit}" = "kB" ]; then
+		page_size_kib="${value}"
+		break
+	fi
+done < "${proc_root}/self/smaps"
+
+case "${mem_total_kib}" in
+	""|*[!0-9]*) exit 0 ;;
+esac
+case "${page_size_kib}" in
+	""|*[!0-9]*) exit 0 ;;
+esac
+[ "${mem_total_kib}" -gt 0 ] && [ "${page_size_kib}" -gt 0 ] || exit 0
+
+# TTM defaults to limiting GPU-backed system-memory allocations to half of
+# RAM. Keep that conservative default on smaller systems, but on larger systems
+# make all but 16 GiB available so large AI models can use otherwise inaccessible
+# GPU-accessible memory. This raises a ceiling; it does not reserve or allocate
+# RAM.
+total_pages=$((mem_total_kib / page_size_kib))
+reserve_pages=$((16777216 / page_size_kib))
+kernel_default_pages=$((total_pages / 2))
+pages_limit=$((total_pages - reserve_pages))
+
+[ "${pages_limit}" -gt "${kernel_default_pages}" ] || exit 0
+
+run_root="${RUN_ROOT:-/run}"
+mkdir -p "${run_root}/modprobe.d"
+printf 'options ttm pages_limit=%s\n' "${pages_limit}" \
+	> "${run_root}/modprobe.d/umbrel-ttm-memory-limit.conf"
+
+# Normally TTM is loaded later from the real root and consumes the modprobe
+# option above. Also update the live parameter in case a future initramfs loads
+# TTM before this script runs.
+ttm_pages_limit="${SYSFS_ROOT:-/sys}/module/ttm/parameters/pages_limit"
+if [ -w "${ttm_pages_limit}" ]; then
+	printf '%s\n' "${pages_limit}" > "${ttm_pages_limit}"
+fi
