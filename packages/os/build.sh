@@ -19,6 +19,15 @@ mender_artifact() {
     docker run --rm -v "$(pwd):/data" umbrelos:builder /usr/bin/mender-artifact "$@"
 }
 
+# Check whether the host can already run both build architectures without QEMU.
+# amd64 emulation only counts as working if the container sees SSSE3 in
+# /proc/cpuinfo: Rosetta and native hosts do, QEMU user-mode emulation doesn't
+# (and Homebrew hard-fails on exactly that check during the amd64 root fs build).
+host_emulation_is_good() {
+    docker run --rm --platform linux/amd64 alpine grep -q ssse3 /proc/cpuinfo > /dev/null 2>&1 \
+        && docker run --rm --platform linux/arm64 alpine true > /dev/null 2>&1
+}
+
 # Run a command with sudo only in GitHub Actions
 # These commands fail in GHA without sudo but they aren't needed locally and it's
 # annoying for the script to get blocked and be prompted.
@@ -86,8 +95,14 @@ function main() {
     fi
 
     # Enable QEMU/binfmt-based multi-platform support for building arm64 on
-    # amd64 or vice versa, e.g., to build for Pi 5 on an x86 system.
-    docker run --privileged --rm tonistiigi/binfmt --install all
+    # amd64 or vice versa, e.g., to build for Pi 5 on an x86 system. Skipped when
+    # the host already runs both architectures well, since installing the QEMU
+    # handlers would replace Rosetta on Apple Silicon (OrbStack/Docker Desktop),
+    # which is faster than QEMU and, unlike it, exposes the x86 CPU flags that
+    # Homebrew requires (we probe with the same SSSE3 check Homebrew performs).
+    if ! host_emulation_is_good; then
+        docker run --privileged --rm tonistiigi/binfmt --install all
+    fi
 
     if [ -z "${SKIP_ROOTS:-}" ]; then
         if [ -z "${SKIP_PI:-}" ]; then
