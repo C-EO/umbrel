@@ -7,6 +7,7 @@ import type {FileChangeEvent} from '../files/watcher.js'
 import type {OperationsInProgress} from '../files/files.js'
 import type {BackupsInProgress, RestoreStatus} from '../backups/backups.js'
 import type {ExpansionStatus, FailsafeTransitionStatus, RebuildStatus, ReplaceStatus} from '../hardware/raid.js'
+import type {Machine, OsImage} from '../machines/machines.js'
 
 // Type assertion to ensure all events in EventTypes are defined in events
 type MissingInEvents = Exclude<keyof EventTypes, (typeof events)[number]>
@@ -32,6 +33,8 @@ export const events = [
 	'raid:failsafe-transition-progress',
 	'raid:rebuild-progress',
 	'raid:replace-progress',
+	'machines:updated',
+	'machines:os-images-updated',
 	'raid:status-change',
 ] as const satisfies readonly (keyof EventTypes)[]
 
@@ -74,6 +77,12 @@ export type EventTypes = {
 	'raid:rebuild-progress': RebuildStatus
 	// Fires when RAID replace progress changes
 	'raid:replace-progress': ReplaceStatus
+	// Fires with a full snapshot of all virtual machines whenever any machine
+	// changes (state transitions, install progress, settings, pinning)
+	'machines:updated': Machine[]
+	// Fires with a full snapshot of all OS images whenever any image changes
+	// (download progress, download completion, custom ISO registration)
+	'machines:os-images-updated': OsImage[]
 	// Fires when the RAID pool's user-visible state changes: pool status, data or
 	// accelerator membership, per-member status, raid type or topology
 	'raid:status-change': undefined

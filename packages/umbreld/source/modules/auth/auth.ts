@@ -23,7 +23,7 @@ const APP_HANDOFF_DURATION = 30 * ONE_SECOND
 
 export type CredentialAudience = 'dashboard' | 'app-gateway' | 'browser-session' | 'http-api-token'
 export type HttpApiScope = 'file-download' | 'file-view' | 'file-thumbnail' | 'logs-download' | 'ca-download'
-export type WebSocketTarget = 'trpc' | 'terminal'
+export type WebSocketTarget = 'trpc' | 'terminal' | 'machines'
 
 export type Principal = {
 	sessionId: string
@@ -509,6 +509,11 @@ export default class Auth {
 	}
 
 	registerWebSocket(principal: Principal, socket: WebSocket) {
+		// ws emits protocol failures on the individual connection. EventEmitter
+		// treats an unhandled 'error' event as an uncaught exception, so every
+		// accepted or rejected WebSocket must have containment in place
+		// before authentication can terminate it.
+		socket.on('error', (error) => this.#umbreld.logger.error('WebSocket connection error', error))
 		if (!this.#isPrincipalActive(principal)) {
 			socket.terminate()
 			return false

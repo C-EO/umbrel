@@ -344,12 +344,18 @@ export default async function createTestUmbreld({
 export async function createTestVm({
 	device,
 	bootDisk,
+	image,
+	memory,
+	cores,
 	forwardPorts = [],
 	startupTimeout = 300_000,
 	stateDirectoryName,
 }: {
 	device?: 'umbrel-pro' | 'umbrel-home' | 'nas' | 'pi'
 	bootDisk?: 'default' | 'emmc' | 'nvme' | 'usb' | 'sdcard' | 'none'
+	image?: string
+	memory?: number
+	cores?: number
 	forwardPorts?: Array<{hostPort: number; guestPort: number}>
 	startupTimeout?: number
 	stateDirectoryName?: string
@@ -409,6 +415,9 @@ export async function createTestVm({
 
 		const deviceArgs = device ? ['--device', device] : []
 		const bootDiskArgs = bootDisk ? ['--boot-disk', bootDisk] : []
+		const imageArgs = image ? [image] : []
+		const memoryArgs = memory ? ['--memory', String(memory)] : []
+		const coreArgs = cores ? ['--cores', String(cores)] : []
 		const cdromArgs = cdrom ? ['--cdrom', cdrom] : []
 		const bootNvmeSlotArgs = bootNvmeSlot ? ['--boot-nvme-slot', String(bootNvmeSlot)] : []
 		const forwardPortArgs = forwardPorts.flatMap(({hostPort, guestPort}) => [
@@ -418,7 +427,7 @@ export async function createTestVm({
 		const vmProcess = $({
 			env,
 			detached: true,
-		})`${vmScript} boot ${deviceArgs} ${bootDiskArgs} ${cdromArgs} ${bootNvmeSlotArgs} ${forwardPortArgs} --ssh-port ${sshPort} --http-port ${httpPort}`
+		})`${vmScript} boot ${imageArgs} ${deviceArgs} ${bootDiskArgs} ${memoryArgs} ${coreArgs} ${cdromArgs} ${bootNvmeSlotArgs} ${forwardPortArgs} --ssh-port ${sshPort} --http-port ${httpPort}`
 		vmProcessPid = vmProcess.pid
 
 		// Capture output and track if process exits
@@ -525,6 +534,22 @@ export async function createTestVm({
 			}
 		}
 		throw new Error('Failed to kill VM process')
+	}
+
+	async function forcePowerOff() {
+		if (!vmProcessPid) return
+		const pid = vmProcessPid
+		if (process.platform === 'linux') {
+			// vm.sh launches QEMU through sudo on Linux. Signalling the process
+			// group as the test user can report success after killing only the
+			// unprivileged wrapper, leaving the root-owned QEMU process alive. That
+			// is not a power cut, so always signal the complete group through sudo.
+			await $`sudo kill -KILL -- ${-pid}`
+		} else {
+			process.kill(-pid, 'SIGKILL')
+		}
+		await pWaitFor(() => !isRunning(), {interval: 100, timeout: 10_000})
+		vmProcessPid = undefined
 	}
 
 	async function addNvme({slot, size}: {slot: number; size?: string}) {
@@ -734,6 +759,7 @@ printf '\\n${authFailureMarker}\\n'
 		waitForShutdown,
 		powerOn,
 		powerOff,
+		forcePowerOff,
 		addNvme,
 		removeNvme,
 		disconnectNvme,

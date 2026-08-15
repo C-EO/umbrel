@@ -2,6 +2,8 @@ import {motion, Variant} from 'motion/react'
 import {useMemo} from 'react'
 import {useLocation} from 'react-router-dom'
 
+import {useMachines, useMachinesLiveUpdates} from '@/features/machines/hooks/use-machines'
+import type {Machine} from '@/features/machines/types'
 import {useShortcuts, type Shortcut} from '@/hooks/use-shortcuts'
 import {useWidgets} from '@/hooks/use-widgets'
 import {Widget} from '@/modules/widgets'
@@ -15,6 +17,7 @@ import {AppIconConnected, AppLabel} from './app-icon'
 import {Search} from './desktop-misc'
 import {DockSpacer} from './dock'
 import {Header} from './header'
+import {MachineIcon} from './machine-icon'
 import {ShortcutIcon} from './shortcut-icon'
 
 export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
@@ -27,8 +30,18 @@ export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
 	const widgets = useWidgets()
 	const {shortcuts} = useShortcuts()
 
-	// Merge apps and shortcuts into a single alphabetically sorted list
-	type GridItem = {type: 'app'; id: string; name: string} | {type: 'shortcut'; shortcut: Shortcut}
+	// Machines pinned to the homescreen from the Machines feature. Mount the live
+	// updates here (not just inside the Machines overlay) so pinned icons and
+	// their context menus reflect state changes while the desktop is showing.
+	useMachinesLiveUpdates()
+	const {machines} = useMachines()
+	const pinnedMachines = useMemo(() => machines.filter((machine) => machine.pinned), [machines])
+
+	// Merge apps, shortcuts and pinned machines into a single alphabetically sorted list
+	type GridItem =
+		| {type: 'app'; id: string; name: string}
+		| {type: 'shortcut'; shortcut: Shortcut}
+		| {type: 'machine'; machine: Machine}
 
 	const gridItems = useMemo(() => {
 		const items: GridItem[] = []
@@ -45,14 +58,19 @@ export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
 			}
 		}
 
-		items.sort((a, b) => {
-			const nameA = a.type === 'app' ? a.name : a.shortcut.title
-			const nameB = b.type === 'app' ? b.name : b.shortcut.title
-			return nameA.localeCompare(nameB)
-		})
+		for (const machine of pinnedMachines) {
+			items.push({type: 'machine', machine})
+		}
+
+		const itemName = (item: GridItem) => {
+			if (item.type === 'app') return item.name
+			if (item.type === 'shortcut') return item.shortcut.title
+			return item.machine.name
+		}
+		items.sort((a, b) => itemName(a).localeCompare(itemName(b)))
 
 		return items
-	}, [userApps, shortcuts])
+	}, [userApps, shortcuts, pinnedMachines])
 
 	if (isLoading || widgets.isLoading) return null
 	if (!userApps) return null
@@ -119,7 +137,7 @@ export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
 						))}
 						apps={gridItems.map((item, i) => (
 							<motion.div
-								key={item.type === 'app' ? item.id : item.shortcut.url}
+								key={item.type === 'app' ? item.id : item.type === 'shortcut' ? item.shortcut.url : item.machine.id}
 								layout
 								initial={{
 									opacity: 0,
@@ -139,7 +157,13 @@ export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
 									ease: 'easeOut',
 								}}
 							>
-								{item.type === 'app' ? <AppIconConnected appId={item.id} /> : <ShortcutIcon shortcut={item.shortcut} />}
+								{item.type === 'app' ? (
+									<AppIconConnected appId={item.id} />
+								) : item.type === 'shortcut' ? (
+									<ShortcutIcon shortcut={item.shortcut} />
+								) : (
+									<MachineIcon machine={item.machine} />
+								)}
 							</motion.div>
 						))}
 					/>

@@ -85,7 +85,7 @@ type Trashmeta = {
 	path: string
 }
 
-type BaseDirectory = '/Home' | '/Trash' | '/Apps' | '/External' | '/Backups' | '/Network'
+type BaseDirectory = '/Home' | '/Trash' | '/Apps' | '/Machines' | '/External' | '/Backups' | '/Network'
 
 export type ViewPreferences = {
 	view: 'icons' | 'list'
@@ -150,12 +150,13 @@ export default class Files {
 			['/Home', `${umbreld.dataDirectory}/home`],
 			['/Trash', `${umbreld.dataDirectory}/trash`],
 			['/Apps', `${umbreld.dataDirectory}/app-data`],
+			['/Machines', `${umbreld.dataDirectory}/machines`],
 			['/External', `${umbreld.dataDirectory}/external`],
 			['/Backups', `${umbreld.dataDirectory}/backups`],
 			['/Network', `${umbreld.dataDirectory}/network`],
 		])
 
-		this.watcher = new Watcher(umbreld, {paths: ['/Home', '/Trash', '/Apps']})
+		this.watcher = new Watcher(umbreld, {paths: ['/Home', '/Trash', '/Apps', '/Machines']})
 		this.recents = new Recents(umbreld, {paths: ['/Home']})
 		this.favorites = new Favorites(umbreld)
 		this.archive = new Archive(umbreld)
@@ -1247,6 +1248,16 @@ export default class Files {
 			isProtected = await this.#umbreld.apps.isInstalled(appId)
 		}
 
+		// Every descendant of an installed machine directory is canonical runtime
+		// state. Expose it read-only for inspection/copying; lifecycle changes must
+		// go through Machines so disks, firmware and definitions cannot be moved or
+		// replaced underneath a running guest. Orphaned directories remain mutable.
+		const machinePath = /^\/Machines\/([^/]+)(?:\/.*)?$/.exec(rulePath)
+		if (machinePath && (await this.#umbreld.machines.exists(machinePath[1]))) {
+			isProtected = true
+			operations.delete('writable')
+		}
+
 		if (isProtected) {
 			operations.delete('move')
 			operations.delete('rename')
@@ -1258,6 +1269,8 @@ export default class Files {
 		const isUnshareable = match(rulePath, [
 			'/Apps',
 			'/Apps/*',
+			'/Machines',
+			'/Machines/**',
 			'/External',
 			'/Network',
 			'/Network/**',

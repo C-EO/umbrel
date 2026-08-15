@@ -6,6 +6,7 @@ import {EditableName} from '@/features/files/components/listing/file-item/editab
 import {TruncatedFilename} from '@/features/files/components/listing/file-item/truncated-filename'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
 import {useIsTouchDevice} from '@/features/files/hooks/use-is-touch-device'
+import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
 import type {FileSystemItem} from '@/features/files/types'
 import {formatFilesystemSize} from '@/features/files/utils/format-filesystem-size'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
@@ -27,6 +28,8 @@ export const IconsViewFileItem = ({
 	fadedContent,
 }: IconsViewFileItemProps) => {
 	const {t} = useTranslation()
+	const {machine} = useMachineFolder(item.path)
+	const displayName = machine?.name ?? item.name
 	const isUploading = 'isUploading' in item && item.isUploading
 	const uploadingProgress = isUploading && 'progress' in item ? item.progress : 0
 	const isTouchDevice = useIsTouchDevice()
@@ -47,11 +50,11 @@ export const IconsViewFileItem = ({
 				<FileItemIcon item={item} className='h-14 w-14' useAnimatedIcon={!isTouchDevice} isHovered={isHovered} />
 			</div>
 			<div className={cn('relative w-full flex-col items-center', fadedContent && 'opacity-50')}>
-				{isEditingName ? (
+				{isEditingName && !machine ? (
 					<EditableName item={item} view='icons' onFinish={onEditingNameComplete} />
 				) : (
 					<TruncatedFilename
-						filename={item.name}
+						filename={displayName}
 						view='icons'
 						className='mt-1 line-clamp-2 w-full text-center text-12 leading-tight'
 					/>

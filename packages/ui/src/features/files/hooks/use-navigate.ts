@@ -5,6 +5,7 @@ import {
 	BASE_ROUTE_PATH,
 	EXTERNAL_STORAGE_PATH,
 	HOME_PATH,
+	MACHINES_PATH,
 	NETWORK_STORAGE_PATH,
 	RECENTS_PATH,
 	SEARCH_PATH,
@@ -100,6 +101,7 @@ export const useNavigate = () => {
 	const isBrowsingRecents = currentPath.startsWith(RECENTS_PATH)
 
 	const isBrowsingApps = currentPath.startsWith(APPS_PATH)
+	const isBrowsingMachines = currentPath.startsWith(MACHINES_PATH)
 
 	const isBrowsingSearch = currentPath.startsWith(SEARCH_PATH)
 
@@ -131,6 +133,7 @@ export const useNavigate = () => {
 		isBrowsingHome,
 		isBrowsingRecents,
 		isBrowsingApps,
+		isBrowsingMachines,
 		isBrowsingSearch,
 		isBrowsingExternalStorage,
 		isViewingExternalDrives,

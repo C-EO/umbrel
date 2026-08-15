@@ -52,6 +52,13 @@ export const systemApps = [
 		systemAppTo: '/settings',
 	},
 	{
+		id: 'UMBREL_machines',
+		name: 'Machines',
+		icon: '/assets/dock/dock-machines.png',
+		systemApp: true,
+		systemAppTo: '/machines',
+	},
+	{
 		id: 'UMBREL_live-usage',
 		name: 'Live Usage',
 		icon: '/assets/dock/dock-live-usage.png',

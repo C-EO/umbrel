@@ -27,6 +27,7 @@ import {
 	TRASH_PATH as FILES_TRASH_PATH,
 } from '@/features/files/constants'
 import {getLastFilesPath} from '@/features/files/utils/last-files-path'
+import {MACHINES_ADD_PATH} from '@/features/machines/constants'
 import {useDebugInstallRandomApps} from '@/hooks/use-debug-install-random-apps'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useLaunchApp} from '@/hooks/use-launch-app'
@@ -107,6 +108,7 @@ function CmdkContent() {
 		scrollRef.current?.scrollTo({top: 0})
 	}, [searchQuery])
 	const userQ = trpcReact.user.get.useQuery()
+	const isMember = userQ.data?.role === 'member'
 	const launchApp = useLaunchApp()
 	const debugInstallRandomApps = useDebugInstallRandomApps()
 	const {shortcuts} = useShortcuts()
@@ -157,6 +159,30 @@ function CmdkContent() {
 			>
 				{t('cmdk.widgets')}
 			</CommandItem>
+			{!isMember && (
+				<>
+					<CommandItem
+						icon={systemAppsKeyed['UMBREL_machines'].icon}
+						value={systemAppsKeyed['UMBREL_machines'].name}
+						onSelect={() => {
+							navigate(systemAppsKeyed['UMBREL_machines'].systemAppTo)
+							setOpen(false)
+						}}
+					>
+						{systemAppsKeyed['UMBREL_machines'].name}
+					</CommandItem>
+					<CommandItem
+						icon={systemAppsKeyed['UMBREL_machines'].icon}
+						value={t('machines.create-virtual-machine')}
+						onSelect={() => {
+							navigate(MACHINES_ADD_PATH)
+							setOpen(false)
+						}}
+					>
+						{t('machines.create-virtual-machine')}
+					</CommandItem>
+				</>
+			)}
 			<CommandItem
 				icon={systemAppsKeyed['UMBREL_home'].icon}
 				onSelect={() => {

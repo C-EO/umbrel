@@ -75,19 +75,27 @@ export async function getSystemDiskUsage(
 	return await getDiskUsageByPath(umbreld.dataDirectory)
 }
 
-export async function getDiskUsage(
-	umbreld: Umbreld,
-): Promise<{size: number; totalUsed: number; system: number; files: number; apps: DiskUsage[]}> {
+export async function getDiskUsage(umbreld: Umbreld): Promise<{
+	size: number
+	totalUsed: number
+	system: number
+	files: number
+	apps: DiskUsage[]
+	machines: Array<{id: string; name: string; osId: string; used: number}>
+}> {
 	const {size, totalUsed} = await getSystemDiskUsage(umbreld)
 
-	// Get app disk usage
-	const apps = await Promise.all(
-		umbreld.apps.instances.map(async (app) => ({
-			id: app.id,
-			used: await app.getDiskUsage(),
-		})),
-	)
+	const [apps, machines] = await Promise.all([
+		Promise.all(
+			umbreld.apps.instances.map(async (app) => ({
+				id: app.id,
+				used: await app.getDiskUsage(),
+			})),
+		),
+		umbreld.machines.storageResourceUsage(),
+	])
 	const appsTotal = apps.reduce((total, app) => total + app.used, 0)
+	const machinesTotal = machines.reduce((total, machine) => total + machine.used, 0)
 
 	const filesTotalUsage = (
 		await Promise.all(
@@ -104,9 +112,10 @@ export async function getDiskUsage(
 	return {
 		size,
 		totalUsed,
-		system: Math.max(minSystemUsage, totalUsed - (appsTotal + filesTotalUsage)),
+		system: Math.max(minSystemUsage, totalUsed - (appsTotal + machinesTotal + filesTotalUsage)),
 		files: filesTotalUsage,
 		apps,
+		machines,
 	}
 }
 
@@ -233,6 +242,7 @@ export async function getMemoryUsage(umbreld: Umbreld): Promise<{
 	totalUsed: number
 	system: number
 	apps: MemoryUsage[]
+	machines: Array<{id: string; name: string; osId: string; used: number}>
 }> {
 	// Attribution model:
 	// - totalUsed: system-wide pressure-relevant used memory from MemAvailable
@@ -243,7 +253,11 @@ export async function getMemoryUsage(umbreld: Umbreld): Promise<{
 
 	// Read meminfo first so the measurment isn't affected by docker
 	const {size, totalUsed} = await getSystemMemoryFromMeminfo()
-	const [containerIds, zramRamFactor] = await Promise.all([getDockerContainerIds(), getZramRamFactor()])
+	const [containerIds, zramRamFactor, machineUsage] = await Promise.all([
+		getDockerContainerIds(),
+		getZramRamFactor(),
+		umbreld.machines.runtimeResourceUsage(),
+	])
 	const safeZramRamFactor = clampNonNegativeNumber(zramRamFactor)
 
 	const apps = await Promise.all(
@@ -279,13 +293,15 @@ export async function getMemoryUsage(umbreld: Umbreld): Promise<{
 
 	// Calculate memory used by the system (total - apps)
 	const appsTotal = clampByteCount(apps.reduce((total, app) => total + app.used, 0))
-	const system = clampByteCount(totalUsed - appsTotal, totalUsed)
+	const machinesTotal = clampByteCount(machineUsage.memory.reduce((total, machine) => total + machine.used, 0))
+	const system = clampByteCount(totalUsed - appsTotal - machinesTotal, totalUsed)
 
 	return {
 		size,
 		totalUsed,
 		system,
 		apps,
+		machines: machineUsage.memory,
 	}
 }
 
@@ -327,9 +343,10 @@ export async function getCpuUsage(umbreld: Umbreld): Promise<{
 	totalUsed: number
 	system: number
 	apps: CpuUsage[]
+	machines: Array<{id: string; name: string; osId: string; used: number}>
 }> {
-	// Get a snapshot of system CPU usage
-	const processes = await getProcessesCpu()
+	// Get snapshots close together so the residual system bucket stays useful.
+	const [processes, machineUsage] = await Promise.all([getProcessesCpu(), umbreld.machines.runtimeResourceUsage()])
 
 	// Calculate total CPU used by all processes
 	const totalUsed = processes.reduce((total, process) => total + process.cpu, 0)
@@ -355,7 +372,8 @@ export async function getCpuUsage(umbreld: Umbreld): Promise<{
 
 	// Calculate CPU used by the system (total - apps)
 	const appsTotal = apps.reduce((total, app) => total + app.used, 0)
-	const system = Math.max(0, totalUsed - appsTotal)
+	const machinesTotal = machineUsage.cpu.reduce((total, machine) => total + machine.used, 0)
+	const system = Math.max(0, totalUsed - appsTotal - machinesTotal)
 
 	// Get total CPU threads
 	const threads = os.cpus().length
@@ -365,6 +383,7 @@ export async function getCpuUsage(umbreld: Umbreld): Promise<{
 		totalUsed,
 		system,
 		apps,
+		machines: machineUsage.cpu,
 	}
 }
 

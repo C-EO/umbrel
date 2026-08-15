@@ -7,6 +7,7 @@ import {EditableName} from '@/features/files/components/listing/file-item/editab
 import {TruncatedFilename} from '@/features/files/components/listing/file-item/truncated-filename'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
 import {FILE_TYPE_MAP} from '@/features/files/constants'
+import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
 import type {FileSystemItem} from '@/features/files/types'
 import {formatFilesystemDate} from '@/features/files/utils/format-filesystem-date'
 import {formatFilesystemSize} from '@/features/files/utils/format-filesystem-size'
@@ -26,6 +27,8 @@ interface ListViewFileItemProps {
 
 export function ListViewFileItem({item, isEditingName, onEditingNameComplete, fadedContent}: ListViewFileItemProps) {
 	const {t} = useTranslation()
+	const {machine} = useMachineFolder(item.path)
+	const displayName = machine?.name ?? item.name
 	const isUploading = 'isUploading' in item && item.isUploading
 	const uploadingProgress = isUploading && 'progress' in item ? item.progress : 0
 
@@ -45,11 +48,11 @@ export function ListViewFileItem({item, isEditingName, onEditingNameComplete, fa
 				</div>
 				<div className={cn('flex flex-1 items-center justify-between overflow-hidden', fadedContent && 'opacity-50')}>
 					<div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
-						{isEditingName ? (
+						{isEditingName && !machine ? (
 							<EditableName item={item} view='list' onFinish={onEditingNameComplete} />
 						) : (
 							<TruncatedFilename
-								filename={item.name}
+								filename={displayName}
 								view='list'
 								className='min-w-0 overflow-hidden pr-2 text-12 text-ellipsis whitespace-nowrap'
 							/>
@@ -89,10 +92,10 @@ export function ListViewFileItem({item, isEditingName, onEditingNameComplete, fa
 						<FileItemIcon item={item} className='h-5 w-5' />
 					</div>
 					<div className={cn('min-w-0', fadedContent && 'opacity-50')}>
-						{isEditingName ? (
+						{isEditingName && !machine ? (
 							<EditableName item={item} view='list' onFinish={onEditingNameComplete} />
 						) : (
-							<TruncatedFilename filename={item.name} view='list' className='min-w-0 text-12' />
+							<TruncatedFilename filename={displayName} view='list' className='min-w-0 text-12' />
 						)}
 					</div>
 				</div>

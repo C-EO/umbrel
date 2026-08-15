@@ -36,6 +36,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 		currentPath,
 		uiPath,
 		isBrowsingApps,
+		isBrowsingMachines,
 		isBrowsingExternalStorage,
 		isViewingExternalDrives,
 		isViewingNetworkDevices,
@@ -231,7 +232,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 			desktopActions: DesktopActions,
 			mobileActions: MobileDropdownActions,
 			hidePath,
-			hideSearch: isBrowsingApps || isBrowsingExternalStorage || isBrowsingNetworkStorage, // hide search if browsing apps, external storage, or network
+			hideSearch: isBrowsingApps || isBrowsingMachines || isBrowsingExternalStorage || isBrowsingNetworkStorage,
 		})
 	}, [
 		disableActions,
@@ -239,6 +240,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 		isWritable,
 		hidePath,
 		isBrowsingApps,
+		isBrowsingMachines,
 		isBrowsingExternalStorage,
 		isViewingExternalDrives,
 		isViewingNetworkDevices,

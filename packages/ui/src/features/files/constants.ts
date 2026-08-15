@@ -29,6 +29,7 @@ export const BASE_ROUTE_PATH = '/files' as const
 export const HOME_PATH = '/Home' as const
 export const TRASH_PATH = '/Trash' as const
 export const APPS_PATH = '/Apps' as const
+export const MACHINES_PATH = '/Machines' as const
 export const EXTERNAL_STORAGE_PATH = '/External' as const
 export const NETWORK_STORAGE_PATH = '/Network' as const
 export const BACKUPS_PATH = '/Backups' as const

@@ -34,6 +34,17 @@ interface UploadingFileSystemItem extends FileSystemItem {
 	// progress, speed, etc. are already optional in FileSystemItem
 }
 
+// Record of a finished upload. Success is otherwise indistinguishable from
+// cancel/skip for consumers watching `uploadingItems` (the item just leaves the
+// list either way), so completions are recorded here. `collisionStrategy` is
+// 'keep-both' when the server stored the file under a new deduplicated name —
+// i.e. `path` is NOT where the file actually landed.
+export type UploadCompletion = {
+	path: string
+	collisionStrategy: 'error' | 'replace' | 'keep-both'
+	completedAt: number
+}
+
 // ---------------- Long-running filesystem operations ----------------
 // Copy and move currently (could be extended to other operations, such as archive and unarchive)
 // Used for the operations floating island, and the rewind restore progress dialog
@@ -48,6 +59,8 @@ interface GlobalFilesContextValue {
 	// Uploads
 	uploadingItems: UploadingFileSystemItem[]
 	uploadStats: UploadStats
+	// Recent successful uploads, newest last (see UploadCompletion)
+	uploadCompletions: UploadCompletion[]
 	startUpload: (files: File[] | FileList, destinationPath: string) => void
 	cancelUpload: (tempId: string) => void
 
@@ -162,6 +175,9 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 	// -- 2. Uploads state
 	const [uploadingItems, setUploadingItems] = useState<UploadingFileSystemItem[]>([])
 	const [uploadStats, setUploadStats] = useState<UploadStats>(calculateUploadStats([]))
+	// Recent successful uploads (capped), so consumers can tell success apart
+	// from cancel/skip after an item leaves `uploadingItems`
+	const [uploadCompletions, setUploadCompletions] = useState<UploadCompletion[]>([])
 	const activeXHRsRef = useRef<Map<string, XMLHttpRequest>>(new Map())
 
 	// -- 3. Operations-in-progress state (copy and move currently)
@@ -318,7 +334,12 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 			xhr.onload = async () => {
 				activeXHRsRef.current.delete(tempId)
 				if (xhr.status >= 200 && xhr.status < 300) {
-					// Success, finalize (remove item from list, invalidate cache)
+					// Success: record the completion, then finalize (remove item from
+					// list, invalidate cache). Keep the last 10 completions.
+					setUploadCompletions((prev) => [
+						...prev.slice(-9),
+						{path: item.path, collisionStrategy, completedAt: Date.now()},
+					])
 					finalizeUpload(tempId, destinationPath)
 				} else {
 					const isCollision = xhr.responseText?.includes('[destination-already-exists]')
@@ -594,6 +615,7 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 		// uploads
 		uploadingItems,
 		uploadStats,
+		uploadCompletions,
 		startUpload,
 		cancelUpload,
 

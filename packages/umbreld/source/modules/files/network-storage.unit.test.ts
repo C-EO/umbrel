@@ -34,6 +34,8 @@ test('keeps a configured network share when unmounting fails', async () => {
 	const getWriteLock = vi.fn(async (operation: (store: {set: typeof set}) => Promise<void>) => operation({set}))
 	const releaseCloud = vi.fn()
 	const blockNetworkStorage = vi.fn(async () => releaseCloud)
+	const releaseMachines = vi.fn()
+	const blockStoragePaths = vi.fn(async () => releaseMachines)
 	const logger = {
 		log: vi.fn(),
 		error: vi.fn(),
@@ -49,6 +51,7 @@ test('keeps a configured network share when unmounting fails', async () => {
 			getBaseDirectory: () => '/tmp/network',
 			cloud: {blockNetworkStorage},
 		},
+		machines: {blockStoragePaths},
 		logger: {createChildLogger: () => logger},
 	} as unknown as Umbreld
 	runCommand.mockImplementation(async (command: string) => {
@@ -65,7 +68,9 @@ test('keeps a configured network share when unmounting fails', async () => {
 	expect(getWriteLock).not.toHaveBeenCalled()
 	expect(storage.mountedShares).toContain(share.mountPath)
 	expect(blockNetworkStorage).toHaveBeenCalledWith(share)
+	expect(blockStoragePaths).toHaveBeenCalledWith([share.mountPath])
 	expect(releaseCloud).toHaveBeenCalledOnce()
+	expect(releaseMachines).toHaveBeenCalledOnce()
 })
 
 test('removes an unmounted configured share when its mount directory is already absent', async () => {
@@ -83,6 +88,8 @@ test('removes an unmounted configured share when its mount directory is already 
 	const getWriteLock = vi.fn(async (operation: (store: {set: typeof set}) => Promise<void>) => operation({set}))
 	const releaseCloud = vi.fn()
 	const blockNetworkStorage = vi.fn(async () => releaseCloud)
+	const releaseMachines = vi.fn()
+	const blockStoragePaths = vi.fn(async () => releaseMachines)
 	const logger = {
 		log: vi.fn(),
 		error: vi.fn(),
@@ -98,6 +105,7 @@ test('removes an unmounted configured share when its mount directory is already 
 			getBaseDirectory: () => '/tmp/network',
 			cloud: {blockNetworkStorage},
 		},
+		machines: {blockStoragePaths},
 		logger: {createChildLogger: () => logger},
 	} as unknown as Umbreld
 	runCommand.mockRejectedValue(new Error('not a mountpoint'))
@@ -108,6 +116,69 @@ test('removes an unmounted configured share when its mount directory is already 
 	expect(shares).toEqual([])
 	expect(getWriteLock).toHaveBeenCalledOnce()
 	expect(blockNetworkStorage).toHaveBeenCalledWith(share)
+	expect(blockStoragePaths).toHaveBeenCalledWith([share.mountPath])
 	expect(releaseCloud).toHaveBeenCalledOnce()
+	expect(releaseMachines).toHaveBeenCalledOnce()
 	expect(logger.error).not.toHaveBeenCalled()
+})
+
+test('unmounts every stacked filesystem before removing a configured share', async () => {
+	const share = {
+		host: 'nas.local',
+		share: 'Media',
+		username: 'ada',
+		password: 'secret',
+		mountPath: '/Network/nas.local/Media',
+	}
+	let shares = [share]
+	let mountLayers = 2
+	const set = vi.fn(async (_key: string, value: typeof shares) => {
+		shares = value
+	})
+	const getWriteLock = vi.fn(async (operation: (store: {set: typeof set}) => Promise<void>) => operation({set}))
+	const releaseCloud = vi.fn()
+	const blockNetworkStorage = vi.fn(async () => releaseCloud)
+	const releaseMachines = vi.fn()
+	const blockStoragePaths = vi.fn(async () => releaseMachines)
+	const logger = {
+		log: vi.fn(),
+		error: vi.fn(),
+		verbose: vi.fn(),
+	}
+	const umbreld = {
+		store: {
+			get: vi.fn(async () => shares),
+			getWriteLock,
+		},
+		files: {
+			virtualToSystemPathUnsafe: () => '/tmp/network/nas.local/Media',
+			getBaseDirectory: () => '/tmp/network',
+			cloud: {blockNetworkStorage},
+		},
+		machines: {blockStoragePaths},
+		logger: {createChildLogger: () => logger},
+	} as unknown as Umbreld
+	runCommand.mockImplementation(async (command: string) => {
+		if (command.startsWith('mountpoint ')) {
+			if (mountLayers > 0) return {stdout: ''}
+			throw new Error('not a mountpoint')
+		}
+		if (command.startsWith('umount ')) {
+			mountLayers--
+			return {stdout: ''}
+		}
+		throw new Error(`Unexpected command: ${command}`)
+	})
+
+	const storage = new NetworkStorage(umbreld)
+	storage.mountedShares.add(share.mountPath)
+
+	await expect(storage.removeShare(share.mountPath)).resolves.toBe(true)
+	expect(mountLayers).toBe(0)
+	expect(runCommand.mock.calls.filter(([command]) => String(command).startsWith('umount '))).toHaveLength(2)
+	expect(shares).toEqual([])
+	expect(storage.mountedShares).not.toContain(share.mountPath)
+	expect(releaseCloud).toHaveBeenCalledOnce()
+	expect(blockStoragePaths).toHaveBeenCalledWith([share.mountPath])
+	expect(releaseMachines).toHaveBeenCalledOnce()
 })

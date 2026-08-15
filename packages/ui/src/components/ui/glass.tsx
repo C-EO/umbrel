@@ -64,8 +64,9 @@ export const REFRACT =
  */
 export const GlassFrostedContext = createContext(false)
 
-// The map ships as a blob: URL, not canvas.toDataURL() — umbreld's CSP is
-// `img-src * blob:`, so data: URIs are blocked and feImage would load nothing.
+// The map ships as a revocable blob: URL, not canvas.toDataURL() — umbreld's
+// CSP is `img-src * blob:`, so data: URIs are blocked and feImage would load
+// nothing. Revocation also avoids retaining a large URI after the lens changes.
 function buildLensMap(
 	w: number,
 	h: number,

@@ -33,12 +33,14 @@ import {
 	FILE_TYPE_MAP,
 	HOME_PATH,
 	IMAGE_EXTENSIONS_WITH_IMAGE_THUMBNAILS,
+	MACHINES_PATH,
 	RECENTS_PATH,
 	TRASH_PATH,
 	VIDEO_EXTENSIONS_WITH_IMAGE_THUMBNAILS,
 } from '@/features/files/constants'
 import {useCloudAccounts} from '@/features/files/hooks/use-cloud'
 import {useCloudBadge} from '@/features/files/hooks/use-cloud-badge'
+import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
 import {useNetworkDeviceType} from '@/features/files/hooks/use-network-device-type'
 import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
 import {useShares} from '@/features/files/hooks/use-shares'
@@ -47,6 +49,7 @@ import {CLOUD_SELF_TILE_BRANDS, cloudAccountBrand} from '@/features/files/utils/
 import {splitFileName} from '@/features/files/utils/format-filesystem-name'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
 import {isDirectoryAnExternalDrivePartition} from '@/features/files/utils/is-directory-an-external-drive-partition'
+import {OsIcon} from '@/features/machines/components/os-icon'
 import {useAuthorizedHttpUrl} from '@/modules/auth/http-auth'
 import {trpcReact} from '@/trpc/trpc'
 
@@ -61,6 +64,7 @@ interface FileItemIcon {
 export const FileItemIcon = ({item, onlySVG, className, useAnimatedIcon = false, isHovered = false}: FileItemIcon) => {
 	const {t} = useTranslation()
 	const {isPathShared} = useShares()
+	const {machine} = useMachineFolder(item.path)
 	const isShared = isPathShared(item.path)
 	const cloudProvider = useCloudBadge(item.path)
 	// Flavor branding only matters for the handful of icons that carry a badge
@@ -178,6 +182,11 @@ export const FileItemIcon = ({item, onlySVG, className, useAnimatedIcon = false,
 			<div className='relative'>
 				<FolderIcon className={className} path={item.path} useAnimatedIcon={useAnimatedIcon} isHovered={isHovered} />
 				{isAppFolder ? <AppFolderBottomIcon appId={extractAppIdFromPath(item.path)} /> : null}
+				{machine ? (
+					<div className='absolute right-0 bottom-0 size-1/2 max-h-8 min-h-5 max-w-8 min-w-5 translate-x-[16%] translate-y-[10%] overflow-hidden rounded-[25%] border border-white/15 bg-black/30 p-[1px] shadow-md md:min-h-[0.9rem] md:min-w-[0.9rem]'>
+						<OsIcon osId={machine.osId} className='size-full' />
+					</div>
+				) : null}
 
 				{shareBadge}
 				{cloudBadge}
@@ -245,6 +254,10 @@ const FolderIcon = ({
 	}
 	if (path === APPS_PATH) {
 		return <AppsIcon className={className} />
+	}
+
+	if (path === MACHINES_PATH) {
+		return <img src='/assets/dock/dock-machines.png' alt='' draggable={false} className={className} />
 	}
 
 	const FolderComponent = useAnimatedIcon ? AnimatedFolderIcon : SimpleFolderIcon

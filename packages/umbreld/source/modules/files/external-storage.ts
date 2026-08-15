@@ -21,11 +21,17 @@ type BlockDevice = {
 	partitions: {
 		id: string
 		type: string
+		filesystemType: string
 		size: number
 		mountpoints: string[]
 		label: string
 		filesystemUuid: string
 	}[]
+}
+
+export function syntheticOwnershipMountOptions(filesystemType: string, userId: number, groupId: number) {
+	if (!['exfat', 'vfat', 'ntfs', 'ntfs3'].includes(filesystemType.toLowerCase())) return undefined
+	return `uid=${userId},gid=${groupId},fmask=0007,dmask=0007`
 }
 
 // Get block devices
@@ -41,6 +47,7 @@ export async function getBlockDevices() {
 		size?: number
 		children?: LsBlkDevice[]
 		parttypename?: string
+		fstype?: string
 		uuid?: string
 	}
 	const {stdout} = await $`lsblk --output-all --json --bytes`
@@ -72,6 +79,7 @@ export async function getBlockDevices() {
 			device.partitions.push({
 				id: partition.name,
 				type: partition.parttypename ?? 'unknown',
+				filesystemType: partition.fstype ?? 'unknown',
 				label: partition.label?.trim() ?? 'Untitled',
 				filesystemUuid: partition.uuid?.trim() ?? '',
 				size: partition.size ?? 0,
@@ -225,16 +233,30 @@ export default class ExternalStorage {
 							// Mount partition
 							await fse.ensureDir(systemMountpoint)
 							await this.#umbreld.files.chownSystemPath(systemMountpoint)
-							await pRetry(() => $`mount /dev/${partition.id} ${systemMountpoint}`, {
-								retries: 10,
-								minTimeout: 500,
-								factor: 1,
-								onFailedAttempt: (error) => {
-									this.logger.log(
-										`Mount attempt ${error.attemptNumber} for ${partition.id} failed, ${error.retriesLeft} retries left`,
-									)
+							const {userId, groupId} = this.#umbreld.files.fileOwner
+							const mountOptions = syntheticOwnershipMountOptions(partition.filesystemType, userId, groupId)
+							await pRetry(
+								async () => {
+									if (mountOptions) {
+										// Files and QEMU share this group. Permission-emulating
+										// filesystems cannot chown an individual VM disk later, so
+										// grant group write access at mount time instead.
+										await $`mount -o ${mountOptions} /dev/${partition.id} ${systemMountpoint}`
+									} else {
+										await $`mount /dev/${partition.id} ${systemMountpoint}`
+									}
 								},
-							})
+								{
+									retries: 10,
+									minTimeout: 500,
+									factor: 1,
+									onFailedAttempt: (error) => {
+										this.logger.log(
+											`Mount attempt ${error.attemptNumber} for ${partition.id} failed, ${error.retriesLeft} retries left`,
+										)
+									},
+								},
+							)
 
 							// Log on success
 							this.logger.log(`Mounted partition ${device.name} ${partition.label} as ${virtualMountPoint}`)
@@ -305,18 +327,20 @@ export default class ExternalStorage {
 				.flatMap((partition) => partition.mountpoints)
 				.filter((mountpoint) => mountpoint.startsWith(externalBasePath))
 				.map((mountpoint) => this.#umbreld.files.systemToVirtualPath(mountpoint))
-			const releaseClouds = blockCloud
-				? await this.#umbreld.files.cloud.blockExternalStorage(
-						blockDevice.partitions.map((partition) => ({
-							filesystemUuid: partition.filesystemUuid || undefined,
-							mountPaths: partition.mountpoints
-								.filter((mountpoint) => mountpoint.startsWith(externalBasePath))
-								.map((mountpoint) => this.#umbreld.files.systemToVirtualPath(mountpoint)),
-						})),
-					)
-				: () => {}
+			const releaseMachines = await this.#umbreld.machines.blockStoragePaths(virtualMountPaths)
+			let releaseClouds = () => {}
 
 			try {
+				releaseClouds = blockCloud
+					? await this.#umbreld.files.cloud.blockExternalStorage(
+							blockDevice.partitions.map((partition) => ({
+								filesystemUuid: partition.filesystemUuid || undefined,
+								mountPaths: partition.mountpoints
+									.filter((mountpoint) => mountpoint.startsWith(externalBasePath))
+									.map((mountpoint) => this.#umbreld.files.systemToVirtualPath(mountpoint)),
+							})),
+						)
+					: () => {}
 				// Exclude shares on this device from Samba before unmounting (otherwise Samba keeps the directory busy)
 				if (virtualMountPaths.length > 0) await this.#umbreld.files.samba.applyShares({excludePaths: virtualMountPaths})
 
@@ -372,6 +396,7 @@ export default class ExternalStorage {
 				return true
 			} finally {
 				releaseClouds()
+				releaseMachines()
 			}
 		})
 	}

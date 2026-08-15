@@ -510,21 +510,41 @@ export default class Backups {
 		this.#umbreld.eventBus.emit('backups:backup-progress', this.backupsInProgress)
 
 		try {
-			// Create the snapshot
-			// TODO: Attempt recovering from device out of space errors by deleting old snapshots
-			this.logger.log(`Creating snapshot`)
-			await this.repository(repository.id, ['snapshot', 'create', this.#umbreld.dataDirectory], {
-				onOutput: (output) => {
-					// Pluck progress in brackets from output like:
-					// '/ 1 hashing, 216 hashed (1.6 GB), 21121 cached (5.4 GB), uploaded 1.4 GB, estimated 7.6 GB (91.6%) 0s left'
-					const match = output.match(/estimated.*\((\d+(?:\.\d+)?)%\).*left/)
-					if (!match) return
+			let failure: unknown
+			let machinesPrepared = false
+			try {
+				// Running VMs continuously mutate large disk, firmware, and TPM files.
+				// Pivot their writes into external overlays so Kopia sees a coherent,
+				// restorable machine directory while guests continue running.
+				await this.#umbreld.machines.prepareBackup()
+				machinesPrepared = true
+				// Create the snapshot
+				// TODO: Attempt recovering from device out of space errors by deleting old snapshots
+				this.logger.log(`Creating snapshot`)
+				await this.repository(repository.id, ['snapshot', 'create', this.#umbreld.dataDirectory], {
+					onOutput: (output) => {
+						// Pluck progress in brackets from output like:
+						// '/ 1 hashing, 216 hashed (1.6 GB), 21121 cached (5.4 GB), uploaded 1.4 GB, estimated 7.6 GB (91.6%) 0s left'
+						const match = output.match(/estimated.*\((\d+(?:\.\d+)?)%\).*left/)
+						if (!match) return
 
-					// Update progress
-					backupProgress.percent = Number(match[1])
-					this.#umbreld.eventBus.emit('backups:backup-progress', this.backupsInProgress)
-				},
-			})
+						// Update progress
+						backupProgress.percent = Number(match[1])
+						this.#umbreld.eventBus.emit('backups:backup-progress', this.backupsInProgress)
+					},
+				})
+			} catch (error) {
+				failure = error
+			}
+
+			if (machinesPrepared) {
+				try {
+					await this.#umbreld.machines.releaseBackup()
+				} catch (error) {
+					failure = failure ? new AggregateError([failure, error], '[backup-machine-snapshot-release-failed]') : error
+				}
+			}
+			if (failure) throw failure
 
 			// Clear any backup failure notifications if we get a successful backup
 			await this.#umbreld.notifications.clear(`backups-failing:${repository.id}`).catch(() => {})
@@ -596,6 +616,15 @@ export default class Backups {
 
 		// Ignore temporary migration directory
 		ignoreFileContents.push('.temporary-migration')
+
+		// Downloaded source images are re-derivable caches; every created VM is
+		// flattened into its own canonical disk. Machine operation journals and
+		// live backup overlays must never enter a snapshot. Generated install media
+		// can contain password hashes or user-supplied Windows product keys and is
+		// deliberately excluded as non-authoritative, install-time secret material.
+		ignoreFileContents.push('machine-images')
+		ignoreFileContents.push('machines/*/operations')
+		ignoreFileContents.push('machines/*/media')
 
 		// Local HTTPS certificates are per-device and regenerated after restore.
 		ignoreFileContents.push('lan-ingress')

@@ -19,6 +19,7 @@ import EventBus from './modules/event-bus/event-bus.js'
 import Dbus from './modules/dbus/dbus.js'
 import Backups from './modules/backups/backups.js'
 import SystemNg from './modules/system-ng/system-ng.js'
+import Machines from './modules/machines/machines.js'
 import LanIngress from './modules/lan-ingress/lan-ingress.js'
 import Auth from './modules/auth/auth.js'
 import Mcp, {type McpStoreSettings} from './modules/mcp/mcp.js'
@@ -158,6 +159,7 @@ export default class Umbreld {
 	dbus: Dbus
 	backups: Backups
 	systemNg: SystemNg
+	machines: Machines
 	lanIngress: LanIngress
 	auth: Auth
 	mcp: Mcp
@@ -190,6 +192,7 @@ export default class Umbreld {
 		this.dbus = new Dbus(this)
 		this.backups = new Backups(this)
 		this.systemNg = new SystemNg(this)
+		this.machines = new Machines(this)
 		this.lanIngress = new LanIngress(this)
 		this.auth = new Auth(this)
 		this.mcp = new Mcp(this)
@@ -288,6 +291,15 @@ export default class Umbreld {
 		// interrupted after the member was durably marked as deleted.
 		await this.user.finishPendingDeletions()
 
+		// Apps bind their declared host ports first. Machines then reconcile
+		// autostart domains and can report a precise port conflict for restored
+		// legacy app state; new app installs consult Machines before binding.
+		// Machines is an optional host capability. Persisted VM networking can be
+		// temporarily unreconcilable during early boot (for example before a LAN
+		// default route exists), but that must never prevent the rest of umbreld
+		// from serving the dashboard and retrying normally.
+		await this.machines.start().catch((error) => this.logger.error('Failed to start Machines', error))
+
 		// Start backups last because it depends on files
 		this.backups.start()
 
@@ -333,6 +345,7 @@ export default class Umbreld {
 				this.appStore.stop(),
 				this.dbus.stop(),
 				this.systemNg.stop(),
+				this.machines.stop(),
 				this.auth.stop(),
 				this.mcp.stop(),
 			])

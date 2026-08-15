@@ -27,6 +27,7 @@ export function useDisk(options: {poll?: boolean} = {}) {
 		apps: sort(
 			[
 				...(diskQ.data?.apps ?? []),
+				...(diskQ.data?.machines ?? []).map((machine) => ({...machine, entity: 'machine' as const})),
 				{
 					id: 'umbreld-system',
 					used: diskQ.data?.system ?? 0,

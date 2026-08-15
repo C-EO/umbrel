@@ -21,6 +21,7 @@ export function useCpu(options: {poll?: boolean} = {}) {
 		apps: sort(
 			[
 				...(cpuQ.data?.apps ?? []),
+				...(cpuQ.data?.machines ?? []).map((machine) => ({...machine, entity: 'machine' as const})),
 				{
 					id: 'umbreld-system',
 					used: cpuQ.data?.system ?? 0,

@@ -409,6 +409,10 @@ export default class Apps {
 		if (!manifestVersionIsSupported) {
 			throw new Error(`App manifest version not supported`)
 		}
+		// Machine port forwards and app ports share the host namespace. Check
+		// the canonical machine definitions before installing so a later app
+		// cannot silently steal a stable port promised to a VM.
+		await this.#umbreld.machines.assertAppPortAvailable(manifest.port)
 
 		this.logger.log(`Setting up data directory for ${appId}`)
 		const appDataDirectory = `${this.#umbreld.dataDirectory}/app-data/${appId}`

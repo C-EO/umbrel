@@ -17,6 +17,14 @@ afterAll(async () => {
 })
 
 describe(`backupProgress()`, () => {
+	test('excludes generated machine media and operation state from every snapshot', async () => {
+		await umbreld.instance.backups.createIgnoreFile()
+		const ignore = await fse.readFile(`${umbreld.instance.dataDirectory}/.kopiaignore`, 'utf8')
+
+		expect(ignore).toContain('machines/*/operations')
+		expect(ignore).toContain('machines/*/media')
+	})
+
 	test('throws invalid error without auth token', async () => {
 		await expect(umbreld.unauthenticatedClient.backups.backupProgress.query()).rejects.toThrow('Invalid token')
 	})

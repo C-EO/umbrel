@@ -153,8 +153,8 @@ test('system information uses routes and omits hardware identifiers', async () =
 
 test('system resources includes compact RAID health only when a pool exists', async () => {
 	const context = baseContext()
-	const cpu = {threads: 4, totalUsed: 20, system: 20, apps: []}
-	const memory = {size: 1_000, totalUsed: 500, system: 400, apps: []}
+	const cpu = {threads: 4, totalUsed: 20, system: 20, apps: [], machines: []}
+	const memory = {size: 1_000, totalUsed: 500, system: 400, apps: [], machines: []}
 	const storage = {size: 2_000, totalUsed: 800, available: 1_200}
 	const temperature = {warning: 'normal' as const, temperature: 42}
 	vi.mocked(context.rpc.system.cpuUsage).mockResolvedValue(cpu)

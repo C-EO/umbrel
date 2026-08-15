@@ -37,7 +37,7 @@ async function tarWithSymlink(path: string, target: string) {
 	return contents
 }
 
-async function issueWebSocketTicket(port: number, token: string, target: 'trpc' | 'terminal') {
+async function issueWebSocketTicket(port: number, token: string, target: 'trpc' | 'terminal' | 'machines') {
 	const session = browserSessions.get(token)
 	if (!session) return
 	const response = await got.post(`http://localhost:${port}/trpc/user.createWebSocketTicket`, {
@@ -57,7 +57,7 @@ async function issueWebSocketTicket(port: number, token: string, target: 'trpc' 
 async function trySubscriptionOverWebSocket(
 	port: number,
 	token: string,
-	event: 'system:disk:change' | 'files:operation-progress',
+	event: 'system:disk:change' | 'files:operation-progress' | 'machines:updated',
 ): Promise<'started' | 'error'> {
 	const wsClient = createWSClient({
 		url: async () => {
@@ -476,6 +476,8 @@ describe('Multi-user accounts', () => {
 		)
 		await expect(umbreld.client.user.deleteUser.mutate({userId: memberUserId})).rejects.toThrow('owner')
 		await expect(umbreld.client.files.favorites.query()).rejects.toThrow('owner')
+		await expect(umbreld.client.machines.list.query()).rejects.toThrow('owner')
+		await expect(umbreld.client.machines.capabilities.query()).rejects.toThrow('owner')
 	})
 
 	test('members can view the read-only device summary', async () => {
@@ -549,6 +551,8 @@ describe('Multi-user accounts', () => {
 		await expect(trySubscriptionOverWebSocket(port, ownerToken, 'system:disk:change')).resolves.toBe('started')
 		// A member cannot, even over websocket (which previously bypassed role checks)
 		await expect(trySubscriptionOverWebSocket(port, memberToken, 'system:disk:change')).resolves.toBe('error')
+		await expect(trySubscriptionOverWebSocket(port, ownerToken, 'machines:updated')).resolves.toBe('started')
+		await expect(trySubscriptionOverWebSocket(port, memberToken, 'machines:updated')).resolves.toBe('error')
 	})
 
 	test('members can subscribe to their own scoped events', async () => {
@@ -568,6 +572,12 @@ describe('Multi-user accounts', () => {
 	test('terminal websockets open for the owner', async () => {
 		const port = umbreld.vm.httpPort
 		await expect(tryRawWebSocketUpgrade(port, '/terminal?rows=24&cols=80', ownerToken)).resolves.toBe('open')
+	})
+
+	test('machine console and audio websocket tickets are owner-only', async () => {
+		const port = umbreld.vm.httpPort
+		await expect(issueWebSocketTicket(port, memberToken, 'machines')).resolves.toBeUndefined()
+		await expect(issueWebSocketTicket(port, ownerToken, 'machines')).resolves.toMatch(/^[0-9a-f]+$/)
 	})
 
 	test('view preferences are scoped per account', async () => {
@@ -1385,35 +1395,88 @@ rm -rf '${home}/Photos/holiday-private'
 		}
 	})
 
-	test('members see usage stats with unshared apps folded into other', async () => {
-		// Members can read the overall usage stats
-		await loginAs(memberToken)
-		await expect(umbreld.client.system.systemDiskUsage.query()).resolves.toBeDefined()
-		await expect(umbreld.client.system.systemMemoryUsage.query()).resolves.toBeDefined()
+	test('members see usage stats with owner-only apps and machines folded into other', async () => {
+		const imagePath = '/Home/member-hidden-machine.img'
+		let machineId: string | undefined
 
-		// With no apps shared, the installed app is hidden from the breakdown and
-		// its usage is folded into a single 'other' entry
-		const memberDiskUsage = await umbreld.client.system.diskUsage.query()
-		const memberAppIds = memberDiskUsage.apps.map((app) => app.id)
-		expect(memberAppIds).not.toContain('sparkles-hello-world')
-		expect(memberAppIds).toContain('other')
+		try {
+			// Boot a real, minimal VM so every resource breakdown has owner-only
+			// machine data that the member-facing response must redact.
+			await loginAs(ownerToken)
+			const disk = Buffer.alloc(1024 * 1024)
+			disk.set([0xfa, 0xf4, 0xeb, 0xfd])
+			disk.set([0x55, 0xaa], 510)
+			await umbreld.api.post(`files/upload?path=${encodeURIComponent(imagePath)}`, {body: disk})
+			const machine = await umbreld.client.machines.create.mutate({
+				name: 'Member hidden machine',
+				imagePath,
+				arch: 'amd64',
+				firmware: 'bios',
+				diskSizeGb: 1,
+				cores: 1,
+				memoryGb: 1,
+			})
+			machineId = machine.id
+			await pWaitFor(
+				async () =>
+					(await umbreld.client.machines.list.query()).some(
+						(candidate) => candidate.id === machineId && candidate.state === 'running',
+					),
+				{interval: 250, timeout: 30_000},
+			)
 
-		// The owner still sees the full breakdown with no 'other' entry
-		await loginAs(ownerToken)
-		const ownerDiskUsage = await umbreld.client.system.diskUsage.query()
-		const ownerAppIds = ownerDiskUsage.apps.map((app) => app.id)
-		expect(ownerAppIds).toContain('sparkles-hello-world')
-		expect(ownerAppIds).not.toContain('other')
+			const ownerUsage = await Promise.all([
+				umbreld.client.system.diskUsage.query(),
+				umbreld.client.system.memoryUsage.query(),
+				umbreld.client.system.cpuUsage.query(),
+			])
+			for (const usage of ownerUsage) {
+				expect(usage.machines).toContainEqual(expect.objectContaining({id: machineId, name: 'Member hidden machine'}))
+			}
+			const ownerDiskUsage = ownerUsage[0]
+			const ownerAppIds = ownerDiskUsage.apps.map((app) => app.id)
+			expect(ownerAppIds).toContain('sparkles-hello-world')
+			expect(ownerAppIds).not.toContain('other')
 
-		// Sharing the app reveals it in the member's breakdown
-		await umbreld.client.apps.addMemberShare.mutate({appId: 'sparkles-hello-world', sharedWith: 'all'})
-		await loginAs(memberToken)
-		const sharedDiskUsage = await umbreld.client.system.diskUsage.query()
-		expect(sharedDiskUsage.apps.map((app) => app.id)).toContain('sparkles-hello-world')
+			// Members can read overall usage, but neither the machine identity nor
+			// its separate resource accounting crosses the account boundary.
+			await loginAs(memberToken)
+			await expect(umbreld.client.system.systemDiskUsage.query()).resolves.toBeDefined()
+			await expect(umbreld.client.system.systemMemoryUsage.query()).resolves.toBeDefined()
+			const memberUsage = await Promise.all([
+				umbreld.client.system.diskUsage.query(),
+				umbreld.client.system.memoryUsage.query(),
+				umbreld.client.system.cpuUsage.query(),
+			])
+			for (const usage of memberUsage) {
+				expect(usage.machines).toStrictEqual([])
+				expect(JSON.stringify(usage)).not.toContain(machineId)
+				expect(JSON.stringify(usage)).not.toContain('Member hidden machine')
+			}
 
-		// Clean up
-		await loginAs(ownerToken)
-		await umbreld.client.apps.removeMemberShare.mutate({appId: 'sparkles-hello-world'})
+			const memberDiskUsage = memberUsage[0]
+			const memberAppIds = memberDiskUsage.apps.map((app) => app.id)
+			expect(memberAppIds).not.toContain('sparkles-hello-world')
+			expect(memberAppIds).toContain('other')
+			const ownerMachineDisk = ownerDiskUsage.machines.find(({id}) => id === machineId)!.used
+			expect(memberDiskUsage.apps.find(({id}) => id === 'other')!.used).toBeGreaterThanOrEqual(ownerMachineDisk)
+
+			// Sharing the app reveals only that app. The machine remains anonymous
+			// inside Other and never appears in the Machines breakdown.
+			await loginAs(ownerToken)
+			await umbreld.client.apps.addMemberShare.mutate({appId: 'sparkles-hello-world', sharedWith: 'all'})
+			await loginAs(memberToken)
+			const sharedDiskUsage = await umbreld.client.system.diskUsage.query()
+			expect(sharedDiskUsage.apps.map((app) => app.id)).toEqual(
+				expect.arrayContaining(['sparkles-hello-world', 'other']),
+			)
+			expect(sharedDiskUsage.machines).toStrictEqual([])
+		} finally {
+			await loginAs(ownerToken)
+			await umbreld.client.apps.removeMemberShare.mutate({appId: 'sparkles-hello-world'}).catch(() => {})
+			if (machineId) await umbreld.client.machines.uninstall.mutate({id: machineId}).catch(() => {})
+			await umbreld.client.files.delete.mutate({path: imagePath}).catch(() => {})
+		}
 	})
 
 	test('the app gateway enforces member app shares in realtime', async () => {

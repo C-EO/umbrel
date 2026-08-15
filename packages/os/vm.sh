@@ -188,6 +188,18 @@ initialize_qmp_socket() {
   QMP_SOCKET="/tmp/umbrel-vm-${digest:0:16}.qmp"
 }
 
+remove_qmp_socket() {
+  initialize_qmp_socket
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    # QEMU runs through sudo for KVM and therefore owns its QMP socket as root.
+    # A force-killed VM cannot remove the socket itself, so the next boot must
+    # clean it up with the same privilege before QEMU can bind the path again.
+    sudo rm -f -- "$QMP_SOCKET"
+  else
+    rm -f -- "$QMP_SOCKET"
+  fi
+}
+
 # Initialize state directory and state files
 init_state() {
   mkdir -p "$STATE_DIR"
@@ -1326,7 +1338,7 @@ boot_vm() {
   done
   echo
 
-  rm -f "$QMP_SOCKET"
+  remove_qmp_socket
   printf '%s\n' "$device" > "$RUNNING_DEVICE_FILE"
 
   local netdev_arg="user,id=net0,hostfwd=tcp:127.0.0.1:${ssh_port}-:22,hostfwd=tcp:127.0.0.1:${http_port}-:80"
@@ -1391,8 +1403,7 @@ reflash() {
 
 # Reset all state
 reset_state() {
-  initialize_qmp_socket
-  rm -f "$QMP_SOCKET"
+  remove_qmp_socket
   if [[ -d "$STATE_DIR" ]]; then
     echo "Removing VM state directory: $STATE_DIR"
     rm -rf "$STATE_DIR"

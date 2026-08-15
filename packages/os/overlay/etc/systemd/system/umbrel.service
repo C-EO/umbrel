@@ -1,7 +1,7 @@
 [Unit]
 Description=Umbrel daemon
-Wants=umbrel-custom-pre-start.service
-After=network-online.target docker.service umbrel-custom-pre-start.service
+Wants=umbrel-custom-pre-start.service libvirtd.socket
+After=network-online.target docker.service libvirtd.socket umbrel-custom-pre-start.service
 
 [Service]
 TimeoutStopSec=15min

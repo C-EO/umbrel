@@ -16,9 +16,12 @@ import {WebSocketServer} from 'ws'
 import {createProxyMiddleware} from 'http-proxy-middleware'
 
 import type Umbreld from '../../index.js'
-import type {Principal} from '../auth/auth.js'
+import type {Principal, WebSocketTarget} from '../auth/auth.js'
 import {trpcExpressHandler, trpcWssHandler} from './trpc/index.js'
 import createTerminalWebSocketHandler from './terminal-socket.js'
+import createMachineConsoleWebSocketHandler from './machine-console-socket.js'
+import MachineConsoleSessions from './machine-console-sessions.js'
+import createMachineAudioWebSocketHandler from './machine-audio-socket.js'
 import createAppAuthRouter from './app-auth.js'
 import {authorizeHttpRequest} from '../auth/http-request.js'
 
@@ -27,6 +30,8 @@ import fileApi from '../files/api.js'
 export type ServerOptions = {umbreld: Umbreld}
 
 export type AuthenticatedWebSocketRequest = http.IncomingMessage & {authPrincipal?: Principal}
+
+export const MAX_WEBSOCKET_PAYLOAD_BYTES = 1024 * 1024
 
 // Safely wrapps async request handlers in logic to catch errors and pass them to the errror handling middleware
 const asyncHandler = (
@@ -67,7 +72,7 @@ class Server {
 	// All WebSocket servers require a valid auth token to connect
 	mountWebSocketServer(path: string, setupHandler: (wss: WebSocketServer) => void) {
 		// Create the WebSocket server
-		const wss = new WebSocketServer({noServer: true})
+		const wss = new WebSocketServer({noServer: true, maxPayload: MAX_WEBSOCKET_PAYLOAD_BYTES})
 
 		// Pass the WebSocket server to the setup handler so it can do whatever it needs
 		setupHandler(wss)
@@ -104,7 +109,8 @@ class Server {
 					scriptSrc: this.umbreld.developmentMode ? ["'self'", "'unsafe-inline'"] : null,
 					// Allow 3rd party app images (remove this if we serve them locally in the future)
 					// Also allow blob: URLs for images being uploaded in Files (since their thumbnails don't exist yet)
-					imgSrc: ['*', 'blob:'],
+					// and data: URLs for browser-rendered VM cursor images from noVNC.
+					imgSrc: ['*', 'blob:', 'data:'],
 					// Allow fetching data from our apps API (e.g., for Discover page in App Store)
 					connectSrc: ["'self'", 'https://apps.umbrel.com'],
 					// Allow plain text access over the local network
@@ -121,7 +127,10 @@ class Server {
 
 		// Log requests
 		this.app.use((request, response, next) => {
-			this.logger.verbose(`${request.method} ${request.path}`)
+			const path = request.path.startsWith('/api/machines/first-boot/')
+				? '/api/machines/first-boot/[redacted]'
+				: request.path
+			this.logger.verbose(`${request.method} ${path}`)
 			next()
 		})
 
@@ -156,7 +165,9 @@ class Server {
 				// We can't set custom headers because that not allowed by the WebSocket browser spec.
 				const ticket = searchParams.get('ticket')
 				if (!ticket) throw new Error('Missing WebSocket ticket')
-				const target = pathname === '/terminal' ? 'terminal' : 'trpc'
+				let target: WebSocketTarget = 'trpc'
+				if (pathname === '/terminal') target = 'terminal'
+				if (pathname === '/machines/console' || pathname === '/machines/audio') target = 'machines'
 				const principal = await this.umbreld.auth.consumeWebSocketTicket(ticket, target)
 				;(request as AuthenticatedWebSocketRequest).authPrincipal = principal
 
@@ -197,9 +208,26 @@ class Server {
 			wss.on('connection', createTerminalWebSocketHandler({umbreld: this.umbreld, logger}))
 		})
 
+		// Proxy authenticated noVNC traffic to the per-machine QEMU VNC Unix
+		// socket. QEMU never opens a TCP listener on the host.
+		const machineConsoleSessions = new MachineConsoleSessions()
+		this.mountWebSocketServer('/machines/console', (wss) => {
+			const logger = this.logger.createChildLogger('machine-console')
+			wss.on(
+				'connection',
+				createMachineConsoleWebSocketHandler({umbreld: this.umbreld, logger, sessions: machineConsoleSessions}),
+			)
+		})
+		this.mountWebSocketServer('/machines/audio', (wss) => {
+			const logger = this.logger.createChildLogger('machine-audio')
+			wss.on(
+				'connection',
+				createMachineAudioWebSocketHandler({umbreld: this.umbreld, logger, sessions: machineConsoleSessions}),
+			)
+		})
+
 		// Every file endpoint is mounted beneath an authentication-first subrouter.
 		this.app.use('/api/files', fileApi(this.umbreld))
-
 		// MCP has its own static bearer authentication and is deliberately
 		// mounted before the dashboard SPA fallback.
 		this.app.use('/mcp', this.umbreld.mcp.router)

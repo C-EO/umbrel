@@ -18,6 +18,7 @@ import {
 } from '@/components/ui/immersive-dialog'
 import {SegmentedControl} from '@/components/ui/segmented-control'
 import {LOADING_DASH} from '@/constants'
+import {MachineAppIcon} from '@/features/machines/components/machine-app-icon'
 import {canStart, canStop, useAppInstall, useAppState} from '@/hooks/use-app-install'
 import {extractIconAccentColor} from '@/hooks/use-color-thief'
 import {useCpuForUi} from '@/hooks/use-cpu'
@@ -53,6 +54,16 @@ export default function LiveUsageDialog() {
 }
 
 type SelectedTab = 'storage' | 'memory' | 'cpu'
+
+type UsageListItem = {
+	id: string
+	used: number
+	entity?: 'machine'
+	name?: string
+	osId?: string
+}
+
+const usageItemKey = ({id, entity}: Pick<UsageListItem, 'id' | 'entity'>) => `${entity ?? 'app'}-${id}`
 
 const SEGMENT_COLORS = [
 	'hsl(var(--color-brand))',
@@ -100,9 +111,7 @@ function LiveUsageContent() {
 	const memoryUsage = useMemoryForUi({poll: selectedTab === 'memory'})
 	const diskUsage = useDiskForUi()
 
-	const colors = useAppColors(
-		[...(cpuUsage.apps ?? []), ...(memoryUsage.apps ?? []), ...(diskUsage.apps ?? [])].map((app) => app.id),
-	)
+	const colors = useUsageColors([...(cpuUsage.apps ?? []), ...(memoryUsage.apps ?? []), ...(diskUsage.apps ?? [])])
 	const cpuSegments = useSegments({apps: cpuUsage.apps, total: 100, usedFraction: cpuUsage.progress, colors})
 	const memorySegments = useSegments({
 		apps: memoryUsage.apps,
@@ -202,7 +211,7 @@ function LiveUsageContent() {
 }
 // ---
 
-function StorageSection({colors}: {colors: AppColors}) {
+function StorageSection({colors}: {colors: UsageColors}) {
 	const {t, i18n} = useTranslation()
 	const {isLoading, value, valueSub, secondaryValue, progress, isDiskLow, isDiskFull, apps, size} = useDiskForUi({
 		poll: true,
@@ -236,7 +245,7 @@ function StorageSection({colors}: {colors: AppColors}) {
 	)
 }
 
-function MemorySection({colors, chart}: {colors: AppColors; chart?: Array<{value: number}>}) {
+function MemorySection({colors, chart}: {colors: UsageColors; chart?: Array<{value: number}>}) {
 	const {t, i18n} = useTranslation()
 	const {isLoading, value, valueSub, secondaryValue, progress, isMemoryLow, apps, size} = useMemoryForUi({poll: true})
 	const segments = useSegments({apps, total: size, usedFraction: progress, colors})
@@ -260,7 +269,7 @@ function MemorySection({colors, chart}: {colors: AppColors; chart?: Array<{value
 	)
 }
 
-function CpuSection({colors, chart}: {colors: AppColors; chart?: Array<{value: number}>}) {
+function CpuSection({colors, chart}: {colors: UsageColors; chart?: Array<{value: number}>}) {
 	const {i18n} = useTranslation()
 	const {isLoading, value, secondaryValue, progress, apps} = useCpuForUi({poll: true})
 	const segments = useSegments({apps, total: 100, usedFraction: progress, colors})
@@ -281,49 +290,49 @@ function CpuSection({colors, chart}: {colors: AppColors; chart?: Array<{value: n
 type BarSegment = {id: string; label: string; color: string; start: number; width: number}
 
 /**
- * Colors for app segments: the app icon's dominant hue when one is
- * extractable, otherwise a palette color assigned by first appearance. Either
- * way an app keeps one color in every bar and list for the lifetime of the
- * dialog. Assignment happens in the commit-phase effect (ids arrive
- * usage-sorted, so the biggest consumers get distinct palette slots first)
- * keeping render pure; the async icon color overwrites the palette fallback
- * when extraction resolves.
+ * Colors for app and machine segments: an app icon's dominant hue when one is
+ * extractable, otherwise a palette color assigned by first appearance.
+ * Machines use the palette because their icon is a composed React element.
+ * Every item keeps one color in every bar and list for the lifetime of the
+ * dialog.
  */
-function useAppColors(appIds: string[]) {
-	const resolveApp = useResolveApp()
+function useUsageColors(items: UsageListItem[]) {
+	const resolveItem = useResolveUsageItem()
 	const requestedRef = useRef(new Set<string>())
 	const paletteSizeRef = useRef(0)
 	const [colors, setColors] = useState(() => new Map<string, string>())
 
-	const idsKey = appIds.join(',')
 	useEffect(() => {
-		for (const id of idsKey.split(',')) {
-			if (!id || requestedRef.current.has(id)) continue
-			const {icon} = resolveApp(id)
+		for (const item of items) {
+			const key = usageItemKey(item)
+			if (requestedRef.current.has(key)) continue
+			const {icon} = resolveItem(item)
 			// No icon yet (apps provider still loading) — leave unmarked so we retry
-			if (!icon) continue
-			requestedRef.current.add(id)
+			if (!icon && item.entity !== 'machine') continue
+			requestedRef.current.add(key)
 			// Every appearing app gets a deterministic fallback immediately, so
 			// even rows that never make a bar segment are distinguishable from
 			// the gray "Other" catch-all
 			const fallback = SEGMENT_COLORS[paletteSizeRef.current++ % SEGMENT_COLORS.length]
-			setColors((prev) => new Map(prev).set(id, fallback))
-			extractIconAccentColor(icon).then((color) => {
-				if (color) setColors((prev) => new Map(prev).set(id, color))
-			})
+			setColors((prev) => new Map(prev).set(key, fallback))
+			if (icon) {
+				extractIconAccentColor(icon).then((color) => {
+					if (color) setColors((prev) => new Map(prev).set(key, color))
+				})
+			}
 		}
-	}, [idsKey, resolveApp])
+	}, [items, resolveItem])
 
 	return useMemo(
 		() => ({
-			get(id: string) {
-				return colors.get(id)
+			get(item: Pick<UsageListItem, 'id' | 'entity'>) {
+				return colors.get(usageItemKey(item))
 			},
 		}),
 		[colors],
 	)
 }
-type AppColors = ReturnType<typeof useAppColors>
+type UsageColors = ReturnType<typeof useUsageColors>
 
 function useSegments({
 	apps,
@@ -331,13 +340,13 @@ function useSegments({
 	usedFraction,
 	colors,
 }: {
-	apps?: Array<{id: string; used: number}>
+	apps?: UsageListItem[]
 	total?: number
 	usedFraction: number
-	colors: AppColors
+	colors: UsageColors
 }): BarSegment[] {
 	const {t} = useTranslation()
-	const resolveApp = useResolveApp()
+	const resolveItem = useResolveUsageItem()
 
 	if (!apps || !total) return []
 
@@ -353,11 +362,11 @@ function useSegments({
 		// Apps are sorted by usage, so everything after the first sliver is smaller
 		if (width < 0.004) break
 		segments.push({
-			id: app.id,
-			label: resolveApp(app.id).name,
+			id: usageItemKey(app),
+			label: resolveItem(app).name,
 			// The commit-phase assignment lands one frame after first render; the
 			// gray placeholder blends into the assigned color via the bar transition
-			color: colors.get(app.id) ?? OTHER_SEGMENT_COLOR,
+			color: colors.get(app) ?? OTHER_SEGMENT_COLOR,
 			start: cursor,
 			width,
 		})
@@ -550,17 +559,29 @@ function useResolveApp() {
 	)
 }
 
+function useResolveUsageItem() {
+	const {t} = useTranslation()
+	const resolveApp = useResolveApp()
+
+	return useMemo(
+		() =>
+			(item: UsageListItem): {name: string; icon?: string} =>
+				item.entity === 'machine' ? {name: item.name || t('machines')} : resolveApp(item.id),
+		[resolveApp, t],
+	)
+}
+
 function AppList({
 	apps,
 	formatValue,
 	colors,
 }: {
-	apps?: {id: string; used: number}[]
+	apps?: UsageListItem[]
 	formatValue: (value: number) => string
-	colors: AppColors
+	colors: UsageColors
 }) {
 	const {userAppsKeyed} = useApps()
-	const resolveApp = useResolveApp()
+	const resolveItem = useResolveUsageItem()
 	const userQ = trpcReact.user.get.useQuery()
 	// Members see shared apps but can't manage them
 	const isMember = userQ.data?.role === 'member'
@@ -573,17 +594,19 @@ function AppList({
 
 	return (
 		<div className={appListClass}>
-			{apps.map(({id, used}) => {
-				const {name, icon} = resolveApp(id)
+			{apps.map((item) => {
+				const {id, used, entity, osId} = item
+				const {name, icon} = resolveItem(item)
 				// System entries (System, Files, "other") aren't manageable apps
-				const isUserApp = Boolean(userAppsKeyed[id])
+				const isUserApp = entity !== 'machine' && Boolean(userAppsKeyed[id])
 				return (
 					<AppListRow
-						key={id}
+						key={usageItemKey(item)}
 						icon={icon}
+						osId={entity === 'machine' ? osId : undefined}
 						title={name}
 						value={formatValue(used)}
-						barColor={colors.get(id) ?? OTHER_SEGMENT_COLOR}
+						barColor={colors.get(item) ?? OTHER_SEGMENT_COLOR}
 						barShare={used / maxUsed}
 						status={isUserApp && <AppRowStatus appId={id} />}
 						menu={
@@ -700,6 +723,7 @@ const appListClass = tw`settings-edge-material overflow-hidden rounded-24`
 
 function AppListRow({
 	icon,
+	osId,
 	title,
 	value,
 	disabled,
@@ -709,6 +733,7 @@ function AppListRow({
 	menu,
 }: {
 	icon?: string
+	osId?: string
 	title: string
 	value: string
 	disabled?: boolean
@@ -729,7 +754,15 @@ function AppListRow({
 				disabled && 'opacity-50',
 			)}
 		>
-			<AppIcon src={icon} size={28} className={cn('rounded-8 shadow-md', disabled && 'grayscale')} />
+			{osId ? (
+				<MachineAppIcon
+					osId={osId}
+					className={cn('size-7 rounded-8 shadow-md', disabled && 'grayscale')}
+					badgeClassName='size-3'
+				/>
+			) : (
+				<AppIcon src={icon} size={28} className={cn('rounded-8 shadow-md', disabled && 'grayscale')} />
+			)}
 			<div className='flex min-w-0 flex-1 items-center gap-1.5'>
 				<span className='min-w-0 truncate text-15 font-medium -tracking-4 opacity-90'>{title}</span>
 				{status}

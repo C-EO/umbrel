@@ -12,6 +12,7 @@ import {SidebarCloud} from '@/features/files/components/sidebar/sidebar-cloud'
 import {SidebarExternalStorage} from '@/features/files/components/sidebar/sidebar-external-storage'
 import {SidebarFavorites} from '@/features/files/components/sidebar/sidebar-favorites'
 import {SidebarHome} from '@/features/files/components/sidebar/sidebar-home'
+import {SidebarMachines} from '@/features/files/components/sidebar/sidebar-machines'
 import {SidebarNetworkStorage} from '@/features/files/components/sidebar/sidebar-network-storage'
 import {SidebarRecents} from '@/features/files/components/sidebar/sidebar-recents'
 import {SidebarOwnersUmbrel, SidebarSharedStorage} from '@/features/files/components/sidebar/sidebar-shared-with-me'
@@ -72,6 +73,7 @@ export function Sidebar({className}: {className?: string}) {
 					<SidebarHome />
 					{!isMember && <SidebarRecents />}
 					{(!isMember || hasSharedApps) && <SidebarApps />}
+					{!isMember && <SidebarMachines />}
 				</SidebarSection>
 
 				{/* Owner's Umbrel, shown to members only when the owner has shared something from their home */}

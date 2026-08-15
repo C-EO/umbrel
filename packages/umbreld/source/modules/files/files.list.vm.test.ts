@@ -1,4 +1,7 @@
+import {randomUUID} from 'node:crypto'
+
 import {expect, beforeAll, afterAll, test} from 'vitest'
+import yaml from 'js-yaml'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
@@ -144,7 +147,7 @@ test('list() lists the root directory', async () => {
 		size: 0,
 		modified: expect.any(Number),
 		operations: [],
-		files: ['Apps', 'Backups', 'External', 'Home', 'Network', 'Trash'].map((name) => ({
+		files: ['Apps', 'Backups', 'External', 'Home', 'Machines', 'Network', 'Trash'].map((name) => ({
 			name,
 			path: `/${name}`,
 			type: 'directory',
@@ -153,6 +156,66 @@ test('list() lists the root directory', async () => {
 			operations: expect.arrayContaining(['copy']),
 		})),
 	})
+})
+
+test('list() exposes machine data and only protects roots backed by a valid machine', async () => {
+	const machineDirectory = '/home/umbrel/umbrel/machines/test-machine'
+	const machineYaml = Buffer.from(
+		yaml.dump({
+			version: 1,
+			id: 'test-machine',
+			name: 'Test machine',
+			osId: 'custom',
+			osName: 'Custom',
+			osVersion: 'Custom image',
+			arch: 'amd64',
+			platformProfile: 'modern-x86',
+			machineType: 'pc-q35-9.2',
+			firmware: 'uefi',
+			uuid: randomUUID(),
+			macAddress: '02:00:00:00:00:01',
+			diskSizeGb: 1,
+			cores: 1,
+			memoryMb: 1024,
+			autostart: false,
+			pinned: false,
+			createdAt: Date.now(),
+			portForwards: [],
+		}),
+	).toString('base64')
+	await umbreld.vm.sshAsRoot(
+		`mkdir -p ${machineDirectory} && printf 'editable machine data' > ${machineDirectory}/notes.txt && printf '%s' '${machineYaml}' | base64 -d > ${machineDirectory}/machine.yaml`,
+	)
+
+	await expect(umbreld.client.files.list.query({path: '/Machines'})).resolves.toMatchObject({
+		path: '/Machines',
+		files: [
+			{
+				path: '/Machines/test-machine',
+				operations: expect.not.arrayContaining(['move', 'rename', 'trash', 'delete', 'share']),
+			},
+		],
+	})
+	await expect(umbreld.client.files.list.query({path: '/Machines/test-machine'})).resolves.toMatchObject({
+		files: expect.arrayContaining([
+			expect.objectContaining({
+				path: '/Machines/test-machine/notes.txt',
+				operations: expect.not.arrayContaining(['writable', 'move', 'rename', 'trash', 'delete', 'share']),
+			}),
+		]),
+	})
+
+	await umbreld.vm.sshAsRoot(`rm ${machineDirectory}/machine.yaml`)
+	await expect(umbreld.client.files.list.query({path: '/Machines'})).resolves.toMatchObject({
+		files: [
+			{
+				path: '/Machines/test-machine',
+				operations: expect.arrayContaining(['move', 'rename', 'trash']),
+			},
+		],
+	})
+
+	await umbreld.vm.sshAsRoot(`rm -rf ${machineDirectory}`)
 })
 
 test('list() lists the /Home directory', async () => {

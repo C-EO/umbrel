@@ -145,7 +145,10 @@ export default class NetworkStorage {
 			credentialsDirectory = await fse.mkdtemp(nodePath.join(os.tmpdir(), 'umbrel-cifs-credentials-'))
 			const credentialsPath = nodePath.join(credentialsDirectory, 'credentials')
 			await fse.writeFile(credentialsPath, `username=${share.username}\npassword=${share.password}\n`, {mode: 0o600})
-			await $`mount -t cifs ${smbPath} ${systemMountPath} -o credentials=${credentialsPath},uid=${userId},gid=${groupId},iocharset=utf8`
+			// libvirt-qemu shares the Files group so VM disks can live on a
+			// NAS. CIFS synthesizes Unix permissions client-side, so make the
+			// shared group writable when the mount is established.
+			await $`mount -t cifs ${smbPath} ${systemMountPath} -o credentials=${credentialsPath},uid=${userId},gid=${groupId},file_mode=0660,dir_mode=0770,iocharset=utf8`
 			this.mountedShares.add(share.mountPath)
 			this.logger.log(`Successfully mounted network share: ${smbPath} to ${share.mountPath}`)
 		} catch (error) {
@@ -164,13 +167,20 @@ export default class NetworkStorage {
 	}
 
 	// Unmount a share
-	async #unmountShare(share: NetworkShare, {blockCloud = true} = {}): Promise<void> {
+	async #unmountShare(share: NetworkShare, {blockCloud = true, blockMachines = true} = {}): Promise<void> {
 		this.logger.log(`Unmounting network share: ${share.mountPath}`)
-		const releaseClouds = blockCloud ? await this.#umbreld.files.cloud.blockNetworkStorage(share) : () => {}
+		const releaseMachines = blockMachines ? await this.#umbreld.machines.blockStoragePaths([share.mountPath]) : () => {}
+		let releaseClouds = () => {}
 		try {
-			// If we're mounted, unmount
+			releaseClouds = blockCloud ? await this.#umbreld.files.cloud.blockNetworkStorage(share) : () => {}
+			// Unmount every layer at this path. Interrupted or overlapping mount
+			// lifecycle work can leave multiple CIFS mounts stacked on the same
+			// directory, and a single umount would expose the older layer again.
 			const systemMountPath = this.#umbreld.files.virtualToSystemPathUnsafe(share.mountPath)
-			if (await this.#isMounted(share)) await $`umount ${systemMountPath}`
+			for (let attempts = 0; await this.#isMounted(share); attempts++) {
+				if (attempts >= 32) throw new Error(`Too many stacked mounts at ${share.mountPath}`)
+				await $`umount ${systemMountPath}`
+			}
 
 			// Directory cleanup is housekeeping, not part of proving that the
 			// filesystem was detached. A failed mount may already have removed
@@ -190,6 +200,7 @@ export default class NetworkStorage {
 			throw error
 		} finally {
 			releaseClouds()
+			releaseMachines()
 		}
 	}
 
@@ -249,8 +260,9 @@ export default class NetworkStorage {
 	// Remove a share
 	async removeShare(sharePath: string) {
 		const share = await this.getShare(sharePath)
-		const releaseClouds = await this.#umbreld.files.cloud.blockNetworkStorage(share)
+		let releaseClouds = () => {}
 		try {
+			releaseClouds = await this.#umbreld.files.cloud.blockNetworkStorage(share)
 			// Attempt to unmount the share first
 			await this.#unmountShare(share, {blockCloud: false})
 

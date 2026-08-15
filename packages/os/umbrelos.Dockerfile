@@ -32,7 +32,9 @@ ARG RCLONE_SHA256_arm64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c
 # ui build stage
 #########################################################################
 
-FROM node:${NODE_VERSION}-bookworm-slim AS ui-build
+# The UI output is architecture-independent, so build it on the builder's native
+# architecture. This also avoids running esbuild's Go binary under emulation.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS ui-build
 
 # Set the working directory
 WORKDIR /app
@@ -51,6 +53,25 @@ RUN npm ci
 
 # Build the shared dashboard and app-auth frontend
 RUN npm run build
+
+
+#########################################################################
+# bundled container image stage
+#########################################################################
+
+# Pull the target-architecture images with a native skopeo binary. Go binaries
+# can fail under cross-architecture user-mode emulation, and skopeo is only
+# needed while building these archives—not in the shipped OS.
+FROM --platform=$BUILDPLATFORM debian:${DEBIAN_VERSION}-${DEBIAN_IMAGE_SNAPSHOT_DATE} AS bundled-images
+
+ARG APT_SNAPSHOT_DATE
+ARG TARGETARCH
+
+COPY packages/os/build-steps /build-steps
+RUN /build-steps/initialize.sh "${APT_SNAPSHOT_DATE}" && \
+    apt-get install --yes ca-certificates skopeo && \
+    mkdir -p /images
+RUN skopeo copy --override-arch "${TARGETARCH}" docker://ghcr.io/getumbrel/tor@sha256:e382b8629c0dfef6ceb396b062622d4e4e955b19d6f16b883fd2c0723ad5671a docker-archive:/images/tor
 
 
 #########################################################################
@@ -164,6 +185,18 @@ RUN git clone --depth=1 https://github.com/Homebrew/brew "${HOMEBREW_REPOSITORY}
         "${HOMEBREW_PREFIX}/var/homebrew" && \
     ln -s ../Homebrew/bin/brew "${HOMEBREW_PREFIX}/bin/brew"
 
+# Rosetta reports the arm64 host's /proc/cpuinfo even while presenting an
+# x86_64 userspace to the container. Homebrew consequently rejects its x86_64
+# bottle before execution despite Rosetta supporting SSSE3. Bypass only that
+# preflight in this identifiable cross-build environment; native x86_64 builds
+# retain Homebrew's hardware guard unchanged.
+RUN if [ "$(uname -m)" = "x86_64" ] && \
+       grep -q '^Features.*asimd' /proc/cpuinfo && \
+       ! grep -qE '^(flags|Features).*\bssse3\b' /proc/cpuinfo; then \
+        sed -i '/if ! grep -qE .*ssse3.*\/proc\/cpuinfo/,/    fi/c\    :' \
+            "${HOMEBREW_REPOSITORY}/Library/Homebrew/brew.sh"; \
+    fi
+
 RUN mkdir -p "${HOMEBREW_REPOSITORY}/Library/Taps/homebrew/homebrew-core" && \
     git -C "${HOMEBREW_REPOSITORY}/Library/Taps/homebrew/homebrew-core" init && \
     git -C "${HOMEBREW_REPOSITORY}/Library/Taps/homebrew/homebrew-core" remote add origin https://github.com/Homebrew/homebrew-core.git && \
@@ -238,6 +271,71 @@ RUN apt-get install --yes bluez
 
 # Install essential system utilities
 RUN apt-get install --yes sudo nano vim less man iproute2 iputils-ping curl wget ca-certificates usbutils whois build-essential e2fsprogs
+
+# Install the host virtualization stack used by Umbrel Machines. Both system
+# emulators and firmware families are present on every architecture so restored
+# machines can still boot through TCG when their guest architecture differs
+# from the host. Machine definitions and disks live in the Umbrel data
+# directory; libvirt only owns disposable runtime state. Avoid the default
+# recommendations, which add unrelated GUI, media, network, and storage
+# backends and consume well over a gigabyte on the A/B system partitions.
+# QEMU's OpenGL module loads libEGL at runtime without declaring it as a hard
+# package dependency, so keep libegl1 explicit for the headless virgl display.
+RUN apt-get install --yes --no-install-recommends \
+    libvirt-daemon-system \
+    libvirt-daemon-driver-qemu \
+    libvirt-daemon-lock \
+    libvirt-clients \
+    qemu-system-x86 \
+    qemu-system-arm \
+    qemu-system-modules-opengl \
+    qemu-utils \
+    libegl1 \
+    ovmf \
+    qemu-efi-aarch64 \
+    seabios \
+    swtpm \
+    swtpm-tools \
+    dnsmasq-base \
+    nftables \
+    iptables \
+    alsa-utils \
+    cloud-image-utils \
+    libarchive-tools \
+    xorriso \
+    genisoimage \
+    dosfstools \
+    mtools \
+    wimtools
+
+# Docker's nftables compatibility rules can contain expressions that the
+# iptables frontend cannot round-trip (notably Tailscale interface globs).
+# Use libvirt's native nftables backend so transient VM networks coexist with
+# Docker without attempting to parse or rewrite Docker's rules.
+RUN sed -i 's/^#firewall_backend = "iptables"/firewall_backend = "nftables"/' /etc/libvirt/network.conf && \
+    grep -Fqx 'firewall_backend = "nftables"' /etc/libvirt/network.conf && \
+    rm -f /etc/libvirt/qemu/networks/default.xml /etc/libvirt/qemu/networks/autostart/default.xml
+
+# QEMU opens the snd-aloop playback devices while umbreld captures the paired
+# streams. Device nodes are owned by root:audio on Debian. The explicit device
+# ACL also tells libvirt which loopback nodes to copy into each QEMU mount
+# namespace; its dynamic disk, render, and other device grants remain intact.
+COPY packages/os/qemu-machines.conf /tmp/qemu-machines.conf
+RUN usermod --append --groups audio libvirt-qemu && \
+    sed -i '$r /tmp/qemu-machines.conf' /etc/libvirt/qemu.conf && \
+    rm /tmp/qemu-machines.conf && \
+    grep -Fq '"/dev/snd/pcmC15D0p"' /etc/libvirt/qemu.conf
+
+# Debian builds libvirt with the monolithic daemon. Keep it socket activated;
+# it can reconnect to running QEMU processes after a daemon restart and does
+# not persist any canonical Umbrel machine definitions.
+RUN systemctl disable libvirtd.service
+# Umbreld owns the lifecycle of its transient domains. Debian enables
+# libvirt-guests by default, but its five-minute shutdown wait would delay an
+# Umbrel reboot whenever a guest ignores ACPI poweroff (for example while it
+# is sitting in firmware or an installer).
+RUN systemctl mask libvirt-guests.service
+RUN systemctl enable libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket virtlogd.socket virtlockd.socket
 
 # Install umbreld dependencies
 # (many of these can be remove after the apps refactor)
@@ -332,10 +430,13 @@ RUN ln -sf /opt/linuxbrew/bin/watchman /usr/local/bin/watchman && \
     chmod 2777 /usr/local/var/run/watchman && \
     watchman -v
 
+# External and network Files mounts use the Umbrel group for shared write
+# access. This lets the unprivileged QEMU user run disks from USB/NAS storage
+# without weakening QEMU to root or making those mounts world-writable.
+RUN usermod -aG umbrel libvirt-qemu
+
 # Preload images
-RUN sudo apt-get install --yes skopeo
-RUN mkdir -p /images
-RUN skopeo copy docker://ghcr.io/getumbrel/tor@sha256:e382b8629c0dfef6ceb396b062622d4e4e955b19d6f16b883fd2c0723ad5671a docker-archive:/images/tor
+COPY --from=bundled-images /images /images
 
 # Install umbreld
 COPY packages/umbreld /opt/umbreld

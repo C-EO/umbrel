@@ -44,6 +44,7 @@ export function useMemory(options: {poll?: boolean} = {}) {
 		apps: sort(
 			[
 				...(memoryQ.data?.apps ?? []),
+				...(memoryQ.data?.machines ?? []).map((machine) => ({...machine, entity: 'machine' as const})),
 				{
 					id: 'umbreld-system',
 					used: memoryQ.data?.system ?? 0,

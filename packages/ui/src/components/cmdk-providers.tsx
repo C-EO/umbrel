@@ -1,6 +1,8 @@
 import {lazy, Suspense, type ComponentType} from 'react'
 
 import {FilesCmdkSearchProvider} from '@/features/files/cmdk-search-provider'
+// Machines
+import {MachinesCmdkSearchProvider} from '@/features/machines/cmdk-search-provider'
 
 export interface CmdkSearchProviderProps {
 	query: string
@@ -21,4 +23,8 @@ function LazySettingsCmdkSearchProvider(props: CmdkSearchProviderProps) {
 	)
 }
 
-export const cmdkSearchProviders: CmdkSearchProvider[] = [LazySettingsCmdkSearchProvider, FilesCmdkSearchProvider]
+export const cmdkSearchProviders: CmdkSearchProvider[] = [
+	LazySettingsCmdkSearchProvider,
+	FilesCmdkSearchProvider,
+	MachinesCmdkSearchProvider,
+]

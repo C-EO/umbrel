@@ -75,6 +75,7 @@ export function Dock() {
 	// Members browse the app store read-only, updates are owner-only
 	const {data: user} = trpcReact.user.get.useQuery()
 	const isMember = user?.role === 'member'
+	const isOwner = user?.role === 'owner'
 
 	const appUpdateCount = appsWithUpdates.length
 
@@ -142,6 +143,16 @@ export function Dock() {
 						notificationCount={settingsNotificationCount}
 						mouseX={mouseX}
 					/>
+					{isOwner && (
+						<DockItem
+							iconSize={iconSize}
+							iconSizeZoomed={iconSizeZoomed}
+							to={systemAppsKeyed['UMBREL_machines'].systemAppTo}
+							open={pathname.startsWith(systemAppsKeyed['UMBREL_machines'].systemAppTo)}
+							bg={systemAppsKeyed['UMBREL_machines'].icon}
+							mouseX={mouseX}
+						/>
+					)}
 					<DockItem
 						iconSize={iconSize}
 						iconSizeZoomed={iconSizeZoomed}
@@ -209,6 +220,12 @@ export function DockPreview() {
 			/>
 			<DockItem
 				bg={systemAppsKeyed['UMBREL_settings'].icon}
+				mouseX={mouseX}
+				iconSize={iconSize}
+				iconSizeZoomed={iconSizeZoomed}
+			/>
+			<DockItem
+				bg={systemAppsKeyed['UMBREL_machines'].icon}
 				mouseX={mouseX}
 				iconSize={iconSize}
 				iconSizeZoomed={iconSizeZoomed}

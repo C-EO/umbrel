@@ -24,7 +24,8 @@ export type FilesDialogKey =
 	| 'files-add-network-share'
 	| 'files-format-drive'
 	| 'files-cloud-add'
-export type DialogKey = GlobalDialogKey | AppStoreDialogKey | SettingsDialogKey | FilesDialogKey
+export type MachinesDialogKey = 'machines-vm-settings'
+export type DialogKey = GlobalDialogKey | AppStoreDialogKey | SettingsDialogKey | FilesDialogKey | MachinesDialogKey
 
 // TODO: make dialog query params typesafe
 

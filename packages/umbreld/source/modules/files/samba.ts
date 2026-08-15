@@ -223,7 +223,7 @@ export default class Samba {
 	}
 
 	// Remove shares on deletion
-	// Note: The watcher only covers /Home, /Trash, and /Apps. External drives are not watched,
+	// Note: The watcher only covers /Home, /Trash, and /Apps. External drives and machine disks are not watched,
 	// so if a shared folder on an external drive is deleted outside the UI while the drive is
 	// connected, the share will remain in the store but be marked as unavailable by listShares()
 	// and skipped by applyShares(). (UI-initiated deletes handle share removal in files.ts.)

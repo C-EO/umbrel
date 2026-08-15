@@ -39,6 +39,7 @@ describe('Auth', () => {
 	let userExists: boolean
 	let memberIds: Set<string>
 	let sharedAppIds: Map<string, string[]>
+	let loggerError: ReturnType<typeof vi.fn>
 	let umbreld: Umbreld
 	let auth: Auth
 
@@ -49,15 +50,17 @@ describe('Auth', () => {
 		userExists = true
 		memberIds = new Set()
 		sharedAppIds = new Map()
+		loggerError = vi.fn()
 		umbreld = {
 			dataDirectory,
 			isBackupRestoreFirstStart: false,
+			logger: {error: loggerError},
 			user: {
 				exists: async () => userExists,
 				getMember: async (accountId: string) => (memberIds.has(accountId) ? {id: accountId} : undefined),
 			},
 			apps: {sharedAppIdsForUser: async (accountId: string) => sharedAppIds.get(accountId) ?? []},
-		} as Umbreld
+		} as unknown as Umbreld
 		auth = new Auth(umbreld)
 		await auth.start()
 	})
@@ -324,6 +327,16 @@ describe('Auth', () => {
 			fs.readFile(`${dataDirectory}/secrets/auth/sessions.yaml`, 'utf8'),
 		)
 		expect(stored).not.toContain(session.principal.sessionId)
+	})
+
+	test('contains WebSocket protocol errors instead of letting EventEmitter throw', async () => {
+		const session = await auth.createSession()
+		const socket = new TestSocket()
+		auth.registerWebSocket(session.principal, socket as unknown as WebSocket)
+		const error = new Error('invalid frame')
+
+		expect(() => socket.emit('error', error)).not.toThrow()
+		expect(loggerError).toHaveBeenCalledWith('WebSocket connection error', error)
 	})
 
 	test('reschedules live-connection expiry when a session is renewed', async () => {

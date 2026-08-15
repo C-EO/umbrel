@@ -9,6 +9,7 @@ import {createBrowserRouter, Outlet} from 'react-router-dom'
 import {CmdkMenu, CmdkProvider} from '@/components/cmdk'
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
 import {filesRoutes} from '@/features/files/routes'
+import {machinesConsoleRoutes, machinesRoutes} from '@/features/machines/routes'
 import {DesktopContextMenu} from '@/modules/desktop/desktop-context-menu'
 
 import {ErrorBoundaryPageFallback} from './components/ui/error-boundary-page-fallback'
@@ -94,6 +95,7 @@ export const router = createBrowserRouter([
 				Component: EditWidgetsPage,
 				ErrorBoundary: ErrorBoundaryCardFallback,
 			},
+			...machinesRoutes,
 			{
 				Component: SheetLayout,
 				children: [
@@ -183,6 +185,9 @@ export const router = createBrowserRouter([
 			},
 		],
 	},
+
+	// machines fullscreen console: minimal-chrome VM view opened in a new tab
+	...machinesConsoleRoutes,
 
 	// raid-error: shown when RAID mount fails (storage system unavailable)
 	{

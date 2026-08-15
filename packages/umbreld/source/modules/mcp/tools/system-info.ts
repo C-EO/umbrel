@@ -59,7 +59,7 @@ export default function registerSystemInfoTools(server: McpServer, context: McpT
 		{
 			title: 'Get system resources',
 			description:
-				'Get current CPU, memory, and storage usage, CPU temperature, plus RAID or storage-pool health when present, for this umbrelOS device. CPU and memory include a per-app breakdown.',
+				'Get current CPU, memory, and storage usage, CPU temperature, plus RAID or storage-pool health when present, for this umbrelOS device. CPU and memory include per-app and per-machine breakdowns.',
 			inputSchema: z.object({}),
 			annotations: {
 				readOnlyHint: true,

@@ -17,6 +17,7 @@ import notifications from '../../notifications/routes.js'
 import eventBus from '../../event-bus/routes.js'
 import backups from '../../backups/routes.js'
 import shortcuts from '../../shortcuts/routes.js'
+import machines from '../../machines/routes.js'
 import lanIngress from '../../lan-ingress/routes.js'
 import mcp from '../../mcp/routes.js'
 
@@ -38,6 +39,7 @@ const appRouter = router({
 	eventBus,
 	backups,
 	shortcuts,
+	machines,
 	lanIngress,
 	mcp,
 })

@@ -1,6 +1,7 @@
 import {setTimeout} from 'node:timers/promises'
 
 import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from 'vitest'
+import pRetry from 'p-retry'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 import {CLOUD_SCHEDULER_INTERVAL} from '../files/cloud.js'
@@ -28,6 +29,7 @@ describe.sequential('Backup restore on current install', () => {
 	let umbreld: Awaited<ReturnType<typeof createTestVm>>
 	let failed = false
 	let repositoryId: string
+	let machineId: string
 	let cloudAccountId: string
 	let syncId: string
 	let cloudLastSuccessfulAt: number
@@ -57,6 +59,18 @@ describe.sequential('Backup restore on current install', () => {
 
 	test('creates a restorable backup on external storage', async () => {
 		await umbreld.client.files.createDirectory.mutate({path: '/Home/current-restore-marker'})
+		await umbreld.api.post('files/upload?path=/Home/backup-machine.img', {body: Buffer.alloc(1024 * 1024)})
+		const machine = await umbreld.client.machines.create.mutate({
+			name: 'Backup restore machine',
+			imagePath: '/Home/backup-machine.img',
+			arch: 'amd64',
+			diskSizeGb: 1,
+			cores: 1,
+			memoryGb: 1,
+		})
+		machineId = machine.id
+		await umbreld.client.machines.updateSettings.mutate({id: machineId, autostart: true})
+
 		await writeVmCloudFixture(umbreld, '/source/before-restore.txt', 'present in the backup')
 		await startVmCloudWebDav(umbreld)
 		const connected = await umbreld.client.files.cloud.connectWebDav.mutate({
@@ -93,6 +107,20 @@ describe.sequential('Backup restore on current install', () => {
 		})
 		await expect(umbreld.client.backups.backup.mutate({repositoryId})).resolves.toBe(true)
 		await expect(umbreld.client.backups.listBackups.query({repositoryId})).resolves.toHaveLength(1)
+
+		const runningMachine = (await umbreld.client.machines.list.query()).find(({id}) => id === machineId)
+		expect(runningMachine?.state).toBe('running')
+		const liveXml = await umbreld.vm.sshAsRoot(`virsh --connect qemu:///system dumpxml umbrel-machine-${machineId}`)
+		expect(liveXml).toContain(`/run/umbrel-machines/${machineId}/storage/disk.qcow2`)
+		expect(liveXml).not.toContain('backup-overlay.qcow2')
+
+		const backup = await latestBackup(umbreld, repositoryId)
+		const machineFiles = await umbreld.client.backups.listBackupFiles.query({
+			backupId: backup.id,
+			path: `/machines/${machineId}`,
+		})
+		expect(machineFiles).toEqual(expect.arrayContaining(['machine.yaml', 'disk.qcow2', 'nvram.fd']))
+		expect(machineFiles).not.toContain('operations')
 	})
 
 	test('restores a backup on the current Umbrel install', async () => {
@@ -102,6 +130,10 @@ describe.sequential('Backup restore on current install', () => {
 
 		await writeVmCloudFixture(umbreld, '/source/after-restore.txt', 'created after the backup')
 		await umbreld.client.files.trash.mutate({path: '/Home/current-restore-marker'})
+		await umbreld.client.machines.uninstall.mutate({id: machineId})
+		await expect(umbreld.client.machines.list.query()).resolves.not.toEqual(
+			expect.arrayContaining([expect.objectContaining({id: machineId})]),
+		)
 		await restoreBackupAndWait({umbreld, backupId: backup.id})
 
 		const homeListing = await umbreld.client.files.list.query({path: '/Home'})
@@ -114,6 +146,26 @@ describe.sequential('Backup restore on current install', () => {
 		})
 		expectRestoreProgressEvents(restoreProgressSubscription.collected, backup.id)
 		restoreProgressSubscription.unsubscribe()
+
+		await pRetry(
+			async () => {
+				const machine = (await umbreld.client.machines.list.query()).find(({id}) => id === machineId)
+				expect(machine).toMatchObject({
+					id: machineId,
+					name: 'Backup restore machine',
+					autostart: true,
+					state: 'running',
+				})
+			},
+			{retries: 120, factor: 1, minTimeout: 500, maxTimeout: 500},
+		)
+		const restoredDomain = await umbreld.vm.sshAsRoot(
+			`virsh --connect qemu:///system dominfo umbrel-machine-${machineId}`,
+		)
+		expect(restoredDomain).toContain('Persistent:     no')
+		await expect(
+			umbreld.vm.sshAsRoot(`test -f /home/umbrel/umbrel/machines/${machineId}/disk.qcow2 && echo restored`),
+		).resolves.toBe('restored')
 
 		const restoredCloud = await waitForSync(
 			umbreld.client,

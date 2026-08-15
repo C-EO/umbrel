@@ -38,6 +38,10 @@ vi.mock('fs-extra', async () => {
 const nullMock = (command: string) => {}
 let mockCommand = nullMock
 afterEach(() => (mockCommand = nullMock))
+// The execa mock receives the static prefix of tagged-template commands. Both
+// forms are valid: native Unix filesystems mount directly, while FAT/exFAT use
+// synthetic uid/gid/mode options before the block-device argument.
+const isBlockDeviceMount = (command: string) => command.startsWith('mount /dev/') || command.startsWith('mount -o ')
 vi.mock('execa', async () => {
 	const originalModule = (await vi.importActual('execa')) as any
 	const runMock = (tag: any, args: any[]) => {
@@ -316,6 +320,28 @@ describe('files.unmountExternalDevice', () => {
 		await expect(fse.pathExists(mountPoint)).resolves.toBe(false)
 	})
 
+	test('does not eject a device that backs an active machine', async () => {
+		let unmountAttempts = 0
+		mockCommand = (command: string) => {
+			if (command.startsWith('lsblk'))
+				return JSON.stringify(LSBLK_EXTERNAL_DISK_MOUNTED).replaceAll(
+					'/home/umbrel/umbrel',
+					umbreld.instance.dataDirectory,
+				)
+			if (command.startsWith('umount')) unmountAttempts++
+		}
+		const guard = vi
+			.spyOn(umbreld.instance.machines, 'blockStoragePaths')
+			.mockRejectedValue(new Error('[machine-external-disk-in-use] Test machine'))
+
+		await expect(umbreld.client.files.unmountExternalDevice.mutate({deviceId: 'sda'})).rejects.toThrow(
+			'[machine-external-disk-in-use]',
+		)
+		expect(guard).toHaveBeenCalledWith(['/External/Red T5'])
+		expect(unmountAttempts).toBe(0)
+		guard.mockRestore()
+	})
+
 	test('does not force-remove an external device when unmounting fails', async () => {
 		mockCommand = (command: string) => {
 			if (command.startsWith('lsblk'))
@@ -394,7 +420,7 @@ describe('externalstorage.#mountExternalDevices', () => {
 				return JSON.stringify(LSBLK_EXTERNAL_DISK_ATTACHED)
 			}
 			if (command.startsWith('mountpoint')) return {exitCode: 1}
-			if (command.startsWith('mount /dev/')) {
+			if (isBlockDeviceMount(command)) {
 				mountCommands++
 				return 'fake mount worked'
 			}
@@ -434,7 +460,7 @@ describe('externalstorage.#mountExternalDevices', () => {
 			if (command.startsWith('df')) return {stdout: 'Filesystem\n/dev/sda4'}
 			// Mock mountpoint command to return nonzero exit code so unused mount paths don't get cleaned up
 			if (command.startsWith('mountpoint')) return {exitCode: 1}
-			if (command.startsWith('mount /dev/')) {
+			if (isBlockDeviceMount(command)) {
 				mountCommands++
 				return 'fake mount worked'
 			}
@@ -458,7 +484,7 @@ describe('externalstorage.#mountExternalDevices', () => {
 		mockCommand = (command: string) => {
 			if (command.startsWith('lsblk')) return JSON.stringify(LSBLK_EXTERNAL_DISK_ATTACHED)
 			if (command.startsWith('mountpoint')) return {exitCode: 1}
-			if (command.startsWith('mount /dev/')) {
+			if (isBlockDeviceMount(command)) {
 				mountCommands++
 				if (mountCommands < 3) return Promise.reject(new Error('transient mount failure'))
 				return 'fake mount worked'

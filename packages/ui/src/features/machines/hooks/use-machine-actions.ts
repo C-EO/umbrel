@@ -1,0 +1,68 @@
+import {toast} from '@/components/ui/toast'
+import {trpcReact} from '@/trpc/trpc'
+import {t} from '@/utils/i18n'
+
+// Maps backend `[bracketed-error-codes]` to human readable messages.
+// Keep translation keys as literal t() arguments so the translation updater
+// can discover and preserve them.
+export function getMachinesErrorMessage(message: string) {
+	const code = message.match(/^\[([^\]]+)\]/)?.[1]
+	if (!code) return message
+
+	switch (code) {
+		case 'machine-disk-shrink-not-allowed':
+			return t('machines-error.machine-disk-shrink-not-allowed')
+		case 'machine-first-boot-setup-in-progress':
+			return t('machines-error.machine-first-boot-setup-in-progress')
+		case 'machine-install-media-eject-failed':
+			return t('machines-error.machine-install-media-eject-failed')
+		case 'machine-external-disk-unavailable':
+			return t('machines-error.machine-external-disk-unavailable')
+		case 'machine-insufficient-storage':
+			return t('machines-error.machine-insufficient-storage')
+		case 'machine-install-interrupted':
+			return t('machines-error.machine-install-interrupted')
+		case 'machine-install-retry-credentials-required':
+			return t('machines-error.machine-install-retry-credentials-required')
+		default:
+			return message
+	}
+}
+
+export function useMachineActions() {
+	const utils = trpcReact.useUtils()
+
+	const invalidateMachines = () => utils.machines.list.invalidate()
+
+	const onError = (error: {message: string}) => toast.error(getMachinesErrorMessage(error.message))
+
+	const create = trpcReact.machines.create.useMutation({onError, onSettled: invalidateMachines}).mutateAsync
+	const retryInstall = trpcReact.machines.retryInstall.useMutation({onError, onSettled: invalidateMachines}).mutate
+	const start = trpcReact.machines.start.useMutation({onError, onSettled: invalidateMachines}).mutate
+	const stop = trpcReact.machines.stop.useMutation({onError, onSettled: invalidateMachines}).mutate
+	const restart = trpcReact.machines.restart.useMutation({onError, onSettled: invalidateMachines}).mutate
+	const forceStop = trpcReact.machines.forceStop.useMutation({onError, onSettled: invalidateMachines}).mutate
+	const ejectInstallMedia = trpcReact.machines.ejectInstallMedia.useMutation({
+		onError,
+		onSettled: invalidateMachines,
+	}).mutateAsync
+	const uninstall = trpcReact.machines.uninstall.useMutation({onError, onSettled: invalidateMachines}).mutateAsync
+	const updateSettings = trpcReact.machines.updateSettings.useMutation({
+		onError,
+		onSettled: invalidateMachines,
+	}).mutateAsync
+	const setPinned = trpcReact.machines.setPinned.useMutation({onError, onSettled: invalidateMachines}).mutate
+
+	return {
+		create,
+		retryInstall,
+		start,
+		stop,
+		restart,
+		forceStop,
+		ejectInstallMedia,
+		uninstall,
+		updateSettings,
+		setPinned,
+	}
+}

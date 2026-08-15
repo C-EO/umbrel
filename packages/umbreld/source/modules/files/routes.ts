@@ -396,9 +396,13 @@ export default router({
 		.mutation(async ({ctx, input}) => ctx.umbreld.files.externalStorage.formatExternalDevice(input)),
 
 	// Get external storage devices
-	externalDevices: publicProcedureWhenNoUserExists.query(async ({ctx}) =>
-		ctx.umbreld.files.externalStorage.getExternalDevicesWithVirtualMountPoints(),
-	),
+	externalDevices: publicProcedureWhenNoUserExists.query(async ({ctx}) => {
+		const devices = await ctx.umbreld.files.externalStorage.getExternalDevicesWithVirtualMountPoints()
+		return devices.map((device) => ({
+			...device,
+			partitions: device.partitions.map(({filesystemType: _, ...partition}) => partition),
+		}))
+	}),
 
 	// Unmount an external device
 	unmountExternalDevice: privateProcedure

@@ -68,21 +68,19 @@ async function getSystemLogs(type: 'umbrelos' | 'system', lines = 1500, maxOutpu
 	return stripAnsi(process.stdout)
 }
 
-// Fold the per-app usage of apps a member can't see into a single 'other'
-// entry. The full breakdown is computed as normal first, this only
-// post-processes the result for member accounts.
-async function scopeUsageAppsForMember<T extends {apps: {id: string; used: number}[]}>(
-	umbreld: Umbreld,
-	usage: T,
-	userId: string,
-): Promise<T> {
+// Fold device-wide usage a member can't inspect into a single 'other' entry.
+// Machines are owner-only, while installed apps remain visible only when the
+// owner shared them with this member.
+async function scopeUsageAppsForMember<
+	T extends {apps: {id: string; used: number}[]; machines: {id: string; used: number}[]},
+>(umbreld: Umbreld, usage: T, userId: string): Promise<T> {
 	if (userId === OWNER_USER_ID) return usage
 	const sharedAppIds = await umbreld.apps.sharedAppIdsForUser(userId)
 	const visibleApps = usage.apps.filter((app) => sharedAppIds.includes(app.id))
 	const hiddenApps = usage.apps.filter((app) => !sharedAppIds.includes(app.id))
-	const otherUsed = hiddenApps.reduce((total, app) => total + app.used, 0)
+	const otherUsed = [...hiddenApps, ...usage.machines].reduce((total, item) => total + item.used, 0)
 	const apps = otherUsed > 0 ? [...visibleApps, {id: 'other', used: otherUsed}] : visibleApps
-	return {...usage, apps}
+	return {...usage, apps, machines: []}
 }
 
 export default router({
@@ -159,9 +157,9 @@ export default router({
 	// Read-only device metadata shown in every account's settings summary.
 	deviceName: privateProcedureWithMembers.query(async () => (await detectDevice()).device),
 	// Usage stats are visible to members so they get the normal settings and
-	// live usage experience. The per-app breakdowns compute the full result as
-	// normal and are then post-processed to fold apps the member can't see into
-	// a single 'other' entry.
+	// live usage experience. Device-wide breakdowns compute the full result as
+	// normal and are then post-processed to fold owner-only resources and apps
+	// the member can't see into a single 'other' entry.
 	cpuTemperature: privateProcedureWithMembers.query(() => getCpuTemperature()),
 	systemDiskUsage: privateProcedureWithMembers.query(({ctx}) => getSystemDiskUsage(ctx.umbreld)),
 	diskUsage: privateProcedureWithMembers.query(async ({ctx}) =>
