@@ -1,4 +1,4 @@
-import {useEffect, useState} from 'react'
+import {useEffect, useId, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 // TODO: Consider changing TbBattery1 (low life) and TbHeartBroken (unhealthy) icons to something more intuitive
 import {TbActivityHeartbeat, TbAlertTriangleFilled, TbBattery1, TbFlame, TbHeartBroken} from 'react-icons/tb'
@@ -11,7 +11,6 @@ import {formatStorageSize} from '../utils'
 
 type SsdShapeProps = {
 	device: StorageDevice
-	slotNumber: number
 	onHealthClick: () => void
 	minRoundedDriveSize: number
 	raidType?: 'storage' | 'failsafe'
@@ -23,7 +22,6 @@ type SsdShapeProps = {
 
 export function SsdShape({
 	device,
-	slotNumber,
 	onHealthClick,
 	minRoundedDriveSize,
 	raidType,
@@ -115,8 +113,11 @@ export function SsdShape({
 	const viewBoxY = -fingerHeight
 	const totalHeight = height + fingerHeight
 
-	// Unique ID for gradient (needed when multiple SSDs on page)
-	const gradientId = `ssd-gradient-${slotNumber}`
+	// Unique IDs are needed when an arbitrary number of SSD shapes share the page.
+	const visualId = useId()
+	const gradientId = `${visualId}-ssd-gradient`
+	const fingerGradientId = `${visualId}-finger-gradient`
+	const fingerStrokeId = `${visualId}-finger-stroke`
 
 	return (
 		<div className={cn('relative shrink-0', isReadyToAdd && 'animate-pulse')} style={{width, height: totalHeight}}>
@@ -147,11 +148,11 @@ export function SsdShape({
 							</>
 						)}
 					</linearGradient>
-					<linearGradient id={`finger-gradient-${slotNumber}`} x1='0%' y1='0%' x2='0%' y2='100%'>
+					<linearGradient id={fingerGradientId} x1='0%' y1='0%' x2='0%' y2='100%'>
 						<stop offset='0%' stopColor='rgba(255, 255, 255, 0.12)' />
 						<stop offset='100%' stopColor='rgba(255, 255, 255, 0)' />
 					</linearGradient>
-					<linearGradient id={`finger-stroke-${slotNumber}`} x1='0%' y1='0%' x2='0%' y2='100%'>
+					<linearGradient id={fingerStrokeId} x1='0%' y1='0%' x2='0%' y2='100%'>
 						<stop offset='0%' stopColor='rgba(255, 255, 255, 0.2)' />
 						<stop offset='100%' stopColor='rgba(255, 255, 255, 0)' />
 					</linearGradient>
@@ -167,8 +168,8 @@ export function SsdShape({
 						width={fingerWidth}
 						height={fingerHeight}
 						rx={3}
-						fill={`url(#finger-gradient-${slotNumber})`}
-						stroke={`url(#finger-stroke-${slotNumber})`}
+						fill={`url(#${fingerGradientId})`}
+						stroke={`url(#${fingerStrokeId})`}
 						strokeWidth={0.5}
 					/>
 				))}
@@ -181,8 +182,8 @@ export function SsdShape({
 						width={fingerWidth}
 						height={fingerHeight}
 						rx={3}
-						fill={`url(#finger-gradient-${slotNumber})`}
-						stroke={`url(#finger-stroke-${slotNumber})`}
+						fill={`url(#${fingerGradientId})`}
+						stroke={`url(#${fingerStrokeId})`}
 						strokeWidth={0.5}
 					/>
 				))}

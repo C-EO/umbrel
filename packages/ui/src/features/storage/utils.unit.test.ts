@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type {RaidDevice, StorageDevice} from './hooks/use-storage.ts'
-import {planFailsafeTransition, planMirrorAdditions} from './utils.ts'
+import type {RaidDevice, RaidStatus, StorageDevice} from './hooks/use-storage.ts'
+import {getPoolDeviceType, planFailsafeTransition, planMirrorAdditions} from './utils.ts'
 
 const TB = 1_000_000_000_000
 
@@ -27,6 +27,27 @@ function poolDrive(overrides: {id?: string; roundedSize?: number}): RaidDevice {
 }
 
 const ids = (devices: Array<{id?: string}>) => devices.map((d) => d.id)
+
+test('getPoolDeviceType routes attached SSD and HDD pools to their matching manager', () => {
+	const pool = {
+		exists: true,
+		devices: [{id: 'POOL', status: 'ONLINE', readErrors: 0, writeErrors: 0, checksumErrors: 0}],
+	} as RaidStatus
+
+	assert.equal(getPoolDeviceType(pool, [device({id: 'POOL', type: 'ssd'})]), 'ssd')
+	assert.equal(getPoolDeviceType(pool, [device({id: 'POOL', type: 'hdd'})]), 'hdd')
+})
+
+test('getPoolDeviceType uses topology hints when pool members are detached', () => {
+	const detachedPool = {
+		exists: true,
+		devices: [{id: 'MISSING', status: 'UNAVAIL', readErrors: 0, writeErrors: 0, checksumErrors: 0}],
+	} as RaidStatus
+
+	assert.equal(getPoolDeviceType({...detachedPool, topology: 'mirror'}, []), 'hdd')
+	assert.equal(getPoolDeviceType({...detachedPool, topology: 'raidz'}, []), 'ssd')
+	assert.equal(getPoolDeviceType({name: 'umbrel', exists: false}, []), undefined)
+})
 
 test('planMirrorAdditions pairs largest drives first, allowing mismatched sizes', () => {
 	// Unlike the onboarding pairing, mirror additions accept unequal pairs - ZFS clamps

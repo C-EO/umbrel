@@ -17,7 +17,7 @@ type Warning = {
 
 type SsdHealthDialogProps = {
 	device: StorageDevice
-	slotNumber: number
+	slotNumber?: number
 	open: boolean
 	onOpenChange: (open: boolean) => void
 }
@@ -86,7 +86,7 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange}: SsdHea
 					>
 						<img
 							src='/assets/onboarding/ssd-info.webp'
-							alt={t('onboarding.raid.ssd-label', {number: slotNumber})}
+							alt={slotNumber ? t('onboarding.raid.ssd-label', {number: slotNumber}) : device.name}
 							draggable={false}
 							className='ml-auto w-[95%]'
 						/>
@@ -103,7 +103,7 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange}: SsdHea
 								{formatSize(device.size)}
 							</span>
 							<span className='text-white/50' style={{fontSize: 'clamp(12px, 2.5vw, 14px)'}}>
-								{t('onboarding.raid.ssd-label', {number: slotNumber})}
+								{slotNumber ? t('onboarding.raid.ssd-label', {number: slotNumber}) : device.name}
 							</span>
 						</div>
 						{/* Right side - Model */}
@@ -263,7 +263,7 @@ const listItemClass = tw`flex items-center gap-3 px-3 h-[42px] text-14 font-medi
 
 // Hook to manage SSD health dialog state
 export function useSsdHealthDialog() {
-	const [selectedDevice, setSelectedDevice] = useState<{device: StorageDevice; slotNumber: number} | null>(null)
+	const [selectedDevice, setSelectedDevice] = useState<{device: StorageDevice; slotNumber?: number} | null>(null)
 
 	return {
 		selectedDevice,
@@ -271,7 +271,7 @@ export function useSsdHealthDialog() {
 		onOpenChange: (open: boolean) => {
 			if (!open) setSelectedDevice(null)
 		},
-		openDialog: (device: StorageDevice, slotNumber: number) => {
+		openDialog: (device: StorageDevice, slotNumber?: number) => {
 			setSelectedDevice({device, slotNumber})
 		},
 	}

@@ -3,6 +3,7 @@ import {useEffect, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useLocation, useNavigate} from 'react-router-dom'
 
+import {Spinner} from '@/components/ui/loading'
 import {AccountCredentials} from '@/routes/onboarding/create-account'
 import {trpcReact} from '@/trpc/trpc'
 
@@ -14,11 +15,15 @@ const MIN_SCAN_DISPLAY_TIME = 3000
 
 // Entry point for RAID onboarding flow. Detects SSDs and routes to /raid/setup if found.
 // Shows inline error states for detection errors or no SSDs found.
-export default function Raid() {
+export type RaidOnboardingVariant = 'pro' | 'generic'
+
+export default function Raid({variant = 'pro'}: {variant?: RaidOnboardingVariant}) {
 	const {t} = useTranslation()
 	const navigate = useNavigate()
 	const location = useLocation()
-	const {devices, isDetecting, error} = useDetectStorageDevices()
+	const isGeneric = variant === 'generic'
+	const basePath = isGeneric ? '/onboarding/ssd-raid' : '/onboarding/raid'
+	const {devices, isDetecting, error} = useDetectStorageDevices({genericSsd: isGeneric})
 
 	// Get credentials passed from create-account page via React Router's location.state
 	const credentials = location.state?.credentials as AccountCredentials | undefined
@@ -64,9 +69,9 @@ export default function Raid() {
 	useEffect(() => {
 		if (!credentials || error || recoverableInstallQ.isError) return
 		if (detectionComplete && devices.length > 0) {
-			navigate('/onboarding/raid/setup', {state: {credentials}})
+			navigate(`${basePath}/setup`, {state: {credentials}})
 		}
-	}, [detectionComplete, devices.length, credentials, navigate, error, recoverableInstallQ.isError])
+	}, [basePath, detectionComplete, devices.length, credentials, navigate, error, recoverableInstallQ.isError])
 
 	// Don't render while redirecting due to missing credentials
 	if (!credentials) return null
@@ -76,7 +81,11 @@ export default function Raid() {
 		return (
 			<RaidError
 				title={error ?? t('onboarding.raid.error.detection-failed')}
-				instructions={t('onboarding.raid.error.detection-instructions')}
+				instructions={
+					isGeneric
+						? t('onboarding.ssd-raid.error.detection-instructions')
+						: t('onboarding.raid.error.detection-instructions')
+				}
 			/>
 		)
 	}
@@ -86,12 +95,29 @@ export default function Raid() {
 		return (
 			<RaidError
 				title={t('onboarding.raid.error.no-ssds-detected')}
-				instructions={t('onboarding.raid.error.no-ssds-instructions')}
-				image={{
-					src: '/assets/onboarding/no-ssd-found.webp',
-					alt: t('onboarding.raid.no-ssds-alt'),
-				}}
+				instructions={
+					isGeneric
+						? t('onboarding.ssd-raid.error.no-ssds-instructions')
+						: t('onboarding.raid.error.no-ssds-instructions')
+				}
+				image={
+					isGeneric
+						? undefined
+						: {
+								src: '/assets/onboarding/no-ssd-found.webp',
+								alt: t('onboarding.raid.no-ssds-alt'),
+							}
+				}
 			/>
+		)
+	}
+
+	if (isGeneric) {
+		return (
+			<div className='flex flex-1 flex-col items-center justify-center gap-4'>
+				<Spinner size='6' />
+				<span className='text-[15px] text-white/85'>{t('onboarding.ssd-raid.scanning')}</span>
+			</div>
 		)
 	}
 

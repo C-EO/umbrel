@@ -235,8 +235,7 @@ export const router = createBrowserRouter([
 					</EnsureUserDoesntExist>
 				),
 			},
-			// RAID setup flow (Pro only)
-			// TODO: will require changes once RAID is available on custom amd64 devices.
+			// Umbrel Pro RAID setup flow
 			{
 				path: 'raid',
 				element: (
@@ -263,6 +262,20 @@ export const router = createBrowserRouter([
 						<RaidSetup />
 					</EnsureProDevice>
 				),
+			},
+			// SSD RAID setup flow (generic devices with internal SSDs)
+			{
+				path: 'ssd-raid',
+				element: (
+					<EnsureUserDoesntExist>
+						<Raid variant='generic' />
+					</EnsureUserDoesntExist>
+				),
+			},
+			{
+				// No EnsureUserDoesntExist guard: setup spans the reboot that creates the user.
+				path: 'ssd-raid/setup',
+				element: <RaidSetup variant='generic' />,
 			},
 			// HDD RAID setup flow (generic devices with internal hard drives)
 			{

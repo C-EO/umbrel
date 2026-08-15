@@ -1,6 +1,22 @@
 import prettyBytes from 'pretty-bytes'
 
-import type {RaidDevice, StorageDevice} from './hooks/use-storage'
+import type {RaidDevice, RaidStatus, StorageDevice} from './hooks/use-storage'
+
+export function getPoolDeviceType(
+	raidStatus: RaidStatus | undefined,
+	allDevices: StorageDevice[],
+): 'ssd' | 'hdd' | undefined {
+	if (!raidStatus?.exists) return undefined
+
+	const poolDeviceIds = new Set(raidStatus.devices?.map((device) => device.id) ?? [])
+	const attachedPoolDevice = allDevices.find((device) => device.id && poolDeviceIds.has(device.id))
+	if (attachedPoolDevice) return attachedPoolDevice.type
+
+	// Mirror data vdevs and accelerators identify HDD pools even when their physical
+	// members are detached. Without either hint, retain the existing SSD fallback.
+	if (raidStatus.topology === 'mirror' || raidStatus.accelerator?.exists) return 'hdd'
+	return 'ssd'
+}
 
 // Format bytes without space, rounding to integer only for 3+ digit values (>=100) to avoid overflow
 // e.g., "4.5TB", "45.2GB", "256GB" - only 256.1GB gets rounded because 256 >= 100

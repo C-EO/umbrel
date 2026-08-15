@@ -1,5 +1,7 @@
 import {RouterOutput, trpcReact} from '@/trpc/trpc'
 
+import {getPoolDeviceType} from '../utils'
+
 // Types from backend
 export type RaidStatus = RouterOutput['hardware']['raid']['getStatus']
 export type StorageDevice = RouterOutput['hardware']['internalStorage']['getDevices'][number]
@@ -280,15 +282,7 @@ export function useStorage(options: UseStorageOptions = {}) {
 	const isDegraded = raidStatus?.status === 'DEGRADED'
 	const canReplaceFailedDevice = isDegraded && failedRaidDevices.length > 0 && availableDevices.length > 0
 
-	// Derived: Whether the pool is made of HDDs or SSDs. Falls back to topology/accelerator
-	// hints when no pool device is physically attached (mirror topology and accelerators
-	// only exist on HDD pools).
-	let poolDeviceType: 'ssd' | 'hdd' | undefined
-	if (raidStatus?.exists) {
-		if (raidDevices.length > 0) poolDeviceType = raidDevices[0].type
-		else if (raidStatus.topology === 'mirror' || raidStatus.accelerator?.exists) poolDeviceType = 'hdd'
-		else poolDeviceType = 'ssd'
-	}
+	const poolDeviceType = getPoolDeviceType(raidStatus, allDevices)
 
 	// Derived: Mirror pairs for HDD failsafe pools. Members keep their pool status even when
 	// the physical device is missing so the UI can render a failed/removed drive.

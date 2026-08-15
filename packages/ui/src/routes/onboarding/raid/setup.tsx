@@ -27,10 +27,11 @@ import {AccountCredentials} from '@/routes/onboarding/create-account'
 import {trpcReact} from '@/trpc/trpc'
 import {linkClass} from '@/utils/element-classes'
 
+import type {RaidOnboardingVariant} from './index'
 import {RaidError} from './raid-error'
 import {RecoverExistingInstall} from './recover-existing-install'
 import {SsdHealthDialog, useSsdHealthDialog} from './ssd-health-dialog'
-import {SsdSlot, SsdTray} from './ssd-tray'
+import {GenericSsdTray, SsdSlot, SsdTray} from './ssd-tray'
 import {
 	FAILSAFE_COLOR,
 	formatSize,
@@ -120,18 +121,97 @@ function FailSafeInfo({
 		)
 	}
 
-	// 4 SSDs - fully expanded, no additional text needed
+	// 4+ SSDs - no additional expansion hint needed
 	return null
+}
+
+function SsdSummaryList({
+	devices,
+	showSlotNumbers,
+	onHealthClick,
+}: {
+	devices: StorageDevice[]
+	showSlotNumbers: boolean
+	onHealthClick?: (device: StorageDevice) => void
+}) {
+	const {t} = useTranslation()
+
+	return (
+		<div className='flex flex-col rounded-xl bg-white/5 p-3'>
+			{devices.map((device) => {
+				const warning = getHealthWarningMessage(device, t)
+				const hasWarning = getDeviceHealth(device).hasWarning
+				const content = (
+					<>
+						<div className='flex flex-col gap-0.5'>
+							<div className='flex items-center gap-2'>
+								{warning ? (
+									<TbAlertTriangle className='size-5 text-[#F5A623]' />
+								) : (
+									<TbCircleCheckFilled className='size-5 text-brand' />
+								)}
+								<span className='text-[14px] font-medium text-white/60 md:text-[15px]'>
+									{showSlotNumbers ? (
+										<Trans
+											t={t}
+											i18nKey='onboarding.raid.ssd-in-slot'
+											values={{size: formatSize(device.roundedSize), slot: device.slot}}
+											components={{highlight: <span className='text-white' />}}
+										/>
+									) : (
+										<>
+											<span className='text-white'>{formatSize(device.roundedSize)}</span>
+											{' · '}
+											{device.name}
+										</>
+									)}
+								</span>
+							</div>
+							{warning && <p className='ml-7 text-[12px] text-[#F5A623]/80 md:text-[13px]'>{warning}</p>}
+						</div>
+						{onHealthClick && (
+							<div className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] px-3 py-0.5 md:hidden'>
+								<TbActivityHeartbeat className='size-4 text-white/60' />
+								{hasWarning && (
+									<span className='absolute -top-0.5 right-1.5 translate-x-1/3 -translate-y-1/3'>
+										<span className='absolute inset-0 size-2.5 rounded-full bg-[#F5A623]' />
+										<span className='absolute inset-0 size-2.5 animate-ping rounded-full bg-[#F5A623] opacity-75' />
+									</span>
+								)}
+							</div>
+						)}
+					</>
+				)
+
+				return onHealthClick ? (
+					<button
+						key={device.id}
+						type='button'
+						onClick={() => onHealthClick(device)}
+						className='-mx-1 flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/5'
+					>
+						{content}
+					</button>
+				) : (
+					<div key={device.id} className='flex items-center justify-between gap-2 px-1 py-1.5'>
+						{content}
+					</div>
+				)
+			})}
+		</div>
+	)
 }
 
 // ============================================================================
 // Main Component
 // ============================================================================
 
-export default function RaidSetup() {
+export default function RaidSetup({variant = 'pro'}: {variant?: RaidOnboardingVariant}) {
 	const {t} = useTranslation()
 	const navigate = useNavigate()
 	const location = useLocation()
+	const isGeneric = variant === 'generic'
+	const basePath = isGeneric ? '/onboarding/ssd-raid' : '/onboarding/raid'
 
 	// Get credentials from React Router's location.state (passed from create-account page)
 	// location.state survives page refresh (browser History API), lost only on direct URL navigation or new tab.
@@ -142,7 +222,7 @@ export default function RaidSetup() {
 	const credentials = location.state?.credentials as AccountCredentials | undefined
 
 	// Always fetch fresh devices from server in case user shut down to change an SSD and refreshes current url
-	const {devices, isDetecting} = useDetectStorageDevices()
+	const {devices, isDetecting} = useDetectStorageDevices({genericSsd: isGeneric})
 	const recoverableInstallQ = trpcReact.hardware.raid.hasRecoverableInstall.useQuery(undefined, {
 		enabled: !!credentials,
 		refetchOnWindowFocus: false,
@@ -170,6 +250,7 @@ export default function RaidSetup() {
 
 	// Shutdown confirmation dialog state
 	const [showShutdownDialog, setShowShutdownDialog] = useState(false)
+	const [showEraseDialog, setShowEraseDialog] = useState(false)
 
 	// Setup phase: null | 'setting-up' | 'restarting' | 'complete' | 'error'
 	const [setupPhase, setSetupPhase] = useState<null | 'setting-up' | 'restarting' | 'complete' | 'error'>(null)
@@ -252,9 +333,9 @@ export default function RaidSetup() {
 	useEffect(() => {
 		if (!credentials) return
 		if (isDetecting || devices.length === 0) {
-			navigate('/onboarding/raid', {state: {credentials}, replace: true})
+			navigate(basePath, {state: {credentials}, replace: true})
 		}
-	}, [isDetecting, devices.length, credentials, navigate])
+	}, [basePath, isDetecting, devices.length, credentials, navigate])
 
 	// Don't render while redirecting
 	if (!credentials || isDetecting || devices.length === 0) {
@@ -269,12 +350,14 @@ export default function RaidSetup() {
 				subTitleMaxWidth={430}
 				showLogo={false}
 			>
-				<img
-					src='/assets/onboarding/pro-front.webp'
-					alt={t('storage-manager.umbrel-pro')}
-					draggable={false}
-					className='w-64 md:w-96'
-				/>
+				{!isGeneric && (
+					<img
+						src='/assets/onboarding/pro-front.webp'
+						alt={t('storage-manager.umbrel-pro')}
+						draggable={false}
+						className='w-64 md:w-96'
+					/>
+				)}
 				<div className='mt-4 w-full max-w-sm'>
 					<Progress />
 				</div>
@@ -292,7 +375,7 @@ export default function RaidSetup() {
 	}
 
 	if (recoverableInstallQ.data && !setUpAsNew) {
-		return <RecoverExistingInstall devices={devices} onSetUpAsNew={() => setSetUpAsNew(true)} />
+		return <RecoverExistingInstall devices={devices} variant={variant} onSetUpAsNew={() => setSetUpAsNew(true)} />
 	}
 
 	// --- Event Handlers ---
@@ -334,26 +417,36 @@ export default function RaidSetup() {
 	// --- Derived State & Calculations ---
 
 	// We show the smallest drive as "failsafe" because it determines the usable capacity per drive.
-	// Get the last slot device with the smallest roundedSize.
+	// Use the last smallest device when multiple drives share that size.
 	const smallestSize = devices.length > 0 ? Math.min(...devices.map((d) => d.roundedSize)) : 0
 	const smallestDevices = devices.filter((d) => d.roundedSize === smallestSize)
-	const smallestDeviceSlot = smallestDevices.length > 0 ? (smallestDevices[smallestDevices.length - 1].slot ?? -1) : -1
+	const smallestDevice = smallestDevices[smallestDevices.length - 1]
 
-	// Convert devices to slots array for SsdTray visualization
-	// Uses the slot property from each device (1-4)
-	const slots: (SsdSlot | null)[] = [null, null, null, null]
+	// Umbrel Pro has a fixed four-slot layout. Generic devices preserve the detected
+	// device order and can render any number of SSDs without inventing slot numbers.
+	const proSlots: (SsdSlot | null)[] = [null, null, null, null]
 	devices.forEach((device) => {
 		const slotIndex = (device.slot ?? 0) - 1 // slot is 1-indexed
 		if (slotIndex >= 0 && slotIndex < 4) {
-			slots[slotIndex] = {
+			proSlots[slotIndex] = {
 				size: formatSize(device.roundedSize),
 				hasWarning: getDeviceHealth(device).hasWarning,
 			}
 		}
 	})
+	const genericSlots: SsdSlot[] = devices.map((device) => ({
+		size: formatSize(device.roundedSize),
+		hasWarning: getDeviceHealth(device).hasWarning,
+		label: device.name,
+	}))
+	const visualSlots = isGeneric ? genericSlots : proSlots
 
-	// The failsafe slot is the smallest drive (when failsafe is enabled)
-	const failsafeSlot = failSafeEnabled && canEnableFailSafe && smallestDeviceSlot > 0 ? smallestDeviceSlot - 1 : -1
+	const failsafeSlot =
+		failSafeEnabled && canEnableFailSafe && smallestDevice
+			? isGeneric
+				? devices.indexOf(smallestDevice)
+				: (smallestDevice.slot ?? 0) - 1
+			: -1
 
 	// Calculate storage values based on failsafe config
 	// FailSafe uses RAIDZ1: one drive's worth of capacity for parity (based on smallest drive)
@@ -453,13 +546,17 @@ export default function RaidSetup() {
 					</div>
 				}
 			>
-				<img
-					src='/assets/onboarding/pro-front.webp'
-					alt={t('storage-manager.umbrel-pro')}
-					draggable={false}
-					className='w-64 md:w-96'
-				/>
-				<p className='-mt-4 text-[13px] font-medium text-white/30'>{t('storage-manager.umbrel-pro')}</p>
+				{!isGeneric && (
+					<>
+						<img
+							src='/assets/onboarding/pro-front.webp'
+							alt={t('storage-manager.umbrel-pro')}
+							draggable={false}
+							className='w-64 md:w-96'
+						/>
+						<p className='-mt-4 text-[13px] font-medium text-white/30'>{t('storage-manager.umbrel-pro')}</p>
+					</>
+				)}
 				{/* Progress bar */}
 				<div className='mt-4 w-full max-w-sm'>
 					<Progress />
@@ -471,7 +568,7 @@ export default function RaidSetup() {
 	// --- Render: Success State ---
 
 	// Show success page after setup is complete
-	// Note: Pro uses this inline success page (not /onboarding/account-created) because we need to
+	// RAID onboarding uses this inline success page (not /onboarding/account-created) because we need to
 	// display storage/failsafe details and handle auto-login after reboot
 	if (setupPhase === 'complete') {
 		// Get first name from credentials
@@ -499,14 +596,22 @@ export default function RaidSetup() {
 					</div>
 				}
 			>
-				<img
-					src='/assets/onboarding/pro-front.webp'
-					alt={t('storage-manager.umbrel-pro')}
-					draggable={false}
-					className='w-64 md:w-96'
-				/>
-				<p className='-mt-2 text-[20px] font-semibold text-white/85'>{t('storage-manager.umbrel-pro')}</p>
-				<p className='-mt-5 text-[14px] font-medium text-white/50'>
+				{!isGeneric && (
+					<>
+						<img
+							src='/assets/onboarding/pro-front.webp'
+							alt={t('storage-manager.umbrel-pro')}
+							draggable={false}
+							className='w-64 md:w-96'
+						/>
+						<p className='-mt-2 text-[20px] font-semibold text-white/85'>{t('storage-manager.umbrel-pro')}</p>
+					</>
+				)}
+				<p
+					className={
+						isGeneric ? 'text-[14px] font-medium text-white/50' : '-mt-5 text-[14px] font-medium text-white/50'
+					}
+				>
 					{failSafeEnabled
 						? t('onboarding.raid.success.storage-info-failsafe', {
 								available: availableStorage,
@@ -549,54 +654,16 @@ export default function RaidSetup() {
 					>
 						{t('onboarding.raid.storage')}
 					</h1>
-					<p className='text-[14px] text-white/50 md:text-[16px]'>{t('onboarding.raid.ssds-found')}</p>
+					<p className='text-[14px] text-white/50 md:text-[16px]'>
+						{isGeneric ? t('onboarding.ssd-raid.ssds-found') : t('onboarding.raid.ssds-found')}
+					</p>
 				</div>
 
-				{/* SSD list card */}
-				<div className='flex flex-col rounded-xl bg-white/5 p-3'>
-					{devices.map((device) => {
-						const warning = getHealthWarningMessage(device, t)
-						const hasWarning = getDeviceHealth(device).hasWarning
-						return (
-							<button
-								key={device.id}
-								type='button'
-								onClick={() => healthDialog.openDialog(device, device.slot ?? 0)}
-								className='-mx-1 flex items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/5'
-							>
-								<div className='flex flex-col gap-0.5'>
-									<div className='flex items-center gap-2'>
-										{warning ? (
-											<TbAlertTriangle className='size-5 text-[#F5A623]' />
-										) : (
-											<TbCircleCheckFilled className='size-5 text-brand' />
-										)}
-										<span className='text-[14px] font-medium text-white/60 md:text-[15px]'>
-											<Trans
-												t={t}
-												i18nKey='onboarding.raid.ssd-in-slot'
-												values={{size: formatSize(device.roundedSize), slot: device.slot}}
-												components={{highlight: <span className='text-white' />}}
-											/>
-										</span>
-									</div>
-									{warning && <p className='ml-7 text-[12px] text-[#F5A623]/80 md:text-[13px]'>{warning}</p>}
-								</div>
-								{/* Health pill - mobile only (desktop has device visualization) */}
-								<div className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] px-3 py-0.5 md:hidden'>
-									<TbActivityHeartbeat className='size-4 text-white/60' />
-									{/* Warning dot with ping - positioned to intersect pill edge */}
-									{hasWarning && (
-										<span className='absolute -top-0.5 right-1.5 translate-x-1/3 -translate-y-1/3'>
-											<span className='absolute inset-0 size-2.5 rounded-full bg-[#F5A623]' />
-											<span className='absolute inset-0 size-2.5 animate-ping rounded-full bg-[#F5A623] opacity-75' />
-										</span>
-									)}
-								</div>
-							</button>
-						)
-					})}
-				</div>
+				<SsdSummaryList
+					devices={devices}
+					showSlotNumbers={!isGeneric}
+					onHealthClick={(device) => healthDialog.openDialog(device, isGeneric ? undefined : device.slot)}
+				/>
 
 				{/* Shut down link */}
 				<button
@@ -718,7 +785,7 @@ export default function RaidSetup() {
 
 					{/* Continue button */}
 					<button
-						onClick={handleContinue}
+						onClick={() => (isGeneric ? setShowEraseDialog(true) : handleContinue())}
 						{...primaryButtonProps}
 						className={`${primaryButtonProps.className} w-full md:w-fit`}
 					>
@@ -727,28 +794,40 @@ export default function RaidSetup() {
 				</div>
 			</div>
 
-			{/* Right side - device visualization (hidden on mobile) */}
-			<div className='hidden flex-1 flex-col items-end justify-center md:-mr-6 md:flex'>
+			{/* Right side - shared SSD visualization (hidden on mobile) */}
+			<div
+				className={`hidden min-w-0 flex-1 flex-col justify-center md:flex ${isGeneric ? 'items-center' : 'items-end md:-mr-6'}`}
+			>
 				<div
-					className='w-[95%]'
+					className={isGeneric ? 'w-full' : 'w-[95%]'}
 					style={{
 						maskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
 						WebkitMaskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
 					}}
 				>
-					<SsdTray
-						slots={slots}
-						failsafeSlot={failsafeSlot}
-						onHealthClick={(slotIndex) => {
-							// Find the device for this slot (slots are 0-indexed, device.slot is 1-indexed)
-							const device = devices.find((d) => d.slot === slotIndex + 1)
-							if (device) {
-								healthDialog.openDialog(device, slotIndex + 1)
-							}
-						}}
-					/>
+					{isGeneric ? (
+						<GenericSsdTray
+							slots={visualSlots}
+							failsafeSlot={failsafeSlot}
+							onHealthClick={(deviceIndex) => {
+								const device = devices[deviceIndex]
+								if (device) healthDialog.openDialog(device)
+							}}
+						/>
+					) : (
+						<SsdTray
+							slots={visualSlots}
+							failsafeSlot={failsafeSlot}
+							onHealthClick={(slotIndex) => {
+								const device = devices.find((candidate) => candidate.slot === slotIndex + 1)
+								if (device) healthDialog.openDialog(device, slotIndex + 1)
+							}}
+						/>
+					)}
 				</div>
-				<div className='-mt-20 flex w-[95%] translate-x-4 flex-col items-center gap-1'>
+				<div
+					className={`flex flex-col items-center gap-1 ${isGeneric ? 'mt-2 w-full' : '-mt-20 w-[95%] translate-x-4'}`}
+				>
 					<p className='text-[20px] font-semibold text-white/50'>
 						{t('onboarding.raid.available-storage')} <span className='text-brand'>{availableStorage}</span>
 					</p>
@@ -769,7 +848,11 @@ export default function RaidSetup() {
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>{t('onboarding.raid.shutdown-dialog.title')}</AlertDialogTitle>
-						<AlertDialogDescription>{t('onboarding.raid.shutdown-dialog.description')}</AlertDialogDescription>
+						<AlertDialogDescription>
+							{isGeneric
+								? t('onboarding.ssd-raid.shutdown-dialog.description')
+								: t('onboarding.raid.shutdown-dialog.description')}
+						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
 						<AlertDialogAction variant='destructive' onClick={() => shutdown()}>
@@ -779,6 +862,27 @@ export default function RaidSetup() {
 					</AlertDialogFooter>
 				</AlertDialogContent>
 			</AlertDialog>
+
+			{/* Generic hardware always confirms the destructive operation in the UI. */}
+			{isGeneric && (
+				<AlertDialog open={showEraseDialog} onOpenChange={setShowEraseDialog}>
+					<AlertDialogContent>
+						<AlertDialogHeader icon={TbAlertTriangleFilled}>
+							<AlertDialogTitle>{t('onboarding.ssd-raid.erase-dialog.title')}</AlertDialogTitle>
+							<AlertDialogDescription>{t('onboarding.ssd-raid.erase-dialog.description')}</AlertDialogDescription>
+							<div className='max-h-[320px] overflow-y-auto pt-2'>
+								<SsdSummaryList devices={devices} showSlotNumbers={false} />
+							</div>
+						</AlertDialogHeader>
+						<AlertDialogFooter>
+							<AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+							<AlertDialogAction variant='destructive' onClick={handleContinue}>
+								{t('onboarding.raid.recovery.set-up-new-dialog.confirm')}
+							</AlertDialogAction>
+						</AlertDialogFooter>
+					</AlertDialogContent>
+				</AlertDialog>
+			)}
 
 			{/* SSD Health dialog */}
 			{healthDialog.selectedDevice && (

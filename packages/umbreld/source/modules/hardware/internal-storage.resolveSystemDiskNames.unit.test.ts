@@ -51,6 +51,12 @@ describe('resolveSystemDiskNames', () => {
 		)
 	})
 
+	test('uses the Rugix config partition when root is an overlay and data is on ZFS', () => {
+		expect(resolveSystemDiskNames(['overlay', '/dev/sda1', 'umbrelos-df2f7bce/data'], blockDevices)).toEqual(
+			new Set(['sda']),
+		)
+	})
+
 	test('fails closed when no system path resolves to a physical disk', () => {
 		expect(() => resolveSystemDiskNames(['umbrelos-df2f7bce/data', 'overlay', undefined], blockDevices)).toThrow(
 			'Could not determine the physical disk backing the running system',

@@ -20,7 +20,9 @@ import {useAuth} from '@/modules/auth/use-auth'
 import {OnboardingAction, OnboardingFooter} from '@/routes/onboarding/onboarding-footer'
 import {trpcReact} from '@/trpc/trpc'
 
-// Credentials for Umbrel Pro RAID flow. Passed via React Router's location.state
+import {getGenericRaidOnboardingPath} from './storage-selection'
+
+// Credentials for RAID onboarding flows. Passed via React Router's location.state
 // through the RAID setup pages. Actual user.register call happens in setup.tsx
 // after RAID configuration. location.state survives page refresh but is lost on
 // direct URL navigation or new tab.
@@ -36,7 +38,7 @@ export default function CreateAccount() {
 	const navigate = useNavigate()
 	const auth = useAuth()
 	const [language] = useLanguage()
-	const {data: deviceInfo} = useDeviceInfo()
+	const {data: deviceInfo, isLoading: isDeviceInfoLoading} = useDeviceInfo()
 
 	const [name, setName] = useState('')
 	const [password, setPassword] = useState('')
@@ -47,9 +49,10 @@ export default function CreateAccount() {
 
 	const isPro = deviceInfo?.umbrelHostEnvironment === 'umbrel-pro'
 	const isRaspberryPi = deviceInfo?.umbrelHostEnvironment === 'raspberry-pi'
+	const isGeneric = deviceInfo?.umbrelHostEnvironment === 'unknown'
 	const externalDevicesQ = trpcReact.files.externalDevices.useQuery(undefined, {enabled: isRaspberryPi})
-	// Generic devices with internal hard drives get the HDD RAID onboarding flow
-	const internalStorageQ = trpcReact.hardware.internalStorage.getDevices.useQuery(undefined, {enabled: !isPro})
+	// Generic devices with internal data drives get the matching RAID onboarding flow
+	const internalStorageQ = trpcReact.hardware.internalStorage.getDevices.useQuery(undefined, {enabled: isGeneric})
 
 	const loginMut = trpcReact.user.login.useMutation({
 		onSuccess: async (token) => {
@@ -73,15 +76,17 @@ export default function CreateAccount() {
 			return
 		}
 
-		// Devices with internal hard drives get the HDD RAID setup flow. If detection
-		// fails we fall back to the standard registration flow.
-		const internalDevices = internalStorageQ.data ?? (await internalStorageQ.refetch()).data
-		const hasHdds = internalDevices?.some((device) => device.type === 'hdd' && !device.isSystemDrive && device.id)
-		if (hasHdds) {
-			setIsNavigating(true)
-			const credentials: AccountCredentials = {name, password, language}
-			navigate('/onboarding/hdd-raid', {state: {credentials}})
-			return
+		if (isGeneric) {
+			// Generic devices prefer HDD RAID when HDDs are present, otherwise SSD RAID
+			// when SSDs are present. If detection fails we fall back to standard setup.
+			const internalDevices = internalStorageQ.data ?? (await internalStorageQ.refetch()).data
+			const raidOnboardingPath = getGenericRaidOnboardingPath(internalDevices ?? [])
+			if (raidOnboardingPath) {
+				setIsNavigating(true)
+				const credentials: AccountCredentials = {name, password, language}
+				navigate(raidOnboardingPath, {state: {credentials}})
+				return
+			}
 		}
 
 		// Otherwise we do standard registration flow
@@ -123,7 +128,7 @@ export default function CreateAccount() {
 
 	const remoteFormError = !registerMut.error?.data?.zodError && registerMut.error?.message
 	const formError = localError || remoteFormError
-	const isLoading = registerMut.isPending || loginMut.isPending || isNavigating
+	const isLoading = isDeviceInfoLoading || registerMut.isPending || loginMut.isPending || isNavigating
 
 	return (
 		<Layout

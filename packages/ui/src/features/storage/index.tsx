@@ -26,29 +26,33 @@ import {SsdShape} from './components/ssd-shape'
 import {StorageDonutChart} from './components/storage-donut-chart'
 import {StorageModeDisplay} from './components/storage-mode-display'
 import {StorageStats} from './components/storage-stats'
-import {StorageDevice, useStorage} from './hooks/use-storage'
-import {formatStorageSize} from './utils'
+import {getDeviceHealth, StorageDevice, useStorage} from './hooks/use-storage'
+import {formatStorageSize, getPoolDeviceType} from './utils'
 
 // Umbrel Pro has 4 SSD slots
 const SLOT_INDICES = [0, 1, 2, 3] as const
 
-// Umbrel Pro gets the physical tray visualization; any other device gets the
-// list-based manager (its empty state offers installing the first drives)
+// SSD pools share one manager. Umbrel Pro adds its known four-slot enclosure layout;
+// generic SSD hardware renders the same controls against a slotless device rail.
+// HDD pools and generic hardware without a pool use the list manager built around
+// mirrors and accelerators, including its empty state for installing the first drives.
 export default function StorageManagerDialog() {
 	const {isUmbrelPro, isLoading: isLoadingUmbrelPro} = useIsUmbrelPro()
 	const raidStatusQ = trpcReact.hardware.raid.getStatus.useQuery()
+	const devicesQ = trpcReact.hardware.internalStorage.getDevices.useQuery()
 
-	if (isLoadingUmbrelPro || raidStatusQ.isLoading) return null
-	if (isUmbrelPro) return <ProStorageManager />
+	if (isLoadingUmbrelPro || raidStatusQ.isLoading || devicesQ.isLoading) return null
+	if (isUmbrelPro) return <SsdStorageManager isUmbrelPro />
+	if (raidStatusQ.data?.exists && getPoolDeviceType(raidStatusQ.data, devicesQ.data ?? []) === 'ssd') {
+		return <SsdStorageManager isUmbrelPro={false} />
+	}
 	return <ListStorageManager />
 }
 
-function ProStorageManager() {
+function SsdStorageManager({isUmbrelPro}: {isUmbrelPro: boolean}) {
 	const {t} = useTranslation()
 	const navigate = useNavigate()
 	const [temperatureUnit] = useTemperatureUnit()
-
-	const {isUmbrelPro} = useIsUmbrelPro()
 
 	// Get actual storage data
 	// We poll every 15 seconds to keep temperature and health status up to date
@@ -56,6 +60,7 @@ function ProStorageManager() {
 		allDevices,
 		raidDevices,
 		availableDevices,
+		availableSsds,
 		ssdSlots,
 		readyToAddIds,
 		chartData,
@@ -72,7 +77,7 @@ function ProStorageManager() {
 		isLoading: isStorageLoading,
 		// Degraded replacement
 		failedRaidDevices,
-		canReplaceFailedDevice,
+		isDegraded,
 		// Mutations
 		addDeviceAsync,
 		transitionToFailsafeAsync,
@@ -95,19 +100,121 @@ function ProStorageManager() {
 	const [deviceToAdd, setDeviceToAdd] = useState<StorageDevice | null>(null)
 	const [isSwapDialogOpen, setIsSwapDialogOpen] = useState(false)
 	const [swapSlot, setSwapSlot] = useState<number | null>(null)
+	const [swapDeviceId, setSwapDeviceId] = useState<string | null>(null)
 	const [isReplaceFailedDialogOpen, setIsReplaceFailedDialogOpen] = useState(false)
 	const [deviceForReplacement, setDeviceForReplacement] = useState<StorageDevice | null>(null)
 
-	// Pre-compute slot states to avoid logic duplication between mobile and desktop
-	const slotStates = SLOT_INDICES.map((i) => {
-		const device = ssdSlots[i]
-		const isReadyToAdd = device && readyToAddIds.has(device.id)
-		const isInRaid = device && !isReadyToAdd
+	const detectedGenericSsds = allDevices.filter((device) => device.type === 'ssd' && !device.isSystemDrive && device.id)
+	const displayedSsds = isUmbrelPro
+		? SLOT_INDICES.map((slotIndex) => ({device: ssdSlots[slotIndex], slotNumber: slotIndex + 1}))
+		: detectedGenericSsds.map((device) => ({device, slotNumber: undefined}))
+	const canReplaceFailedSsd = isDegraded && failedRaidDevices.length > 0 && availableSsds.length > 0
+
+	// Pre-compute device states once for the shared mobile and desktop presentations.
+	const ssdStates = displayedSsds.map(({device, slotNumber}) => {
 		const raidDevice = device ? raidDevices.find((rd) => rd.id === device.id) : undefined
+		const isReadyToAdd = !!device && readyToAddIds.has(device.id)
+		const isInRaid = !!raidDevice
 		const isFailedDrive = raidDevice && raidDevice.raidStatus !== 'ONLINE'
-		const hasWarning = device && (isFailedDrive || device.smartStatus === 'unhealthy')
-		return {device, isReadyToAdd, isInRaid, raidDevice, isFailedDrive, hasWarning}
+		const hasWarning = device && (isFailedDrive || getDeviceHealth(device).hasWarning)
+		return {device, slotNumber, isReadyToAdd, isInRaid, raidDevice, isFailedDrive, hasWarning}
 	})
+
+	const renderSsdAction = (state: (typeof ssdStates)[number], fullWidth = false) => {
+		const {device, slotNumber, isReadyToAdd, isInRaid, isFailedDrive} = state
+		const sizeClass = fullWidth ? 'w-full justify-center py-1 text-[12px]' : 'px-2 py-1 text-[11px]'
+
+		if (isInRaid && device) {
+			return (
+				<button
+					type='button'
+					onClick={() => {
+						setSwapSlot(slotNumber ?? null)
+						setSwapDeviceId(slotNumber ? null : (device.id ?? null))
+						setIsSwapDialogOpen(true)
+					}}
+					className={cn(
+						'flex items-center rounded-full font-medium transition-colors',
+						fullWidth ? 'gap-1' : 'gap-0.5',
+						sizeClass,
+						isFailedDrive
+							? 'bg-[#FF3434] text-white hover:bg-[#FF3434]/90'
+							: 'border border-white/[0.08] bg-white/[0.06] text-white/80 hover:bg-white/10',
+					)}
+				>
+					<TbRefreshDot className='size-3.5' />
+					{isFailedDrive ? t('storage-manager.replace') : t('storage-manager.swap')}
+				</button>
+			)
+		}
+
+		if (isReadyToAdd && device) {
+			if (canReplaceFailedSsd) {
+				return (
+					<button
+						type='button'
+						onClick={() => {
+							setDeviceForReplacement(device)
+							setIsReplaceFailedDialogOpen(true)
+						}}
+						className={cn(
+							'flex items-center rounded-full bg-[#FF3434] font-medium text-white transition-colors hover:bg-[#FF3434]/90',
+							fullWidth ? 'gap-1' : 'gap-0.5',
+							sizeClass,
+						)}
+					>
+						<TbRefreshDot className='size-3.5' />
+						{t('storage-manager.replace')}
+					</button>
+				)
+			}
+
+			return (
+				<button
+					type='button'
+					onClick={() => {
+						setDeviceToAdd(device)
+						setIsAddDialogOpen(true)
+					}}
+					className={cn(
+						'flex animate-pulse items-center rounded-full border border-white/20 bg-white/15 font-medium text-white transition-colors hover:bg-white/20',
+						fullWidth ? 'gap-1' : 'gap-0.5',
+						sizeClass,
+					)}
+				>
+					{fullWidth ? (
+						<TbPlus className='size-3' strokeWidth={3} />
+					) : (
+						<span className='flex size-3 items-center justify-center rounded-full bg-white/30'>
+							<TbPlus className='size-2 text-white' strokeWidth={3} />
+						</span>
+					)}
+					{t('storage-manager.add')}
+				</button>
+			)
+		}
+
+		return (
+			<button
+				type='button'
+				onClick={() => setIsInstallSsdDialogOpen(true)}
+				className={cn(
+					'flex items-center rounded-full bg-brand font-medium text-white transition-colors hover:bg-brand/90',
+					fullWidth ? 'gap-1' : 'gap-0.5',
+					sizeClass,
+				)}
+			>
+				{fullWidth ? (
+					<TbPlus className='size-3' strokeWidth={3} />
+				) : (
+					<span className='flex size-3 items-center justify-center rounded-full bg-white'>
+						<TbPlus className='size-2 text-brand' strokeWidth={3} />
+					</span>
+				)}
+				{t('storage-manager.add')}
+			</button>
+		)
+	}
 
 	return (
 		<ImmersiveDialog
@@ -149,12 +256,12 @@ function ProStorageManager() {
 						{/* Mobile: SSD List Card */}
 						<div className='flex flex-col gap-6 md:hidden'>
 							<div className='flex flex-col rounded-xl bg-white/5 p-3'>
-								{slotStates.map(({device, isReadyToAdd, isInRaid, isFailedDrive, hasWarning}, i) => (
+								{ssdStates.map(({device, slotNumber, isInRaid, hasWarning}, i) => (
 									<div
-										key={`mobile-slot-${i}`}
+										key={`mobile-ssd-${slotNumber ?? device?.id ?? i}`}
 										className='flex items-center justify-between gap-2 rounded-lg px-2 py-2'
 									>
-										{/* Left: Status + Slot info */}
+										{/* Left: Status + SSD info */}
 										<div className='flex items-center gap-2'>
 											{/* Only show checkmark when device is in RAID, warning if issues, empty otherwise */}
 											{isInRaid ? (
@@ -166,9 +273,8 @@ function ProStorageManager() {
 											) : (
 												<div className='size-5 shrink-0' />
 											)}
-											{/* "SSD" labels are not translated - they match the physical device markings */}
-											<span className='text-[14px] font-medium text-white/60'>
-												SSD {i + 1}
+											<span className='min-w-0 truncate text-[14px] font-medium text-white/60'>
+												{slotNumber ? `SSD ${slotNumber}` : device?.name}
 												{device && (
 													<>
 														{' · '}
@@ -185,7 +291,7 @@ function ProStorageManager() {
 											{device && (
 												<button
 													type='button'
-													onClick={() => healthDialog.openDialog(device, i + 1)}
+													onClick={() => healthDialog.openDialog(device, slotNumber)}
 													className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] px-3 py-0.5'
 												>
 													<TbActivityHeartbeat className='size-4 text-white/60' />
@@ -199,66 +305,20 @@ function ProStorageManager() {
 											)}
 
 											{/* Action button - fixed width container for alignment */}
-											<div className='w-[76px]'>
-												{isInRaid ? (
-													<button
-														type='button'
-														onClick={() => {
-															setSwapSlot(i + 1)
-															setIsSwapDialogOpen(true)
-														}}
-														className={cn(
-															'flex w-full items-center justify-center gap-1 rounded-full py-1 text-[12px] font-medium transition-colors',
-															isFailedDrive
-																? 'bg-[#FF3434] text-white hover:bg-[#FF3434]/90'
-																: 'border border-white/[0.08] bg-white/[0.06] text-white/80 hover:bg-white/10',
-														)}
-													>
-														<TbRefreshDot className='size-3.5' />
-														{isFailedDrive ? t('storage-manager.replace') : t('storage-manager.swap')}
-													</button>
-												) : isReadyToAdd ? (
-													canReplaceFailedDevice ? (
-														// Degraded array - offer to replace failed device
-														<button
-															type='button'
-															onClick={() => {
-																setDeviceForReplacement(device)
-																setIsReplaceFailedDialogOpen(true)
-															}}
-															className='flex w-full items-center justify-center gap-1 rounded-full bg-[#FF3434] py-1 text-[12px] font-medium text-white transition-colors hover:bg-[#FF3434]/90'
-														>
-															<TbRefreshDot className='size-3.5' />
-															{t('storage-manager.replace')}
-														</button>
-													) : (
-														// Normal add flow
-														<button
-															type='button'
-															onClick={() => {
-																setDeviceToAdd(device)
-																setIsAddDialogOpen(true)
-															}}
-															className='flex w-full animate-pulse items-center justify-center gap-1 rounded-full border border-white/20 bg-white/15 py-1 text-[12px] font-medium text-white transition-colors hover:bg-white/20'
-														>
-															<TbPlus className='size-3' strokeWidth={3} />
-															{t('storage-manager.add')}
-														</button>
-													)
-												) : (
-													<button
-														type='button'
-														onClick={() => setIsInstallSsdDialogOpen(true)}
-														className='flex w-full items-center justify-center gap-1 rounded-full bg-brand py-1 text-[12px] font-medium text-white transition-colors hover:bg-brand/90'
-													>
-														<TbPlus className='size-3' strokeWidth={3} />
-														{t('storage-manager.add')}
-													</button>
-												)}
-											</div>
+											<div className='w-[76px]'>{renderSsdAction(ssdStates[i], true)}</div>
 										</div>
 									</div>
 								))}
+								{!isUmbrelPro && (
+									<button
+										type='button'
+										onClick={() => setIsInstallSsdDialogOpen(true)}
+										className='mx-2 mt-1 flex items-center justify-center gap-1 rounded-full bg-brand py-1 text-[12px] font-medium text-white transition-colors hover:bg-brand/90'
+									>
+										<TbPlus className='size-3' strokeWidth={3} />
+										{t('storage-manager.add')}
+									</button>
+								)}
 							</div>
 
 							{/* Storage info for mobile */}
@@ -284,7 +344,7 @@ function ProStorageManager() {
 						{/* Desktop: Device visualization and info */}
 						<div className='hidden flex-1 items-start gap-6 px-6 md:flex'>
 							{/* Left: Device visualization */}
-							<div className='flex flex-col items-center gap-3'>
+							<div className={isUmbrelPro ? 'flex flex-col items-center gap-3' : 'hidden'}>
 								{/* Gradient border using pseudo-element technique */}
 								<div
 									className='relative h-[480px] w-[480px] rounded-[69px] border-[3px] border-transparent bg-[radial-gradient(78%_100%_at_50%_0%,_rgba(255,255,255,0.12)_0%,_rgba(255,255,255,0.04)_100%)] bg-clip-padding'
@@ -361,7 +421,6 @@ function ProStorageManager() {
 												{device && (
 													<SsdShape
 														device={device}
-														slotNumber={i + 1}
 														onHealthClick={() => healthDialog.openDialog(device, i + 1)}
 														minRoundedDriveSize={minRoundedDriveSize}
 														raidType={raidType}
@@ -375,7 +434,7 @@ function ProStorageManager() {
 									})}
 
 									{/* Action buttons below each slot */}
-									{slotStates.map(({device, isReadyToAdd, isInRaid, isFailedDrive}, i) => (
+									{ssdStates.map((state, i) => (
 										<div
 											key={`button-${i}`}
 											className='absolute flex justify-center'
@@ -385,69 +444,58 @@ function ProStorageManager() {
 												width: '15%',
 											}}
 										>
-											{isInRaid ? (
-												<button
-													type='button'
-													onClick={() => {
-														setSwapSlot(i + 1)
-														setIsSwapDialogOpen(true)
-													}}
-													className={
-														isFailedDrive
-															? 'flex items-center gap-0.5 rounded-full bg-[#FF3434] px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#FF3434]/90'
-															: 'flex items-center gap-0.5 rounded-full border border-white/[0.08] bg-white/[0.06] px-2 py-1 text-[11px] font-medium text-white/80 transition-colors hover:bg-white/10'
-													}
-												>
-													<TbRefreshDot className='size-3.5' />
-													{isFailedDrive ? t('storage-manager.replace') : t('storage-manager.swap')}
-												</button>
-											) : isReadyToAdd ? (
-												canReplaceFailedDevice ? (
-													// Degraded array - offer to replace failed device
-													<button
-														type='button'
-														onClick={() => {
-															setDeviceForReplacement(device)
-															setIsReplaceFailedDialogOpen(true)
-														}}
-														className='flex items-center gap-0.5 rounded-full bg-[#FF3434] px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-[#FF3434]/90'
-													>
-														<TbRefreshDot className='size-3.5' />
-														{t('storage-manager.replace')}
-													</button>
-												) : (
-													// Normal add flow
-													<button
-														type='button'
-														onClick={() => {
-															setDeviceToAdd(device)
-															setIsAddDialogOpen(true)
-														}}
-														className='flex animate-pulse items-center gap-0.5 rounded-full border border-white/20 bg-white/15 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-white/20'
-													>
-														<span className='flex size-3 items-center justify-center rounded-full bg-white/30'>
-															<TbPlus className='size-2 text-white' strokeWidth={3} />
-														</span>
-														{t('storage-manager.add')}
-													</button>
-												)
-											) : (
-												<button
-													type='button'
-													onClick={() => setIsInstallSsdDialogOpen(true)}
-													className='flex items-center gap-0.5 rounded-full bg-brand px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-brand/90'
-												>
-													<span className='flex size-3 items-center justify-center rounded-full bg-white'>
-														<TbPlus className='size-2 text-brand' strokeWidth={3} />
-													</span>
-													{t('storage-manager.add')}
-												</button>
-											)}
+											{renderSsdAction(state)}
 										</div>
 									))}
 								</div>
 								<span className='text-13 font-semibold text-white/50'>{t('storage-manager.umbrel-pro')}</span>
 							</div>
+
+							{!isUmbrelPro && (
+								<div className='flex min-w-0 flex-1 flex-col items-center gap-3'>
+									<div className='relative h-[430px] w-full min-w-0'>
+										{isStorageLoading && (
+											<div className='absolute inset-0 z-10 flex items-center justify-center bg-black/30'>
+												<Spinner size='8' />
+											</div>
+										)}
+										<div className='umbrel-hide-scrollbar flex size-full overflow-x-auto'>
+											<div className='flex w-max min-w-full items-center justify-center gap-8 px-8'>
+												{ssdStates.map((state) => {
+													const {device, raidDevice, isReadyToAdd} = state
+													if (!device) return null
+
+													return (
+														<div key={device.id} className='flex w-[120px] shrink-0 flex-col items-center gap-2'>
+															<SsdShape
+																device={device}
+																onHealthClick={() => healthDialog.openDialog(device)}
+																minRoundedDriveSize={minRoundedDriveSize}
+																raidType={raidType}
+																temperatureUnit={temperatureUnit}
+																isReadyToAdd={isReadyToAdd}
+																raidDevice={raidDevice}
+															/>
+															<span className='w-full truncate text-center text-13 font-medium text-white/50'>
+																{device.name}
+															</span>
+															{renderSsdAction(state)}
+														</div>
+													)
+												})}
+											</div>
+										</div>
+									</div>
+									<button
+										type='button'
+										onClick={() => setIsInstallSsdDialogOpen(true)}
+										className='flex items-center gap-1 rounded-full bg-brand px-3 py-1 text-[12px] font-medium text-white transition-colors hover:bg-brand/90'
+									>
+										<TbPlus className='size-3' strokeWidth={3} />
+										{t('storage-manager.add')}
+									</button>
+								</div>
+							)}
 
 							{/* Right: Storage info */}
 							<div className='relative flex flex-1 flex-col items-center justify-start gap-4 pt-8'>
@@ -510,12 +558,19 @@ function ProStorageManager() {
 			{/* Swap SSD Dialog */}
 			<SwapDialog
 				open={isSwapDialogOpen}
-				onOpenChange={setIsSwapDialogOpen}
+				onOpenChange={(open) => {
+					setIsSwapDialogOpen(open)
+					if (!open) {
+						setSwapSlot(null)
+						setSwapDeviceId(null)
+					}
+				}}
 				raidType={raidType}
 				slot={swapSlot}
+				oldDeviceId={swapDeviceId}
 				isUmbrelPro={isUmbrelPro}
 				raidDriveCount={raidDriveCount}
-				availableDevices={availableDevices}
+				availableDevices={isUmbrelPro ? availableDevices : availableSsds}
 				allDevices={allDevices}
 				replaceDeviceAsync={replaceDeviceAsync}
 			/>

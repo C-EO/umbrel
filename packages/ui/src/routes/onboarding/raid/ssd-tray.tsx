@@ -7,6 +7,7 @@ import {FAILSAFE_COLOR} from './use-raid-setup'
 export type SsdSlot = {
 	size: string // e.g., "2TB"
 	hasWarning?: boolean // true if SSD has health issues
+	label?: string
 }
 
 type SsdTrayProps = {
@@ -181,6 +182,82 @@ export function SsdTray({slots, failsafeSlot = -1, onHealthClick}: SsdTrayProps)
 					</div>
 				)
 			})}
+		</div>
+	)
+}
+
+/**
+ * Renders the same SSD artwork and status treatment as the Umbrel Pro tray,
+ * without assuming a chassis or fixed slot layout.
+ */
+export function GenericSsdTray({slots, failsafeSlot = -1, onHealthClick}: SsdTrayProps) {
+	return (
+		<div className='w-full overflow-x-auto pb-3'>
+			<div className='flex w-max min-w-full items-start justify-center gap-5 px-5'>
+				{slots.map((slot, index) => {
+					if (!slot) return null
+
+					const isFailsafe = index === failsafeSlot
+
+					return (
+						<div key={index} className='flex w-[112px] shrink-0 flex-col items-center gap-2'>
+							<div className='relative aspect-[279/670] w-full'>
+								<img
+									src='/assets/onboarding/ssd.webp'
+									alt={slot.label ?? 'SSD'}
+									draggable={false}
+									className='absolute inset-0 size-full'
+								/>
+
+								<div
+									className='absolute flex flex-col items-center justify-between rounded-lg py-4'
+									style={{
+										left: '8%',
+										top: '7%',
+										width: '61%',
+										height: '83%',
+										border: isFailsafe ? `1px solid ${FAILSAFE_COLOR}` : '1px solid hsl(var(--color-brand))',
+										backgroundColor: isFailsafe ? 'rgba(0, 132, 255, 0.1)' : 'hsl(var(--color-brand) / 0.1)',
+									}}
+								>
+									<span
+										className='mt-8 font-bold'
+										style={{
+											fontSize: '20px',
+											writingMode: 'vertical-rl',
+											transform: 'rotate(180deg)',
+											background: 'linear-gradient(180deg, #FFFFFF 0%, #999999 100%)',
+											WebkitBackgroundClip: 'text',
+											backgroundClip: 'text',
+											WebkitTextFillColor: 'transparent',
+										}}
+									>
+										{slot.size}
+									</span>
+
+									<div className='flex flex-col items-center gap-3'>
+										{isFailsafe && <IoShieldHalf className='size-5' style={{color: FAILSAFE_COLOR}} />}
+										<button
+											type='button'
+											onClick={() => onHealthClick?.(index)}
+											className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] px-3 py-0.5 transition-colors hover:bg-white/[0.12]'
+										>
+											<TbActivityHeartbeat className='size-4 text-white/60' />
+											{slot.hasWarning && (
+												<span className='absolute -top-0.5 -right-0.5 size-2.5'>
+													<span className='absolute inset-0 rounded-full bg-[#F5A623]' />
+													<span className='absolute inset-0 animate-ping rounded-full bg-[#F5A623] opacity-75' />
+												</span>
+											)}
+										</button>
+									</div>
+								</div>
+							</div>
+							<span className='w-full truncate text-center text-13 font-medium text-white/50'>{slot.label}</span>
+						</div>
+					)
+				})}
+			</div>
 		</div>
 	)
 }

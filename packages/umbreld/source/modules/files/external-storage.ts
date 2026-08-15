@@ -8,6 +8,7 @@ import {$} from 'execa'
 import PQueue from 'p-queue'
 
 import type Umbreld from '../../index.js'
+import {getSystemDiskNames} from '../system/system-disk.js'
 
 type BlockDevice = {
 	id: string
@@ -456,60 +457,24 @@ export default class ExternalStorage {
 	async #getExternalDevices() {
 		// Get all block devices
 		const blockDevices = await getBlockDevices()
-		const systemDiskIds = await this.#getSystemDiskIds(blockDevices)
+		const systemDiskNames = await getSystemDiskNames(this.#umbreld.dataDirectory, {
+			// Unit/integration environments may not run on Rugix. On Rugix, where the
+			// config mount authoritatively identifies the boot disk, resolution still
+			// fails closed so we never auto-mount an unknown USB system disk.
+			allowUnresolvedOutsideRugix: true,
+		})
+		const systemPaths = ['/', '/run/rugix/mounts/config', this.#umbreld.dataDirectory]
+		for (const blockDevice of blockDevices) {
+			const hasSystemMount = blockDevice.partitions.some((partition) =>
+				partition.mountpoints.some((mountpoint) =>
+					systemPaths.some((systemPath) => this.#isPathOnMountpoint(systemPath, mountpoint)),
+				),
+			)
+			if (hasSystemMount) systemDiskNames.add(blockDevice.id)
+		}
 
 		// Filter out any non-USB devices and disks that back the running system.
-		return blockDevices.filter((device) => device.transport === 'usb' && !systemDiskIds.has(device.id))
-	}
-
-	// Get disks used by the running system so they are never treated as external storage.
-	async #getSystemDiskIds(blockDevices: BlockDevice[]) {
-		const systemDiskIds = new Set<string>()
-		const systemPaths = [this.#umbreld.dataDirectory, '/']
-
-		for (const blockDevice of blockDevices) {
-			for (const partition of blockDevice.partitions) {
-				const hasSystemMount = partition.mountpoints.some((mountpoint) =>
-					systemPaths.some((systemPath) => this.#isPathOnMountpoint(systemPath, mountpoint)),
-				)
-				if (hasSystemMount) systemDiskIds.add(blockDevice.id)
-			}
-		}
-
-		for (const systemPath of systemPaths) {
-			const source = await this.#getFilesystemSource(systemPath)
-			const diskId = this.#getDiskIdForDeviceSource(source, blockDevices)
-			if (diskId) systemDiskIds.add(diskId)
-		}
-
-		return systemDiskIds
-	}
-
-	async #getFilesystemSource(systemPath: string) {
-		try {
-			const {stdout} = await $`df ${systemPath} --output=source`
-			return stdout
-				.split('\n')
-				.map((line) => line.trim())
-				.filter(Boolean)
-				.pop()
-		} catch {
-			return undefined
-		}
-	}
-
-	#getDiskIdForDeviceSource(source: string | undefined, blockDevices: BlockDevice[]) {
-		if (!source?.startsWith('/dev/')) return undefined
-
-		const deviceId = source.split('/').pop()
-		if (!deviceId) return undefined
-
-		for (const blockDevice of blockDevices) {
-			if (blockDevice.id === deviceId) return blockDevice.id
-			if (blockDevice.partitions.some((partition) => partition.id === deviceId)) return blockDevice.id
-		}
-
-		return undefined
+		return blockDevices.filter((device) => device.transport === 'usb' && !systemDiskNames.has(device.id))
 	}
 
 	#isPathOnMountpoint(systemPath: string, mountpoint: string) {

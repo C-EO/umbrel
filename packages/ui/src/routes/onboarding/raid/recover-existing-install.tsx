@@ -15,33 +15,41 @@ import {
 import {Layout, primaryButtonProps, secondaryButtonClasss} from '@/layouts/bare/shared'
 import {Progress} from '@/modules/bare/progress'
 
+import type {RaidOnboardingVariant} from './index'
 import {SsdHealthDialog, useSsdHealthDialog} from './ssd-health-dialog'
-import {SsdSlot, SsdTray} from './ssd-tray'
+import {GenericSsdTray, SsdSlot, SsdTray} from './ssd-tray'
 import {formatSize, getDeviceHealth, StorageDevice} from './use-raid-setup'
 import {useRecoverExistingInstall} from './use-recover-existing-install'
 
 type RecoverExistingInstallProps = {
 	devices: StorageDevice[]
+	variant?: RaidOnboardingVariant
 	onSetUpAsNew: () => void
 }
 
-export function RecoverExistingInstall({devices, onSetUpAsNew}: RecoverExistingInstallProps) {
+export function RecoverExistingInstall({devices, variant = 'pro', onSetUpAsNew}: RecoverExistingInstallProps) {
 	const {t} = useTranslation()
+	const isGeneric = variant === 'generic'
 	const healthDialog = useSsdHealthDialog()
 	const [showSetUpAsNewDialog, setShowSetUpAsNewDialog] = useState(false)
 
 	const {handleRestore, restoreRequested, restoreFailed, errorMessage} = useRecoverExistingInstall()
 
-	const slots: (SsdSlot | null)[] = [null, null, null, null]
+	const proSlots: (SsdSlot | null)[] = [null, null, null, null]
 	devices.forEach((device) => {
 		const slotIndex = (device.slot ?? 0) - 1
-		if (slotIndex >= 0 && slotIndex < slots.length) {
-			slots[slotIndex] = {
+		if (slotIndex >= 0 && slotIndex < proSlots.length) {
+			proSlots[slotIndex] = {
 				size: formatSize(device.roundedSize),
 				hasWarning: getDeviceHealth(device).hasWarning,
 			}
 		}
 	})
+	const genericSlots: SsdSlot[] = devices.map((device) => ({
+		size: formatSize(device.roundedSize),
+		hasWarning: getDeviceHealth(device).hasWarning,
+		label: device.name,
+	}))
 
 	const setUpAsNewDialog = (
 		<AlertDialog open={showSetUpAsNewDialog} onOpenChange={setShowSetUpAsNewDialog}>
@@ -73,13 +81,17 @@ export function RecoverExistingInstall({devices, onSetUpAsNew}: RecoverExistingI
 					</div>
 				}
 			>
-				<img
-					src='/assets/onboarding/pro-front.webp'
-					alt={t('storage-manager.umbrel-pro')}
-					draggable={false}
-					className='w-64 md:w-96'
-				/>
-				<p className='-mt-4 text-[13px] font-medium text-white/30'>{t('storage-manager.umbrel-pro')}</p>
+				{!isGeneric && (
+					<>
+						<img
+							src='/assets/onboarding/pro-front.webp'
+							alt={t('storage-manager.umbrel-pro')}
+							draggable={false}
+							className='w-64 md:w-96'
+						/>
+						<p className='-mt-4 text-[13px] font-medium text-white/30'>{t('storage-manager.umbrel-pro')}</p>
+					</>
+				)}
 				<div className='mt-4 w-full max-w-sm'>
 					<Progress />
 				</div>
@@ -164,23 +176,39 @@ export function RecoverExistingInstall({devices, onSetUpAsNew}: RecoverExistingI
 				</div>
 			</div>
 
-			<div className='hidden flex-1 flex-col items-end justify-center md:-mr-6 md:flex'>
+			<div
+				className={`hidden min-w-0 flex-1 flex-col justify-center md:flex ${isGeneric ? 'items-center' : 'items-end md:-mr-6'}`}
+			>
 				<div
-					className='w-[95%]'
+					className={isGeneric ? 'w-full' : 'w-[95%]'}
 					style={{
 						maskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
 						WebkitMaskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
 					}}
 				>
-					<SsdTray
-						slots={slots}
-						onHealthClick={(slotIndex) => {
-							const device = devices.find((candidate) => candidate.slot === slotIndex + 1)
-							if (device) healthDialog.openDialog(device, slotIndex + 1)
-						}}
-					/>
+					{isGeneric ? (
+						<GenericSsdTray
+							slots={genericSlots}
+							onHealthClick={(deviceIndex) => {
+								const device = devices[deviceIndex]
+								if (device) healthDialog.openDialog(device)
+							}}
+						/>
+					) : (
+						<SsdTray
+							slots={proSlots}
+							onHealthClick={(slotIndex) => {
+								const device = devices.find((candidate) => candidate.slot === slotIndex + 1)
+								if (device) healthDialog.openDialog(device, slotIndex + 1)
+							}}
+						/>
+					)}
 				</div>
-				<p className='-mt-20 flex w-[95%] translate-x-4 justify-center text-[18px] font-semibold text-brand'>
+				<p
+					className={`flex justify-center text-[18px] font-semibold text-brand ${
+						isGeneric ? 'mt-2 w-full' : '-mt-20 w-[95%] translate-x-4'
+					}`}
+				>
 					{t('onboarding.raid.recovery.found.storage-detected')}
 				</p>
 			</div>
