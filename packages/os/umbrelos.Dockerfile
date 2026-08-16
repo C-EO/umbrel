@@ -8,6 +8,13 @@ ARG BASE_VARIANT=""
 ARG DOCKER_VERSION=28.5.0
 ARG DOCKER_INSTALL_SCRIPT_COMMIT=5c8855edd778525564500337f5ac4ad65a0c168e
 
+ARG NVIDIA_CUDA_SUPPORT=true
+ARG NVIDIA_CONTAINER_TOOLKIT_VERSION=1.19.1-1
+ARG LIBNVIDIA_CONTAINER1_SHA256_amd64=d73bb582af893135198ef81cb22135c790a75d2ad72910446477c6c4430f3e6b
+ARG LIBNVIDIA_CONTAINER_TOOLS_SHA256_amd64=5642763d51961a2295dff09990048a5dcee81edbea2a8c5084e47b09ccf17268
+ARG NVIDIA_CONTAINER_TOOLKIT_BASE_SHA256_amd64=b6c5b4e77a28cde0197cc0e64edf75538604775d9f8aea502cef667e7e5b2132
+ARG NVIDIA_CONTAINER_TOOLKIT_SHA256_amd64=e66acb5b33420a8417429cd217abc8400b4a409a2ae17a3852cf6feb34b5c8e6
+
 ARG YQ_VERSION=4.24.5
 ARG YQ_SHA256_amd64=c93a696e13d3076e473c3a43c06fdb98fafd30dc2f43bc771c4917531961c760
 ARG YQ_SHA256_arm64=8879e61c0b3b70908160535ea358ec67989ac4435435510e1fcb2eda5d74a0e9
@@ -82,6 +89,7 @@ FROM debian:${DEBIAN_VERSION}-${DEBIAN_IMAGE_SNAPSHOT_DATE} AS umbrelos-base
 
 ARG APT_SNAPSHOT_DATE
 ARG TARGETARCH
+ARG NVIDIA_CUDA_SUPPORT
 
 COPY packages/os/build-steps /build-steps
 
@@ -104,6 +112,42 @@ RUN set -e; \
         firmware-realtek \
         firmware-iwlwifi \
         firmware-atheros; \
+    fi
+
+# The Debian kernel and firmware already provide the in-tree amdgpu/KFD and
+# nouveau drivers. That is sufficient when containers bring their own ROCm or
+# Vulkan userspace (including Mesa NVK for NVIDIA GPUs).
+#
+# CUDA and NVIDIA's Vulkan implementation share the NVIDIA kernel driver. Keep
+# their userspace libraries on the host so the NVIDIA Container Toolkit can
+# inject the versions matching that driver into application containers. Use
+# Debian's driver-library and Vulkan ICD package contracts so all private GLX,
+# EGL, and Vulkan dependencies stay version-matched.
+RUN set -e; \
+    if [ "${TARGETARCH}" = "amd64" ] && [ "${NVIDIA_CUDA_SUPPORT}" = "true" ]; then \
+        apt-get install --yes --no-install-recommends \
+            nvidia-open-kernel-dkms \
+            nvidia-driver-libs \
+            libcuda1 \
+            nvidia-smi \
+            nvidia-vulkan-icd; \
+        install --directory /etc/vulkan/icd.d; \
+        cp /usr/share/vulkan/icd.d/nvidia_icd.json \
+            /etc/vulkan/icd.d/nvidia_icd.json; \
+        grep -q 'libGLX_nvidia.so.0' /etc/vulkan/icd.d/nvidia_icd.json; \
+        rm -f \
+            /usr/share/vulkan/icd.d/nvidia_icd.json \
+            /usr/share/vulkan/implicit_layer.d/nvidia_layers.json; \
+    fi
+
+# Keep the cross-hardware acceleration contract explicit. These options are
+# provided by Debian's generic amd64 kernel and expose /dev/dri for Vulkan plus
+# /dev/kfd for containerized ROCm workloads.
+RUN set -e; \
+    if [ "${TARGETARCH}" = "amd64" ]; then \
+        grep -q '^CONFIG_DRM_AMDGPU=m$' /boot/config-*; \
+        grep -q '^CONFIG_HSA_AMD=y$' /boot/config-*; \
+        grep -q '^CONFIG_DRM_NOUVEAU=m$' /boot/config-*; \
     fi
 
 # Cleanup build steps.
@@ -238,6 +282,12 @@ FROM umbrelos-base${BASE_VARIANT} AS umbrelos
 ARG TARGETARCH
 ARG DOCKER_VERSION
 ARG DOCKER_INSTALL_SCRIPT_COMMIT
+ARG NVIDIA_CUDA_SUPPORT
+ARG NVIDIA_CONTAINER_TOOLKIT_VERSION
+ARG LIBNVIDIA_CONTAINER1_SHA256_amd64
+ARG LIBNVIDIA_CONTAINER_TOOLS_SHA256_amd64
+ARG NVIDIA_CONTAINER_TOOLKIT_BASE_SHA256_amd64
+ARG NVIDIA_CONTAINER_TOOLKIT_SHA256_amd64
 ARG YQ_VERSION
 ARG YQ_SHA256_amd64
 ARG YQ_SHA256_arm64
@@ -409,6 +459,32 @@ RUN curl -fsSL https://raw.githubusercontent.com/docker/docker-install/${DOCKER_
 RUN sh /tmp/install-docker.sh --version v${DOCKER_VERSION}
 RUN rm /tmp/install-docker.sh
 
+# Install the NVIDIA Container Toolkit directly from pinned, checksummed
+# packages. The toolkit exposes the matching CUDA and Vulkan driver userspace
+# to containers; application runtimes remain in the application container.
+RUN set -e; \
+    if [ "${TARGETARCH}" = "amd64" ] && [ "${NVIDIA_CUDA_SUPPORT}" = "true" ]; then \
+        nvidia_toolkit_url="https://nvidia.github.io/libnvidia-container/stable/deb/amd64"; \
+        curl -fsSL "${nvidia_toolkit_url}/libnvidia-container1_${NVIDIA_CONTAINER_TOOLKIT_VERSION}_amd64.deb" -o /tmp/libnvidia-container1.deb; \
+        curl -fsSL "${nvidia_toolkit_url}/libnvidia-container-tools_${NVIDIA_CONTAINER_TOOLKIT_VERSION}_amd64.deb" -o /tmp/libnvidia-container-tools.deb; \
+        curl -fsSL "${nvidia_toolkit_url}/nvidia-container-toolkit-base_${NVIDIA_CONTAINER_TOOLKIT_VERSION}_amd64.deb" -o /tmp/nvidia-container-toolkit-base.deb; \
+        curl -fsSL "${nvidia_toolkit_url}/nvidia-container-toolkit_${NVIDIA_CONTAINER_TOOLKIT_VERSION}_amd64.deb" -o /tmp/nvidia-container-toolkit.deb; \
+        echo "${LIBNVIDIA_CONTAINER1_SHA256_amd64}  /tmp/libnvidia-container1.deb" | sha256sum -c -; \
+        echo "${LIBNVIDIA_CONTAINER_TOOLS_SHA256_amd64}  /tmp/libnvidia-container-tools.deb" | sha256sum -c -; \
+        echo "${NVIDIA_CONTAINER_TOOLKIT_BASE_SHA256_amd64}  /tmp/nvidia-container-toolkit-base.deb" | sha256sum -c -; \
+        echo "${NVIDIA_CONTAINER_TOOLKIT_SHA256_amd64}  /tmp/nvidia-container-toolkit.deb" | sha256sum -c -; \
+        apt-get install --yes --no-install-recommends \
+            /tmp/libnvidia-container1.deb \
+            /tmp/libnvidia-container-tools.deb \
+            /tmp/nvidia-container-toolkit-base.deb \
+            /tmp/nvidia-container-toolkit.deb; \
+        rm -f \
+            /tmp/libnvidia-container1.deb \
+            /tmp/libnvidia-container-tools.deb \
+            /tmp/nvidia-container-toolkit-base.deb \
+            /tmp/nvidia-container-toolkit.deb; \
+    fi
+
 # Install kopia from binary
 RUN KOPIA_ARCH=$([ "${TARGETARCH}" = "arm64" ] && echo "arm64" || echo "x64") && \
     KOPIA_SHA256=$(eval echo \$KOPIA_SHA256_${TARGETARCH}) && \
@@ -448,6 +524,18 @@ WORKDIR /
 
 # Copy in filesystem overlay
 COPY packages/os/overlay /
+
+# The common overlay is shared with arm64 builds, so add the NVIDIA runtime
+# after copying it and only when the runtime binary exists on amd64. Toolkit
+# 1.19.1 auto-selects JIT CDI, which does not inject private dependencies from
+# Debian's split NVIDIA packages. Legacy mode uses libnvidia-container's
+# complete dependency discovery.
+RUN set -e; \
+    if [ "${TARGETARCH}" = "amd64" ] && [ "${NVIDIA_CUDA_SUPPORT}" = "true" ]; then \
+        nvidia-ctk runtime configure --runtime=docker; \
+        nvidia-ctk config --in-place \
+            --set nvidia-container-runtime.mode=legacy; \
+    fi
 
 # Rebuild initramfs after overlay changes so custom udev rules are available
 # during early boot coldplug and /dev/disk/by-umbrel-id exists before the

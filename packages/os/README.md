@@ -1,5 +1,29 @@
 # umbrelOS
 
+## GPU acceleration
+
+The amd64 image keeps GPU userspace in application containers while providing
+the host kernel interfaces those runtimes require:
+
+| Hardware/backend | Host support | Container support |
+| --- | --- | --- |
+| AMD Vulkan | In-tree `amdgpu`, `/dev/dri` | Mesa/RADV |
+| AMD ROCm | In-tree `amdgpu`/KFD, `/dev/kfd` and `/dev/dri` | ROCm/HIP |
+| NVIDIA Vulkan | NVIDIA open kernel module, Vulkan ICD, NVIDIA Container Toolkit | Vulkan application/runtime |
+| NVIDIA CUDA | NVIDIA open kernel module, `libcuda`, NVIDIA Container Toolkit | CUDA runtime |
+
+NVIDIA's Vulkan and CUDA implementations share the NVIDIA kernel driver and can
+be used simultaneously. They coexist with AMDGPU and RADV on mixed-GPU systems;
+the Vulkan loader selects the ICD matching each device. Containers using NVIDIA
+Vulkan must request the `graphics` NVIDIA driver capability, expose `/dev/dri`,
+and include the Vulkan and GLVND EGL loaders (`libvulkan1` and `libegl1` on
+Debian-based images).
+
+An image that only needs Vulkan acceleration on NVIDIA hardware can set the
+`NVIDIA_CUDA_SUPPORT=false` build argument to omit the NVIDIA host packages and
+use the in-tree `nouveau` driver with containerized Mesa/NVK instead. NVK cannot
+drive a GPU while that GPU is bound to the NVIDIA kernel driver.
+
 
 ## Build Process
 
