@@ -369,6 +369,7 @@
   "device-info-description": "Cihazınız hakkında bilgi",
   "device-info.cpu": "İşlemci",
   "device-info.device": "Cihaz",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Bellek",
   "device-info.model-number": "Model numarası",
   "device-info.serial-number": "Seri numarası",

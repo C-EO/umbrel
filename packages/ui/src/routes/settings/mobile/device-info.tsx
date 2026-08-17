@@ -20,6 +20,7 @@ export function DeviceInfoDrawer() {
 	const dialogProps = useSettingsDialogProps()
 
 	const deviceQ = trpcReact.systemNg.device.getSpecs.useQuery()
+	const gpuQ = trpcReact.hardware.gpu.getInfo.useQuery()
 
 	if (deviceQ.isLoading) {
 		return null
@@ -48,6 +49,7 @@ export function DeviceInfoDrawer() {
 						cpu={cpu}
 						memory={memory}
 						storage={storage}
+						gpus={gpuQ.data?.gpus}
 					/>
 				</DrawerScroller>
 			</DrawerContent>

@@ -369,6 +369,7 @@
   "device-info-description": "Informacije o tvom uređaju",
   "device-info.cpu": "CPU",
   "device-info.device": "Uređaj",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Memorija",
   "device-info.model-number": "Broj modela",
   "device-info.serial-number": "Serijski broj",

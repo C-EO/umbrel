@@ -10,6 +10,13 @@ import stripAnsi from 'strip-ansi'
 import pRetry from 'p-retry'
 
 import getDirectorySize from '../utilities/get-directory-size.js'
+import {
+	applyGpuAccelerationToService,
+	getGpuAcceleration,
+	removeGpuAccelerationFromService,
+	removeLegacyDriDeviceMappingsFromService,
+	type AppliedGpuAcceleration,
+} from '../hardware/gpu.js'
 import {pullAll} from '../utilities/docker-pull.js'
 import FileStore from '../utilities/file-store.js'
 import {fillSelectedDependencies} from '../utilities/dependencies.js'
@@ -137,11 +144,18 @@ export default class App {
 	async patchComposeFile() {
 		const manifest = await this.readManifest()
 		const appRequestsGpuAccess = manifest.permissions?.includes('GPU')
-		const DRI_DEVICE_PATH = '/dev/dri'
-		const deviceHasGpu = await fse.exists(DRI_DEVICE_PATH).catch(() => false)
+		const gpuAcceleration = appRequestsGpuAccess ? await getGpuAcceleration() : undefined
 
-		const compose = await this.readCompose()
+		type ComposeWithGpuPatch = Compose & {
+			'x-umbrel-gpu-patches'?: Record<string, AppliedGpuAcceleration>
+		}
+		const compose = (await this.readCompose()) as ComposeWithGpuPatch
+		const previousGpuPatches = compose['x-umbrel-gpu-patches'] ?? {}
+		const gpuPatches: Record<string, AppliedGpuAcceleration> = {}
 		for (const serviceName of Object.keys(compose.services!)) {
+			removeGpuAccelerationFromService(compose.services![serviceName], previousGpuPatches[serviceName])
+			removeLegacyDriDeviceMappingsFromService(compose.services![serviceName])
+
 			// Temporary patch to fix contianer names for modern docker-compose installs.
 			// The contianer name scheme used to be <project-name>_<service-name>_1 but
 			// recent versions of docker-compose use <project-name>-<service-name>-1
@@ -163,12 +177,16 @@ export default class App {
 					?.replace('/data/storage', `/home`)
 			})
 
-			// Pass through host DRI device to all app containers if the app requests it
-			const shouldEnableGpuPassthrough = appRequestsGpuAccess && deviceHasGpu
-			if (shouldEnableGpuPassthrough) {
-				compose.services![serviceName].devices = compose.services![serviceName].devices || []
-				compose.services![serviceName].devices.push(DRI_DEVICE_PATH)
+			// Add every acceleration path available on the host. Mixed systems can
+			// expose DRI/Vulkan, ROCm, and NVIDIA CUDA/Vulkan simultaneously.
+			if (gpuAcceleration) {
+				gpuPatches[serviceName] = applyGpuAccelerationToService(compose.services![serviceName], gpuAcceleration)
 			}
+		}
+		if (Object.values(gpuPatches).some((patch) => Object.keys(patch).length > 0)) {
+			compose['x-umbrel-gpu-patches'] = gpuPatches
+		} else {
+			delete compose['x-umbrel-gpu-patches']
 		}
 
 		await this.writeCompose(compose)
@@ -316,6 +334,7 @@ export default class App {
 		try {
 			await this.#runStateTransition('restarting', async () => {
 				await appScript(this.#umbreld, 'stop', this.id)
+				await this.patchComposeFile()
 				await appScript(this.#umbreld, 'start', this.id)
 			})
 			this.state = 'ready'

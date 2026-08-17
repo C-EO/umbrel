@@ -369,6 +369,7 @@
   "device-info-description": "Πληροφορίες για τη συσκευή σου",
   "device-info.cpu": "CPU",
   "device-info.device": "Συσκευή",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Μνήμη",
   "device-info.model-number": "Αριθμός μοντέλου",
   "device-info.serial-number": "Σειριακός αριθμός",

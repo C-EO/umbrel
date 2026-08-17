@@ -369,6 +369,7 @@
   "device-info-description": "Информация за устройството ти",
   "device-info.cpu": "CPU",
   "device-info.device": "Устройство",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Памет",
   "device-info.model-number": "Номер на модела",
   "device-info.serial-number": "Сериен номер",

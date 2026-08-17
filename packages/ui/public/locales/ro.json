@@ -369,6 +369,7 @@
   "device-info-description": "Informații despre dispozitivul tău",
   "device-info.cpu": "CPU",
   "device-info.device": "Dispozitiv",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Memorie",
   "device-info.model-number": "Număr model",
   "device-info.serial-number": "Număr de serie",

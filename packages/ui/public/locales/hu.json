@@ -369,6 +369,7 @@
   "device-info-description": "Információk az eszközödről",
   "device-info.cpu": "Processzor",
   "device-info.device": "Eszköz",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Memória",
   "device-info.model-number": "Modellszám",
   "device-info.serial-number": "Sorozatszám",

@@ -358,8 +358,11 @@ test.sequential('does not missing data-dir app on non-restore boot', async () =>
 test.sequential('restart() restarts an installed app', async () => {
 	// Ensure installed for restart (previous tests may leave it uninstalled)
 	await umbreld.client.apps.install.mutate({appId: 'sparkles-hello-world'}).catch(() => {})
+	const app = umbreld.instance.apps.instances.find(({id}) => id === 'sparkles-hello-world')!
+	const patchComposeFile = vi.spyOn(app, 'patchComposeFile')
 	await expect(umbreld.client.apps.restart.mutate({appId: 'sparkles-hello-world'})).resolves.toStrictEqual(true)
-	// TODO: Check this actually worked
+	expect(patchComposeFile).toHaveBeenCalledOnce()
+	patchComposeFile.mockRestore()
 })
 
 test.sequential('failed lifecycle actions leave an app in a recoverable state', async () => {

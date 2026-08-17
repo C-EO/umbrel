@@ -38,6 +38,7 @@ export function DeviceInfoContent({
 	cpu,
 	memory,
 	storage,
+	gpus,
 }: {
 	umbrelHostEnvironment?: UmbrelHostEnvironment
 	device?: string
@@ -46,6 +47,7 @@ export function DeviceInfoContent({
 	cpu?: string
 	memory?: string
 	storage?: string
+	gpus?: {vendor: string; model: string}[]
 }) {
 	const {t} = useTranslation()
 	const navigate = useNavigate()
@@ -88,6 +90,11 @@ export function DeviceInfoContent({
 						<span className={cn('font-normal', (modelNumber || serialNumber) && 'pr-6')}>{cpu}</span>
 					</div>
 				)}
+				<GpuInfoRows
+					gpus={gpus ?? []}
+					label={t('device-info.gpu')}
+					alignWithCopyButtons={Boolean(modelNumber || serialNumber)}
+				/>
 				{memory && (
 					<div className={listItemClassNarrow}>
 						<span>{t('device-info.memory')}</span>
@@ -118,6 +125,28 @@ export function DeviceInfoContent({
 			</div>
 		</div>
 	)
+}
+
+export function GpuInfoRows({
+	gpus,
+	label,
+	alignWithCopyButtons = false,
+}: {
+	gpus: {vendor: string; model: string}[]
+	label: string
+	alignWithCopyButtons?: boolean
+}) {
+	const visibleGpus = gpus.filter(({vendor, model}) => vendor || model)
+
+	return visibleGpus.map((gpu, index) => (
+		<div className={cn(listItemClass, 'h-auto min-h-[50px] py-2')} key={`${gpu.vendor}-${gpu.model}-${index}`}>
+			<span>{visibleGpus.length > 1 ? `${label} ${index + 1}` : label}</span>
+			<span className={cn('max-w-[70%] text-right font-normal', alignWithCopyButtons && 'pr-6')}>
+				<span className='block'>{gpu.model || gpu.vendor}</span>
+				{gpu.model && gpu.vendor && <span className='block text-12 text-white/40'>{gpu.vendor}</span>}
+			</span>
+		</div>
+	))
 }
 const listClass = tw`divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6`
 const listItemClass = tw`flex items-center gap-3 px-3 h-[50px] text-15 font-medium -tracking-3 justify-between`

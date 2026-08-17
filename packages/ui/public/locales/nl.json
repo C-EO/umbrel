@@ -369,6 +369,7 @@
   "device-info-description": "Informatie over je apparaat",
   "device-info.cpu": "CPU",
   "device-info.device": "Apparaat",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Geheugen",
   "device-info.model-number": "Modelnummer",
   "device-info.serial-number": "Serienummer",

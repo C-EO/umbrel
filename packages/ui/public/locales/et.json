@@ -369,6 +369,7 @@
   "device-info-description": "Teave sinu seadme kohta",
   "device-info.cpu": "CPU",
   "device-info.device": "Seade",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Mälu",
   "device-info.model-number": "Mudelinumber",
   "device-info.serial-number": "Seerianumber",

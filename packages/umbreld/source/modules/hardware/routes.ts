@@ -1,10 +1,16 @@
 import {z} from 'zod'
 
 import {router, privateProcedure, publicProcedureWhenNoUserExists, publicProcedure} from '../server/trpc/trpc.js'
+import {getGpuInfo} from './gpu.js'
 
 const internalStorage = router({
 	// Get internal storage devices (NVMe, HDD, eMMC, etc.)
 	getDevices: publicProcedureWhenNoUserExists.query(async ({ctx}) => ctx.umbreld.hardware.internalStorage.getDevices()),
+})
+
+const gpu = router({
+	// Report the graphics controllers currently available.
+	getInfo: privateProcedure.query(async () => getGpuInfo()),
 })
 
 const thunderbolt = router({
@@ -138,6 +144,7 @@ const umbrelPro = router({
 
 export default router({
 	internalStorage,
+	gpu,
 	thunderbolt,
 	raid,
 	umbrelPro,

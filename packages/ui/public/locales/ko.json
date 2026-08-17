@@ -369,6 +369,7 @@
   "device-info-description": "디바이스에 대한 정보",
   "device-info.cpu": "CPU",
   "device-info.device": "디바이스",
+  "device-info.gpu": "GPU",
   "device-info.memory": "메모리",
   "device-info.model-number": "모델 번호",
   "device-info.serial-number": "일련번호",

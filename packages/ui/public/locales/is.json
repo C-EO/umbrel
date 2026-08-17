@@ -369,6 +369,7 @@
   "device-info-description": "Upplýsingar um tækið þitt",
   "device-info.cpu": "Örgjörvi",
   "device-info.device": "Tæki",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Minni",
   "device-info.model-number": "Gerðarnúmer",
   "device-info.serial-number": "Raðnúmer",

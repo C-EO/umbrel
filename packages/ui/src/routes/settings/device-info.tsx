@@ -13,6 +13,7 @@ export default function DeviceInfoDialog() {
 	const dialogProps = useSettingsDialogProps()
 
 	const deviceQ = trpcReact.systemNg.device.getSpecs.useQuery()
+	const gpuQ = trpcReact.hardware.gpu.getInfo.useQuery()
 
 	// Don't show dialog because we don't know how big it will be until the content is loaded
 	if (deviceQ.isLoading) {
@@ -44,6 +45,7 @@ export default function DeviceInfoDialog() {
 						cpu={cpu}
 						memory={memory}
 						storage={storage}
+						gpus={gpuQ.data?.gpus}
 					/>
 				</div>
 			</DialogScrollableContent>

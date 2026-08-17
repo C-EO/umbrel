@@ -369,6 +369,7 @@
   "device-info-description": "你的裝置資訊",
   "device-info.cpu": "CPU",
   "device-info.device": "裝置",
+  "device-info.gpu": "GPU",
   "device-info.memory": "記憶體",
   "device-info.model-number": "型號",
   "device-info.serial-number": "序號",

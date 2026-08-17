@@ -369,6 +369,7 @@
   "device-info-description": "Information about your device",
   "device-info.cpu": "CPU",
   "device-info.device": "Device",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Memory",
   "device-info.model-number": "Model number",
   "device-info.serial-number": "Serial number",

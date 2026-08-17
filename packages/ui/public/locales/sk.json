@@ -369,6 +369,7 @@
   "device-info-description": "Informácie o tvojom zariadení",
   "device-info.cpu": "CPU",
   "device-info.device": "Zariadenie",
+  "device-info.gpu": "GPU",
   "device-info.memory": "Pamäť",
   "device-info.model-number": "Číslo modelu",
   "device-info.serial-number": "Sériové číslo",

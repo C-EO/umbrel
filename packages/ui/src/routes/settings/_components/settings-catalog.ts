@@ -272,6 +272,7 @@ export function createSettingsCatalog(
 				t('device-info.model-number'),
 				t('device-info.serial-number'),
 				t('device-info.cpu'),
+				t('device-info.gpu'),
 				t('device-info.memory'),
 				t('device-info.storage'),
 			],
