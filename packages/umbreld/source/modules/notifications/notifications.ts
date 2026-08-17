@@ -5,10 +5,12 @@ const accountPrefix = (userId: string) => `@account:${encodeURIComponent(userId)
 const accountNotification = (userId: string, notification: string) => `${accountPrefix(userId)}${notification}`
 
 export default class Notifications {
+	#umbreld: Umbreld
 	#store: Umbreld['store']
 	logger: Umbreld['logger']
 
 	constructor(umbreld: Umbreld) {
+		this.#umbreld = umbreld
 		this.#store = umbreld.store
 		const {name} = this.constructor
 		this.logger = umbreld.logger.createChildLogger(name.toLowerCase())
@@ -49,6 +51,9 @@ export default class Notifications {
 			await set('notifications', notifications)
 		})
 
+		// Wake up subscribed clients
+		this.#umbreld.eventBus.emit('notifications:change')
+
 		return true
 	}
 
@@ -68,6 +73,9 @@ export default class Notifications {
 			// Save new notifications
 			await set('notifications', notifications)
 		})
+
+		// Wake up subscribed clients
+		this.#umbreld.eventBus.emit('notifications:change')
 
 		return true
 	}
@@ -91,6 +99,10 @@ export default class Notifications {
 				),
 			)
 		})
+
+		// Wake up subscribed clients
+		this.#umbreld.eventBus.emit('notifications:change')
+
 		return true
 	}
 
@@ -103,6 +115,10 @@ export default class Notifications {
 				(await this.get()).filter((notification) => !notification.startsWith(prefix)),
 			)
 		})
+
+		// Wake up subscribed clients
+		this.#umbreld.eventBus.emit('notifications:change')
+
 		return true
 	}
 }

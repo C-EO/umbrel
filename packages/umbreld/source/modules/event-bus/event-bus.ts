@@ -36,6 +36,8 @@ export const events = [
 	'machines:updated',
 	'machines:os-images-updated',
 	'raid:status-change',
+	'notifications:change',
+	'hardware:thunderbolt:devices-change',
 ] as const satisfies readonly (keyof EventTypes)[]
 
 // Statically define event types
@@ -86,6 +88,13 @@ export type EventTypes = {
 	// Fires when the RAID pool's user-visible state changes: pool status, data or
 	// accelerator membership, per-member status, raid type or topology
 	'raid:status-change': undefined
+	// Fires when the stored set of notifications changes. Deliberately carries
+	// no payload so it can be streamed to members; clients refetch their own
+	// account-filtered list.
+	'notifications:change': undefined
+	// Fires when the user-visible Thunderbolt device state changes
+	// e.g. connect/disconnect or an authorization/trust change
+	'hardware:thunderbolt:devices-change': undefined
 }
 
 export default class EventBus {

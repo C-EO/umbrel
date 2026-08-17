@@ -7,6 +7,18 @@ const internalStorage = router({
 	getDevices: publicProcedureWhenNoUserExists.query(async ({ctx}) => ctx.umbreld.hardware.internalStorage.getDevices()),
 })
 
+const thunderbolt = router({
+	// Only the device owner can inspect or change Thunderbolt authorization.
+	getDevices: privateProcedure.query(async ({ctx}) => ctx.umbreld.hardware.thunderbolt.getDevices()),
+	getPendingDevices: privateProcedure.query(async ({ctx}) => ctx.umbreld.hardware.thunderbolt.getPendingDevices()),
+	authorize: privateProcedure
+		.input(z.object({id: z.string().uuid()}))
+		.mutation(async ({ctx, input}) => ctx.umbreld.hardware.thunderbolt.authorize(input.id)),
+	revoke: privateProcedure
+		.input(z.object({id: z.string().uuid()}))
+		.mutation(async ({ctx, input}) => ctx.umbreld.hardware.thunderbolt.revoke(input.id)),
+})
+
 const raid = router({
 	// Check status of initial RAID setup boot process
 	checkInitialRaidSetupStatus: publicProcedure.query(async ({ctx}) =>
@@ -126,6 +138,7 @@ const umbrelPro = router({
 
 export default router({
 	internalStorage,
+	thunderbolt,
 	raid,
 	umbrelPro,
 })

@@ -9,15 +9,17 @@ import type {OperationsInProgress} from '../files/files.js'
 import {type EventTypes, events} from './event-bus.js'
 
 // The only events member accounts may listen to. Each one is filtered down to
-// what belongs to the member before it's streamed, everything else is
-// owner-only, so nothing is ever streamed to members without an explicit,
-// scoped opt-in below.
+// what belongs to the member before it's streamed, or carries no payload at
+// all, everything else is owner-only, so nothing is ever streamed to members
+// without an explicit, scoped opt-in below.
 const memberAllowedEvents = new Set<(typeof events)[number]>([
 	'files:operation-progress',
 	'files:cloud-progress',
 	'files:watcher:change',
 	'files:member-shares:change',
 	'apps:member-shares:change',
+	// Payload-free ping; members refetch their own account-filtered list
+	'notifications:change',
 ])
 
 export default router({

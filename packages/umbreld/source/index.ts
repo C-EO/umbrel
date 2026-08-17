@@ -1,4 +1,5 @@
 import path from 'node:path'
+import {setTimeout} from 'node:timers/promises'
 import fse from 'fs-extra'
 
 // TODO: import packageJson from '../package.json' assert {type: 'json'}
@@ -129,6 +130,11 @@ type StoreSchema = {
 		menderToRugixAttempt?: number
 	}
 	mcp?: McpStoreSettings
+	authorizedThunderboltDevices?: {
+		id: string
+		name?: string
+		vendor?: string
+	}[]
 }
 
 export type UmbreldOptions = {
@@ -230,6 +236,20 @@ export default class Umbreld {
 		await this.setBackupRestoreFirstStartFlag()
 		await this.auth.start()
 
+		// Start restoring remembered Thunderbolt authorization alongside the
+		// other early boot work. Its result is handled here so a later timeout
+		// never leaves a rejected promise unobserved.
+		const thunderboltAuthorizationRestore = Promise.race([
+			this.hardware.thunderbolt
+				.reconcile()
+				.then(() => true)
+				.catch((error) => {
+					this.logger.error('Failed to restore Thunderbolt authorization', error)
+					return true
+				}),
+			setTimeout(5_000, false),
+		])
+
 		// Restore configured hostname after boot/update (non-blocking)
 		restoreHostname(this)
 
@@ -274,6 +294,14 @@ export default class Umbreld {
 		// the dashboard can mutate files. Slower credential maintenance remains
 		// part of Files startup and runs in the background.
 		await this.files.cloud.restoreProtectionState()
+
+		// Give the early restore up to five seconds to finish before apps inspect
+		// attached hardware. A timeout only stops startup from waiting; the original
+		// promise continues running and handles its own errors.
+		const thunderboltAuthorizationRestored = await thunderboltAuthorizationRestore
+		if (!thunderboltAuthorizationRestored) {
+			this.logger.error('Timed out waiting for Thunderbolt authorization restore; continuing startup')
+		}
 
 		// Initialise modules
 		await Promise.all([

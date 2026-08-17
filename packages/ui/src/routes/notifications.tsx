@@ -15,6 +15,7 @@ import {
 	AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import {Button} from '@/components/ui/button'
+import {toast} from '@/components/ui/toast'
 import {BackupDeviceIcon} from '@/features/backups/components/backup-device-icon'
 import {getDeviceNameFromPath} from '@/features/backups/utils/backup-location-helpers'
 import {CloudBreakDiagram} from '@/features/files/components/cloud-break-diagram'
@@ -22,6 +23,7 @@ import {useHomePath} from '@/features/files/hooks/use-home-path'
 import {cloudAccountBrand} from '@/features/files/utils/cloud'
 import {useNotifications} from '@/hooks/use-notifications'
 import {cn} from '@/lib/utils'
+import {thunderboltAccessoryImage} from '@/routes/settings/thunderbolt'
 import {shouldShowWhatsNew} from '@/routes/whats-new'
 import {trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
@@ -185,6 +187,7 @@ export function Notifications() {
 	const linkToDialog = useLinkToDialog()
 	const homePath = useHomePath()
 	const versionQ = trpcReact.system.version.useQuery()
+	const utils = trpcReact.useUtils()
 
 	// Determine if we need to query backup repositories
 	// TODO: remove support for legacy "backups-failing" notification format
@@ -200,6 +203,38 @@ export function Notifications() {
 	const hasCloudNotification = notifications.some((n) => n.startsWith('cloud-auth:'))
 	const cloudAccountsQuery = trpcReact.files.cloud.accounts.useQuery(undefined, {
 		enabled: hasCloudNotification,
+	})
+
+	// Unknown Thunderbolt devices remain blocked until the device owner grants
+	// access. Device-level notifications are never returned to member accounts.
+	const hasThunderboltNotification = notifications.some((n) => n.startsWith('thunderbolt-authorization-required:'))
+	const pendingThunderboltDevicesQuery = trpcReact.hardware.thunderbolt.getPendingDevices.useQuery(undefined, {
+		enabled: hasThunderboltNotification,
+	})
+	const invalidateThunderbolt = async () => {
+		await Promise.all([
+			utils.notifications.get.invalidate(),
+			utils.hardware.thunderbolt.getPendingDevices.invalidate(),
+			utils.hardware.thunderbolt.getDevices.invalidate(),
+		])
+	}
+	const thunderboltActionError = (error: unknown) => {
+		const message = error instanceof Error ? error.message : t('unknown-error')
+		toast.error(t('thunderbolt-settings.action-error', {message}), {
+			icon: (
+				<img src={thunderboltAccessoryImage} alt='' draggable={false} className='size-10 shrink-0 object-contain' />
+			),
+		})
+	}
+	const authorizeThunderboltDevice = trpcReact.hardware.thunderbolt.authorize.useMutation({
+		onSuccess: invalidateThunderbolt,
+		onError: thunderboltActionError,
+	})
+	// Denying maps to revoke: the device stays blocked and the prompt stays
+	// away while it remains plugged in; reconnecting it asks again
+	const denyThunderboltDevice = trpcReact.hardware.thunderbolt.revoke.useMutation({
+		onSuccess: invalidateThunderbolt,
+		onError: thunderboltActionError,
 	})
 
 	// Separate umbrelos-updated notification from others
@@ -256,6 +291,43 @@ export function Notifications() {
 						</Button>
 						<AlertDialogAction variant='primary' onClick={onSignIn} tabIndex={0}>
 							{t('notifications.cloud-auth.sign-in')}
+						</AlertDialogAction>
+					</>
+				),
+			}
+		}
+
+		if (notification.startsWith('thunderbolt-authorization-required:')) {
+			// Device ids are kernel-provided UUIDs, so they are matched verbatim.
+			// URI-decoding could throw on a malformed stored notification, which
+			// would crash the whole app since this component mounts at the root.
+			const id = notification.slice('thunderbolt-authorization-required:'.length)
+			const device = pendingThunderboltDevicesQuery.data?.find((candidate) => candidate.id === id)
+			const deviceName =
+				[device?.vendor, device?.name].filter(Boolean).join(' ') || t('notifications.thunderbolt.accessory')
+			return {
+				title: t('notifications.thunderbolt.title'),
+				icon: <img src={thunderboltAccessoryImage} alt='' draggable={false} className='w-20' />,
+				description: t('notifications.thunderbolt.description', {device: deviceName}),
+				action: (
+					<>
+						<AlertDialogAction
+							variant='default'
+							disabled={authorizeThunderboltDevice.isPending || denyThunderboltDevice.isPending}
+							onClick={() => denyThunderboltDevice.mutate({id})}
+							tabIndex={0}
+						>
+							{t('notifications.thunderbolt.dont-allow')}
+						</AlertDialogAction>
+						<AlertDialogAction
+							variant='primary'
+							disabled={authorizeThunderboltDevice.isPending || denyThunderboltDevice.isPending}
+							onClick={() => authorizeThunderboltDevice.mutate({id})}
+							tabIndex={0}
+						>
+							{authorizeThunderboltDevice.isPending
+								? t('notifications.thunderbolt.allowing')
+								: t('notifications.thunderbolt.allow')}
 						</AlertDialogAction>
 					</>
 				),
