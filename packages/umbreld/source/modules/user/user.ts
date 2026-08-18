@@ -18,6 +18,8 @@ export type Member = {
 	language: string
 	temperatureUnit?: string
 	viewPreferences?: Partial<ViewPreferences>
+	favorites?: string[]
+	recents?: string[]
 }
 
 export type DeletedMember = {
@@ -529,6 +531,67 @@ export default class User {
 	async setAccountViewPreferences(userId: string, viewPreferences: Partial<ViewPreferences>) {
 		if (userId === OWNER_USER_ID) return this.#store.set('files.preferences', viewPreferences as ViewPreferences)
 		return this.#updateMember(userId, {viewPreferences})
+	}
+
+	// Get an account's file favorites. Owner data retains its established store
+	// location; member data lives with the rest of that member's private state.
+	async getAccountFavorites(userId: string): Promise<string[] | undefined> {
+		if (userId === OWNER_USER_ID) return this.#store.get('files.favorites')
+		const member = await this.getMember(userId)
+		return member?.favorites
+	}
+
+	// Read every account's stored favorites from one coherent store snapshot.
+	// Callers derive defaults for accounts without an explicit value.
+	async getAllAccountFavorites() {
+		const store = await this.#store.get()
+		return [
+			{userId: OWNER_USER_ID, favorites: store.files?.favorites},
+			...(store.members ?? [])
+				.filter(isActiveMember)
+				.map((member) => ({userId: member.id, favorites: member.favorites})),
+		]
+	}
+
+	// Atomically update favorites so concurrent add/remove requests cannot
+	// overwrite one another. Returning undefined leaves stored state unchanged.
+	async updateAccountFavorites(userId: string, update: (favorites: string[] | undefined) => string[] | undefined) {
+		let found = false
+		await this.#store.getWriteLock(async ({get, set}) => {
+			if (userId === OWNER_USER_ID) {
+				found = true
+				const favorites = update(await get('files.favorites'))
+				if (favorites !== undefined) await set('files.favorites', favorites)
+				return
+			}
+
+			const memberRecords = (await get('members')) ?? []
+			let changed = false
+			const updatedMembers = memberRecords.map((member) => {
+				if (member.id !== userId || !isActiveMember(member)) return member
+				found = true
+				const favorites = update(member.favorites)
+				if (favorites === undefined) return member
+				changed = true
+				return {...member, favorites}
+			})
+			if (changed) await set('members', updatedMembers)
+		})
+		if (!found) throw new Error('User not found')
+		return true
+	}
+
+	// Recents follow the same account boundary as favorites. The Recents module
+	// serializes writes, so replacing the current snapshot is sufficient.
+	async getAccountRecents(userId: string): Promise<string[] | undefined> {
+		if (userId === OWNER_USER_ID) return this.#store.get('files.recents')
+		const member = await this.getMember(userId)
+		return member?.recents
+	}
+
+	async setAccountRecents(userId: string, recents: string[]) {
+		if (userId === OWNER_USER_ID) return this.#store.set('files.recents', recents)
+		return this.#updateMember(userId, {recents})
 	}
 
 	// ── Account scoped 2FA ──────────────────────────────────────────────────

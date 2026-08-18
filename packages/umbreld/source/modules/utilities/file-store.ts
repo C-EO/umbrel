@@ -105,8 +105,11 @@ export default class FileStore<T extends Serializable> {
 		return this.#write(store)
 	}
 
-	async get<P extends string>(property?: StorePath<T, P>, defaultValue?: DotProp<T, P>) {
+	async get(): Promise<T>
+	async get<P extends string>(property: StorePath<T, P>, defaultValue?: DotProp<T, P>): Promise<DotProp<T, P>>
+	async get<P extends string>(property?: StorePath<T, P>, defaultValue?: DotProp<T, P>): Promise<T | DotProp<T, P>> {
 		const store = await this.#read()
+		if (property === undefined) return store
 
 		return getProperty(store, property as string, defaultValue) as DotProp<T, P>
 	}

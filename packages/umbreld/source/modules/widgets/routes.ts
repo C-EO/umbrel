@@ -91,7 +91,7 @@ export default router({
 		}),
 
 	// Get live data for a widget
-	data: privateProcedure
+	data: privateProcedureWithMembers
 		.input(
 			z.object({
 				widgetId: z.string(),
@@ -99,15 +99,23 @@ export default router({
 		)
 		.query(async ({ctx, input}) => {
 			const {appId, widgetName} = splitWidgetId(input.widgetId)
+			const accountId = ctx.principal!.accountId
 			let widgetData: {[key: string]: any}
 
 			if (appId === 'umbrel') {
 				// This is an Umbrel widget
 				if (!(widgetName in umbrelWidgets)) throw new Error(`No widget named ${widgetName} found in Umbrel widgets`)
 
-				widgetData = await umbrelWidgets[widgetName as keyof typeof umbrelWidgets](ctx.umbreld)
+				if (widgetName in filesWidgets) {
+					widgetData = await filesWidgets[widgetName as keyof typeof filesWidgets](ctx.umbreld, accountId)
+				} else {
+					widgetData = await systemWidgets[widgetName as keyof typeof systemWidgets](ctx.umbreld)
+				}
 			} else {
 				// This is an app widget
+				if (accountId !== OWNER_USER_ID && !(await ctx.umbreld.apps.sharedAppIdsForUser(accountId)).includes(appId)) {
+					throw new Error('[widget-not-found]')
+				}
 				widgetData = await ctx.apps.getApp(appId).getWidgetData(widgetName)
 			}
 

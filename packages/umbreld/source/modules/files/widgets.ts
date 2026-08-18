@@ -1,8 +1,8 @@
 import type Umbreld from '../../index.js'
 
 export const filesWidgets = {
-	'files-recents': async function (umbreld: Umbreld) {
-		const recentFiles = await umbreld.files.recents.get()
+	'files-recents': async function (umbreld: Umbreld, accountId: string) {
+		const recentFiles = await umbreld.files.recents.get(accountId)
 
 		return {
 			type: 'files-list',
@@ -13,8 +13,8 @@ export const filesWidgets = {
 		}
 	},
 
-	'files-favorites': async function (umbreld: Umbreld) {
-		const favorites = await umbreld.files.favorites.listFavorites()
+	'files-favorites': async function (umbreld: Umbreld, accountId: string) {
+		const favorites = await umbreld.files.favorites.listFavorites(accountId)
 
 		return {
 			type: 'files-grid',

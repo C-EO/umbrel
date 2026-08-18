@@ -157,7 +157,7 @@ export default class Files {
 		])
 
 		this.watcher = new Watcher(umbreld, {paths: ['/Home', '/Trash', '/Apps', '/Machines']})
-		this.recents = new Recents(umbreld, {paths: ['/Home']})
+		this.recents = new Recents(umbreld)
 		this.favorites = new Favorites(umbreld)
 		this.archive = new Archive(umbreld)
 		this.thumbnails = new Thumbnails(umbreld)
@@ -1299,10 +1299,9 @@ export default class Files {
 			operations.add('delete')
 		}
 
-		// Favorites remain owner-only. Members may create household SMB exports
-		// from directories in their own private Home.
+		// Members may create household SMB exports only from their own private
+		// Home. Favorites are account-scoped and remain available to members.
 		if (this.ownerOfPath(virtualPath) !== OWNER_USER_ID) {
-			operations.delete('favorite')
 			if (this.ownerOfPath(virtualPath) !== userId) operations.delete('share')
 		}
 
@@ -1315,12 +1314,11 @@ export default class Files {
 			if (!share) return []
 
 			// The same rules as the owner apply (protected and read-only paths
-			// stay protected), minus favorites and SMB-over-SMB, and trashing,
+			// stay protected), minus SMB-over-SMB and trashing,
 			// which would strand the
 			// owner's files in the member's private trash, so members hard delete
 			// from shares instead
 			if (!isExternal) operations.delete('share')
-			operations.delete('favorite')
 			if (operations.has('trash')) {
 				operations.delete('trash')
 				operations.add('delete')

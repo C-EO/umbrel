@@ -398,11 +398,33 @@ describe('Multi-user accounts', () => {
 		const names = listing.files.map((file) => file.name).sort()
 		expect(names).toStrictEqual(['Documents', 'Downloads', 'Photos', 'Videos'])
 
-		// Members may export eligible folders from their own Home over SMB, while
-		// favorites remain owner-only.
+		// Members may export and favorite eligible folders from their own Home.
 		const documents = listing.files.find((file) => file.name === 'Documents')!
 		expect(documents.operations).toContain('share')
-		expect(documents.operations).not.toContain('favorite')
+		expect(documents.operations).toContain('favorite')
+	})
+
+	test('member favorites and the Files favorites widget are account-scoped', async () => {
+		await loginAs(memberToken)
+		const memberHome = `/Users/${memberUserId}`
+		await expect(umbreld.client.files.favorites.query()).resolves.toStrictEqual(
+			['Downloads', 'Documents', 'Photos', 'Videos'].map((folder) => `${memberHome}/${folder}`),
+		)
+
+		// Keep the new favorite within the widget's four-item display limit.
+		await umbreld.client.files.removeFavorite.mutate({path: `${memberHome}/Videos`})
+		await umbreld.client.files.createDirectory.mutate({path: `${memberHome}/favorite-me`})
+		await umbreld.client.files.addFavorite.mutate({path: `${memberHome}/favorite-me`})
+		expect((await umbreld.client.widget.data.query({widgetId: 'umbrel:files-favorites'})).paths).toContain(
+			`${memberHome}/favorite-me`,
+		)
+
+		await loginAs(ownerToken)
+		expect(await umbreld.client.files.favorites.query()).not.toContain(`${memberHome}/favorite-me`)
+		expect((await umbreld.client.widget.data.query({widgetId: 'umbrel:files-favorites'})).paths).not.toContain(
+			`${memberHome}/favorite-me`,
+		)
+		await loginAs(memberToken)
 	})
 
 	test("member home and trash changes are watched like the owner's filesystem", async () => {
@@ -425,11 +447,25 @@ describe('Multi-user accounts', () => {
 				},
 				{interval: 100, timeout: 10_000},
 			)
+			await pWaitFor(
+				async () =>
+					(await umbreld.client.widget.data.query({widgetId: 'umbrel:files-recents'})).items.some(
+						(file: {name: string}) => file.name === 'watched-home.txt',
+					),
+				{interval: 100, timeout: 10_000},
+			)
+
+			await loginAs(ownerToken)
+			expect((await umbreld.client.widget.data.query({widgetId: 'umbrel:files-recents'})).items).not.toEqual(
+				expect.arrayContaining([expect.objectContaining({name: 'watched-home.txt'})]),
+			)
+			await loginAs(memberToken)
 		} finally {
 			changes.close()
 			await umbreld.vm.sshAsRoot(
 				`rm -f '${memberRoot}/home/Documents/watched-home.txt' '${memberRoot}/trash/watched-trash.txt'`,
 			)
+			await loginAs(memberToken)
 		}
 	})
 
@@ -475,7 +511,6 @@ describe('Multi-user accounts', () => {
 			'owner',
 		)
 		await expect(umbreld.client.user.deleteUser.mutate({userId: memberUserId})).rejects.toThrow('owner')
-		await expect(umbreld.client.files.favorites.query()).rejects.toThrow('owner')
 		await expect(umbreld.client.machines.list.query()).rejects.toThrow('owner')
 		await expect(umbreld.client.machines.capabilities.query()).rejects.toThrow('owner')
 	})
@@ -493,11 +528,13 @@ describe('Multi-user accounts', () => {
 		await expect(umbreld.client.system.getNetworkInterfaces.query()).rejects.toThrow('owner')
 	})
 
-	test('members get empty apps and widgets so the desktop can render', async () => {
+	test('members get empty apps and enabled widgets before any apps are shared', async () => {
 		await loginAs(memberToken)
-		// Members don't have app/widget access yet, these return empty rather than erroring
+		// App lists and the legacy enabled-widget preference remain empty, while
+		// unshared app widget data stays inaccessible.
 		await expect(umbreld.client.apps.list.query()).resolves.toStrictEqual([])
 		await expect(umbreld.client.widget.enabled.query()).resolves.toStrictEqual([])
+		await expect(umbreld.client.widget.data.query({widgetId: 'bitcoin:stats'})).rejects.toThrow('[widget-not-found]')
 
 		// The owner still sees their real apps/widgets
 		await loginAs(ownerToken)
@@ -909,7 +946,7 @@ describe('Multi-user accounts', () => {
 		expect(memberDir.operations).toContain('rename')
 		expect(memberDir.operations).not.toContain('trash')
 		expect(memberDir.operations).not.toContain('share')
-		expect(memberDir.operations).not.toContain('favorite')
+		expect(memberDir.operations).toContain('favorite')
 		await expect(umbreld.client.files.trash.mutate({path: '/Home/Photos/holiday/member-dir'})).rejects.toThrow(
 			'operation-not-allowed',
 		)

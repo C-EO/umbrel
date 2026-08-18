@@ -268,20 +268,22 @@ export default router({
 		.mutation(async ({ctx, input}) => ctx.umbreld.files.deleteMany(input.paths, ctx.principal?.accountId)),
 
 	// Get favorites
-	favorites: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.favorites.listFavorites()),
+	favorites: privateProcedureWithMembers.query(async ({ctx}) =>
+		ctx.umbreld.files.favorites.listFavorites(ctx.principal!.accountId),
+	),
 
 	// Add a favorite
-	addFavorite: privateProcedure
+	addFavorite: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.favorites.addFavorite(input.path)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.favorites.addFavorite(input.path, ctx.principal!.accountId)),
 
 	// Remove a favorite
-	removeFavorite: privateProcedure
+	removeFavorite: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.favorites.removeFavorite(input.path)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.favorites.removeFavorite(input.path, ctx.principal!.accountId)),
 
 	// Get recent files
-	recents: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.recents.get()),
+	recents: privateProcedureWithMembers.query(async ({ctx}) => ctx.umbreld.files.recents.get(ctx.principal!.accountId)),
 
 	// Get view preferences
 	// Scoped to the current account

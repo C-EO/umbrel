@@ -26,9 +26,9 @@ export default class Favorites {
 	}
 
 	// Get favorites
-	async #get() {
-		const favorites = await this.#umbreld.store.get('files.favorites')
-		return favorites || []
+	async #get(userId: string) {
+		const favorites = await this.#umbreld.user.getAccountFavorites(userId)
+		return this.#normalizeFavorites(favorites ?? this.#defaultFavorites(userId))
 	}
 
 	// Remove favorites on deletion
@@ -37,22 +37,31 @@ export default class Favorites {
 	// and there's no way to tell the difference between a move/rename and a deletion/recreation.
 	async #handleFileChange(event: FileChangeEvent) {
 		if (event.type !== 'delete') return
-		const favorites = await this.#get()
 		const virtualDeletedPath = this.#umbreld.files.systemToVirtualPath(event.path)
-		const deletedFavorites = favorites.filter((favorite) => favorite.startsWith(virtualDeletedPath))
-		for (const favorite of deletedFavorites) await this.removeFavorite(favorite)
+		const accounts = await this.#umbreld.user.getAllAccountFavorites()
+		for (const {userId, favorites: storedFavorites} of accounts) {
+			const favorites = this.#normalizeFavorites(storedFavorites ?? this.#defaultFavorites(userId))
+			const deletedFavorites = favorites.filter(
+				(favorite) => favorite === virtualDeletedPath || favorite.startsWith(`${virtualDeletedPath}/`),
+			)
+			for (const favorite of deletedFavorites) {
+				await this.removeFavorite(favorite, userId).catch((error) =>
+					this.logger.error(`Failed to remove deleted favorite ${favorite} for ${userId}`, error),
+				)
+			}
+		}
 	}
 
 	// List favorited directories
-	async listFavorites() {
+	async listFavorites(userId: string = OWNER_USER_ID) {
 		// Get favorites from the store
-		const favorites = await this.#get()
+		const favorites = await this.#get(userId)
 
 		// Strip out any favorites that aren't existing directories (or no longer
 		// resolve, e.g. the directory was replaced with an escaping symlink)
 		const mappedFavorites = await Promise.all(
 			favorites.map(async (favorite) => {
-				const systemPath = await this.#umbreld.files.virtualToSystemPath(favorite, OWNER_USER_ID).catch(() => undefined)
+				const systemPath = await this.#umbreld.files.virtualToSystemPath(favorite, userId).catch(() => undefined)
 				if (!systemPath) return undefined
 				const file = await this.#umbreld.files.status(systemPath).catch(() => undefined)
 				if (file?.type !== 'directory') return undefined
@@ -65,38 +74,47 @@ export default class Favorites {
 	}
 
 	// Save a favorite directory
-	async addFavorite(virtualPath: string) {
+	async addFavorite(virtualPath: string, userId: string = OWNER_USER_ID) {
+		virtualPath = this.#umbreld.files.normalizeVirtualPath(virtualPath)
+
+		// Authorize before inspecting path capabilities so an account cannot use
+		// the error shape to probe inaccessible directories.
+		await this.#umbreld.files.virtualToSystemPath(virtualPath, userId)
+
 		// Check operation is allowed
-		const allowedOperations = await this.#umbreld.files.getAllowedOperations(virtualPath)
+		const allowedOperations = await this.#umbreld.files.getAllowedOperations(virtualPath, userId)
 		if (!allowedOperations.includes('favorite')) throw new Error('[operation-not-allowed]')
 
-		// Resolve and validate the path (owner authorization + symlink containment)
-		// before persisting anything, so an escaping path can't be written to the
-		// store. Favorites live in the owner namespace.
-		await this.#umbreld.files.virtualToSystemPath(virtualPath, OWNER_USER_ID)
-
 		// Save entry in the store
-		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
-			const favorites = await this.#get()
-			let favorite = favorites.find((favorite) => favorite === virtualPath)
-			if (favorite) return
-			favorites.push(virtualPath)
-			await set('files.favorites', favorites)
+		await this.#umbreld.user.updateAccountFavorites(userId, (stored) => {
+			const favorites = this.#normalizeFavorites(stored ?? this.#defaultFavorites(userId))
+			if (favorites.includes(virtualPath)) return undefined
+			return [...favorites, virtualPath]
 		})
 
 		return true
 	}
 
 	// Remove a favorite directory
-	async removeFavorite(virtualPath: string) {
+	async removeFavorite(virtualPath: string, userId: string = OWNER_USER_ID) {
+		virtualPath = this.#umbreld.files.normalizeVirtualPath(virtualPath)
 		let deleted = false
-		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
-			const favorites = await this.#get()
+		await this.#umbreld.user.updateAccountFavorites(userId, (stored) => {
+			const favorites = this.#normalizeFavorites(stored ?? this.#defaultFavorites(userId))
 			const newFavorites = favorites.filter((favorite) => favorite !== virtualPath)
 			deleted = newFavorites.length < favorites.length
-			if (deleted) await set('files.favorites', newFavorites)
+			return deleted ? newFavorites : undefined
 		})
 		return deleted
+	}
+
+	#defaultFavorites(userId: string) {
+		const home = userId === OWNER_USER_ID ? '/Home' : `/Users/${userId}`
+		return ['Downloads', 'Documents', 'Photos', 'Videos'].map((folder) => `${home}/${folder}`)
+	}
+
+	#normalizeFavorites(favorites: string[]) {
+		return [...new Set(favorites.map((favorite) => this.#umbreld.files.normalizeVirtualPath(favorite)))]
 	}
 
 	// Remove listener
