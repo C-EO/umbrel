@@ -17,6 +17,7 @@ import {
 	getDiskUsage,
 	getMemoryUsage,
 	getCpuUsage,
+	getGpuUsage,
 	reboot,
 	shutdown,
 	detectDevice,
@@ -81,6 +82,25 @@ async function scopeUsageAppsForMember<
 	const otherUsed = [...hiddenApps, ...usage.machines].reduce((total, item) => total + item.used, 0)
 	const apps = otherUsed > 0 ? [...visibleApps, {id: 'other', used: otherUsed}] : visibleApps
 	return {...usage, apps, machines: []}
+}
+
+async function scopeGpuUsageAppsForMember(
+	umbreld: Umbreld,
+	usage: Awaited<ReturnType<typeof getGpuUsage>>,
+	userId: string,
+): Promise<Awaited<ReturnType<typeof getGpuUsage>>> {
+	if (userId === OWNER_USER_ID) return usage
+	const sharedAppIds = await umbreld.apps.sharedAppIdsForUser(userId)
+	const visibleApps = usage.apps.filter((app) => sharedAppIds.includes(app.id))
+	const hiddenApps = usage.apps.filter((app) => !sharedAppIds.includes(app.id))
+	const other = hiddenApps.reduce(
+		(total, app) => ({id: 'other', used: total.used + app.used, memoryUsed: total.memoryUsed + app.memoryUsed}),
+		{id: 'other', used: 0, memoryUsed: 0},
+	)
+	return {
+		...usage,
+		apps: other.used > 0 || other.memoryUsed > 0 ? [...visibleApps, other] : visibleApps,
+	}
 }
 
 export default router({
@@ -171,6 +191,9 @@ export default router({
 	),
 	cpuUsage: privateProcedureWithMembers.query(async ({ctx}) =>
 		scopeUsageAppsForMember(ctx.umbreld, await getCpuUsage(ctx.umbreld), ctx.principal?.accountId ?? OWNER_USER_ID),
+	),
+	gpuUsage: privateProcedureWithMembers.query(async ({ctx}) =>
+		scopeGpuUsageAppsForMember(ctx.umbreld, await getGpuUsage(ctx.umbreld), ctx.principal?.accountId ?? OWNER_USER_ID),
 	),
 	getIpAddresses: privateProcedureWithMembers.query(() => getIpAddresses()),
 	getHostname: privateProcedure.query(() => getHostname()),

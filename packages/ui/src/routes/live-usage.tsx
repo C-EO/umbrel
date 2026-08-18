@@ -23,11 +23,12 @@ import {canStart, canStop, useAppInstall, useAppState} from '@/hooks/use-app-ins
 import {extractIconAccentColor} from '@/hooks/use-color-thief'
 import {useCpuForUi} from '@/hooks/use-cpu'
 import {useDiskForUi} from '@/hooks/use-disk'
+import {useGpuForUi} from '@/hooks/use-gpu'
 import {useMemoryForUi, useSystemMemoryForUi} from '@/hooks/use-memory'
 import {cn} from '@/lib/utils'
 import {useAppUninstall} from '@/modules/apps/use-app-uninstall'
 import {AppT, systemAppsKeyed, useApps} from '@/providers/apps'
-import {trpcReact} from '@/trpc/trpc'
+import {trpcReact, type RouterOutput} from '@/trpc/trpc'
 import {useDialogOpenProps} from '@/utils/dialog'
 import {formatNumberI18n} from '@/utils/number'
 import {maybePrettyBytes} from '@/utils/pretty-bytes'
@@ -53,11 +54,12 @@ export default function LiveUsageDialog() {
 	)
 }
 
-type SelectedTab = 'storage' | 'memory' | 'cpu'
+type SelectedTab = 'storage' | 'memory' | 'cpu' | 'gpu'
 
 type UsageListItem = {
 	id: string
 	used: number
+	memoryUsed?: number
 	entity?: 'machine'
 	name?: string
 	osId?: string
@@ -92,7 +94,7 @@ function LiveUsageContent() {
 	const {search} = useLocation()
 	const navigate = useNavigate()
 	const queryParams = new URLSearchParams(search)
-	const selectedTab = (queryParams.get('tab') as SelectedTab) || 'cpu'
+	const requestedTab = (queryParams.get('tab') as SelectedTab) || 'cpu'
 
 	const setSelectedTab = (tab: SelectedTab) => {
 		queryParams.set('tab', tab)
@@ -103,6 +105,8 @@ function LiveUsageContent() {
 	// As disk-usage doesn't change much in real-time but the calculation causes
 	// CPU spikes
 	const cpuUsage = useCpuForUi({poll: true})
+	const gpuUsage = useGpuForUi({poll: true})
+	const selectedTab = requestedTab === 'gpu' && !gpuUsage.isLoading && !gpuUsage.hasGpu ? 'cpu' : requestedTab
 	// The card number/chart only need the light meminfo endpoint. The per-app
 	// breakdown (docker ps + a cgroup sweep per call in umbreld) is fetched once
 	// on open — pre-building every card's segment layer and pinning stable
@@ -111,8 +115,14 @@ function LiveUsageContent() {
 	const memoryUsage = useMemoryForUi({poll: selectedTab === 'memory'})
 	const diskUsage = useDiskForUi()
 
-	const colors = useUsageColors([...(cpuUsage.apps ?? []), ...(memoryUsage.apps ?? []), ...(diskUsage.apps ?? [])])
+	const colors = useUsageColors([
+		...(cpuUsage.apps ?? []),
+		...(memoryUsage.apps ?? []),
+		...(diskUsage.apps ?? []),
+		...(gpuUsage.apps ?? []),
+	])
 	const cpuSegments = useSegments({apps: cpuUsage.apps, total: 100, usedFraction: cpuUsage.progress, colors})
+	const gpuSegments = useSegments({apps: gpuUsage.apps, total: 100, usedFraction: gpuUsage.progress, colors})
 	const memorySegments = useSegments({
 		apps: memoryUsage.apps,
 		total: memoryUsage.size,
@@ -129,6 +139,7 @@ function LiveUsageContent() {
 	// Initialize cpu and memory charts with 30 "0" values so there's a clean base line from where they start populating with
 	const [cpuChartData, setCpuChartData] = useState<Array<{value: number}>>(new Array(30).fill({value: 0}))
 	const [memoryChartData, setMemoryChartData] = useState<Array<{value: number}>>(new Array(30).fill({value: 0}))
+	const [gpuChartData, setGpuChartData] = useState<Array<{value: number}>>(new Array(30).fill({value: 0}))
 
 	// Update cpu and memory charts whenever their progress values update
 	useEffect(() => {
@@ -139,10 +150,14 @@ function LiveUsageContent() {
 		setMemoryChartData((prevData) => appendChartPoint(prevData, memorySystem.progress * 100 || 0))
 	}, [memorySystem.progress])
 
+	useEffect(() => {
+		setGpuChartData((prevData) => appendChartPoint(prevData, gpuUsage.progress * 100 || 0))
+	}, [gpuUsage.progress])
+
 	return (
 		<div className='grid gap-y-5'>
 			{/* Hidden on mobile, as we show regular tabs */}
-			<div className='hidden gap-3 sm:grid sm:grid-cols-3'>
+			<div className={cn('hidden gap-3 sm:grid', gpuUsage.hasGpu ? 'sm:grid-cols-4' : 'sm:grid-cols-3')}>
 				<UsageTabButton onClick={() => setSelectedTab('cpu')}>
 					<UsageCard
 						title={t('cpu')}
@@ -184,6 +199,19 @@ function LiveUsageContent() {
 						active={selectedTab === 'storage'}
 					/>
 				</UsageTabButton>
+				{gpuUsage.hasGpu && (
+					<UsageTabButton onClick={() => setSelectedTab('gpu')}>
+						<UsageCard
+							title={t('gpu')}
+							value={gpuUsage.value}
+							progressLabel={gpuUsage.secondaryValue}
+							segments={gpuSegments}
+							progress={gpuUsage.progress}
+							active={selectedTab === 'gpu'}
+							chart={gpuChartData}
+						/>
+					</UsageTabButton>
+				)}
 			</div>
 
 			{/* Shown only on mobile */}
@@ -194,6 +222,7 @@ function LiveUsageContent() {
 						{id: 'cpu', label: t('cpu')},
 						{id: 'memory', label: t('memory')},
 						{id: 'storage', label: t('storage')},
+						...(gpuUsage.hasGpu ? [{id: 'gpu' as const, label: t('gpu')}] : []),
 					]}
 					value={selectedTab}
 					onValueChange={setSelectedTab}
@@ -205,6 +234,7 @@ function LiveUsageContent() {
 				{selectedTab === 'cpu' && <CpuSection colors={colors} chart={cpuChartData} />}
 				{selectedTab === 'memory' && <MemorySection colors={colors} chart={memoryChartData} />}
 				{selectedTab === 'storage' && <StorageSection colors={colors} />}
+				{selectedTab === 'gpu' && <GpuSection colors={colors} chart={gpuChartData} />}
 			</ErrorBoundary>
 		</div>
 	)
@@ -240,7 +270,7 @@ function StorageSection({colors}: {colors: UsageColors}) {
 				/>
 			</div>
 			{isLoading && <AppListSkeleton systemApps={[systemAppsKeyed.UMBREL_system, systemAppsKeyed.UMBREL_files]} />}
-			<AppList apps={apps} colors={colors} formatValue={(v) => maybePrettyBytes(v, i18n.language)} />
+			<AppList apps={apps} colors={colors} formatValue={(item) => maybePrettyBytes(item.used, i18n.language)} />
 		</>
 	)
 }
@@ -264,7 +294,7 @@ function MemorySection({colors, chart}: {colors: UsageColors; chart?: Array<{val
 				/>
 			</div>
 			{isLoading && <AppListSkeleton systemApps={[systemAppsKeyed.UMBREL_system]} />}
-			<AppList apps={apps} colors={colors} formatValue={(v) => maybePrettyBytes(v, i18n.language)} />
+			<AppList apps={apps} colors={colors} formatValue={(item) => maybePrettyBytes(item.used, i18n.language)} />
 		</>
 	)
 }
@@ -280,7 +310,90 @@ function CpuSection({colors, chart}: {colors: UsageColors; chart?: Array<{value:
 				<UsageCard active value={value} progressLabel={secondaryValue} segments={segments} chart={chart} />
 			</div>
 			{isLoading && <AppListSkeleton systemApps={[systemAppsKeyed.UMBREL_system]} />}
-			<AppList apps={apps} colors={colors} formatValue={(n) => formatNumberI18n({n, locale: i18n.language}) + '%'} />
+			<AppList
+				apps={apps}
+				colors={colors}
+				formatValue={(item) => formatNumberI18n({n: item.used, locale: i18n.language}) + '%'}
+			/>
+		</>
+	)
+}
+
+type GpuDevice = RouterOutput['system']['gpuUsage']['devices'][number]
+
+function GpuDeviceCard({device}: {device: GpuDevice}) {
+	const {i18n} = useTranslation()
+	const totalUsed = device.totalUsed
+	const dedicated = device.dedicatedMemory
+	const shared = device.sharedMemory
+
+	return (
+		<div className='settings-edge-material rounded-24 p-5'>
+			<div className='flex min-w-0 items-start justify-between gap-3'>
+				<div className='min-w-0'>
+					<div className='truncate text-15 font-semibold -tracking-2 text-white/80'>{device.model}</div>
+					<div className='mt-1 truncate text-12 font-medium -tracking-2 text-white/35'>{device.vendor}</div>
+				</div>
+				<div className='text-20 shrink-0 font-semibold -tracking-3'>
+					{totalUsed === null ? LOADING_DASH : `${Math.ceil(totalUsed)}%`}
+				</div>
+			</div>
+			<div className='mt-4'>
+				<CompositionBar segments={[]} flat progress={(totalUsed ?? 0) / 100} />
+			</div>
+			{(dedicated || shared) && (
+				<div className='mt-4 grid gap-2 border-t border-white/8 pt-4 text-12 font-medium -tracking-2'>
+					{dedicated && (
+						<div className='flex items-center justify-between gap-3'>
+							<span className='text-white/35'>VRAM</span>
+							<span className='text-white/65'>
+								{maybePrettyBytes(dedicated.used, i18n.language)}
+								{dedicated.total !== null && ` / ${maybePrettyBytes(dedicated.total, i18n.language)}`}
+							</span>
+						</div>
+					)}
+					{shared && (
+						<div className='flex items-center justify-between gap-3'>
+							<span className='text-white/35'>RAM</span>
+							<span className='text-white/65'>{maybePrettyBytes(shared.used, i18n.language)}</span>
+						</div>
+					)}
+				</div>
+			)}
+		</div>
+	)
+}
+
+function GpuSection({colors, chart}: {colors: UsageColors; chart?: Array<{value: number}>}) {
+	const {i18n} = useTranslation()
+	const {isLoading, value, secondaryValue, progress, apps, devices} = useGpuForUi({poll: true})
+	const segments = useSegments({apps, total: 100, usedFraction: progress, colors})
+
+	return (
+		<>
+			<div className='sm:hidden'>
+				<UsageCard active value={value} progressLabel={secondaryValue} segments={segments} chart={chart} />
+			</div>
+			{devices.length > 0 && (
+				<div className='grid gap-3 sm:grid-cols-2'>
+					{devices.map((device) => (
+						<GpuDeviceCard key={device.id} device={device} />
+					))}
+				</div>
+			)}
+			{isLoading && <AppListSkeleton systemApps={[systemAppsKeyed.UMBREL_system]} />}
+			<AppList
+				apps={apps}
+				colors={colors}
+				formatValue={(item) => {
+					const values = []
+					if (item.used > 0 || !item.memoryUsed) {
+						values.push(formatNumberI18n({n: item.used, locale: i18n.language}) + '%')
+					}
+					if (item.memoryUsed) values.push(maybePrettyBytes(item.memoryUsed, i18n.language))
+					return values.join(' · ')
+				}}
+			/>
 		</>
 	)
 }
@@ -577,7 +690,7 @@ function AppList({
 	colors,
 }: {
 	apps?: UsageListItem[]
-	formatValue: (value: number) => string
+	formatValue: (item: UsageListItem) => string
 	colors: UsageColors
 }) {
 	const {userAppsKeyed} = useApps()
@@ -605,7 +718,7 @@ function AppList({
 						icon={icon}
 						osId={entity === 'machine' ? osId : undefined}
 						title={name}
-						value={formatValue(used)}
+						value={formatValue(item)}
 						barColor={colors.get(item) ?? OTHER_SEGMENT_COLOR}
 						barShare={used / maxUsed}
 						status={isUserApp && <AppRowStatus appId={id} />}

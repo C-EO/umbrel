@@ -13,6 +13,7 @@ import type Umbreld from '../../index.js'
 import getDirectorySize from '../utilities/get-directory-size.js'
 import {escapeSpecialRegExpLiterals} from '../utilities/regexp.js'
 import pWaitFor from 'p-wait-for'
+import {getGpuDeviceUsage, type GpuDeviceUsage} from '../hardware/gpu-usage.js'
 
 export async function getCpuTemperature(): Promise<{
 	warning: 'normal' | 'warm' | 'hot'
@@ -156,6 +157,40 @@ async function getDockerContainerIds(): Promise<Map<string, string>> {
 	} catch {
 		return new Map()
 	}
+}
+
+// Map host PIDs to their Umbrel app without running `docker top` once per
+// container. Docker's systemd cgroup contains every process in a container,
+// including children, and the single `docker ps` snapshot gives us the stable
+// full container ID used by that cgroup path.
+async function getAppPids(umbreld: Umbreld): Promise<Map<number, string>> {
+	const [containerIds, appContainers] = await Promise.all([
+		getDockerContainerIds(),
+		Promise.all(
+			umbreld.apps.instances.map(async (app) => ({
+				id: app.id,
+				containers: await app.getContainerNames().catch(() => []),
+			})),
+		),
+	])
+	const pidToApp = new Map<number, string>()
+
+	await Promise.all(
+		appContainers.flatMap((app) =>
+			app.containers.map(async (containerName) => {
+				const containerId = containerIds.get(containerName)
+				if (!containerId) return
+				const contents = await fse
+					.readFile(`/sys/fs/cgroup/system.slice/docker-${containerId}.scope/cgroup.procs`, 'utf8')
+					.catch(() => '')
+				for (const line of contents.split('\n')) {
+					const pid = Number(line.trim())
+					if (Number.isInteger(pid) && pid > 0) pidToApp.set(pid, app.id)
+				}
+			}),
+		),
+	)
+	return pidToApp
 }
 
 // Reads cgroup v2 memory usage for a Docker container.
@@ -302,6 +337,103 @@ export async function getMemoryUsage(umbreld: Umbreld): Promise<{
 		system,
 		apps,
 		machines: machineUsage.memory,
+	}
+}
+
+type GpuAppUsage = {
+	id: string
+	used: number
+	memoryUsed: number
+}
+
+export async function getGpuUsage(umbreld: Umbreld): Promise<{
+	totalUsed: number | null
+	memoryUsed: number
+	system: number
+	systemMemoryUsed: number
+	apps: GpuAppUsage[]
+	devices: Array<{
+		id: string
+		vendor: string
+		model: string
+		driver: string
+		totalUsed: number | null
+		dedicatedMemory: {total: number | null; used: number} | null
+		sharedMemory: {used: number} | null
+	}>
+}> {
+	// Sampling happens only when this endpoint is requested. Avoid the Docker and
+	// cgroup sweep entirely on systems without a GPU; Live Usage still probes the
+	// lightweight device path so a hot-plugged GPU appears without reopening it.
+	// GPU monitoring must never add work to startup or app lifecycle paths.
+	const rawDevices = await getGpuDeviceUsage()
+	if (rawDevices.length === 0) return aggregateGpuUsage(rawDevices, new Map())
+	const pidToApp = await getAppPids(umbreld)
+	return aggregateGpuUsage(rawDevices, pidToApp)
+}
+
+export function aggregateGpuUsage(rawDevices: GpuDeviceUsage[], pidToApp: Map<number, string>) {
+	const appDevices = new Map<string, Map<string, {used: number; memoryUsed: number}>>()
+
+	for (const device of rawDevices) {
+		for (const process of device.processes) {
+			const appIds = [...new Set(process.pids.flatMap((pid) => pidToApp.get(pid) ?? []))]
+			// Shared DRM clients should normally remain inside one container. If a
+			// client spans multiple apps, leave it in the system residual instead of
+			// exposing or arbitrarily assigning another app's usage.
+			if (appIds.length !== 1) continue
+			const appId = appIds[0]
+			const devices = appDevices.get(appId) ?? new Map<string, {used: number; memoryUsed: number}>()
+			const usage = devices.get(device.id) ?? {used: 0, memoryUsed: 0}
+			usage.used = clampNonNegativeNumber(usage.used + (process.used ?? 0))
+			usage.memoryUsed = clampByteCount(usage.memoryUsed + process.dedicatedMemoryUsed + process.sharedMemoryUsed)
+			devices.set(device.id, usage)
+			appDevices.set(appId, devices)
+		}
+	}
+
+	// Device-wide and per-client counters are sampled through different kernel
+	// interfaces (and NVIDIA commands), so their windows can be a few milliseconds
+	// apart. Keep the attribution internally consistent when that makes the sum of
+	// app samples momentarily exceed the device-wide value. Memory is an absolute
+	// counter and must not be scaled with utilization.
+	for (const device of rawDevices) {
+		if (device.totalUsed === null) continue
+		const usages = [...appDevices.values()].flatMap((devices) => {
+			const usage = devices.get(device.id)
+			return usage ? [usage] : []
+		})
+		const attributed = usages.reduce((total, usage) => total + usage.used, 0)
+		if (attributed <= device.totalUsed || attributed === 0) continue
+		const scale = device.totalUsed / attributed
+		for (const usage of usages) usage.used *= scale
+	}
+
+	const apps = [...appDevices].map(([id, devices]) => ({
+		id,
+		// Like Windows Task Manager, the aggregate is the busiest device rather
+		// than a sum that could exceed 100% on a mixed-GPU system.
+		used: Math.min(100, Math.max(0, ...[...devices.values()].map(({used}) => used))),
+		memoryUsed: clampByteCount([...devices.values()].reduce((total, usage) => total + usage.memoryUsed, 0)),
+	}))
+	const knownDeviceUsage = rawDevices.flatMap(({totalUsed}) => (totalUsed === null ? [] : [totalUsed]))
+	const totalUsed = knownDeviceUsage.length > 0 ? Math.max(...knownDeviceUsage) : null
+	const memoryUsed = clampByteCount(
+		rawDevices.reduce(
+			(total, device) => total + (device.dedicatedMemory?.used ?? 0) + (device.sharedMemory?.used ?? 0),
+			0,
+		),
+	)
+	const appsUsed = apps.reduce((total, app) => total + app.used, 0)
+	const appsMemoryUsed = apps.reduce((total, app) => total + app.memoryUsed, 0)
+
+	return {
+		totalUsed,
+		memoryUsed,
+		system: Math.max(0, (totalUsed ?? 0) - appsUsed),
+		systemMemoryUsed: clampByteCount(memoryUsed - appsMemoryUsed, memoryUsed),
+		apps,
+		devices: rawDevices.map(({processes: _processes, ...device}) => device),
 	}
 }
 
