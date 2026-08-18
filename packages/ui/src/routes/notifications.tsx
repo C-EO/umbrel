@@ -210,7 +210,20 @@ export function Notifications() {
 	const hasThunderboltNotification = notifications.some((n) => n.startsWith('thunderbolt-authorization-required:'))
 	const pendingThunderboltDevicesQuery = trpcReact.hardware.thunderbolt.getPendingDevices.useQuery(undefined, {
 		enabled: hasThunderboltNotification,
+		// Events keep the prompt's device state current across brief disconnects;
+		// polling covers a missed or temporarily disconnected subscription.
+		refetchInterval: 30_000,
 	})
+	const invalidatePendingThunderboltDevices = () => utils.hardware.thunderbolt.getPendingDevices.invalidate()
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'hardware:thunderbolt:devices-change'},
+		{
+			enabled: hasThunderboltNotification,
+			onStarted: invalidatePendingThunderboltDevices,
+			onData: invalidatePendingThunderboltDevices,
+			onError: (error) => console.error('hardware:thunderbolt:devices-change subscription error', error),
+		},
+	)
 	const invalidateThunderbolt = async () => {
 		await Promise.all([
 			utils.notifications.get.invalidate(),
@@ -313,7 +326,7 @@ export function Notifications() {
 					<>
 						<AlertDialogAction
 							variant='default'
-							disabled={authorizeThunderboltDevice.isPending || denyThunderboltDevice.isPending}
+							disabled={!device || authorizeThunderboltDevice.isPending || denyThunderboltDevice.isPending}
 							onClick={() => denyThunderboltDevice.mutate({id})}
 							tabIndex={0}
 						>

@@ -170,6 +170,23 @@ describe('Thunderbolt', () => {
 		expect(notifications).toStrictEqual([])
 	})
 
+	test('forgets a remembered device when automatic re-authorization fails', async () => {
+		await addDevice()
+		remembered = [{id: DEVICE_ID, name: 'DS-9003', vendor: 'TB4'}]
+		const setDeviceAuthorization = vi.fn(async () => undefined)
+		const thunderbolt = new Thunderbolt(umbreld, {devicesPath, setDeviceAuthorization})
+
+		await thunderbolt.reconcile()
+
+		expect(setDeviceAuthorization).toHaveBeenCalledTimes(1)
+		expect(remembered).toStrictEqual([])
+		expect(notifications).toStrictEqual([thunderboltNotification(DEVICE_ID)])
+
+		// Subsequent udev events must not retry the rejected remembered approval.
+		await thunderbolt.reconcile()
+		expect(setDeviceAuthorization).toHaveBeenCalledTimes(1)
+	})
+
 	test('requires fresh approval for remembered devices on secure-mode domains', async () => {
 		const devicePath = await addDevice()
 		await setDomainSecurity('secure')
@@ -242,24 +259,23 @@ describe('Thunderbolt', () => {
 
 	test('waits after each fallback scan and never overlaps reconciliations', async () => {
 		await addDevice()
-		remembered = [{id: DEVICE_ID, name: 'DS-9003', vendor: 'TB4'}]
 		const eventMonitor = createEventMonitor()
 
 		let calls = 0
 		let activeCalls = 0
 		let maxActiveCalls = 0
 		let finishSecondCall!: () => void
-		const setDeviceAuthorization = async () => {
+		vi.mocked(umbreld.notifications.get).mockImplementation(async () => {
 			calls += 1
 			activeCalls += 1
 			maxActiveCalls = Math.max(maxActiveCalls, activeCalls)
 			if (calls === 2) await new Promise<void>((resolve) => (finishSecondCall = resolve))
 			activeCalls -= 1
-		}
+			return [...notifications]
+		})
 		const thunderbolt = new Thunderbolt(umbreld, {
 			devicesPath,
 			scanIntervalMs: 5,
-			setDeviceAuthorization,
 			startEventMonitor: eventMonitor.start,
 		})
 
@@ -283,7 +299,11 @@ describe('Thunderbolt', () => {
 
 	test('persists an approval only after authorizing the connected device', async () => {
 		const devicePath = await addDevice()
-		const thunderbolt = new Thunderbolt(umbreld, {devicesPath, setDeviceAuthorization})
+		const thunderbolt = new Thunderbolt(umbreld, {
+			devicesPath,
+			setDeviceAuthorization,
+			authorizationStabilityMs: 0,
+		})
 		notifications = [thunderboltNotification(DEVICE_ID)]
 
 		await expect(thunderbolt.authorize(DEVICE_ID)).resolves.toMatchObject({
@@ -296,6 +316,77 @@ describe('Thunderbolt', () => {
 		await expect(fse.readFile(nodePath.join(devicePath, 'authorized'), 'utf8')).resolves.toBe('1\n')
 		expect(remembered).toStrictEqual([{id: DEVICE_ID, name: 'DS-9003', vendor: 'TB4'}])
 		expect(notifications).toStrictEqual([])
+	})
+
+	test('waits for a flapping device to reconnect before authorizing it', async () => {
+		notifications = [thunderboltNotification(DEVICE_ID)]
+		const thunderbolt = new Thunderbolt(umbreld, {
+			devicesPath,
+			setDeviceAuthorization,
+			authorizationReconnectTimeoutMs: 1_000,
+			authorizationRetryIntervalMs: 1,
+			authorizationStabilityMs: 0,
+		})
+
+		const authorization = thunderbolt.authorize(DEVICE_ID)
+		await new Promise((resolve) => globalThis.setTimeout(resolve, 10))
+		const devicePath = await addDevice()
+
+		await expect(authorization).resolves.toMatchObject({
+			id: DEVICE_ID,
+			connected: true,
+			authorized: true,
+			remembered: true,
+		})
+		await expect(fse.readFile(nodePath.join(devicePath, 'authorized'), 'utf8')).resolves.toBe('1\n')
+		expect(remembered).toStrictEqual([{id: DEVICE_ID, name: 'DS-9003', vendor: 'TB4'}])
+		expect(notifications).toStrictEqual([])
+	})
+
+	test('retries when a device disconnects during authorization', async () => {
+		await addDevice()
+		let attempts = 0
+		const flappingAuthorization = vi.fn(async (authorizedPath: string, authorized: boolean) => {
+			attempts += 1
+			if (attempts === 1) {
+				await fse.remove(nodePath.dirname(authorizedPath))
+				throw new Error('device disappeared')
+			}
+			await fse.writeFile(authorizedPath, authorized ? '1\n' : '0\n')
+		})
+		const thunderbolt = new Thunderbolt(umbreld, {
+			devicesPath,
+			setDeviceAuthorization: flappingAuthorization,
+			authorizationReconnectTimeoutMs: 1_000,
+			authorizationRetryIntervalMs: 1,
+			authorizationStabilityMs: 0,
+		})
+
+		const authorization = thunderbolt.authorize(DEVICE_ID)
+		await vi.waitFor(() => expect(flappingAuthorization).toHaveBeenCalledTimes(1))
+		await addDevice()
+
+		await expect(authorization).resolves.toMatchObject({id: DEVICE_ID, authorized: true, remembered: true})
+		expect(flappingAuthorization).toHaveBeenCalledTimes(2)
+	})
+
+	test('discards session-only remembered trust just once while authorization retries', async () => {
+		await addDevice({security: 'secure'})
+		remembered = [{id: DEVICE_ID, name: 'DS-9003', vendor: 'TB4'}]
+		const rejectedAuthorization = vi.fn(async () => undefined)
+		const thunderbolt = new Thunderbolt(umbreld, {
+			devicesPath,
+			setDeviceAuthorization: rejectedAuthorization,
+			authorizationReconnectTimeoutMs: 20,
+			authorizationRetryIntervalMs: 1,
+			authorizationStabilityMs: 0,
+		})
+
+		await expect(thunderbolt.authorize(DEVICE_ID)).rejects.toThrow('remained unauthorized')
+
+		expect(rejectedAuthorization.mock.calls.length).toBeGreaterThan(1)
+		expect(umbreld.store.getWriteLock).toHaveBeenCalledTimes(1)
+		expect(remembered).toStrictEqual([])
 	})
 
 	test('emits a devices-change event exactly once per observable device change', async () => {
@@ -343,11 +434,25 @@ describe('Thunderbolt', () => {
 		expect(umbreld.store.getWriteLock).toHaveBeenCalledTimes(2)
 	})
 
-	test('keeps approval state when the device is unplugged and clears its stale notification', async () => {
+	test('keeps approval state when unplugged and clears a stale notification after the disconnect grace period', async () => {
 		remembered = [{id: DEVICE_ID, name: 'DS-9003', vendor: 'TB4'}]
 		notifications = [thunderboltNotification(DEVICE_ID)]
-		const thunderbolt = new Thunderbolt(umbreld, {devicesPath, setDeviceAuthorization})
+		let now = 1_000
+		const thunderbolt = new Thunderbolt(umbreld, {
+			devicesPath,
+			setDeviceAuthorization,
+			notificationDisconnectGraceMs: 30_000,
+			now: () => now,
+		})
 
+		await thunderbolt.reconcile()
+		expect(notifications).toStrictEqual([thunderboltNotification(DEVICE_ID)])
+
+		now += 29_999
+		await thunderbolt.reconcile()
+		expect(notifications).toStrictEqual([thunderboltNotification(DEVICE_ID)])
+
+		now += 1
 		await thunderbolt.reconcile()
 
 		expect(remembered).toHaveLength(1)
@@ -364,11 +469,44 @@ describe('Thunderbolt', () => {
 		])
 	})
 
+	test('keeps the approval prompt stable across brief Thunderbolt disconnects', async () => {
+		let now = 1_000
+		const thunderbolt = new Thunderbolt(umbreld, {
+			devicesPath,
+			setDeviceAuthorization,
+			notificationDisconnectGraceMs: 30_000,
+			now: () => now,
+		})
+		const devicePath = await addDevice()
+
+		await thunderbolt.reconcile()
+		expect(notifications).toStrictEqual([thunderboltNotification(DEVICE_ID)])
+
+		await fse.remove(devicePath)
+		now += 10_000
+		await thunderbolt.reconcile()
+		expect(notifications).toStrictEqual([thunderboltNotification(DEVICE_ID)])
+
+		await addDevice()
+		now += 10_000
+		await thunderbolt.reconcile()
+		expect(notifications).toStrictEqual([thunderboltNotification(DEVICE_ID)])
+
+		await fse.remove(devicePath)
+		now += 10_000
+		await thunderbolt.reconcile()
+		now += 30_000
+		await thunderbolt.reconcile()
+		expect(notifications).toStrictEqual([])
+	})
+
 	test('does not remember a device when kernel authorization fails', async () => {
 		await addDevice()
 		const thunderbolt = new Thunderbolt(umbreld, {
 			devicesPath,
 			setDeviceAuthorization: async () => undefined,
+			authorizationReconnectTimeoutMs: 0,
+			authorizationStabilityMs: 0,
 		})
 
 		await expect(thunderbolt.authorize(DEVICE_ID)).rejects.toThrow('remained unauthorized')
