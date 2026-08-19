@@ -118,17 +118,20 @@ RUN set -e; \
 # nouveau drivers. That is sufficient when containers bring their own ROCm or
 # Vulkan userspace (including Mesa NVK for NVIDIA GPUs).
 #
-# CUDA and NVIDIA's Vulkan implementation share the NVIDIA kernel driver. Keep
-# their userspace libraries on the host so the NVIDIA Container Toolkit can
-# inject the versions matching that driver into application containers. Use
-# Debian's driver-library and Vulkan ICD package contracts so all private GLX,
-# EGL, and Vulkan dependencies stay version-matched.
+# CUDA, NVIDIA's Vulkan implementation, and NVDEC/NVENC share the NVIDIA kernel
+# driver. Keep their userspace libraries on the host so the NVIDIA Container
+# Toolkit can inject the versions matching that driver into application
+# containers. Use Debian's driver-library and Vulkan ICD package contracts so
+# all private compute, video, GLX, EGL, and Vulkan dependencies stay
+# version-matched.
 RUN set -e; \
     if [ "${TARGETARCH}" = "amd64" ] && [ "${NVIDIA_CUDA_SUPPORT}" = "true" ]; then \
         apt-get install --yes --no-install-recommends \
             nvidia-open-kernel-dkms \
             nvidia-driver-libs \
             libcuda1 \
+            libnvcuvid1 \
+            libnvidia-encode1 \
             nvidia-smi \
             nvidia-vulkan-icd; \
         install --directory /etc/vulkan/icd.d; \

@@ -11,13 +11,16 @@ the host kernel interfaces those runtimes require:
 | AMD ROCm | In-tree `amdgpu`/KFD, `/dev/kfd` and `/dev/dri` | ROCm/HIP |
 | NVIDIA Vulkan | NVIDIA open kernel module, Vulkan ICD, NVIDIA Container Toolkit | Vulkan application/runtime |
 | NVIDIA CUDA | NVIDIA open kernel module, `libcuda`, NVIDIA Container Toolkit | CUDA runtime |
+| NVIDIA video | NVIDIA open kernel module, NVDEC/NVENC libraries, NVIDIA Container Toolkit | Video application/runtime |
 
-NVIDIA's Vulkan and CUDA implementations share the NVIDIA kernel driver and can
-be used simultaneously. They coexist with AMDGPU and RADV on mixed-GPU systems;
-the Vulkan loader selects the ICD matching each device. Containers using NVIDIA
-Vulkan must request the `graphics` NVIDIA driver capability, expose `/dev/dri`,
-and include the Vulkan and GLVND EGL loaders (`libvulkan1` and `libegl1` on
-Debian-based images).
+NVIDIA's Vulkan, CUDA, and video implementations share the NVIDIA kernel driver
+and can be used simultaneously. They coexist with AMDGPU and RADV on mixed-GPU
+systems; the Vulkan loader selects the ICD matching each device. Containers
+using NVIDIA Vulkan must request the `graphics` NVIDIA driver capability,
+expose `/dev/dri`, and include the Vulkan and GLVND EGL loaders (`libvulkan1`
+and `libegl1` on Debian-based images). Containers using NVDEC or NVENC must
+request the `video` NVIDIA driver capability and include a compatible video
+application such as FFmpeg.
 
 An image that only needs Vulkan acceleration on NVIDIA hardware can set the
 `NVIDIA_CUDA_SUPPORT=false` build argument to omit the NVIDIA host packages and
