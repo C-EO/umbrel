@@ -62,16 +62,19 @@ export default function registerAppTools(server: McpServer, context: McpToolCont
 		(input) =>
 			runTool(context, 'list_apps', input, async () => {
 				const [apps, registry] = await Promise.all([context.rpc.apps.list(), registryApps(context).catch(() => [])])
-				const latestVersions = new Map(registry.map((app) => [app.id, app.version]))
+				const latestApps = new Map(registry.map((app) => [app.id, app]))
 				return apps.map((app) => {
 					if ('error' in app) return {id: app.id, error: app.error}
+					const latestApp = latestApps.get(app.id)
+					const updateAvailable = latestApp !== undefined && latestApp.version !== app.version
 					return {
 						id: app.id,
 						name: app.name,
 						version: app.version,
 						state: app.state,
 						progress: app.progress,
-						updateAvailable: latestVersions.has(app.id) && latestVersions.get(app.id) !== app.version,
+						updateAvailable,
+						...(updateAvailable ? {updateCompatible: latestApp.compatible} : {}),
 						...(app.implements ? {implements: app.implements} : {}),
 					}
 				})
@@ -269,6 +272,7 @@ export default function registerAppTools(server: McpServer, context: McpToolCont
 							tagline: app.tagline,
 							version: app.version,
 							category: app.category,
+							compatible: app.compatible,
 							dependencies: app.dependencies ?? [],
 							installed: installed.has(app.id),
 						}))
@@ -304,6 +308,7 @@ export default function registerAppTools(server: McpServer, context: McpToolCont
 						tagline: app.tagline,
 						description: app.description,
 						category: app.category,
+						compatible: app.compatible,
 						dependencies: app.dependencies ?? [],
 						implements: app.implements ?? [],
 						installSize: app.installSize,

@@ -89,6 +89,7 @@
   "app-updates.less": "по-малко",
   "app-updates.more": "повече",
   "app-updates.no-updates": "Всички приложения са актуални!",
+  "app-updates.os-update-required": "Тази актуализация изисква umbrelOS {{version}} или по-нова версия.",
   "app-updates.update": "Обнови",
   "app-updates.update-all": "Обнови всички",
   "app-updates.updates-available-count_one": "{{count}} налично обновление",

@@ -89,6 +89,7 @@
   "app-updates.less": "manj",
   "app-updates.more": "več",
   "app-updates.no-updates": "Vse aplikacije so posodobljene!",
+  "app-updates.os-update-required": "Ta posodobitev zahteva umbrelOS {{version}} ali novejšo različico.",
   "app-updates.update": "Posodobi",
   "app-updates.update-all": "Posodobi vse",
   "app-updates.updates-available-count_one": "Na voljo je {{count}} posodobitev",

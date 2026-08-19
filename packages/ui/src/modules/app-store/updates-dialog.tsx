@@ -23,6 +23,7 @@ export function UpdatesDialogConnected() {
 	const dialogProps = useDialogOpenProps('updates')
 	const {appsWithUpdates, isLoading} = useAppsWithUpdates()
 	const updateAll = useUpdateAllApps()
+	const compatibleUpdates = appsWithUpdates.filter((app) => app.compatible)
 
 	if (isLoading) return null
 
@@ -37,7 +38,7 @@ export function UpdatesDialogConnected() {
 					variant='primary'
 					onClick={updateAll.updateAll}
 					className='w-auto'
-					disabled={updateAll.isLoading || updateAll.isUpdating || appsWithUpdates.length === 0}
+					disabled={updateAll.isLoading || updateAll.isUpdating || compatibleUpdates.length === 0}
 				>
 					{updateAll.isUpdating ? t('app-updates.updating') : t('app-updates.update-all')}
 				</Button>
@@ -106,7 +107,6 @@ function AppItem({app}: {app: RegistryApp}) {
 			utils.apps.list.invalidate()
 		},
 	})
-	const updateApp = () => updateMut.mutate({appId: app.id})
 
 	const progress = appStateQ.data?.progress
 	const appState = appStateQ.isLoading ? 'loading' : appStateQ.data!.state
@@ -116,15 +116,22 @@ function AppItem({app}: {app: RegistryApp}) {
 		<div className='p-2.5'>
 			<div className='flex items-center gap-2.5'>
 				<AppIcon src={app.icon} size={36} className='rounded-8' />
-				<div className='flex flex-col'>
+				<div className='flex min-w-0 flex-col'>
 					<h3 className='text-13 font-semibold'>{app.name}</h3>
 					<p className='text-13 opacity-40'>{app.version}</p>
+					{!app.compatible && (
+						<p className='text-12 text-amber-300/70'>
+							{t('app-updates.os-update-required', {
+								version: app.manifestVersion.replace(/\.0$/, ''),
+							})}
+						</p>
+					)}
 				</div>
 				<div className='flex-1' />
 				<ProgressButton
 					size='sm'
-					onClick={updateApp}
-					disabled={inProgress || updateMut.isPending}
+					onClick={() => updateMut.mutate({appId: app.id})}
+					disabled={!app.compatible || inProgress || updateMut.isPending}
 					state={appState}
 					progress={progress}
 					style={{

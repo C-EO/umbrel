@@ -89,6 +89,7 @@
   "app-updates.less": "少なく",
   "app-updates.more": "もっと",
   "app-updates.no-updates": "すべてのアプリが最新です！",
+  "app-updates.os-update-required": "このアップデートにはumbrelOS {{version}}以降が必要です。",
   "app-updates.update": "更新",
   "app-updates.update-all": "すべて更新",
   "app-updates.updates-available-count_one": "{{count}}個のアップデートが利用可能",

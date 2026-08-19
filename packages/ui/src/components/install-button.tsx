@@ -16,7 +16,6 @@ type Props = {
 	installSize?: string
 	progress?: number
 	state: AppStateOrLoading
-	compatible?: boolean
 	onInstallClick?: () => void
 	onOpenClick?: () => void
 }

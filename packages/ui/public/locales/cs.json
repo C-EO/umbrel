@@ -89,6 +89,7 @@
   "app-updates.less": "méně",
   "app-updates.more": "více",
   "app-updates.no-updates": "Všechny aplikace jsou aktuální!",
+  "app-updates.os-update-required": "Tato aktualizace vyžaduje umbrelOS {{version}} nebo novější.",
   "app-updates.update": "Aktualizovat",
   "app-updates.update-all": "Aktualizovat vše",
   "app-updates.updates-available-count_one": "K dispozici je {{count}} aktualizace",

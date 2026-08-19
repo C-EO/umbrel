@@ -89,6 +89,7 @@
   "app-updates.less": "간단히",
   "app-updates.more": "자세히",
   "app-updates.no-updates": "모든 앱이 최신 버전이에요!",
+  "app-updates.os-update-required": "이 업데이트를 설치하려면 umbrelOS {{version}} 이상이 필요합니다.",
   "app-updates.update": "업데이트",
   "app-updates.update-all": "모두 업데이트",
   "app-updates.updates-available-count_one": "{{count}}개 업데이트가 가능해요",

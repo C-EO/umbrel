@@ -225,6 +225,7 @@ test('App Store tools return compact summaries and forward install alternatives 
 		tagline: 'A Bitcoin wallet',
 		version: '1.2.3',
 		category: 'Finance',
+		compatible: true,
 		description: 'A deliberately long description',
 		dependencies: ['bitcoin'],
 		installSize: 1_000_000,
@@ -270,6 +271,22 @@ test('App Store tools return compact summaries and forward install alternatives 
 	expect(context.mcp.addAppGrant).toHaveBeenCalledWith('wallet')
 	expect(() => registry.get('get_app_details')).not.toThrow()
 	expect(() => registry.get('get_app_logs')).toThrow()
+})
+
+test('app tools report incompatible updates without claiming they can be installed', async () => {
+	const context = baseContext()
+	vi.mocked(context.rpc.appStore.registry).mockResolvedValue([
+		{apps: [{id: 'wallet', version: '2.0.0', compatible: false}]},
+	] as never)
+	vi.mocked(context.rpc.apps.list).mockResolvedValue([
+		{id: 'wallet', name: 'Wallet', version: '1.0.0', state: 'ready', progress: 100},
+	] as never)
+
+	const registry = toolRegistry()
+	registerAppTools(registry.server, context, {apps: ['wallet'], appStore: false, files: [], manageSystem: false})
+	expect(parseToolResult(await registry.get('list_apps').handler({}))).toMatchObject([
+		{id: 'wallet', updateAvailable: true, updateCompatible: false},
+	])
 })
 
 test('app logs clamp requests, bound the route output and retain only the newest safe lines', async () => {

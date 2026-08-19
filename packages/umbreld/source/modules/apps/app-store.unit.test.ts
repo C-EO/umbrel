@@ -10,7 +10,7 @@ test('public registry excludes repository locations and undeclared manifest fiel
 			apps: [
 				{
 					appStoreId: 'community',
-					manifestVersion: '1.0.0',
+					manifestVersion: '2.0.0',
 					id: 'community-example',
 					name: 'Example',
 					tagline: 'An example app',
@@ -31,7 +31,7 @@ test('public registry excludes repository locations and undeclared manifest fiel
 		},
 	] as unknown as Parameters<typeof sanitizeRegistry>[0]
 
-	const sanitized = sanitizeRegistry(registry)
+	const sanitized = sanitizeRegistry(registry, '2.0.0-beta.1')
 
 	expect(sanitized).toHaveLength(1)
 	expect(sanitized[0].meta).toStrictEqual({id: 'community', name: 'Community'})
@@ -41,6 +41,7 @@ test('public registry excludes repository locations and undeclared manifest fiel
 		id: 'community-example',
 		name: 'Example',
 		repo: 'https://example.com/source',
+		compatible: true,
 	})
 	expect(sanitized[0].apps[0]).not.toHaveProperty('port')
 	expect(sanitized[0].apps[0]).not.toHaveProperty('path')

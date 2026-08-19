@@ -1,13 +1,11 @@
 import prettyBytes from 'pretty-bytes'
 import {useImperativeHandle, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import semver from 'semver'
 import {arrayIncludes} from 'ts-extras'
 
 import {toast} from '@/components/ui/toast'
 import {useAppInstall} from '@/hooks/use-app-install'
 import {useLaunchApp} from '@/hooks/use-launch-app'
-import {useVersion} from '@/hooks/use-version'
 import {OSUpdateRequiredDialog} from '@/modules/app-store/os-update-required'
 import {SelectDependenciesDialog} from '@/modules/app-store/select-dependencies-dialog'
 import {useApps} from '@/providers/apps'
@@ -27,7 +25,6 @@ export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: Reac
 	const {userAppsKeyed, isLoading} = useApps()
 	const openApp = useLaunchApp()
 	const [selections, setSelections] = useState({} as Record<string, string>)
-	const os = useVersion()
 	const [highlightDependency, setHighlightDependency] = useState<string | undefined>(undefined)
 
 	useImperativeHandle(ref, () => ({
@@ -37,7 +34,7 @@ export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: Reac
 		},
 	}))
 
-	if (isLoading || !userAppsKeyed || !apps || os.isLoading) {
+	if (isLoading || !userAppsKeyed || !apps) {
 		return (
 			<InstallButton
 				key={app.id}
@@ -99,14 +96,12 @@ export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: Reac
 		alternatives.some((app) => selections[app.dependencyId] === app.appId && isInstalled(app.appId)),
 	)
 
-	const compatible = semver.lte(app.manifestVersion, os.version)
-
 	const install = () => {
 		if (isMember) {
 			toast(t('app-store.ask-owner-to-install'), {area: 'app-store'})
 			return
 		}
-		if (!compatible) {
+		if (!app.compatible) {
 			setShowOSUpdateRequiredDialog(true)
 			return
 		}
@@ -137,7 +132,6 @@ export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: Reac
 				// state={userApp?.state || 'initial'}
 				progress={appInstall.progress}
 				state={appInstall.state}
-				compatible={compatible}
 				onInstallClick={install}
 				onOpenClick={() => openApp(app.id)}
 			/>

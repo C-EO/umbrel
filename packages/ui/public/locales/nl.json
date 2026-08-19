@@ -89,6 +89,7 @@
   "app-updates.less": "minder",
   "app-updates.more": "meer",
   "app-updates.no-updates": "Alle apps zijn up-to-date!",
+  "app-updates.os-update-required": "Voor deze update is umbrelOS {{version}} of hoger vereist.",
   "app-updates.update": "Update",
   "app-updates.update-all": "Alles updaten",
   "app-updates.updates-available-count_one": "{{count}} update beschikbaar",

@@ -89,6 +89,7 @@
   "app-updates.less": "λιγότερα",
   "app-updates.more": "περισσότερα",
   "app-updates.no-updates": "Όλες οι εφαρμογές είναι ενημερωμένες!",
+  "app-updates.os-update-required": "Αυτή η ενημέρωση απαιτεί umbrelOS {{version}} ή νεότερη έκδοση.",
   "app-updates.update": "Ενημέρωση",
   "app-updates.update-all": "Ενημέρωση όλων",
   "app-updates.updates-available-count_one": "Διαθέσιμη {{count}} ενημέρωση",

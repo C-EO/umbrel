@@ -3,6 +3,7 @@ import pRetry from 'p-retry'
 import type Umbreld from '../../index.js'
 import runEvery from '../utilities/run-every.js'
 import AppRepository from './app-repository.js'
+import {isManifestVersionCompatible} from './manifest-compatibility.js'
 
 type RepositoryRegistry = Awaited<ReturnType<AppRepository['readRegistry']>>
 type RegistryApp = RepositoryRegistry['apps'][number]
@@ -10,7 +11,7 @@ type RegistryApp = RepositoryRegistry['apps'][number]
 // Only app-store presentation and install-planning fields cross the API
 // boundary. Repository manifests are untrusted extensible YAML, so spreading a
 // parsed manifest here would expose arbitrary fields to every member account.
-export function sanitizeRegistryApp(app: RegistryApp) {
+export function sanitizeRegistryApp(app: RegistryApp, umbrelVersion: string) {
 	const {
 		appStoreId,
 		manifestVersion,
@@ -59,13 +60,14 @@ export function sanitizeRegistryApp(app: RegistryApp) {
 		installSize,
 		implements: implements_,
 		requiresHttps,
+		compatible: isManifestVersionCompatible(manifestVersion, umbrelVersion),
 	}
 }
 
-export function sanitizeRegistry(registry: RepositoryRegistry[]) {
+export function sanitizeRegistry(registry: RepositoryRegistry[], umbrelVersion: string) {
 	return registry.map(({meta, apps}) => ({
 		meta: {id: meta.id, name: meta.name},
-		apps: apps.map(sanitizeRegistryApp),
+		apps: apps.map((app) => sanitizeRegistryApp(app, umbrelVersion)),
 	}))
 }
 
@@ -168,7 +170,7 @@ export default class AppStore {
 	// Public app-store data shared with both owner and member dashboards. Keep
 	// repository locations and arbitrary manifest extensions out of this DTO.
 	async publicRegistry() {
-		return sanitizeRegistry(await this.registry())
+		return sanitizeRegistry(await this.registry(), this.#umbreld.version)
 	}
 
 	// Repository URLs are management data and remain owner-only.

@@ -89,6 +89,7 @@
   "app-updates.less": "менше",
   "app-updates.more": "більше",
   "app-updates.no-updates": "Всі програми оновлені!",
+  "app-updates.os-update-required": "Для цього оновлення потрібна umbrelOS версії {{version}} або новішої.",
   "app-updates.update": "Оновити",
   "app-updates.update-all": "Оновити все",
   "app-updates.updates-available-count_one": "Доступно {{count}} оновлення",

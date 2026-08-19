@@ -89,6 +89,7 @@
   "app-updates.less": "kevesebb",
   "app-updates.more": "több",
   "app-updates.no-updates": "Minden alkalmazás naprakész!",
+  "app-updates.os-update-required": "Ehhez a frissítéshez umbrelOS {{version}} vagy újabb verzió szükséges.",
   "app-updates.update": "Frissítés",
   "app-updates.update-all": "Összes frissítése",
   "app-updates.updates-available-count_one": "{{count}} frissítés elérhető",

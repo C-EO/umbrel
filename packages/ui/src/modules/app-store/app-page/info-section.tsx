@@ -1,9 +1,7 @@
 import {ReactNode} from 'react'
 import {useTranslation} from 'react-i18next'
-import semver from 'semver'
 
 import {UNKNOWN} from '@/constants'
-import {useVersion} from '@/hooks/use-version'
 import {cn} from '@/lib/utils'
 import {RegistryApp} from '@/trpc/trpc'
 import {linkClass} from '@/utils/element-classes'
@@ -63,10 +61,7 @@ function KV({k, v}: {k: ReactNode; v: ReactNode}) {
 
 function InfoSectionCompatibilityText({app}: {app: RegistryApp}) {
 	const {t} = useTranslation()
-	const os = useVersion()
-	return os.version && semver.lte(app.manifestVersion, os.version)
+	return app.compatible
 		? t('app-page.section.info.compatibility-compatible')
-		: os.version
-			? t('app-page.section.info.compatibility-not-compatible')
-			: t('unknown')
+		: t('app-page.section.info.compatibility-not-compatible')
 }

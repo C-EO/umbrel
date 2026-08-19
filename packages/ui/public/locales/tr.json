@@ -89,6 +89,7 @@
   "app-updates.less": "daha az",
   "app-updates.more": "daha fazla",
   "app-updates.no-updates": "Tüm uygulamalar güncel!",
+  "app-updates.os-update-required": "Bu güncelleme için umbrelOS {{version}} veya sonraki bir sürüm gereklidir.",
   "app-updates.update": "Güncelle",
   "app-updates.update-all": "Hepsini güncelle",
   "app-updates.updates-available-count_one": "{{count}} güncelleme mevcut",

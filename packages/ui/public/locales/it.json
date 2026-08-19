@@ -89,6 +89,7 @@
   "app-updates.less": "meno",
   "app-updates.more": "più",
   "app-updates.no-updates": "Tutte le app sono aggiornate!",
+  "app-updates.os-update-required": "Questo aggiornamento richiede umbrelOS {{version}} o versione successiva.",
   "app-updates.update": "Aggiorna",
   "app-updates.update-all": "Aggiorna tutto",
   "app-updates.updates-available-count_one": "{{count}} aggiornamento disponibile",

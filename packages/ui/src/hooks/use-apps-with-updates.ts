@@ -1,3 +1,4 @@
+import {isAppUpdateAvailable} from '@/modules/app-store/update-availability'
 import {useApps} from '@/providers/apps'
 import {useAllAvailableApps} from '@/providers/available-apps'
 
@@ -16,7 +17,7 @@ export function useAppsWithUpdates() {
 	const appsWithUpdates = (apps.userApps ?? [])
 		.filter((app) => {
 			const availableApp = availableApps.appsKeyed[app.id]
-			return availableApp && availableApp.version !== app.version
+			return isAppUpdateAvailable(app.version, availableApp)
 		})
 		.map((app) => availableApps.appsKeyed[app.id])
 

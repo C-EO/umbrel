@@ -4,7 +4,6 @@ import {dirname, join} from 'node:path'
 import fse from 'fs-extra'
 import {$} from 'execa'
 import pRetry from 'p-retry'
-import semver from 'semver'
 
 import randomToken from '../../modules/utilities/random-token.js'
 import type Umbreld from '../../index.js'
@@ -13,6 +12,7 @@ import type {AppSettings} from './schema.js'
 import App, {readManifestInDirectory} from './app.js'
 import type {AppManifest} from './schema.js'
 import {fillSelectedDependencies} from '../utilities/dependencies.js'
+import {assertManifestVersionCompatible} from './manifest-compatibility.js'
 
 export default class Apps {
 	#umbreld: Umbreld
@@ -388,10 +388,7 @@ export default class Apps {
 		return app
 	}
 
-	async install(appId: string, alternatives?: AppSettings['dependencies']) {
-		if (await this.isInstalled(appId)) throw new Error(`App ${appId} is already installed`)
-
-		this.logger.log(`Installing app ${appId}`)
+	async #readCompatibleAppTemplate(appId: string) {
 		const appTemplatePath = await this.#umbreld.appStore.getAppTemplateFilePath(appId)
 
 		let manifest: AppManifest
@@ -400,15 +397,16 @@ export default class Apps {
 		} catch {
 			throw new Error('App template not found')
 		}
-		const manifestVersionValid = semver.valid(manifest.manifestVersion)
-		if (!manifestVersionValid) {
-			throw new Error('App manifest version is invalid')
-		}
-		const umbrelVersionValid = semver.valid(this.#umbreld.version)
-		const manifestVersionIsSupported = !!umbrelVersionValid && semver.lte(manifestVersionValid, umbrelVersionValid)
-		if (!manifestVersionIsSupported) {
-			throw new Error(`App manifest version not supported`)
-		}
+		assertManifestVersionCompatible(manifest.manifestVersion, this.#umbreld.version)
+
+		return {appTemplatePath, manifest}
+	}
+
+	async install(appId: string, alternatives?: AppSettings['dependencies']) {
+		if (await this.isInstalled(appId)) throw new Error(`App ${appId} is already installed`)
+
+		this.logger.log(`Installing app ${appId}`)
+		const {appTemplatePath, manifest} = await this.#readCompatibleAppTemplate(appId)
 		// Machine port forwards and app ports share the host namespace. Check
 		// the canonical machine definitions before installing so a later app
 		// cannot silently steal a stable port promised to a VM.
@@ -514,6 +512,7 @@ export default class Apps {
 
 	async update(appId: string) {
 		const app = this.getApp(appId)
+		await this.#readCompatibleAppTemplate(appId)
 
 		return app.update()
 	}

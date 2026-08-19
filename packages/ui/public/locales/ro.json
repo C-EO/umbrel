@@ -89,6 +89,7 @@
   "app-updates.less": "mai puțin",
   "app-updates.more": "mai mult",
   "app-updates.no-updates": "Toate aplicațiile sunt actualizate!",
+  "app-updates.os-update-required": "Această actualizare necesită umbrelOS {{version}} sau o versiune ulterioară.",
   "app-updates.update": "Actualizează",
   "app-updates.update-all": "Actualizează tot",
   "app-updates.updates-available-count_one": "{{count}} actualizare disponibilă",

@@ -89,6 +89,7 @@
   "app-updates.less": "較少",
   "app-updates.more": "更多",
   "app-updates.no-updates": "所有應用程式都是最新版本！",
+  "app-updates.os-update-required": "此更新需要 umbrelOS {{version}} 或更新版本。",
   "app-updates.update": "更新",
   "app-updates.update-all": "全部更新",
   "app-updates.updates-available-count_one": "有 {{count}} 項更新可用",

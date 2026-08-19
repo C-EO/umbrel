@@ -89,6 +89,7 @@
   "app-updates.less": "minna",
   "app-updates.more": "meira",
   "app-updates.no-updates": "Öll forrit eru uppfærð!",
+  "app-updates.os-update-required": "Þessi uppfærsla krefst umbrelOS {{version}} eða nýrri útgáfu.",
   "app-updates.update": "Uppfæra",
   "app-updates.update-all": "Uppfæra allt",
   "app-updates.updates-available-count_one": "{{count}} uppfærsla í boði",

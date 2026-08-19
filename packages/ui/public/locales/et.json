@@ -89,6 +89,7 @@
   "app-updates.less": "vähem",
   "app-updates.more": "rohkem",
   "app-updates.no-updates": "Kõik rakendused on ajakohased!",
+  "app-updates.os-update-required": "See värskendus nõuab umbrelOS-i versiooni {{version}} või uuemat.",
   "app-updates.update": "Uuenda",
   "app-updates.update-all": "Uuenda kõiki",
   "app-updates.updates-available-count_one": "{{count}} uuendus saadaval",
