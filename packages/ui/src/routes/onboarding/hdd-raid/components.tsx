@@ -10,7 +10,7 @@ export function ModalShell({footer, children}: {footer?: React.ReactNode; childr
 	return (
 		<div className='flex w-full max-w-[1000px] flex-1 flex-col self-center px-3 py-4 md:px-8 md:py-8'>
 			<div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-[24px] bg-black/40 shadow-2xl backdrop-blur-2xl'>
-				<div className='flex flex-1 flex-col gap-4 overflow-y-auto p-5 md:p-8'>{children}</div>
+				<div className='umbrel-stable-gutter flex flex-1 flex-col gap-4 overflow-y-auto p-5 md:p-8'>{children}</div>
 				{footer && (
 					<div className='flex flex-wrap items-center justify-between gap-3 border-t border-white/6 bg-black/20 px-5 py-4 md:px-8'>
 						{footer}

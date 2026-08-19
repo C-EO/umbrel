@@ -519,11 +519,10 @@ function BackupsList({
 		return <div className='p-3 text-center text-sm text-white/40'>{t('backups-restore.no-backups-found')}</div>
 	}
 
-	// Show max 5 backups with scroll
-	const shouldScroll = backups.length > 5
-
+	// Show max 5 backups with scroll; the gutter stays reserved so crossing
+	// the threshold doesn't reflow the rows
 	return (
-		<div className={shouldScroll ? 'max-h-[200px] overflow-y-auto' : ''}>
+		<div className='umbrel-stable-gutter max-h-[200px] overflow-y-auto'>
 			<div className='divide-y divide-white/6'>
 				{backups.map((backup, index) => {
 					const id = backup.id ?? ''

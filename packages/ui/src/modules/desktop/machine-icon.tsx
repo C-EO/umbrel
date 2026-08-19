@@ -30,8 +30,8 @@ export function MachineIcon({machine}: {machine: Machine}) {
 				>
 					<MachineAppIcon
 						osId={machine.osId}
-						className='w-12 rounded-10 transition-all duration-300 group-hover:scale-110 group-hover:ring-6 group-focus-visible:ring-6 group-active:scale-95 group-data-[state=open]:ring-6 md:w-16 md:rounded-15'
-						badgeClassName='size-4 md:size-5'
+						state={machine.state}
+						className='w-12 rounded-10 ring-white/25 transition-all duration-300 group-hover:scale-110 group-hover:ring-6 group-focus-visible:ring-6 group-active:scale-95 group-data-[state=open]:ring-6 md:w-16 md:rounded-15'
 					/>
 					<div className='max-w-full text-11 leading-normal drop-shadow-desktop-label md:text-13'>
 						<div className='truncate contrast-more:bg-black contrast-more:px-1'>{machine.name}</div>

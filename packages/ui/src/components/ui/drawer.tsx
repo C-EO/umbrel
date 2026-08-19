@@ -104,7 +104,7 @@ function DrawerDescription({
 // Put this in the content of a `Drawer` to make it scrollable. You might need to add `flex-1` to the parent.
 function DrawerScroller({children}: {children: React.ReactNode}) {
 	return (
-		<FadeScroller direction='y' className='flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto'>
+		<FadeScroller direction='y' className='umbrel-stable-gutter flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto'>
 			{children}
 		</FadeScroller>
 	)

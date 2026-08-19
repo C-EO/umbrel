@@ -9,7 +9,7 @@ export const systemWidgets = {
 
 		return {
 			type: 'text-with-progress',
-			link: '?dialog=live-usage&tab=storage',
+			link: '?dialog=live-usage&live-usage-tab=storage',
 			refresh: '30s',
 			title: 'Storage',
 			text: prettyBytes(totalUsed),
@@ -23,7 +23,7 @@ export const systemWidgets = {
 
 		return {
 			type: 'text-with-progress',
-			link: '?dialog=live-usage&tab=memory',
+			link: '?dialog=live-usage&live-usage-tab=memory',
 			refresh: '10s',
 			title: 'Memory',
 			text: prettyBytes(totalUsed),

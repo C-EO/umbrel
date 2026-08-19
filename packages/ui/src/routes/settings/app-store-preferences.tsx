@@ -13,7 +13,7 @@ export default function AppStorePreferencesDialog() {
 		<Dialog {...dialogProps}>
 			<DialogPortal>
 				<DialogContent className='p-0'>
-					<div className='umbrel-dialog-fade-scroller space-y-6 overflow-y-auto px-5 py-6'>
+					<div className='umbrel-dialog-fade-scroller umbrel-stable-gutter space-y-6 overflow-y-auto px-5 py-6'>
 						<DialogHeader>
 							<DialogTitle>{t('app-store.title')}</DialogTitle>
 						</DialogHeader>

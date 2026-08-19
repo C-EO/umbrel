@@ -48,7 +48,7 @@ export function DefaultCredentialsDialog() {
 						e.preventDefault()
 					}}
 				>
-					<div className='umbrel-dialog-fade-scroller flex flex-col gap-y-4 overflow-y-auto p-7'>
+					<div className='umbrel-dialog-fade-scroller umbrel-stable-gutter flex flex-col gap-y-4 overflow-y-auto p-7'>
 						{/* <JSONTree data={app} /> */}
 						<DialogHeader>
 							<DialogTitle className='flex flex-row items-center justify-between'>{title}</DialogTitle>

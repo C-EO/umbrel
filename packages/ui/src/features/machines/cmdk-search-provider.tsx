@@ -28,7 +28,7 @@ export const MachinesCmdkSearchProvider: React.FC<CmdkSearchProviderProps> = ({q
 		const items = [
 			<CommandItem
 				key={`${machine.id}-open`}
-				icon={<OsIcon osId={machine.osId} className='h-full w-full' />}
+				icon={<OsIcon osId={machine.osId} state={machine.state} className='h-full w-full' />}
 				value={`${t('machines.open')} ${machine.name} machines`}
 				onSelect={() => {
 					navigate(machinePath(machine.id))
@@ -45,7 +45,7 @@ export const MachinesCmdkSearchProvider: React.FC<CmdkSearchProviderProps> = ({q
 			items.push(
 				<CommandItem
 					key={`${machine.id}-start`}
-					icon={<OsIcon osId={machine.osId} className='h-full w-full' />}
+					icon={<OsIcon osId={machine.osId} state={machine.state} className='h-full w-full' />}
 					value={`${t('machines.start')} ${machine.name} machines`}
 					onSelect={() => {
 						start({id: machine.id})
@@ -61,7 +61,7 @@ export const MachinesCmdkSearchProvider: React.FC<CmdkSearchProviderProps> = ({q
 			items.push(
 				<CommandItem
 					key={`${machine.id}-stop`}
-					icon={<OsIcon osId={machine.osId} className='h-full w-full' />}
+					icon={<OsIcon osId={machine.osId} state={machine.state} className='h-full w-full' />}
 					value={`${t('machines.stop')} ${machine.name} machines`}
 					onSelect={() => {
 						stop({id: machine.id})

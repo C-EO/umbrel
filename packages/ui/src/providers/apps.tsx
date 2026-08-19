@@ -54,7 +54,7 @@ export const systemApps = [
 	{
 		id: 'UMBREL_machines',
 		name: 'Machines',
-		icon: '/assets/dock/dock-machines.png',
+		icon: '/assets/dock/dock-machines.webp',
 		systemApp: true,
 		systemAppTo: '/machines',
 	},

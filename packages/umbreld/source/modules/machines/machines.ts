@@ -48,6 +48,7 @@ export type Machine = {
 	osVariant?: string
 	state: MachineState
 	installProgress?: number
+	installOsId?: string
 	errorMessage?: string
 	diskSizeGb: number
 	cores: number
@@ -624,7 +625,7 @@ export const builtinMachinesCatalog = catalogSchema.parse({
 			id: 'windows-7-enterprise-amd64',
 			familyId: 'windows-7',
 			name: 'Windows 7',
-			version: 'Windows 7 Enterprise SP1 · EOL',
+			version: 'Enterprise SP1 · EOL',
 			sizeMb: 3_183,
 			arch: 'amd64',
 			platform: 'windows',
@@ -638,7 +639,7 @@ export const builtinMachinesCatalog = catalogSchema.parse({
 			id: 'windows-xp-professional-amd64',
 			familyId: 'windows-xp',
 			name: 'Windows XP',
-			version: 'Windows XP Professional SP3 · EOL',
+			version: 'Professional SP3 · EOL',
 			sizeMb: 621,
 			arch: 'amd64',
 			platform: 'windows',
@@ -652,7 +653,7 @@ export const builtinMachinesCatalog = catalogSchema.parse({
 			id: 'windows-98-se-amd64',
 			familyId: 'windows-98',
 			name: 'Windows 98',
-			version: 'Windows 98 Second Edition · EOL',
+			version: 'Second Edition · EOL',
 			sizeMb: 656,
 			arch: 'amd64',
 			platform: 'windows',
@@ -1337,6 +1338,9 @@ export default class Machines {
 				!firstBootSetup && ((!!installMedia && installMedia !== 'media/seed.iso') || !!bootMedia),
 			state,
 			installProgress: state === 'installing' ? (this.#installProgress.get(definition.id) ?? 0) : undefined,
+			// The exact catalog image this install sources from. osId only stores
+			// the family, which cannot disambiguate variants or custom images.
+			installOsId: state === 'installing' ? definition.installSource?.osId : undefined,
 			errorMessage:
 				(!externalDiskAvailable ? '[machine-external-disk-unavailable]' : this.#errors.get(definition.id)) ??
 				(state === 'error' && installSource ? '[machine-install-interrupted]' : undefined),

@@ -256,7 +256,7 @@ function RegularRestoreFlow() {
 							) : backups.length === 0 ? (
 								<div className='text-center text-xs opacity-60'>{t('backups-restore.no-backups-found')}</div>
 							) : (
-								<FadeScroller direction='y' className='max-h-[45vh] overflow-y-auto pr-1'>
+								<FadeScroller direction='y' className='umbrel-stable-gutter max-h-[45vh] overflow-y-auto'>
 									<div className='space-y-2'>
 										{backups.map((backup, i) => {
 											const selected = backup.id === selectedBackupId

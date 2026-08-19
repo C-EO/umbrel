@@ -37,3 +37,12 @@ export function getGridColumnCount(width: number, itemWidth = 112): number {
 	const containerWidth = itemWidth + borderAllowance * 2
 	return Math.max(1, Math.floor((width + minGap) / (containerWidth + minGap)))
 }
+
+/**
+ * The listing scroller fades content at its edges (see
+ * .umbrel-files-fade-scroller in index.css: a 48px bottom ramp, and a 24px top
+ * ramp once scrolled). Scroll-into-view math pads by these so a selection
+ * lands in the clearly-visible band instead of under a fade.
+ */
+export const LISTING_FADE_TOP_PX = 24
+export const LISTING_FADE_BOTTOM_PX = 48

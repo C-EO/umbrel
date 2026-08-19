@@ -34,7 +34,7 @@ export function useMachineActions() {
 
 	const invalidateMachines = () => utils.machines.list.invalidate()
 
-	const onError = (error: {message: string}) => toast.error(getMachinesErrorMessage(error.message))
+	const onError = (error: {message: string}) => toast.error(getMachinesErrorMessage(error.message), {area: 'machines'})
 
 	const create = trpcReact.machines.create.useMutation({onError, onSettled: invalidateMachines}).mutateAsync
 	const retryInstall = trpcReact.machines.retryInstall.useMutation({onError, onSettled: invalidateMachines}).mutate

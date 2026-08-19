@@ -83,7 +83,7 @@ export default function MachinesLayout() {
 				<div className='flex items-center justify-between'>
 					<motion.div layout='position' transition={layoutMorphTransition} className='flex items-center gap-3'>
 						<img
-							src='/assets/dock/dock-machines.png'
+							src='/assets/dock/dock-machines.webp'
 							alt=''
 							draggable={false}
 							className='size-[50px] shrink-0 rounded-12 shadow-lg'

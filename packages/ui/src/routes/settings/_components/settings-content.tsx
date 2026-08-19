@@ -62,7 +62,7 @@ function LiveUsageCardLink({
 
 	return (
 		<Link
-			to={{search: addLinkSearchParams({dialog: 'live-usage', tab})}}
+			to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': tab})}}
 			id={id}
 			className={cn(
 				'block shrink-0 rounded-24 outline-hidden focus-visible:ring-2 focus-visible:ring-white/20',

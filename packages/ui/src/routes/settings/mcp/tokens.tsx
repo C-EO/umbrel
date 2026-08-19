@@ -34,7 +34,7 @@ export function TokensDetail({
 			<section className='flex flex-col gap-2'>
 				<div className='text-15 font-semibold -tracking-2'>{t('mcp-tokens')}</div>
 				<p className='text-12 leading-tight text-white/35'>{t('mcp-tokens-detail-description')}</p>
-				<div className={shareListClass(tokens.length)}>
+				<div className={shareListClass()}>
 					<AnimatePresence initial={false}>
 						{tokens.map((token) => (
 							<AnimatedRow key={token.id}>

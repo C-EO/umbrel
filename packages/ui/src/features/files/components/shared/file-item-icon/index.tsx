@@ -184,7 +184,7 @@ export const FileItemIcon = ({item, onlySVG, className, useAnimatedIcon = false,
 				{isAppFolder ? <AppFolderBottomIcon appId={extractAppIdFromPath(item.path)} /> : null}
 				{machine ? (
 					<div className='absolute right-0 bottom-0 size-1/2 max-h-8 min-h-5 max-w-8 min-w-5 translate-x-[16%] translate-y-[10%] overflow-hidden rounded-[25%] border border-white/15 bg-black/30 p-[1px] shadow-md md:min-h-[0.9rem] md:min-w-[0.9rem]'>
-						<OsIcon osId={machine.osId} className='size-full' />
+						<OsIcon osId={machine.osId} state={machine.state} className='size-full' />
 					</div>
 				) : null}
 
@@ -257,7 +257,7 @@ const FolderIcon = ({
 	}
 
 	if (path === MACHINES_PATH) {
-		return <img src='/assets/dock/dock-machines.png' alt='' draggable={false} className={className} />
+		return <img src='/assets/dock/dock-machines.webp' alt='' draggable={false} className={className} />
 	}
 
 	const FolderComponent = useAnimatedIcon ? AnimatedFolderIcon : SimpleFolderIcon

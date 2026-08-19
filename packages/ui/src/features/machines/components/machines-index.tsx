@@ -30,7 +30,7 @@ export default function MachinesIndex() {
 		)
 	}
 
-	if (machines.length === 0) return <OsCatalog />
+	if (machines.length === 0) return <OsCatalog intro />
 
 	return <MachinesList machines={machines} />
 }

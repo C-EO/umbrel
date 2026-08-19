@@ -354,6 +354,14 @@ html {
 	scrollbar-width: none; /* Firefox */
 }
 
+/* Reserve the scrollbar gutter so content doesn't shift when a scroller
+   crosses the overflow threshold (styling ::-webkit-scrollbar opts us out of
+   overlay scrollbars, so ours always consume layout width). No-op where
+   scrollbars are genuinely overlay, e.g. Firefox on macOS. */
+.umbrel-stable-gutter {
+	scrollbar-gutter: stable;
+}
+
 .umbrel-button:active {
 	scale: 0.97;
 }
@@ -491,6 +499,9 @@ html {
 	/* height: var(--cmdk-list-height); */
 	/* min-height: 200px; */
 	max-height: 500px;
+	/* Results cross the overflow threshold constantly while typing; keep the
+	   scrollbar's space reserved so rows don't jitter sideways */
+	scrollbar-gutter: stable;
 	/* scroll-padding-block-start: 20px; */
 	/* scroll-padding-block-end: 20px; */
 }

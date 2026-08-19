@@ -491,7 +491,7 @@ export default function CloudAddDialog() {
 	}
 
 	const body = (
-		<div className='flex-1 overflow-x-hidden overflow-y-auto'>
+		<div className='umbrel-stable-gutter flex-1 overflow-x-hidden overflow-y-auto'>
 			<AnimatedHeight transition={{type: 'spring', stiffness: 300, damping: 34}} contentClassName='relative'>
 				<AnimatePresence mode='popLayout' initial={false}>
 					{step === Step.Source && (

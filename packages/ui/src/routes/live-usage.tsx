@@ -1,7 +1,9 @@
 import {DialogPortal} from '@radix-ui/react-dialog'
+import {useMutationState} from '@tanstack/react-query'
+import {getMutationKey} from '@trpc/react-query'
 import {MoreHorizontal} from 'lucide-react'
 import {motion, useReducedMotion} from 'motion/react'
-import {ReactNode, useEffect, useId, useMemo, useRef, useState} from 'react'
+import {Dispatch, ReactNode, SetStateAction, useEffect, useId, useMemo, useRef, useState} from 'react'
 import {ErrorBoundary} from 'react-error-boundary'
 import {useTranslation} from 'react-i18next'
 import {useLocation, useNavigate} from 'react-router-dom'
@@ -19,7 +21,11 @@ import {
 import {SegmentedControl} from '@/components/ui/segmented-control'
 import {LOADING_DASH} from '@/constants'
 import {MachineAppIcon} from '@/features/machines/components/machine-app-icon'
-import {canStart, canStop, useAppInstall, useAppState} from '@/hooks/use-app-install'
+import {useUninstallMachine} from '@/features/machines/components/machines-list'
+import {useMachineActions} from '@/features/machines/hooks/use-machine-actions'
+import {useMachine} from '@/features/machines/hooks/use-machines'
+import type {Machine, MachineState} from '@/features/machines/types'
+import {canRestart, canStart, canStop, useAppInstall, useAppState} from '@/hooks/use-app-install'
 import {extractIconAccentColor} from '@/hooks/use-color-thief'
 import {useCpuForUi} from '@/hooks/use-cpu'
 import {useDiskForUi} from '@/hooks/use-disk'
@@ -30,6 +36,7 @@ import {useAppUninstall} from '@/modules/apps/use-app-uninstall'
 import {AppT, systemAppsKeyed, useApps} from '@/providers/apps'
 import {trpcReact, type RouterOutput} from '@/trpc/trpc'
 import {useDialogOpenProps} from '@/utils/dialog'
+import {cleanGpuName, gpuVendorShortName} from '@/utils/gpu'
 import {formatNumberI18n} from '@/utils/number'
 import {maybePrettyBytes} from '@/utils/pretty-bytes'
 import {tw} from '@/utils/tw'
@@ -54,7 +61,8 @@ export default function LiveUsageDialog() {
 	)
 }
 
-type SelectedTab = 'storage' | 'memory' | 'cpu' | 'gpu'
+const SELECTED_TABS = ['storage', 'memory', 'cpu', 'gpu'] as const
+type SelectedTab = (typeof SELECTED_TABS)[number]
 
 type UsageListItem = {
 	id: string
@@ -63,6 +71,8 @@ type UsageListItem = {
 	entity?: 'machine'
 	name?: string
 	osId?: string
+	/** Padding row for an app with no measured usage (GPU list): no bar, note instead of a value */
+	idle?: boolean
 }
 
 const usageItemKey = ({id, entity}: Pick<UsageListItem, 'id' | 'entity'>) => `${entity ?? 'app'}-${id}`
@@ -89,15 +99,46 @@ function appendChartPoint(prev: Array<{value: number}>, value: number) {
 	return [...prev.slice(1), {value}]
 }
 
+const EMPTY_CHART_DATA: Array<{value: number}> = new Array(30).fill({value: 0})
+
+// Rolling window of the last 30 samples backing a card's background chart,
+// from a flat baseline. Samples on a fixed cadence (matching the 2s usage
+// polls) rather than on value change, so steady load keeps the chart moving
+// and the time axis stays uniform.
+const CHART_SAMPLE_INTERVAL_MS = 2000
+
+function useChartHistory(fraction: number, {enabled = true}: {enabled?: boolean} = {}) {
+	const [data, setData] = useState(EMPTY_CHART_DATA)
+	const fractionRef = useRef(fraction)
+	useEffect(() => {
+		fractionRef.current = fraction
+	}, [fraction])
+	useEffect(() => {
+		if (!enabled) return
+		const id = setInterval(() => {
+			// The usage polls pause while the window is unfocused (TanStack Query
+			// default) — pause sampling with them rather than painting a
+			// fabricated flat line over the gap
+			if (!document.hasFocus()) return
+			setData((prev) => appendChartPoint(prev, fractionRef.current * 100 || 0))
+		}, CHART_SAMPLE_INTERVAL_MS)
+		return () => clearInterval(id)
+	}, [enabled])
+	return data
+}
+
 function LiveUsageContent() {
 	const {t} = useTranslation()
 	const {search} = useLocation()
 	const navigate = useNavigate()
 	const queryParams = new URLSearchParams(search)
-	const requestedTab = (queryParams.get('tab') as SelectedTab) || 'cpu'
+	// Prefixed with the dialog key so useDialogOpenProps sweeps it away when
+	// the dialog closes, like every other dialog-owned param
+	const tabParam = queryParams.get('live-usage-tab')
+	const requestedTab: SelectedTab = SELECTED_TABS.includes(tabParam as SelectedTab) ? (tabParam as SelectedTab) : 'cpu'
 
 	const setSelectedTab = (tab: SelectedTab) => {
-		queryParams.set('tab', tab)
+		queryParams.set('live-usage-tab', tab)
 		navigate({search: queryParams.toString()})
 	}
 
@@ -136,29 +177,35 @@ function LiveUsageContent() {
 		colors,
 	})
 
-	// Initialize cpu and memory charts with 30 "0" values so there's a clean base line from where they start populating with
-	const [cpuChartData, setCpuChartData] = useState<Array<{value: number}>>(new Array(30).fill({value: 0}))
-	const [memoryChartData, setMemoryChartData] = useState<Array<{value: number}>>(new Array(30).fill({value: 0}))
-	const [gpuChartData, setGpuChartData] = useState<Array<{value: number}>>(new Array(30).fill({value: 0}))
+	const cpuChartData = useChartHistory(cpuUsage.progress)
+	const memoryChartData = useChartHistory(memorySystem.progress)
+	// No point maintaining history no card will ever render
+	const gpuChartData = useChartHistory(gpuUsage.progress, {enabled: gpuUsage.hasGpu})
 
-	// Update cpu and memory charts whenever their progress values update
-	useEffect(() => {
-		setCpuChartData((prevData) => appendChartPoint(prevData, cpuUsage.progress * 100 || 0))
-	}, [cpuUsage.progress])
-
-	useEffect(() => {
-		setMemoryChartData((prevData) => appendChartPoint(prevData, memorySystem.progress * 100 || 0))
-	}, [memorySystem.progress])
-
-	useEffect(() => {
-		setGpuChartData((prevData) => appendChartPoint(prevData, gpuUsage.progress * 100 || 0))
-	}, [gpuUsage.progress])
+	// With a GPU there are four cards — too many to show every detail at once,
+	// so exactly one card is expanded at a time: the hovered (or keyboard-
+	// focused) card as a preview of clicking it, otherwise the active one.
+	// Compressed cards drop only the "/ total" denominator; a compressed
+	// active card also keeps its highlight and breakdown.
+	const condensed = gpuUsage.hasGpu
+	const [previewTab, setPreviewTab] = useState<SelectedTab | null>(null)
+	const expandedTab = previewTab ?? selectedTab
 
 	return (
 		<div className='grid gap-y-5'>
 			{/* Hidden on mobile, as we show regular tabs */}
-			<div className={cn('hidden gap-3 sm:grid', gpuUsage.hasGpu ? 'sm:grid-cols-4' : 'sm:grid-cols-3')}>
-				<UsageTabButton onClick={() => setSelectedTab('cpu')}>
+			{/* Cards only claim the preview on enter; it clears when the cursor
+			    leaves the whole row. Crossing the gap between cards is then not a
+			    round-trip through "no preview", which re-expanded the active card
+			    for a few frames and made the row judder */}
+			<div className='hidden gap-3 sm:flex' onMouseLeave={() => setPreviewTab(null)}>
+				<UsageTabButton
+					tab='cpu'
+					condensed={condensed}
+					expanded={expandedTab === 'cpu'}
+					onSelect={setSelectedTab}
+					onPreview={setPreviewTab}
+				>
 					<UsageCard
 						title={t('cpu')}
 						value={cpuUsage.value}
@@ -166,10 +213,18 @@ function LiveUsageContent() {
 						segments={cpuSegments}
 						progress={cpuUsage.progress}
 						active={selectedTab === 'cpu'}
+						condensed={condensed}
+						expanded={expandedTab === 'cpu'}
 						chart={cpuChartData}
 					/>
 				</UsageTabButton>
-				<UsageTabButton onClick={() => setSelectedTab('memory')}>
+				<UsageTabButton
+					tab='memory'
+					condensed={condensed}
+					expanded={expandedTab === 'memory'}
+					onSelect={setSelectedTab}
+					onPreview={setPreviewTab}
+				>
 					<UsageCard
 						title={t('memory')}
 						value={memorySystem.value}
@@ -179,10 +234,18 @@ function LiveUsageContent() {
 						progress={memorySystem.progress}
 						rightChildren={memorySystem.isMemoryLow && <ErrorMessage>{t('memory.low')}</ErrorMessage>}
 						active={selectedTab === 'memory'}
+						condensed={condensed}
+						expanded={expandedTab === 'memory'}
 						chart={memoryChartData}
 					/>
 				</UsageTabButton>
-				<UsageTabButton onClick={() => setSelectedTab('storage')}>
+				<UsageTabButton
+					tab='storage'
+					condensed={condensed}
+					expanded={expandedTab === 'storage'}
+					onSelect={setSelectedTab}
+					onPreview={setPreviewTab}
+				>
 					<UsageCard
 						title={t('storage')}
 						value={diskUsage.value}
@@ -197,10 +260,18 @@ function LiveUsageContent() {
 							</>
 						}
 						active={selectedTab === 'storage'}
+						condensed={condensed}
+						expanded={expandedTab === 'storage'}
 					/>
 				</UsageTabButton>
 				{gpuUsage.hasGpu && (
-					<UsageTabButton onClick={() => setSelectedTab('gpu')}>
+					<UsageTabButton
+						tab='gpu'
+						condensed={condensed}
+						expanded={expandedTab === 'gpu'}
+						onSelect={setSelectedTab}
+						onPreview={setPreviewTab}
+					>
 						<UsageCard
 							title={t('gpu')}
 							value={gpuUsage.value}
@@ -208,7 +279,19 @@ function LiveUsageContent() {
 							segments={gpuSegments}
 							progress={gpuUsage.progress}
 							active={selectedTab === 'gpu'}
+							condensed={condensed}
+							expanded={expandedTab === 'gpu'}
 							chart={gpuChartData}
+							rightChildren={
+								selectedTab === 'gpu' &&
+								expandedTab === 'gpu' &&
+								gpuUsage.devices.length === 1 && <GpuModelWhisper device={gpuUsage.devices[0]} />
+							}
+							footer={
+								gpuUsage.devices.length === 1 && (
+									<GpuVramFooter device={gpuUsage.devices[0]} detailed={expandedTab === 'gpu'} />
+								)
+							}
 						/>
 					</UsageTabButton>
 				)}
@@ -321,79 +404,261 @@ function CpuSection({colors, chart}: {colors: UsageColors; chart?: Array<{value:
 
 type GpuDevice = RouterOutput['system']['gpuUsage']['devices'][number]
 
-function GpuDeviceCard({device}: {device: GpuDevice}) {
-	const {i18n} = useTranslation()
-	const totalUsed = device.totalUsed
+function GpuVendorBadge({vendor}: {vendor: string}) {
+	return (
+		<span className='shrink-0 rounded-4 bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white/50'>
+			{gpuVendorShortName(vendor)}
+		</span>
+	)
+}
+
+function GpuRing({fraction, className}: {fraction: number; className?: string}) {
+	const size = 16
+	const stroke = 2.5
+	const radius = (size - stroke) / 2
+	const circumference = 2 * Math.PI * radius
+	return (
+		<svg width={size} height={size} className='shrink-0'>
+			<circle cx={size / 2} cy={size / 2} r={radius} fill='none' strokeWidth={stroke} className='stroke-white/15' />
+			<circle
+				cx={size / 2}
+				cy={size / 2}
+				r={radius}
+				fill='none'
+				strokeWidth={stroke}
+				strokeLinecap='round'
+				strokeDasharray={`${circumference * Math.min(1, Math.max(0, fraction))} ${circumference}`}
+				transform={`rotate(-90 ${size / 2} ${size / 2})`}
+				className={cn('transition-all duration-700', className)}
+			/>
+		</svg>
+	)
+}
+
+// Single-GPU identity whisper in the summary card's title row
+function GpuModelWhisper({device}: {device: GpuDevice}) {
+	return (
+		<span className='min-w-0 animate-in truncate text-13 font-normal -tracking-2 text-white/30 duration-300 fade-in'>
+			{cleanGpuName(device.model)}
+		</span>
+	)
+}
+
+// Shared GPU-memory display policy for the summary footer and the device
+// panel: dedicated VRAM when present, otherwise the shared pool; a zero
+// dedicated total (some APU carve-outs) counts as unknown, not a divisor.
+// The label stays a literal t() ternary at each call site (the translation
+// updater discovers keys from literal calls), keyed off `dedicated`.
+function gpuMemoryInfo(device: GpuDevice) {
 	const dedicated = device.dedicatedMemory
 	const shared = device.sharedMemory
+	return {
+		dedicated,
+		shared,
+		used: dedicated?.used ?? shared?.used ?? 0,
+		total: dedicated?.total && dedicated.total > 0 ? dedicated.total : null,
+	}
+}
 
+// Single-GPU VRAM readout merged into the summary card (see UsageCard footer).
+// While the card is compressed (`detailed` false) only the label and bar stay
+// — the byte figures and shared-memory note need more width than a compressed
+// card has. Renders nothing when the device reports no memory info at all.
+function GpuVramFooter({device, detailed}: {device: GpuDevice; detailed?: boolean}) {
+	const {t, i18n} = useTranslation()
+	const {dedicated, shared, used, total} = gpuMemoryInfo(device)
+	if (!dedicated && !shared) return null
 	return (
-		<div className='settings-edge-material rounded-24 p-5'>
-			<div className='flex min-w-0 items-start justify-between gap-3'>
-				<div className='min-w-0'>
-					<div className='truncate text-15 font-semibold -tracking-2 text-white/80'>{device.model}</div>
-					<div className='mt-1 truncate text-12 font-medium -tracking-2 text-white/35'>{device.vendor}</div>
-				</div>
-				<div className='text-20 shrink-0 font-semibold -tracking-3'>
-					{totalUsed === null ? LOADING_DASH : `${Math.ceil(totalUsed)}%`}
-				</div>
-			</div>
-			<div className='mt-4'>
-				<CompositionBar segments={[]} flat progress={(totalUsed ?? 0) / 100} />
-			</div>
-			{(dedicated || shared) && (
-				<div className='mt-4 grid gap-2 border-t border-white/8 pt-4 text-12 font-medium -tracking-2'>
-					{dedicated && (
-						<div className='flex items-center justify-between gap-3'>
-							<span className='text-white/35'>VRAM</span>
-							<span className='text-white/65'>
-								{maybePrettyBytes(dedicated.used, i18n.language)}
-								{dedicated.total !== null && ` / ${maybePrettyBytes(dedicated.total, i18n.language)}`}
-							</span>
-						</div>
+		<>
+			<div className='flex items-baseline justify-between gap-2 text-13 -tracking-2'>
+				<span className='font-medium whitespace-nowrap text-white/40'>
+					{dedicated ? t('live-usage.vram') : t('live-usage.gpu-shared-memory')}
+				</span>
+				<span
+					className={cn(
+						'truncate text-white/45 tabular-nums transition-[max-width,opacity] duration-300 motion-reduce:transition-none',
+						detailed ? 'max-w-40 opacity-100' : 'max-w-0 opacity-0',
 					)}
-					{shared && (
-						<div className='flex items-center justify-between gap-3'>
-							<span className='text-white/35'>RAM</span>
-							<span className='text-white/65'>{maybePrettyBytes(shared.used, i18n.language)}</span>
-						</div>
-					)}
+				>
+					{maybePrettyBytes(used, i18n.language)}
+					{total !== null && ` / ${maybePrettyBytes(total, i18n.language)}`}
+				</span>
+			</div>
+			{total !== null && (
+				<div className='h-1 overflow-hidden rounded-full bg-white/10'>
+					<div
+						className='h-full rounded-full bg-white/35 transition-[width] duration-700'
+						style={{width: `${Math.min(1, used / total) * 100}%`}}
+					/>
 				</div>
 			)}
+			{dedicated && shared && (
+				<div
+					className={cn(
+						'truncate text-12 -tracking-2 text-white/25',
+						'overflow-hidden transition-[max-height,opacity,margin] duration-300 motion-reduce:transition-none',
+						// -mt-2 swallows the footer's gap while hidden
+						detailed ? 'max-h-5 opacity-100' : '-mt-2 max-h-0 opacity-0',
+					)}
+				>
+					{t('live-usage.gpu-shared-with-system', {amount: maybePrettyBytes(shared.used, i18n.language)})}
+				</div>
+			)}
+		</>
+	)
+}
+
+// Multi-GPU: the detail panel for the chip-selected device. Remounted per
+// device (key) so the core chart history restarts from that device's baseline.
+function GpuDeviceDetail({device}: {device: GpuDevice}) {
+	const {t, i18n} = useTranslation()
+	const chart = useChartHistory((device.totalUsed ?? 0) / 100)
+	const {dedicated, shared, used, total} = gpuMemoryInfo(device)
+	return (
+		<div className='settings-edge-material rounded-24 p-5'>
+			<div className='flex min-w-0 items-center justify-between gap-3'>
+				<div className='flex min-w-0 items-center gap-2'>
+					<span className='truncate text-15 font-semibold -tracking-2 text-white/80'>{cleanGpuName(device.model)}</span>
+					<GpuVendorBadge vendor={device.vendor} />
+				</div>
+				<span className='shrink-0 text-12 -tracking-2 text-white/25'>
+					{t('live-usage.gpu-driver', {driver: device.driver})}
+				</span>
+			</div>
+			<div className='mt-4 grid gap-5 sm:grid-cols-2'>
+				<div className='relative overflow-hidden rounded-12'>
+					<UsageAreaChart data={chart} active />
+					<div className='relative flex flex-col gap-2 pb-6'>
+						<span className='text-13 font-medium -tracking-2 text-white/40'>{t('live-usage.gpu-core')}</span>
+						<span className='text-20 leading-none font-semibold -tracking-3'>
+							{device.totalUsed === null ? LOADING_DASH : `${Math.ceil(device.totalUsed)}%`}
+						</span>
+					</div>
+				</div>
+				{(dedicated || shared) && (
+					<div className='flex flex-col gap-2'>
+						<span className='text-13 font-medium -tracking-2 text-white/40'>
+							{dedicated ? t('live-usage.vram') : t('live-usage.gpu-shared-memory')}
+						</span>
+						<div className='flex min-w-0 items-baseline gap-1.5'>
+							<span className='text-20 leading-none font-semibold -tracking-3'>
+								{maybePrettyBytes(used, i18n.language)}
+							</span>
+							{total !== null && (
+								<span className='text-13 font-semibold text-white/45'>/ {maybePrettyBytes(total, i18n.language)}</span>
+							)}
+						</div>
+						{total !== null && dedicated && (
+							<CompositionBar segments={[]} flat progress={Math.min(1, dedicated.used / total)} />
+						)}
+						{dedicated && shared && (
+							<div className='text-12 -tracking-2 text-white/25'>
+								{t('live-usage.gpu-shared-with-system', {amount: maybePrettyBytes(shared.used, i18n.language)})}
+							</div>
+						)}
+					</div>
+				)}
+			</div>
 		</div>
 	)
 }
 
 function GpuSection({colors, chart}: {colors: UsageColors; chart?: Array<{value: number}>}) {
-	const {i18n} = useTranslation()
+	const {t, i18n} = useTranslation()
+	const {userApps} = useApps()
 	const {isLoading, value, secondaryValue, progress, apps, devices} = useGpuForUi({poll: true})
 	const segments = useSegments({apps, total: 100, usedFraction: progress, colors})
+	const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null)
+	const selectedDevice = devices.find((device) => device.id === selectedDeviceId) ?? devices[0]
+
+	// Unlike the other tabs, the GPU list only contains apps that hold a GPU
+	// client right now. Pad it with the remaining installed apps so the list
+	// reads as a complete answer ("these aren't using it") instead of
+	// mysteriously short. Row keys stay stable, so an app that starts using
+	// the GPU animates up from the idle block into the measured one.
+	const idleApps: UsageListItem[] = (userApps ?? [])
+		.filter((app) => !apps.some((item) => item.id === app.id))
+		.sort((a, b) => a.name.localeCompare(b.name, i18n.language))
+		.map((app) => ({id: app.id, used: 0, idle: true}))
+
+	// The list mirrors the Memory tab: per-app graphics memory only, so bars,
+	// values, and ordering all describe one dimension (mixed "% · GB" strings
+	// also ragged the row alignment). Compute attribution still colors the
+	// summary card's segment bar. Some drivers can't report per-process memory
+	// at all (nvidia-smi prints "-" → 0 bytes): with no memory figures anywhere
+	// the whole list — values, bars, and ordering — stays on compute share
+	// instead of rendering all-zero bars; an individual zero-memory row among
+	// measured ones just falls back to its compute share as the value.
+	const computeById = new Map(apps.map((item) => [item.id, item.used]))
+	const hasMemoryFigures = apps.some((item) => (item.memoryUsed ?? 0) > 0)
+	const listApps: UsageListItem[] = hasMemoryFigures
+		? [...apps]
+				.map((item) => ({...item, used: item.memoryUsed ?? 0}))
+				.sort((a, b) => b.used - a.used || (computeById.get(b.id) ?? 0) - (computeById.get(a.id) ?? 0))
+		: apps
+	const formatListValue = (item: UsageListItem) => {
+		if (!hasMemoryFigures) return formatNumberI18n({n: Math.round(item.used), locale: i18n.language}) + '%'
+		if (item.used > 0) return maybePrettyBytes(item.used, i18n.language)
+		const compute = computeById.get(item.id) ?? 0
+		if (compute > 0) return formatNumberI18n({n: Math.round(compute), locale: i18n.language}) + '%'
+		return maybePrettyBytes(0, i18n.language)
+	}
 
 	return (
 		<>
 			<div className='sm:hidden'>
-				<UsageCard active value={value} progressLabel={secondaryValue} segments={segments} chart={chart} />
+				<UsageCard
+					active
+					value={value}
+					progressLabel={secondaryValue}
+					segments={segments}
+					chart={chart}
+					rightChildren={devices.length === 1 && <GpuModelWhisper device={devices[0]} />}
+					footer={devices.length === 1 && <GpuVramFooter device={devices[0]} detailed />}
+				/>
 			</div>
-			{devices.length > 0 && (
-				<div className='grid gap-3 sm:grid-cols-2'>
-					{devices.map((device) => (
-						<GpuDeviceCard key={device.id} device={device} />
-					))}
-				</div>
+			{/* One GPU: everything lives in the summary card itself. Multiple: the
+			    summary shows the total and chips pick which device gets the single
+			    detail panel — two GPUs cost no more visual weight than one */}
+			{devices.length > 1 && selectedDevice && (
+				<>
+					<div className='flex flex-wrap gap-2'>
+						{devices.map((device) => {
+							const isSelected = device.id === selectedDevice.id
+							return (
+								<button
+									key={device.id}
+									type='button'
+									aria-pressed={isSelected}
+									onClick={() => setSelectedDeviceId(device.id)}
+									className={cn(
+										'flex items-center gap-2 rounded-full border px-3 py-1.5 text-13 -tracking-2 outline-hidden transition-colors focus-visible:ring-2 focus-visible:ring-white/20',
+										isSelected
+											? 'border-brand/40 bg-brand/15 text-white/90'
+											: 'border-white/10 bg-white/5 text-white/60 hover:bg-white/10',
+									)}
+								>
+									<GpuRing
+										fraction={(device.totalUsed ?? 0) / 100}
+										className={isSelected ? 'stroke-brand' : 'stroke-white/50'}
+									/>
+									<span className='font-medium'>{cleanGpuName(device.model)}</span>
+								</button>
+							)
+						})}
+					</div>
+					<GpuDeviceDetail key={selectedDevice.id} device={selectedDevice} />
+				</>
 			)}
 			{isLoading && <AppListSkeleton systemApps={[systemAppsKeyed.UMBREL_system]} />}
-			<AppList
-				apps={apps}
-				colors={colors}
-				formatValue={(item) => {
-					const values = []
-					if (item.used > 0 || !item.memoryUsed) {
-						values.push(formatNumberI18n({n: item.used, locale: i18n.language}) + '%')
-					}
-					if (item.memoryUsed) values.push(maybePrettyBytes(item.memoryUsed, i18n.language))
-					return values.join(' · ')
-				}}
-			/>
+			{!isLoading && (
+				<AppList
+					apps={[...listApps, ...idleApps]}
+					colors={colors}
+					idleLabel={t('live-usage.not-using-gpu')}
+					formatValue={formatListValue}
+				/>
+			)}
 		</>
 	)
 }
@@ -530,24 +795,108 @@ function CompositionBar({segments, flat, progress}: {segments: BarSegment[]; fla
 
 // --- Usage cards
 
-function UsageTabButton({children, onClick}: {children: ReactNode; onClick: () => void}) {
+function UsageTabButton({
+	tab,
+	condensed,
+	expanded,
+	onSelect,
+	onPreview,
+	children,
+}: {
+	tab: SelectedTab
+	condensed: boolean
+	expanded: boolean
+	onSelect: (tab: SelectedTab) => void
+	onPreview: Dispatch<SetStateAction<SelectedTab | null>>
+	children: ReactNode
+}) {
 	const reduceMotion = Boolean(useReducedMotion())
 	return (
 		<motion.button
 			type='button'
-			onClick={onClick}
-			whileHover={reduceMotion ? undefined : {scale: 1.02}}
+			onClick={() => onSelect(tab)}
+			// No mouseleave: the row container clears the preview once the cursor
+			// leaves it entirely, so gap-crossing between cards doesn't judder
+			onMouseEnter={() => onPreview(tab)}
+			onFocus={() => onPreview(tab)}
+			// Only clear a preview this card owns: the next card's focus may have
+			// already claimed it by the time this card's blur fires
+			onBlur={() => onPreview((current) => (current === tab ? null : current))}
 			whileTap={reduceMotion ? undefined : {scale: 0.98}}
 			transition={cardSpring}
-			className='h-full rounded-24 text-left outline-hidden will-change-transform focus-visible:ring-2 focus-visible:ring-white/20'
+			className={cn(
+				'h-full shrink basis-0 rounded-24 text-left outline-hidden will-change-transform focus-visible:ring-2 focus-visible:ring-white/20',
+				'transition-[flex-grow] duration-300 ease-out motion-reduce:transition-none',
+				// Inactive cards take 21.5% of the row each (but never squeeze below
+				// 134px), the expanded card the remaining ~35.5%. The total stays
+				// constant when a hover moves the expansion between cards, so
+				// bystanders don't move
+				condensed && !expanded ? 'min-w-[134px] grow' : 'min-w-0',
+				condensed && expanded ? 'grow-[1.65]' : 'grow',
+			)}
 		>
 			{children}
 		</motion.button>
 	)
 }
 
+// Background area chart shared by the summary cards and the GPU device panel
+function UsageAreaChart({data, active, preview}: {data: Array<{value: number}>; active?: boolean; preview?: boolean}) {
+	// A localized title could contain characters that are invalid in url(#…)
+	// references (and titles repeat across cards), so use a generated id
+	const chartGradientId = `${useId()}-chart-gradient`
+	return (
+		<ResponsiveContainer
+			style={{position: 'absolute', bottom: -1, left: '-0.5%', zIndex: 0}}
+			width='101%'
+			height='100%'
+			// The card row animates flex-grow on hover; without debouncing, every
+			// resized frame forces a full recharts re-render across all cards
+			debounce={120}
+		>
+			<AreaChart data={data} margin={{bottom: 0}}>
+				<defs>
+					<linearGradient id={chartGradientId} x1='0' y1='0' x2='0' y2='1'>
+						<stop
+							offset='5%'
+							style={{
+								stopColor: active
+									? 'hsl(var(--color-brand) / 0.3)'
+									: preview
+										? 'rgba(255, 255, 255, 0.12)'
+										: 'rgba(255, 255, 255, 0.05)',
+							}}
+						/>
+						<stop offset='95%' style={{stopColor: active ? 'hsl(var(--color-brand) / 0)' : 'rgba(255, 255, 255, 0)'}} />
+					</linearGradient>
+				</defs>
+				<YAxis domain={[0, 100]} hide={true} />
+				<XAxis hide={true} />
+				<Area
+					isAnimationActive={false}
+					type='monotone'
+					dataKey='value'
+					style={{
+						stroke: active
+							? 'hsl(var(--color-brand) / 0.2)'
+							: preview
+								? 'rgba(255, 255, 255, 0.15)'
+								: 'rgba(255, 255, 255, 0.05)',
+					}}
+					fillOpacity={1}
+					fill={`url(#${chartGradientId})`}
+					legendType='none'
+					dot={false}
+				/>
+			</AreaChart>
+		</ResponsiveContainer>
+	)
+}
+
 function UsageCard({
 	active,
+	condensed,
+	expanded,
 	title,
 	value,
 	valueSub,
@@ -556,8 +905,12 @@ function UsageCard({
 	progress,
 	rightChildren,
 	chart,
+	footer,
 }: {
 	active?: boolean
+	/** Desktop GPU row: only the expanded card shows the valueSub denominator */
+	condensed?: boolean
+	expanded?: boolean
 	title?: string
 	value?: string
 	valueSub?: string
@@ -566,10 +919,13 @@ function UsageCard({
 	progress?: number
 	rightChildren?: ReactNode
 	chart?: Array<{value: number}>
+	/** Extra block under the bar (e.g. single-GPU VRAM); collapses while the card is inactive */
+	footer?: ReactNode
 }) {
-	// A localized title could contain characters that are invalid in url(#…)
-	// references (and titles repeat across cards), so use a generated id
-	const chartGradientId = `${useId()}-chart-gradient`
+	const hideExtras = condensed && !expanded
+	// Hover/focus preview: a whisper of the active treatment in neutral white
+	// so the card reads clickable without competing with the brand highlight
+	const preview = expanded && !active
 	return (
 		<div className='settings-edge-material relative h-full overflow-hidden rounded-24 p-5'>
 			<div
@@ -578,42 +934,15 @@ function UsageCard({
 					active ? 'opacity-100' : 'opacity-0',
 				)}
 			/>
-			{chart && (
-				<ResponsiveContainer
-					style={{position: 'absolute', bottom: -1, left: '-0.5%', zIndex: 0}}
-					width='101%'
-					height='100%'
-				>
-					<AreaChart data={chart} margin={{bottom: 0}}>
-						<defs>
-							<linearGradient id={chartGradientId} x1='0' y1='0' x2='0' y2='1'>
-								<stop
-									offset='5%'
-									style={{stopColor: active ? 'hsl(var(--color-brand) / 0.3)' : 'rgba(255, 255, 255, 0.05)'}}
-								/>
-								<stop
-									offset='95%'
-									style={{stopColor: active ? 'hsl(var(--color-brand) / 0)' : 'rgba(255, 255, 255, 0)'}}
-								/>
-							</linearGradient>
-						</defs>
-						<YAxis domain={[0, 100]} hide={true} />
-						<XAxis hide={true} />
-						<Area
-							isAnimationActive={false}
-							type='monotone'
-							dataKey='value'
-							style={{stroke: active ? 'hsl(var(--color-brand) / 0.2)' : 'rgba(255, 255, 255, 0.05)'}}
-							fillOpacity={1}
-							fill={`url(#${chartGradientId})`}
-							legendType='none'
-							dot={false}
-						/>
-					</AreaChart>
-				</ResponsiveContainer>
-			)}
-			<div className='relative flex flex-col gap-3'>
-				{(title || rightChildren) && (
+			<div
+				className={cn(
+					'pointer-events-none absolute inset-0 rounded-24 border border-white/15 bg-linear-to-b from-white/5 to-transparent transition-opacity duration-300',
+					preview ? 'opacity-100' : 'opacity-0',
+				)}
+			/>
+			{chart && <UsageAreaChart data={chart} active={active} preview={preview} />}
+			<div className='relative flex h-full flex-col gap-3'>
+				{title && (
 					<div className='flex min-w-0 items-center justify-between gap-2 text-13 -tracking-2'>
 						<span className='truncate font-semibold text-white/45'>{title}</span>
 						{rightChildren}
@@ -621,12 +950,46 @@ function UsageCard({
 				)}
 				<div className='flex min-w-0 items-baseline gap-1.5 text-24 leading-none font-semibold -tracking-3'>
 					<span className='min-w-0 truncate'>{value ?? LOADING_DASH}</span>
-					{valueSub && <span className='min-w-0 truncate text-13 font-semibold text-white/45'>{valueSub}</span>}
+					{valueSub && (
+						<span
+							className={cn(
+								'min-w-0 truncate text-13 font-semibold text-white/45',
+								condensed && 'transition-[max-width,opacity] duration-300 motion-reduce:transition-none',
+								condensed && (hideExtras ? 'max-w-0 opacity-0' : 'max-w-24'),
+							)}
+						>
+							{valueSub}
+						</span>
+					)}
+					{/* Without a title row (mobile: the tabs above already name the
+					    card), right-side content shares the value line instead of
+					    floating alone in an otherwise-empty header row */}
+					{!title && rightChildren && (
+						<span className='ml-auto flex min-w-0 shrink justify-end text-13 -tracking-2'>{rightChildren}</span>
+					)}
 				</div>
-				<div className='flex flex-col gap-2'>
-					{progressLabel && <div className='text-13 font-medium -tracking-2 text-white/40'>{progressLabel}</div>}
+				{/* mt-auto pins the bar to the card bottom so bars align across
+				    condensed cards (no label) and the expanded one (label above) */}
+				<div className='mt-auto flex flex-col gap-2'>
+					{progressLabel && (
+						<div className={cn('text-13 font-medium -tracking-2 text-white/40', condensed && 'truncate')}>
+							{progressLabel}
+						</div>
+					)}
 					<CompositionBar segments={segments} flat={!active} progress={progress} />
 				</div>
+				{footer && (
+					<div
+						className={cn(
+							'flex flex-col gap-2 overflow-hidden transition-all duration-300 motion-reduce:transition-none',
+							// -mt-3 swallows the wrapper's gap while collapsed so inactive
+							// cards keep their exact height
+							active ? 'max-h-16 opacity-100' : '-mt-3 max-h-0 opacity-0',
+						)}
+					>
+						{footer}
+					</div>
+				)}
 			</div>
 			<div
 				className={cn(
@@ -688,10 +1051,13 @@ function AppList({
 	apps,
 	formatValue,
 	colors,
+	idleLabel,
 }: {
 	apps?: UsageListItem[]
 	formatValue: (item: UsageListItem) => string
 	colors: UsageColors
+	/** Shown in place of the value on `idle` padding rows */
+	idleLabel?: string
 }) {
 	const {userAppsKeyed} = useApps()
 	const resolveItem = useResolveUsageItem()
@@ -699,15 +1065,21 @@ function AppList({
 	// Members see shared apps but can't manage them
 	const isMember = userQ.data?.role === 'member'
 
+	// While a row menu is open, render the snapshot from the moment it opened
+	// so poll-driven re-sorts can't shuffle the target row away mid-click
+	const [frozenApps, setFrozenApps] = useState<UsageListItem[] | null>(null)
+	const handleMenuOpenChange = (open: boolean) => setFrozenApps(open && apps ? apps : null)
+
 	if (userAppsKeyed === undefined) return null
 	if (!apps || apps.length === 0) return null
+	const displayApps = frozenApps ?? apps
 
 	// Apps are sorted by usage, so the first one is the biggest consumer
-	const maxUsed = Math.max(apps[0]?.used ?? 0, Number.EPSILON)
+	const maxUsed = Math.max(displayApps[0]?.used ?? 0, Number.EPSILON)
 
 	return (
 		<div className={appListClass}>
-			{apps.map((item) => {
+			{displayApps.map((item) => {
 				const {id, used, entity, osId} = item
 				const {name, icon} = resolveItem(item)
 				// System entries (System, Files, "other") aren't manageable apps
@@ -717,14 +1089,24 @@ function AppList({
 						key={usageItemKey(item)}
 						icon={icon}
 						osId={entity === 'machine' ? osId : undefined}
+						machineId={entity === 'machine' ? id : undefined}
 						title={name}
-						value={formatValue(item)}
+						value={item.idle ? '' : formatValue(item)}
+						note={item.idle ? idleLabel : undefined}
 						barColor={colors.get(item) ?? OTHER_SEGMENT_COLOR}
-						barShare={used / maxUsed}
-						status={isUserApp && <AppRowStatus appId={id} />}
+						barShare={item.idle ? undefined : used / maxUsed}
+						status={
+							entity === 'machine' ? <MachineRowStatus machineId={id} /> : isUserApp && <AppRowStatus appId={id} />
+						}
 						menu={
 							!isMember &&
-							(isUserApp ? <AppRowMenu appId={id} /> : <span aria-hidden='true' className='size-7 shrink-0' />)
+							(entity === 'machine' ? (
+								<MachineRowMenu machineId={id} onOpenChange={handleMenuOpenChange} />
+							) : isUserApp ? (
+								<AppRowMenu appId={id} onOpenChange={handleMenuOpenChange} />
+							) : (
+								<span aria-hidden='true' className='size-7 shrink-0' />
+							))
 						}
 					/>
 				)
@@ -733,7 +1115,13 @@ function AppList({
 	)
 }
 
-function AppRowMenu({appId}: {appId: string}) {
+const rowMenuTriggerClass = tw`shrink-0 rounded-full p-1.5 text-white/40 transition-colors hover:bg-white/10 hover:text-white focus:outline-hidden focus-visible:bg-white/10 focus-visible:text-white data-[state=open]:bg-white/10 data-[state=open]:text-white`
+
+// Row menus are compact action lists — use the desktop context menus' tight
+// padding instead of the roomier dropdown default
+const rowMenuContentClass = tw`p-1`
+
+function AppRowMenu({appId, onOpenChange}: {appId: string; onOpenChange?: (open: boolean) => void}) {
 	const {t} = useTranslation()
 	const appInstall = useAppInstall(appId)
 	const {promptUninstall, dialogs: uninstallDialogs} = useAppUninstall(appId, appInstall)
@@ -741,20 +1129,21 @@ function AppRowMenu({appId}: {appId: string}) {
 	const state = appInstall.state
 	const startDisabled = !canStart(state)
 	const stopDisabled = !canStop(state)
+	const restartDisabled = !canRestart(state)
 
 	return (
 		<>
-			<DropdownMenu>
+			<DropdownMenu onOpenChange={onOpenChange}>
 				<DropdownMenuTrigger asChild>
-					<button
-						type='button'
-						aria-label={t('live-usage.app-options')}
-						className='shrink-0 rounded-full p-1.5 text-white/40 transition-colors hover:bg-white/10 hover:text-white focus:outline-hidden focus-visible:bg-white/10 focus-visible:text-white data-[state=open]:bg-white/10 data-[state=open]:text-white'
-					>
+					<button type='button' aria-label={t('live-usage.app-options')} className={rowMenuTriggerClass}>
 						<MoreHorizontal className='size-4' />
 					</button>
 				</DropdownMenuTrigger>
-				<DropdownMenuContent align='end'>
+				<DropdownMenuContent align='end' className={rowMenuContentClass}>
+					{/* Restartable covers running and offline (unknown) apps — stopped apps keep it disabled */}
+					<DropdownMenuItem disabled={restartDisabled} onSelect={restartDisabled ? undefined : appInstall.restart}>
+						{t('restart')}
+					</DropdownMenuItem>
 					{/* Startable covers both stopped and offline (unknown) apps */}
 					{canStart(state) ? (
 						<DropdownMenuItem disabled={startDisabled} onSelect={startDisabled ? undefined : appInstall.start}>
@@ -776,6 +1165,99 @@ function AppRowMenu({appId}: {appId: string}) {
 
 			{uninstallDialogs}
 		</>
+	)
+}
+
+// Machine counterpart of AppRowStatus: grayed state label next to the name,
+// hidden while running, with transient states marked like the app rows
+function MachineRowStatus({machineId}: {machineId: string}) {
+	const {t} = useTranslation()
+	const {machine} = useMachine(machineId)
+	// Uninstall has no backend machine state — surface the in-flight mutation
+	// (fired from any component) via the shared mutation cache instead
+	const uninstallingIds = useMutationState({
+		filters: {mutationKey: getMutationKey(trpcReact.machines.uninstall), status: 'pending'},
+		select: (mutation) => (mutation.state.variables as {id: string} | undefined)?.id,
+	})
+	if (uninstallingIds.includes(machineId)) {
+		return (
+			<span className='shrink-0 text-13 -tracking-2 text-white/40'>{t('machines.state.uninstalling') + '...'}</span>
+		)
+	}
+
+	if (!machine || machine.state === 'running') return null
+	// Same dynamic-key pattern as machine-rail/fullscreen-console; every key
+	// exists as a literal t() call in machine-state-badge.tsx, so the
+	// translation updater still discovers them — and new states show up here
+	// without another hand-written mapping
+	const transient = (['installing', 'starting', 'stopping', 'restarting'] as MachineState[]).includes(machine.state)
+	return (
+		<span className='shrink-0 text-13 -tracking-2 text-white/40'>
+			{t(`machines.state.${machine.state}`) + (transient ? '...' : '')}
+		</span>
+	)
+}
+
+// Power actions for machine rows, mirroring AppRowMenu's shape. Uninstall
+// reuses the machines feature's confirmation flow.
+function MachineRowMenu({machineId, onOpenChange}: {machineId: string; onOpenChange?: (open: boolean) => void}) {
+	const {machine} = useMachine(machineId)
+	// The usage row can briefly outlive the machine (e.g. right after uninstall)
+	if (!machine) return <span aria-hidden='true' className='size-7 shrink-0' />
+	return <MachineRowMenuContent machine={machine} onOpenChange={onOpenChange} />
+}
+
+function MachineRowMenuContent({machine, onOpenChange}: {machine: Machine; onOpenChange?: (open: boolean) => void}) {
+	const {t} = useTranslation()
+	const {start, stop, restart, forceStop} = useMachineActions()
+	const promptUninstall = useUninstallMachine(machine)
+
+	const state = machine.state
+	// Both 'stopped' and 'error' get a one-click start (error recovery),
+	// matching the Machines list's power button
+	const startable = state === 'stopped' || state === 'error'
+	const stopDisabled = state !== 'running'
+	const restartDisabled = state !== 'running'
+	// The escape hatch for any non-stopped state — except 'installing', where
+	// uninstall (doubling as cancel-install) is the right action
+	const forceStopDisabled = state === 'stopped' || state === 'installing'
+
+	return (
+		<DropdownMenu onOpenChange={onOpenChange}>
+			<DropdownMenuTrigger asChild>
+				<button type='button' aria-label={t('machines.machine-options')} className={rowMenuTriggerClass}>
+					<MoreHorizontal className='size-4' />
+				</button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align='end' className={rowMenuContentClass}>
+				<DropdownMenuItem
+					disabled={restartDisabled}
+					onSelect={restartDisabled ? undefined : () => restart({id: machine.id})}
+				>
+					{t('restart')}
+				</DropdownMenuItem>
+				{startable ? (
+					<DropdownMenuItem onSelect={() => start({id: machine.id})}>{t('start')}</DropdownMenuItem>
+				) : (
+					<DropdownMenuItem disabled={stopDisabled} onSelect={stopDisabled ? undefined : () => stop({id: machine.id})}>
+						{t('stop')}
+					</DropdownMenuItem>
+				)}
+				<DropdownMenuItem
+					disabled={forceStopDisabled}
+					className='text-destructive2-lightest focus:text-destructive2-lightest data-[highlighted]:text-destructive2-lightest'
+					onSelect={forceStopDisabled ? undefined : () => forceStop({id: machine.id})}
+				>
+					{t('machines.force-stop')}
+				</DropdownMenuItem>
+				<DropdownMenuItem
+					className='text-destructive2-lightest focus:text-destructive2-lightest data-[highlighted]:text-destructive2-lightest'
+					onSelect={promptUninstall}
+				>
+					{t('machines.uninstall')}
+				</DropdownMenuItem>
+			</DropdownMenuContent>
+		</DropdownMenu>
 	)
 }
 
@@ -837,8 +1319,10 @@ const appListClass = tw`settings-edge-material overflow-hidden rounded-24`
 function AppListRow({
 	icon,
 	osId,
+	machineId,
 	title,
 	value,
+	note,
 	disabled,
 	barColor,
 	barShare,
@@ -847,8 +1331,12 @@ function AppListRow({
 }: {
 	icon?: string
 	osId?: string
+	/** Set for machine rows so the icon can reflect the machine's power state */
+	machineId?: string
 	title: string
 	value: string
+	/** Muted annotation shown in place of the value (e.g. "Not using GPU") */
+	note?: string
 	disabled?: boolean
 	barColor?: string
 	barShare?: number
@@ -856,6 +1344,7 @@ function AppListRow({
 	menu?: ReactNode
 }) {
 	const reduceMotion = Boolean(useReducedMotion())
+	const {machine} = useMachine(machineId)
 	return (
 		<motion.div
 			layout={reduceMotion ? false : 'position'}
@@ -868,11 +1357,7 @@ function AppListRow({
 			)}
 		>
 			{osId ? (
-				<MachineAppIcon
-					osId={osId}
-					className={cn('size-7 rounded-8 shadow-md', disabled && 'grayscale')}
-					badgeClassName='size-3'
-				/>
+				<MachineAppIcon osId={osId} state={machine?.state} className={cn('size-7', disabled && 'grayscale')} />
 			) : (
 				<AppIcon src={icon} size={28} className={cn('rounded-8 shadow-md', disabled && 'grayscale')} />
 			)}
@@ -888,9 +1373,13 @@ function AppListRow({
 					/>
 				</span>
 			)}
-			<span className='shrink-0 text-right text-15 font-normal -tracking-3 text-white/45 uppercase tabular-nums sm:min-w-[76px]'>
-				{value}
-			</span>
+			{note ? (
+				<span className='shrink-0 text-right text-13 font-normal -tracking-2 text-white/30'>{note}</span>
+			) : (
+				<span className='shrink-0 text-right text-15 font-normal -tracking-3 text-white/45 uppercase tabular-nums sm:min-w-[76px]'>
+					{value}
+				</span>
+			)}
 			{menu}
 		</motion.div>
 	)

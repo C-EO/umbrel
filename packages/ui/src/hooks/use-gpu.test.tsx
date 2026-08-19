@@ -59,7 +59,13 @@ test('formats GPU utilization, memory, devices, and app attribution for Live Usa
 
 	const view = renderGpuHook(true)
 
-	expect(useQuery).toHaveBeenCalledWith(undefined, {retry: false, refetchInterval: 2000})
+	// Polling backs off to a slow recheck only when we know no GPU is present
+	// (eGPU hotplug); unknown data (cold start / failed fetch) stays fast
+	const [, queryOptions] = useQuery.mock.calls[0]
+	expect(queryOptions.retry).toBe(false)
+	expect(queryOptions.refetchInterval({state: {data: {devices: [{}]}}})).toBe(2000)
+	expect(queryOptions.refetchInterval({state: {data: {devices: []}}})).toBe(30_000)
+	expect(queryOptions.refetchInterval({state: {data: undefined}})).toBe(2000)
 	expect(view.result()).toMatchObject({
 		isLoading: false,
 		hasGpu: true,

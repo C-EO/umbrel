@@ -14,6 +14,8 @@ import {
 	getGridScrollerPadding,
 	GRID_ITEM_HEIGHT,
 	GRID_ROW_GAP,
+	LISTING_FADE_BOTTOM_PX,
+	LISTING_FADE_TOP_PX,
 } from '@/features/files/utils/get-grid-column-count'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useLinkToDialog} from '@/utils/dialog'
@@ -360,10 +362,11 @@ export function useFilesKeyboardShortcuts({
 
 			const {scrollTop, clientHeight} = scrollEl
 
-			if (itemTop < scrollTop) {
-				scrollEl.scrollTop = itemTop
-			} else if (itemBottom > scrollTop + clientHeight) {
-				scrollEl.scrollTop = itemBottom - clientHeight
+			// Pad by the edge fades so the item lands clearly visible, not under them
+			if (itemTop < scrollTop + LISTING_FADE_TOP_PX) {
+				scrollEl.scrollTop = Math.max(0, itemTop - LISTING_FADE_TOP_PX)
+			} else if (itemBottom > scrollTop + clientHeight - LISTING_FADE_BOTTOM_PX) {
+				scrollEl.scrollTop = itemBottom - clientHeight + LISTING_FADE_BOTTOM_PX
 			}
 		}
 

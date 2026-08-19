@@ -6,6 +6,7 @@ import {CopyButton} from '@/components/ui/copy-button'
 import {FadeInImg} from '@/components/ui/fade-in-img'
 import {hostEnvironmentMap, UmbrelHostEnvironment} from '@/constants'
 import {cn} from '@/lib/utils'
+import {gpuSpecModelName} from '@/utils/gpu'
 import {maybeT} from '@/utils/i18n'
 import {maybePrettyBytes} from '@/utils/pretty-bytes'
 import {tw} from '@/utils/tw'
@@ -127,6 +128,9 @@ export function DeviceInfoContent({
 	)
 }
 
+// One "GPU" row however many devices there are: each device stacks on the
+// right as its readable model name (shared naming with Live Usage) over the
+// vendor line, tagged with a small "GPU n" badge when there's more than one.
 export function GpuInfoRows({
 	gpus,
 	label,
@@ -137,16 +141,37 @@ export function GpuInfoRows({
 	alignWithCopyButtons?: boolean
 }) {
 	const visibleGpus = gpus.filter(({vendor, model}) => vendor || model)
+	if (visibleGpus.length === 0) return null
 
-	return visibleGpus.map((gpu, index) => (
-		<div className={cn(listItemClass, 'h-auto min-h-[50px] py-2')} key={`${gpu.vendor}-${gpu.model}-${index}`}>
-			<span>{visibleGpus.length > 1 ? `${label} ${index + 1}` : label}</span>
-			<span className={cn('max-w-[70%] text-right font-normal', alignWithCopyButtons && 'pr-6')}>
-				<span className='block'>{gpu.model || gpu.vendor}</span>
-				{gpu.model && gpu.vendor && <span className='block text-12 text-white/40'>{gpu.vendor}</span>}
+	return (
+		<div className={cn(listItemClass, 'h-auto min-h-[50px] py-2.5')}>
+			<span>{label}</span>
+			<span
+				className={cn(
+					'flex max-w-[70%] flex-col items-end gap-2.5 text-right font-normal',
+					alignWithCopyButtons && 'pr-6',
+				)}
+			>
+				{visibleGpus.map((gpu, index) => (
+					<span key={`${gpu.vendor}-${gpu.model}-${index}`} className='flex flex-col items-end gap-0.5'>
+						<span className='flex min-w-0 items-center gap-1.5 leading-snug'>
+							{visibleGpus.length > 1 && (
+								<span className='shrink-0 rounded-4 bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide whitespace-nowrap text-white/50'>
+									{`${label} ${index + 1}`}
+								</span>
+							)}
+							<span className='min-w-0'>{gpu.model ? gpuSpecModelName(gpu.model) : gpu.vendor}</span>
+						</span>
+						{/* With a single GPU the vendor line is dropped — the model name
+						    already identifies it, and the raw PCI vendor string is noise */}
+						{visibleGpus.length > 1 && gpu.model && gpu.vendor && (
+							<span className='text-12 text-white/40'>{gpu.vendor}</span>
+						)}
+					</span>
+				))}
 			</span>
 		</div>
-	))
+	)
 }
 const listClass = tw`divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6`
 const listItemClass = tw`flex items-center gap-3 px-3 h-[50px] text-15 font-medium -tracking-3 justify-between`

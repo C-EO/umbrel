@@ -86,7 +86,7 @@ export function CommunityAppStoreDialog() {
 		<Dialog {...dialogProps}>
 			<DialogPortal>
 				<DialogScrollableContent showClose>
-					<div className='umbrel-dialog-fade-scroller flex flex-col gap-y-3 overflow-y-auto px-5 py-6'>
+					<div className='umbrel-dialog-fade-scroller umbrel-stable-gutter flex flex-col gap-y-3 overflow-y-auto px-5 py-6'>
 						<DialogHeader>
 							<DialogTitle>{title}</DialogTitle>
 							<DialogDescription className='text-13 text-white/50'>

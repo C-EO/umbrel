@@ -9,8 +9,18 @@ export function useGpu(options: {poll?: boolean} = {}) {
 	const gpuQ = trpcReact.system.gpuUsage.useQuery(undefined, {
 		retry: false,
 		// NVIDIA process telemetry samples over one second. A two-second cadence
-		// stays responsive without keeping nvidia-smi running continuously.
-		refetchInterval: options.poll ? 2000 : undefined,
+		// stays responsive without keeping nvidia-smi running continuously. With
+		// no GPU present there's nothing to sample — just recheck occasionally in
+		// case one appears (e.g. an eGPU getting authorized). Unknown (cold start
+		// or a failed fetch) keeps the fast cadence so a present GPU isn't stuck
+		// behind the slow recheck.
+		refetchInterval: options.poll
+			? (query) => {
+					const devices = query.state.data?.devices
+					if (devices === undefined) return 2000
+					return devices.length > 0 ? 2000 : 30_000
+				}
+			: undefined,
 	})
 	const data = gpuQ.data
 

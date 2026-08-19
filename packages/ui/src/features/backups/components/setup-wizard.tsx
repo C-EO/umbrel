@@ -292,7 +292,7 @@ export function BackupsSetupWizard() {
 				</div>
 
 				{/* Body */}
-				<div className='min-h-0 flex-1 overflow-y-auto'>
+				<div className='umbrel-stable-gutter min-h-0 flex-1 overflow-y-auto'>
 					{step === Step.Destination && <DestinationStep onChangeDestination={handleDestinationChange} onNext={next} />}
 					{step === Step.Folder && folderRootPath && (
 						<FolderPickerStep

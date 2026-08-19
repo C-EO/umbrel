@@ -2,7 +2,7 @@ import {ChevronDown, Upload} from 'lucide-react'
 import {AnimatePresence, motion} from 'motion/react'
 import {lazy, Suspense, useEffect, useRef, useState} from 'react'
 import {RiCloseCircleFill} from 'react-icons/ri'
-import {useNavigate} from 'react-router-dom'
+import {useNavigate, useSearchParams} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
@@ -10,6 +10,7 @@ import {Progress} from '@/components/ui/progress'
 import {toast} from '@/components/ui/toast'
 import type {FileSystemItem} from '@/features/files/types'
 import {MachinesTooltip} from '@/features/machines/components/machines-tooltip'
+import {CatalogIntro} from '@/features/machines/components/os-catalog-intro'
 import {OsIcon, OsIconGlow} from '@/features/machines/components/os-icon'
 import {layoutMorphTransition, MACHINES_CONFIGURE_PATH} from '@/features/machines/constants'
 import {useOsImages} from '@/features/machines/hooks/use-machines'
@@ -17,6 +18,7 @@ import type {OsImage} from '@/features/machines/types'
 import {prettyMb} from '@/features/machines/utils'
 import {useGlobalFiles} from '@/providers/global-files'
 import {t} from '@/utils/i18n'
+import {tw} from '@/utils/tw'
 
 const MiniBrowser = lazy(() =>
 	import('@/features/files/components/mini-browser').then((m) => ({default: m.MiniBrowser})),
@@ -63,55 +65,127 @@ function groupOsImages(osImages: CatalogImage[]): OsFamily[] {
 	return families
 }
 
+// Curated shelves rather than kernel taxonomy: the headline systems most
+// people come for lead in a fixed order (and alternate artwork colors),
+// everything else follows in catalog order.
+const POPULAR_FAMILY_IDS = ['ubuntu', 'debian', 'windows-11', 'android']
+
 // Pure OS picker: select a catalog entry or provide a local image, then move
 // directly to machine settings. Download/cache state stays internal to create.
 // Doubles as the first-time UX (when no machines exist) and the "+" add page.
-export default function OsCatalog() {
+// With `intro`, a first-run pitch (the wall of waking monitors) shows first
+// and morphs into this catalog on commit via the shared icon layoutIds.
+export default function OsCatalog({intro: introRequested = false}: {intro?: boolean}) {
 	const {osImages, isLoading} = useOsImages()
+	const [searchParams] = useSearchParams()
 	const families = groupOsImages(osImages)
-	const linuxFamilies = families.filter((family) => family.platform === 'linux')
-	const windowsFamilies = families.filter((family) => family.platform === 'windows')
+	const popularFamilies = POPULAR_FAMILY_IDS.flatMap((id) => families.filter((family) => family.familyId === id))
+	const moreFamilies = families.filter((family) => !POPULAR_FAMILY_IDS.includes(family.familyId))
+
+	// ?intro=1 forces the pitch on any catalog mount, for previewing it without
+	// deleting every machine
+	const [introDismissed, setIntroDismissed] = useState(false)
+	const introActive = (introRequested || searchParams.get('intro') === '1') && !introDismissed
+	// True while the intro→catalog handoff choreography plays, then cleared so
+	// its bespoke delays never leak into ordinary catalog reflows
+	const [introHandoff, setIntroHandoff] = useState(false)
+	useEffect(() => {
+		if (!introHandoff) return
+		const timer = setTimeout(() => setIntroHandoff(false), 1_800)
+		return () => clearTimeout(timer)
+	}, [introHandoff])
+
+	if (introActive) {
+		// Hold on a blank card rather than flashing catalog skeletons under the pitch
+		if (isLoading) return <div className='min-h-[420px]' />
+		const entries = [
+			...[...popularFamilies, ...moreFamilies].map((family) => ({id: family.familyId, name: family.name})),
+			{id: 'custom', name: t('machines.custom-machine')},
+		]
+		return (
+			<CatalogIntro
+				entries={entries}
+				onCommit={() => {
+					setIntroDismissed(true)
+					setIntroHandoff(true)
+				}}
+			/>
+		)
+	}
 
 	return (
 		<div className='flex flex-col gap-8 p-6 md:p-12'>
 			{isLoading ? (
 				<>
-					{/* Placeholder groups mirror the real Linux and Windows card counts so the
-					    catalog reserves its full height and nothing below shifts when data arrives */}
-					<SkeletonCatalogGroup count={5} />
-					<SkeletonCatalogGroup count={5} />
+					{/* Placeholder groups mirror the amd64 catalog — the fullest — with
+					    More counting its six families plus the Custom machine card. The
+					    catalog's arch mix isn't knowable before data arrives, so smaller
+					    (arm64) catalogs briefly over-reserve rather than jumping taller. */}
+					<SkeletonCatalogGroup count={4} />
+					<SkeletonCatalogGroup count={7} />
 				</>
 			) : (
 				<>
-					<CatalogGroup title={t('machines.catalog-linux')} families={linuxFamilies} />
-					<CatalogGroup title={t('machines.catalog-windows')} families={windowsFamilies} />
+					<CatalogGroup title={t('machines.catalog-popular')} families={popularFamilies} introMorph={introHandoff} />
+					{/* The custom-image flow lives as the last card of More, a peer of the
+					    catalog systems rather than a separate section */}
+					<CatalogGroup
+						title={t('machines.catalog-more')}
+						families={moreFamilies}
+						withCustomMachine
+						introMorph={introHandoff}
+					/>
 				</>
 			)}
-
-			{/* layout: glide down/up when the custom-image grid above appears or empties */}
-			<motion.div
-				layout='position'
-				initial={{opacity: 0}}
-				animate={{opacity: 1}}
-				transition={{delay: 0.1, duration: 0.2, ...layoutMorphTransition}}
-				className='flex flex-col gap-6'
-			>
-				<div className='h-px w-full shrink-0 bg-white/6' />
-				<IsoSources />
-			</motion.div>
 		</div>
 	)
 }
 
-function CatalogGroup({title, families}: {title: string; families: OsFamily[]}) {
-	if (families.length === 0) return null
+function CatalogGroup({
+	title,
+	families,
+	withCustomMachine,
+	introMorph,
+}: {
+	title: string
+	families: OsFamily[]
+	withCustomMachine?: boolean
+	introMorph?: boolean
+}) {
+	if (families.length === 0 && !withCustomMachine) return null
 	return (
 		<section className='flex flex-col gap-3'>
-			<h2 className='text-17 font-semibold -tracking-2 text-white/85'>{title}</h2>
-			<OsCardGrid families={families} />
+			{/* During the intro handoff the headers arrive last, once the monitors
+			    have landed and their cards have materialized */}
+			<motion.h2
+				initial={introMorph ? {opacity: 0, y: 6} : false}
+				animate={{opacity: 1, y: 0}}
+				transition={{delay: 0.55, duration: 0.4, ease: 'easeOut'}}
+				className='text-17 font-semibold -tracking-2 text-white/85'
+			>
+				{title}
+			</motion.h2>
+			<OsCardGrid families={families} withCustomMachine={withCustomMachine} introMorph={introMorph} />
 		</section>
 	)
 }
+
+const catalogGridClass = tw`grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4`
+
+// The card is split into a shell (layout, spacing) and a fill layer (surface,
+// border, hover tint, and the clipped glow) so the intro handoff can fade the
+// surface in beneath a monitor that is still gliding into place — an icon
+// nested in a fading card would be invisible for most of its flight, and a
+// clipping shell would crop it mid-glide. Interactive content must sit in a
+// positioned wrapper (e.g. `relative`) to paint and click above the fill.
+const osCardClass = tw`group relative flex flex-col items-center gap-4 rounded-20 p-4 pt-6 md:p-6`
+const osCardFillClass = tw`absolute inset-0 overflow-hidden rounded-20 border border-white/10 bg-white/6 transition-colors duration-300 group-hover:border-white/15 group-hover:bg-white/8`
+
+// The intro→catalog handoff glide: monitors stream into their tiles one after
+// another on a long, decisive curve
+const introGlideTransition = (index: number) => ({
+	layout: {duration: 0.8, ease: [0.32, 0.72, 0, 1] as [number, number, number, number], delay: 0.05 + index * 0.05},
+})
 
 // Loading placeholder for a catalog group. Mirrors CatalogGroup's structure exactly
 // (same section gap, header text metrics, grid, and card box) so it occupies the same
@@ -123,7 +197,7 @@ function SkeletonCatalogGroup({count}: {count: number}) {
 			<div className='text-17 font-semibold -tracking-2'>
 				<span className='umbrel-pulse inline-block h-[0.7em] w-20 rounded-full bg-white/8 align-middle' />
 			</div>
-			<div className='grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5'>
+			<div className={catalogGridClass}>
 				{Array.from({length: count}).map((_, i) => (
 					<SkeletonOsCard key={i} />
 				))}
@@ -139,9 +213,9 @@ function SkeletonOsCard() {
 	return (
 		<div className='umbrel-pulse flex flex-col items-center gap-4 rounded-20 border border-white/10 bg-white/6 p-4 pt-6 md:p-6'>
 			<div aria-hidden className='invisible flex flex-col items-center gap-2.5'>
-				<div className='size-12' />
+				<div className='size-24' />
 				<div className='flex flex-col items-center gap-1'>
-					<div className='text-15'>&nbsp;</div>
+					<div className='text-17'>&nbsp;</div>
 					<div className='text-13'>&nbsp;</div>
 					<div className='text-11'>&nbsp;</div>
 				</div>
@@ -151,39 +225,138 @@ function SkeletonOsCard() {
 	)
 }
 
-function OsCardGrid({families}: {families: OsFamily[]}) {
+function OsCardGrid({
+	families,
+	withCustomMachine,
+	introMorph,
+}: {
+	families: OsFamily[]
+	withCustomMachine?: boolean
+	introMorph?: boolean
+}) {
 	return (
-		<div className='grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-5'>
+		<div className={catalogGridClass}>
 			<AnimatePresence mode='popLayout' initial={true}>
 				{families.map((family, i) => (
-					<OsCard key={family.key} family={family} index={i} />
+					<OsCard key={family.key} family={family} index={i} introMorph={introMorph} />
 				))}
+				{withCustomMachine && (
+					<CustomMachineCard key='custom-machine' index={families.length} introMorph={introMorph} />
+				)}
 			</AnimatePresence>
 		</div>
 	)
 }
 
-function OsCard({family, index}: {family: OsFamily; index: number}) {
+// Shared shell for every catalog tile: the layered shell/fill/content
+// structure and its intro-handoff timing lanes live here once. `action` fills
+// the bottom slot; further children (hidden inputs, dialogs) mount inside the
+// shell without a visual slot.
+function CatalogCard({
+	osId,
+	index,
+	introMorph,
+	title,
+	subtitle,
+	action,
+	children,
+}: {
+	osId: string
+	index: number
+	introMorph?: boolean
+	title: string
+	subtitle: string
+	action: React.ReactNode
+	children?: React.ReactNode
+}) {
+	// Two timing lanes for the intro handoff: the card surface materializes
+	// beneath the gliding monitor, then copy and actions settle after it lands
+	const surfaceTransition = introMorph
+		? {delay: 0.2 + index * 0.05, duration: 0.5, ease: 'easeOut' as const}
+		: {delay: index * 0.02, duration: 0.2, ease: 'easeOut' as const}
+	const contentTransition = introMorph
+		? {delay: 0.45 + index * 0.05, duration: 0.4, ease: 'easeOut' as const}
+		: surfaceTransition
+
 	return (
 		<motion.div
-			// Cards glide to their new grid spot when a sibling appears/disappears
+			// Cards glide to their new grid spot when a sibling appears/disappears.
+			// The shell itself never mount-fades — its fill and content layers do —
+			// so the layoutId icon inside stays visible while gliding in from the
+			// first-run intro wall.
 			layout='position'
-			initial={{opacity: 0}}
-			animate={{opacity: 1}}
+			initial={false}
 			exit={{opacity: 0}}
-			transition={{delay: index * 0.02, duration: 0.2, ease: 'easeOut', ...layoutMorphTransition}}
-			className='relative flex flex-col items-center gap-4 overflow-hidden rounded-20 border border-white/10 bg-white/6 p-4 pt-6 transition-colors duration-300 hover:border-white/15 hover:bg-white/8 md:p-6'
+			transition={{duration: 0.2, ease: 'easeOut', ...layoutMorphTransition}}
+			className={osCardClass}
 		>
-			<OsIconGlow osId={family.familyId} className='top-5 left-1/2 size-12 -translate-x-1/2' />
-			<div className='flex flex-col items-center gap-2.5'>
-				<OsIcon osId={family.familyId} className='size-12' />
-				<div className='flex flex-col items-center gap-1 text-center'>
-					<div className='text-15 font-medium -tracking-2 text-white'>{family.name}</div>
-					<div className='text-13 -tracking-2 text-white/40'>{family.version}</div>
-				</div>
+			<motion.div
+				aria-hidden
+				initial={{opacity: 0}}
+				animate={{opacity: 1}}
+				transition={surfaceTransition}
+				className={osCardFillClass}
+			>
+				<OsIconGlow osId={osId} className='top-5 left-1/2 size-24 -translate-x-1/2' />
+			</motion.div>
+			{/* relative: paints (and clicks) above the absolutely-positioned fill */}
+			<div className='relative flex flex-col items-center gap-2.5'>
+				{/* layoutId receives the first-run intro wall's monitor at commit, so
+				    it glides into this card instead of popping in */}
+				<motion.div
+					layoutId={`catalog-icon-${osId}`}
+					initial={introMorph ? false : {opacity: 0}}
+					animate={{opacity: 1}}
+					transition={introMorph ? introGlideTransition(index) : {...layoutMorphTransition, opacity: surfaceTransition}}
+				>
+					<OsIcon osId={osId} className='size-24' />
+				</motion.div>
+				<motion.div
+					initial={{opacity: 0, y: introMorph ? 6 : 0}}
+					animate={{opacity: 1, y: 0}}
+					transition={contentTransition}
+					className='flex flex-col items-center gap-1 text-center'
+				>
+					<div className='text-17 font-medium -tracking-2 text-white'>{title}</div>
+					<div className='text-13 -tracking-2 text-white/40'>{subtitle}</div>
+				</motion.div>
 			</div>
-			<OsCardAction family={family} />
+			<motion.div
+				initial={{opacity: 0}}
+				animate={{opacity: 1}}
+				transition={contentTransition}
+				className='relative flex w-full flex-col items-center'
+			>
+				{action}
+			</motion.div>
+			{children}
 		</motion.div>
+	)
+}
+
+function OsCard({family, index, introMorph}: {family: OsFamily; index: number; introMorph?: boolean}) {
+	return (
+		<CatalogCard
+			osId={family.familyId}
+			index={index}
+			introMorph={introMorph}
+			title={family.name}
+			subtitle={family.version}
+			action={<OsCardAction family={family} />}
+		/>
+	)
+}
+
+// Both dropdown-flavored cards share the same trigger: label left, chevron
+// right, matching the fixed width of the single-build size buttons
+function CreateMachineMenuTrigger() {
+	return (
+		<DropdownMenuTrigger asChild>
+			<Button size='md' className='group min-w-44 justify-between whitespace-nowrap'>
+				{t('machines.install')}
+				<ChevronDown className='-mr-1 size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]:rotate-180' />
+			</Button>
+		</DropdownMenuTrigger>
 	)
 }
 
@@ -197,25 +370,24 @@ function OsCardAction({family}: {family: OsFamily}) {
 	const navigate = useNavigate()
 	const goToConfigure = (osId: string) => navigate(`${MACHINES_CONFIGURE_PATH}?os=${osId}`)
 
-	// Single-build OSs get plain buttons
+	// Single-build OSs get plain buttons, with the installed size tucked in on
+	// the right (variant families surface per-variant sizes in their dropdown)
 	if (family.images.length === 1) {
 		const image = family.images[0]
 		return (
-			<Button size='md' className='whitespace-nowrap' onClick={() => goToConfigure(image.id)}>
+			<Button size='md' className='min-w-44 justify-between whitespace-nowrap' onClick={() => goToConfigure(image.id)}>
 				{t('machines.install')}
+				<span className='text-11 -tracking-2 text-white/35 tabular-nums'>
+					{prettyMb(image.estimatedInstalledSizeMb ?? image.sizeMb)}
+				</span>
 			</Button>
 		)
 	}
 
-	// Multiple variants (e.g. Desktop / Server): the button opens a picker.
+	// Multiple variants (e.g. Desktop / Server): the button opens a picker
 	return (
 		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Button size='md' className='group whitespace-nowrap'>
-					{t('machines.install')}
-					<ChevronDown className='-mr-1 size-3.5 opacity-50 transition-transform duration-200 group-data-[state=open]:rotate-180' />
-				</Button>
-			</DropdownMenuTrigger>
+			<CreateMachineMenuTrigger />
 			<DropdownMenuContent align='center' className='w-56'>
 				{family.images.map((image) => (
 					<DropdownMenuItem key={image.id} className='gap-3' onSelect={() => goToConfigure(image.id)}>
@@ -235,42 +407,17 @@ function OsCardAction({family}: {family: OsFamily}) {
 	)
 }
 
-// === Custom image sources: upload or browse in Files ===
+// === Custom machine: bring your own installer or disk image ===
 
-function IsoSources() {
-	return (
-		<div className='flex flex-col gap-3'>
-			<div className='flex flex-col gap-1'>
-				<h2 className='text-17 font-semibold -tracking-2 text-white/85'>{t('machines.custom-image-title')}</h2>
-				<p className='text-12 leading-relaxed text-white/40'>{t('machines.custom-image-formats')}</p>
-			</div>
-			<div className='flex flex-col gap-4 md:flex-row md:items-stretch md:gap-5'>
-				<UploadIsoSource />
-				<div className='hidden w-px shrink-0 bg-white/6 md:block' />
-				<BrowseIsoSource />
-			</div>
-		</div>
-	)
-}
-
-function IsoSourceSection({title, children}: {title: string; children: React.ReactNode}) {
-	return (
-		<div className='flex flex-1 flex-col gap-3 md:py-2'>
-			<h3 className='text-15 font-semibold -tracking-2 text-white/85'>{title}</h3>
-			<div className='rounded-12 border border-white/10 bg-white/6 p-2'>{children}</div>
-		</div>
-	)
-}
-
-const isoSourceInnerClass =
-	'flex h-[41px] w-full items-center justify-center gap-2 rounded-[7px] border border-[#413c3c] bg-[#232323] px-2.5 text-13 font-medium -tracking-2 text-white/75'
-
-// Real upload via the shared Files uploader: the picked file is uploaded to
-// /Home and, once it lands, we proceed to the create form with its path.
-function UploadIsoSource() {
+// The last card of the More shelf — the custom flow is a peer of the catalog
+// systems. Create machine opens a two-source picker: upload an image (via the
+// shared Files uploader, with inline progress in the card) or select one
+// already in Files.
+function CustomMachineCard({index, introMorph}: {index: number; introMorph?: boolean}) {
 	const navigate = useNavigate()
 	const {startUpload, uploadingItems, cancelUpload, uploadCompletions} = useGlobalFiles()
 	const inputRef = useRef<HTMLInputElement>(null)
+	const [browserOpen, setBrowserOpen] = useState(false)
 	const [upload, setUpload] = useState<{path: string; name: string; startedAt: number} | null>(null)
 	// Track that the item has shown up in the uploading list, so its later
 	// disappearance can be told apart from it never having been registered
@@ -305,7 +452,7 @@ function UploadIsoSource() {
 				// A file with this name already existed and the user kept both: the
 				// upload landed under a deduplicated name we don't know, so we can't
 				// deep-link the create form — point them at Browse instead
-				toast.success(t('machines.upload-complete-keep-both'))
+				toast.success(t('machines.upload-complete-keep-both'), {area: 'machines'})
 			} else {
 				navigate(`${MACHINES_CONFIGURE_PATH}?iso=${encodeURIComponent(upload.path)}`)
 			}
@@ -321,7 +468,7 @@ function UploadIsoSource() {
 			return
 		}
 		// Item left the list with no completion record → cancelled (possibly from
-		// the global uploads island) or collision-skipped: just reset the tile
+		// the global uploads island) or collision-skipped: just reset the card
 		if (hasAppearedRef.current) {
 			hasAppearedRef.current = false
 			setUpload(null)
@@ -336,7 +483,44 @@ function UploadIsoSource() {
 	}
 
 	return (
-		<IsoSourceSection title={t('machines.upload-iso')}>
+		<CatalogCard
+			osId='custom'
+			index={index}
+			introMorph={introMorph}
+			title={t('machines.custom-machine')}
+			subtitle={t('machines.custom-image-title')}
+			action={
+				upload ? (
+					<div className='flex h-[30px] w-full items-center gap-2 text-13 font-medium -tracking-2 text-white/75'>
+						<span className='max-w-[40%] truncate'>{upload.name}</span>
+						<Progress value={item?.progress ?? 0} className='flex-1' />
+						<MachinesTooltip label={t('cancel')}>
+							<button
+								className='shrink-0 opacity-50 transition-[opacity,transform] duration-200 hover:opacity-90 active:scale-90'
+								onClick={handleCancel}
+								aria-label={t('cancel')}
+							>
+								<RiCloseCircleFill className='size-4' />
+							</button>
+						</MachinesTooltip>
+					</div>
+				) : (
+					<DropdownMenu>
+						<CreateMachineMenuTrigger />
+						<DropdownMenuContent align='center' className='w-64'>
+							<DropdownMenuItem className='gap-2.5' onSelect={() => inputRef.current?.click()}>
+								<Upload className='size-4 shrink-0 opacity-60' />
+								{t('machines.upload-iso-description')}
+							</DropdownMenuItem>
+							<DropdownMenuItem className='gap-2.5' onSelect={() => setBrowserOpen(true)}>
+								<img src='/assets/dock/dock-files.png' alt='' className='size-4 shrink-0 rounded-[4px]' />
+								{t('machines.browse-iso-description')}
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				)
+			}
+		>
 			<input
 				ref={inputRef}
 				type='file'
@@ -352,46 +536,6 @@ function UploadIsoSource() {
 					startUpload([selected], '/Home')
 				}}
 			/>
-			{upload ? (
-				<div className={isoSourceInnerClass}>
-					<span className='max-w-[40%] truncate'>{upload.name}</span>
-					<Progress value={item?.progress ?? 0} className='flex-1' />
-					<MachinesTooltip label={t('cancel')}>
-						<button
-							className='shrink-0 opacity-50 transition-[opacity,transform] duration-200 hover:opacity-90 active:scale-90'
-							onClick={handleCancel}
-							aria-label={t('cancel')}
-						>
-							<RiCloseCircleFill className='size-4' />
-						</button>
-					</MachinesTooltip>
-				</div>
-			) : (
-				<button
-					className={`${isoSourceInnerClass} border-dashed transition-colors duration-300 hover:bg-[#2a2a2a]`}
-					onClick={() => inputRef.current?.click()}
-				>
-					<Upload className='size-4 shrink-0' />
-					{t('machines.upload-iso-description')}
-				</button>
-			)}
-		</IsoSourceSection>
-	)
-}
-
-function BrowseIsoSource() {
-	const navigate = useNavigate()
-	const [browserOpen, setBrowserOpen] = useState(false)
-
-	return (
-		<IsoSourceSection title={t('machines.browse-iso')}>
-			<button
-				className={`${isoSourceInnerClass} border-dashed transition-colors duration-300 hover:bg-[#2a2a2a]`}
-				onClick={() => setBrowserOpen(true)}
-			>
-				<img src='/assets/dock/dock-files.png' alt='' className='size-4 shrink-0 rounded-[4px]' />
-				{t('machines.browse-iso-description')}
-			</button>
 			{browserOpen && (
 				<Suspense>
 					<MiniBrowser
@@ -407,6 +551,6 @@ function BrowseIsoSource() {
 					/>
 				</Suspense>
 			)}
-		</IsoSourceSection>
+		</CatalogCard>
 	)
 }

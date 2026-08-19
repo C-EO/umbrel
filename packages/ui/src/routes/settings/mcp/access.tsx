@@ -151,7 +151,7 @@ export function AppAccessDetail({
 				) : grantedAppIds.length === 0 ? (
 					<EmptyCard>{t('mcp-no-apps')}</EmptyCard>
 				) : (
-					<div className={shareListClass(grantedAppIds.length)}>
+					<div className={shareListClass()}>
 						<AnimatePresence initial={false}>
 							{grantedAppIds.map((appId) => (
 								<AnimatedRow key={appId}>
@@ -247,7 +247,7 @@ export function FileAccessDetail({
 				) : folderGrants.length === 0 ? (
 					<EmptyCard>{t('mcp-no-folders')}</EmptyCard>
 				) : (
-					<div className={shareListClass(folderGrants.length)}>
+					<div className={shareListClass()}>
 						<AnimatePresence initial={false}>
 							{folderGrants.map((path) => (
 								<AnimatedRow key={path}>
@@ -289,7 +289,7 @@ export function FileAccessDetail({
 
 			<section className='flex flex-col gap-2'>
 				<SectionLabel>{t('mcp-storage-access')}</SectionLabel>
-				<div className={shareListClass(2)}>
+				<div className={shareListClass()}>
 					<ShareEveryoneRow
 						className='p-3'
 						title={t('mcp-usb-storage')}

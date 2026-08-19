@@ -1169,7 +1169,7 @@ function ShareSection({
 			{!shareAll && itemCount === 0 ? (
 				<EmptyCard>{copy.emptyMessage}</EmptyCard>
 			) : (!shareAll || showAdditionalSharesWhenSharingAll) && itemCount > 0 ? (
-				<div className={shareListClass(itemCount)}>
+				<div className={shareListClass()}>
 					<AnimatePresence initial={false}>{rows}</AnimatePresence>
 				</div>
 			) : null}
@@ -1195,7 +1195,7 @@ function StorageAccessSection({
 	return (
 		<section className='flex flex-col gap-2'>
 			<SectionLabel>{t('users.storage-access')}</SectionLabel>
-			<div className={shareListClass(2)}>
+			<div className={shareListClass()}>
 				<ShareEveryoneRow
 					className='p-3'
 					title={t('users.usb-storage')}

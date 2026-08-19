@@ -14,10 +14,10 @@ import {
 	machinePath,
 	machineRowButtonClass,
 	machineStopBgClass,
-	machineStoragePurpleClass,
 } from '@/features/machines/constants'
 import {useMachineActions} from '@/features/machines/hooks/use-machine-actions'
 import type {Machine} from '@/features/machines/types'
+import {prettyMbPair} from '@/features/machines/utils'
 import {cn} from '@/lib/utils'
 import {useConfirmation} from '@/providers/confirmation'
 import {useLinkToDialog} from '@/utils/dialog'
@@ -64,7 +64,7 @@ function MachineRow({machine, index}: {machine: Machine; index: number}) {
 				onClick={() => navigate(machinePath(machine.id))}
 				className='flex min-w-0 cursor-pointer items-center gap-2.5 text-left after:absolute after:inset-0 after:rounded-20 focus:outline-hidden focus-visible:after:ring-3 focus-visible:after:ring-white/20'
 			>
-				<OsIcon osId={machine.osId} className='size-10 md:size-12' />
+				<OsIcon osId={machine.osId} state={machine.state} className='size-10 md:size-12' />
 				<div className='flex min-w-0 flex-col gap-1'>
 					<div className='flex min-w-0 items-center gap-[7px]'>
 						<span className='min-w-0 truncate text-15 font-medium -tracking-2 text-white'>{machine.name}</span>
@@ -185,7 +185,7 @@ function useEjectInstallMedia(machine: Machine) {
 			})
 			if (actionValue !== 'eject') return
 			await ejectInstallMedia({id: machine.id})
-			toast.success(t('machines.install-media-ejected'))
+			toast.success(t('machines.install-media-ejected'), {area: 'machines'})
 		} catch {
 			// User dismissed the dialog or the mutation's onError toast owns the failure.
 		}
@@ -200,6 +200,11 @@ export function MachineMenu({machine, buttonClassName}: {machine: Machine; butto
 	const handleEjectInstallMedia = useEjectInstallMedia(machine)
 
 	const storagePercent = machine.diskSizeGb > 0 ? (machine.storageUsedGb / machine.diskSizeGb) * 100 : 0
+	// Compact "used/total" pair, e.g. "2.57/4 GB" (or "350 MB/4 GB" below a gig)
+	const {downloaded: storageUsed, total: storageTotal} = prettyMbPair(
+		machine.storageUsedGb * 1_000,
+		machine.diskSizeGb * 1_000,
+	)
 
 	return (
 		<DropdownMenu>
@@ -215,11 +220,11 @@ export function MachineMenu({machine, buttonClassName}: {machine: Machine; butto
 					<div className='flex items-center justify-between'>
 						<span className='text-13 font-medium -tracking-2 text-white'>{t('machines.storage')}</span>
 						<span className='text-11 font-semibold text-white'>
-							{machine.storageUsedGb}
-							<span className='text-white/40'>/{machine.diskSizeGb}GB</span>
+							{storageUsed}
+							<span className='text-white/40'>/{storageTotal}</span>
 						</span>
 					</div>
-					<Progress value={storagePercent} size='thicker' className={machineStoragePurpleClass} />
+					<Progress value={storagePercent} size='thicker' variant='primary' />
 				</div>
 				{machine.performanceWarning && (
 					<div className='mb-1 rounded-8 border border-amber-400/20 bg-amber-400/10 p-2 text-12 leading-snug text-amber-200/90'>

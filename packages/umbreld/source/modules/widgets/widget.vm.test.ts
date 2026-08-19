@@ -102,7 +102,7 @@ test.sequential('enabled() returns enabled widgets', async () => {
 test.sequential('data() returns live widget data', async () => {
 	await expect(umbreld.client.widget.data.query({widgetId: 'umbrel:storage'})).resolves.toMatchObject({
 		title: 'Storage',
-		link: '?dialog=live-usage&tab=storage',
+		link: '?dialog=live-usage&live-usage-tab=storage',
 		refresh: 30000,
 		type: 'text-with-progress',
 	})

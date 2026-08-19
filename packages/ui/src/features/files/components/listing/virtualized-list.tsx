@@ -3,6 +3,7 @@ import {FixedSizeGrid, FixedSizeList, GridChildComponentProps, ListChildComponen
 import InfiniteLoader from 'react-window-infinite-loader'
 
 import {FileItem} from '@/features/files/components/listing/file-item'
+import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {
 	getGridColumnCount,
@@ -10,6 +11,8 @@ import {
 	getGridScrollerPadding,
 	GRID_ITEM_HEIGHT,
 	GRID_ROW_GAP,
+	LISTING_FADE_BOTTOM_PX,
+	LISTING_FADE_TOP_PX,
 } from '@/features/files/utils/get-grid-column-count'
 import {getItemKey} from '@/features/files/utils/get-item-key'
 import {useIsMobile} from '@/hooks/use-is-mobile'
@@ -196,6 +199,43 @@ export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 	const isMobile = useIsMobile()
 	const {containerRef, isScrolled} = useScrollFade()
 	const {width, height} = useContainerSize(containerRef)
+	// Bring a programmatically-selected item into view: type-ahead search, a
+	// freshly created folder, and deep links (e.g. the Recents widget or cmdk)
+	// all select without scrolling. Each new single selection is handled once,
+	// so later data refreshes never yank a scroll position the user has since
+	// changed. If the selected item isn't loaded yet (a deep link into a large
+	// directory), keep paging until it appears — onLoadMore self-guards against
+	// duplicate in-flight requests.
+	const selectedItems = useFilesStore((s) => s.selectedItems)
+	const selectedPath = selectedItems.length === 1 ? selectedItems[0].path : undefined
+	const handledSelectionRef = useRef<string | null>(null)
+	useEffect(() => {
+		handledSelectionRef.current = null
+	}, [selectedPath])
+	useEffect(() => {
+		if (!selectedPath || handledSelectionRef.current === selectedPath) return
+		const index = items.findIndex((item) => item.path === selectedPath)
+		if (index === -1) {
+			if (hasMore) onLoadMore(items.length)
+			return
+		}
+		const scrollEl = scrollAreaRef.current
+		if (!scrollEl) return
+		// Row geometry mirrors the List/Grid props below. Scroll only when the
+		// item sits outside the clearly-visible band, padded by the edge fades so
+		// the selection never lands half-hidden under them.
+		const rowHeight = view === 'list' ? (isMobile ? 50 : 40) : GRID_ITEM_HEIGHT + GRID_ROW_GAP
+		const row = view === 'list' ? index : Math.floor(index / getGridColumnCount(width, getGridItemWidth(isMobile)))
+		const itemTop = row * rowHeight
+		const itemBottom = itemTop + rowHeight
+		const {scrollTop, clientHeight} = scrollEl
+		if (itemTop < scrollTop + LISTING_FADE_TOP_PX) {
+			scrollEl.scrollTo({top: Math.max(0, itemTop - LISTING_FADE_TOP_PX)})
+		} else if (itemBottom > scrollTop + clientHeight - LISTING_FADE_BOTTOM_PX) {
+			scrollEl.scrollTo({top: itemBottom - clientHeight + LISTING_FADE_BOTTOM_PX})
+		}
+		handledSelectionRef.current = selectedPath
+	}, [selectedPath, items, hasMore, onLoadMore, view, width, isMobile, scrollAreaRef])
 
 	const isItemsEmpty = items.length === 0
 

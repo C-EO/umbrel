@@ -342,7 +342,7 @@ export default function HddRaidOnboarding() {
 				<AlertDialogHeader icon={TbAlertTriangleFilled}>
 					<AlertDialogTitle>{t('onboarding.raid.recovery.set-up-new-dialog.title')}</AlertDialogTitle>
 					<AlertDialogDescription>{t('storage-manager.add-drives-erase-warning')}</AlertDialogDescription>
-					<div className='grid max-h-[320px] gap-2 overflow-y-auto pt-2 sm:grid-cols-2'>
+					<div className='umbrel-stable-gutter grid max-h-[320px] gap-2 overflow-y-auto pt-2 sm:grid-cols-2'>
 						{devicesToErase.map((device) => (
 							<FoundDeviceCard key={device.id} device={device} />
 						))}

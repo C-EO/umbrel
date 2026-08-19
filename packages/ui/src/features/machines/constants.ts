@@ -1,17 +1,6 @@
 import {cn} from '@/lib/utils'
 import {tw} from '@/utils/tw'
 
-// Served from public/ (not bundled) — umbreld's CSP disallows data: image
-// URIs, so these must stay regular http URLs rather than Vite-inlined assets
-const osAlpine = '/assets/machines/os-alpine.svg'
-const osAndroid = '/assets/machines/os-android.svg'
-const osDebian = '/assets/machines/os-debian.svg'
-const osFedora = '/assets/machines/os-fedora.svg'
-const osUbuntu = '/assets/machines/os-ubuntu.svg'
-const osWindows11 = '/assets/machines/os-windows-11.svg'
-const osWindows95 = '/assets/machines/os-windows-95.svg'
-const osWindowsXp = '/assets/machines/os-windows-xp.svg'
-
 export const MACHINES_PATH = '/machines'
 export const MACHINES_ADD_PATH = '/machines/new'
 export const MACHINES_CONFIGURE_PATH = '/machines/new/configure'
@@ -36,27 +25,24 @@ export const coreOptions = (threads: number | undefined) =>
 	Array.from({length: Math.max(1, threads ?? DEFAULT_CORES)}, (_, i) => i + 1)
 
 type OsVisuals = {
-	logo?: string
 	// Brand color used for logo glows and the mock desktop wallpaper
 	color: string
-	// Some logos (e.g. Debian's swirl) need a solid circle behind them to read well
-	circleBackground?: boolean
 }
 
-// Visuals for the popular OS catalog. Anything not in here (custom ISOs)
-// falls back to a generic disc icon.
+// Brand colors for the popular OS catalog, keyed by familyId. Artwork lives in
+// the machineIconSets map (os-icon.tsx) — keep the two key sets in sync.
 export const osVisuals: Record<string, OsVisuals> = {
-	ubuntu: {logo: osUbuntu, color: '#E95420'},
-	fedora: {logo: osFedora, color: '#3C6EB4'},
-	debian: {logo: osDebian, color: '#D70A53', circleBackground: true},
-	alpine: {logo: osAlpine, color: '#0D597F'},
-	android: {logo: osAndroid, color: '#3DDC84'},
-	'windows-11': {logo: osWindows11, color: '#0078D4'},
-	'windows-server': {logo: osWindows11, color: '#0078D4'},
-	'windows-7': {logo: osWindows11, color: '#00ADEF'},
-	'windows-xp': {logo: osWindowsXp, color: '#7FBA00'},
-	'windows-95': {logo: osWindows95, color: '#008080'},
-	'windows-98': {logo: osWindows95, color: '#008080'},
+	ubuntu: {color: '#E95420'},
+	fedora: {color: '#3C6EB4'},
+	debian: {color: '#D70A53'},
+	alpine: {color: '#0D597F'},
+	android: {color: '#3DDC84'},
+	'windows-11': {color: '#0078D4'},
+	'windows-server': {color: '#0078D4'},
+	'windows-7': {color: '#00ADEF'},
+	'windows-xp': {color: '#7FBA00'},
+	'windows-95': {color: '#008080'},
+	'windows-98': {color: '#008080'},
 }
 
 export const customOsVisuals: OsVisuals = {color: '#8f8f8f'}
@@ -81,9 +67,8 @@ export const machineRailButtonClass = cn(
 	tw`size-12 bg-[rgba(30,30,30,0.75)] shadow-immersive-dialog-close hover:bg-[rgba(60,60,60,0.75)] disabled:opacity-40`,
 )
 
-// Repeated feature colors: stop/error red (#f63636) and storage purple
-// (#722fff). Arbitrary-value Tailwind classes must be literal at build time, so
-// we hoist whole class strings rather than interpolating the hex into a className.
+// Repeated feature color: stop/error red (#f63636). Arbitrary-value Tailwind
+// classes must be literal at build time, so we hoist whole class strings
+// rather than interpolating the hex into a className.
 export const machineStopBgClass = tw`bg-[#f63636]`
 export const machineStopTextClass = tw`text-[#f63636]`
-export const machineStoragePurpleClass = tw`[&>*]:bg-[#722fff]`

@@ -81,7 +81,7 @@ export function MachinesTabBar({machines}: {machines: Machine[]}) {
 			</MachinesTooltip>
 			{machines.map((machine) => (
 				<Tab key={machine.id} to={machinePath(machine.id)} className='animate-in px-3 duration-300 fade-in'>
-					<OsIcon osId={machine.osId} className='size-6' />
+					<OsIcon osId={machine.osId} state={machine.state} className='size-6' />
 					<span className='max-w-40 truncate'>{machine.name}</span>
 				</Tab>
 			))}

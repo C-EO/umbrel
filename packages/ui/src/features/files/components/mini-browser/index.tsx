@@ -207,7 +207,7 @@ export function MiniBrowser({
 					</div>
 				</DialogHeader>
 
-				<div className='h-[min(60vh,480px)] overflow-x-hidden overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2'>
+				<div className='umbrel-stable-gutter h-[min(60vh,480px)] overflow-x-hidden overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2'>
 					{/* Optional actions to render in the browser. e.g., "add NAS" button to open the add NAS dialog */}
 					{actions ? <div className='flex items-center justify-end'>{actions}</div> : null}
 

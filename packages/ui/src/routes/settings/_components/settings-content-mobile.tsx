@@ -242,21 +242,21 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 
 			{!isMember && (
 				<div className='grid grid-cols-2 gap-2.5'>
-					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', tab: 'storage'})}}>
+					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': 'storage'})}}>
 						<MobileStatCardTap>
 							<Card className={statCardClass}>
 								<StorageCardContent headerIcon={<MobileStatIcon icon={PiHardDriveFill} />} />
 							</Card>
 						</MobileStatCardTap>
 					</Link>
-					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', tab: 'memory'})}}>
+					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': 'memory'})}}>
 						<MobileStatCardTap>
 							<Card id={SETTINGS_SYSTEM_CARDS_ID} className={statCardClass}>
 								<MemoryCardContent headerIcon={<MobileStatIcon icon={PiCircuitryBold} />} />
 							</Card>
 						</MobileStatCardTap>
 					</Link>
-					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', tab: 'cpu'})}}>
+					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': 'cpu'})}}>
 						<MobileStatCardTap>
 							<Card className={statCardClass}>
 								<CpuCardContent headerIcon={<MobileStatIcon icon={PiPulseBold} />} />
