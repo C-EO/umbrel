@@ -7,7 +7,6 @@ import {Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, Di
 import {Input} from '@/components/ui/input'
 import {Label} from '@/components/ui/label'
 import {Slider} from '@/components/ui/slider'
-import {Switch} from '@/components/ui/switch'
 import {toast} from '@/components/ui/toast'
 import {OsIcon} from '@/features/machines/components/os-icon'
 import {
@@ -46,7 +45,6 @@ export default function VmSettingsDialog() {
 	const [diskBus, setDiskBus] = useState<'virtio' | 'sata'>('virtio')
 	// Kept as a string so the field can be cleared while typing (empty = invalid)
 	const [diskInput, setDiskInput] = useState('')
-	const [autostart, setAutostart] = useState(false)
 	const [portForwards, setPortForwards] = useState<Machine['portForwards']>([])
 	const [isSaving, setIsSaving] = useState(false)
 
@@ -59,7 +57,6 @@ export default function VmSettingsDialog() {
 		setFirmware(machine.firmware)
 		setDiskBus(machine.diskBus ?? 'virtio')
 		setDiskInput(String(machine.diskSizeGb))
-		setAutostart(machine.autostart)
 		setPortForwards(machine.portForwards)
 	}, [dialogProps.open, machine?.id])
 
@@ -108,7 +105,6 @@ export default function VmSettingsDialog() {
 				cores,
 				...(!hasFixedMemory && {memoryGb}),
 				diskSizeGb: Math.round(diskValue),
-				autostart,
 				...(machine.osId === 'custom' ? {firmware, diskBus} : {}),
 				portForwards,
 			})
@@ -269,13 +265,6 @@ export default function VmSettingsDialog() {
 								{t('machines-error.machine-disk-shrink-not-allowed')}
 							</span>
 						)}
-					</div>
-
-					<div className='flex items-center justify-between gap-4'>
-						<Label htmlFor='machine-autostart' className='text-13 text-white/70'>
-							{t('machines.autostart')}
-						</Label>
-						<Switch id='machine-autostart' checked={autostart} onCheckedChange={setAutostart} disabled={isSaving} />
 					</div>
 
 					<div className='flex flex-col gap-2'>

@@ -1847,7 +1847,7 @@ export default class Machines {
 			cores,
 			memoryMb: sourceImage?.fixedMemoryMb ?? memoryGb * 1_024,
 			username: unattended ? username : undefined,
-			autostart: false,
+			autostart: true,
 			pinned: false,
 			createdAt: Date.now(),
 			firstBootSetup: firstBootToken
@@ -1985,6 +1985,8 @@ export default class Machines {
 				// before every manual start instead of assuming startup state survived.
 				await this.#libvirt.reconcileNetwork(await this.#store.list())
 				await this.#libvirt.start(definition, this.#store.directory(id), await this.#diskSystemPath(definition))
+				definition.autostart = true
+				await this.#store.write(definition)
 			} catch (error) {
 				this.#errors.set(id, error instanceof Error ? error.message : String(error))
 				throw error
@@ -1999,12 +2001,14 @@ export default class Machines {
 	async stopMachine(id: string) {
 		return this.#withMachineLock(id, async () => {
 			this.#assertBackupIdle(id)
-			await this.#definition(id)
+			const definition = await this.#definition(id)
 			if ((await this.#libvirt.state(id)) !== 'running') throw new Error('[machine-not-running]')
 			this.#operations.set(id, 'stopping')
 			await this.#emitMachines()
 			try {
 				await this.#libvirt.stop(id)
+				definition.autostart = false
+				await this.#store.write(definition)
 			} finally {
 				this.#operations.delete(id)
 				await this.#emitMachines()
@@ -2016,11 +2020,13 @@ export default class Machines {
 	async restartMachine(id: string) {
 		return this.#withMachineLock(id, async () => {
 			this.#assertBackupIdle(id)
-			await this.#definition(id)
+			const definition = await this.#definition(id)
 			this.#operations.set(id, 'restarting')
 			await this.#emitMachines()
 			try {
 				await this.#libvirt.restart(id)
+				definition.autostart = true
+				await this.#store.write(definition)
 			} finally {
 				this.#operations.delete(id)
 				await this.#emitMachines()
@@ -2039,11 +2045,13 @@ export default class Machines {
 
 		return this.#withMachineLock(id, async () => {
 			this.#assertBackupIdle(id)
-			await this.#definition(id)
+			const definition = await this.#definition(id)
 			if ((await this.#libvirt.state(id)) === 'stopped' && !this.#operations.has(id) && !install) {
 				throw new Error('[machine-already-stopped]')
 			}
 			await this.#libvirt.stop(id, {force: true})
+			definition.autostart = false
+			await this.#store.write(definition)
 			this.#operations.delete(id)
 			this.#errors.delete(id)
 			await this.#emitMachines()

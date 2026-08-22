@@ -195,6 +195,7 @@ vi.mock('./libvirt.js', async () => {
 			async stop(id: string) {
 				this.states.set(id, 'stopped')
 			}
+			async restart() {}
 
 			async ejectInstallMedia(definition: {id: string}) {
 				libvirtControls.ejectCalls.push(definition.id)
@@ -721,6 +722,35 @@ describe('background machine installation', () => {
 		await expect(first).resolves.toBe(true)
 		await expect(second).rejects.toThrow('[machine-not-stopped]')
 		expect(libvirtControls.startCalls).toHaveLength(startsBeforeRace + 1)
+	})
+
+	test('remembers explicit lifecycle state for autostart', async () => {
+		const {machines, filesRoot} = await createMachines()
+		const imports = nodePath.join(filesRoot, 'External', 'imports')
+		await fse.ensureDir(imports)
+		await fsp.writeFile(nodePath.join(imports, 'source.img'), 'source')
+		const machine = await machines.create({
+			name: 'Remembered lifecycle',
+			imagePath: '/External/imports/source.img',
+			diskSizeGb: 1,
+			cores: 1,
+			memoryGb: 1,
+		})
+		await pWaitFor(async () => (await machines.list()).some(({id, state}) => id === machine.id && state === 'running'))
+
+		expect((await machines.list()).find(({id}) => id === machine.id)?.autostart).toBe(true)
+		await machines.updateSettings(machine.id, {autostart: false})
+		await machines.restartMachine(machine.id)
+		expect((await machines.list()).find(({id}) => id === machine.id)?.autostart).toBe(true)
+
+		await machines.stopMachine(machine.id)
+		expect((await machines.list()).find(({id}) => id === machine.id)?.autostart).toBe(false)
+
+		await machines.startMachine(machine.id)
+		expect((await machines.list()).find(({id}) => id === machine.id)?.autostart).toBe(true)
+
+		await machines.forceStopMachine(machine.id)
+		expect((await machines.list()).find(({id}) => id === machine.id)?.autostart).toBe(false)
 	})
 
 	test('serializes uninstall behind an in-flight start', async () => {
