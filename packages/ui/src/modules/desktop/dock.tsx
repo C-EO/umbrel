@@ -134,15 +134,6 @@ export function Dock() {
 						bg={systemAppsKeyed['UMBREL_files'].icon}
 						mouseX={mouseX}
 					/>
-					<DockItem
-						iconSize={iconSize}
-						iconSizeZoomed={iconSizeZoomed}
-						to={systemAppsKeyed['UMBREL_settings'].systemAppTo}
-						open={pathname.startsWith(systemAppsKeyed['UMBREL_settings'].systemAppTo)}
-						bg={systemAppsKeyed['UMBREL_settings'].icon}
-						notificationCount={settingsNotificationCount}
-						mouseX={mouseX}
-					/>
 					{isOwner && (
 						<DockItem
 							iconSize={iconSize}
@@ -153,6 +144,15 @@ export function Dock() {
 							mouseX={mouseX}
 						/>
 					)}
+					<DockItem
+						iconSize={iconSize}
+						iconSizeZoomed={iconSizeZoomed}
+						to={systemAppsKeyed['UMBREL_settings'].systemAppTo}
+						open={pathname.startsWith(systemAppsKeyed['UMBREL_settings'].systemAppTo)}
+						bg={systemAppsKeyed['UMBREL_settings'].icon}
+						notificationCount={settingsNotificationCount}
+						mouseX={mouseX}
+					/>
 					<DockItem
 						iconSize={iconSize}
 						iconSizeZoomed={iconSizeZoomed}
@@ -219,13 +219,13 @@ export function DockPreview() {
 				iconSizeZoomed={iconSizeZoomed}
 			/>
 			<DockItem
-				bg={systemAppsKeyed['UMBREL_settings'].icon}
+				bg={systemAppsKeyed['UMBREL_machines'].icon}
 				mouseX={mouseX}
 				iconSize={iconSize}
 				iconSizeZoomed={iconSizeZoomed}
 			/>
 			<DockItem
-				bg={systemAppsKeyed['UMBREL_machines'].icon}
+				bg={systemAppsKeyed['UMBREL_settings'].icon}
 				mouseX={mouseX}
 				iconSize={iconSize}
 				iconSizeZoomed={iconSizeZoomed}

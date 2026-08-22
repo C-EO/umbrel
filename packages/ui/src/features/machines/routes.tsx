@@ -10,6 +10,7 @@ const MachinesIndex = React.lazy(() => import('@/features/machines/components/ma
 const OsCatalog = React.lazy(() => import('@/features/machines/components/os-catalog'))
 const CreateMachine = React.lazy(() => import('@/features/machines/components/create-machine'))
 const MachineWindow = React.lazy(() => import('@/features/machines/components/machine-window'))
+const MachineSettings = React.lazy(() => import('@/features/machines/components/machine-settings'))
 const FullscreenConsole = React.lazy(() => import('@/features/machines/components/fullscreen-console'))
 
 // Mounted inside the desktop layout (outside SheetLayout) so the Machines
@@ -35,6 +36,10 @@ export const machinesRoutes: RouteObject[] = [
 			{
 				path: ':machineId',
 				element: <MachineWindow />,
+			},
+			{
+				path: ':machineId/settings',
+				element: <MachineSettings />,
 			},
 		],
 	},

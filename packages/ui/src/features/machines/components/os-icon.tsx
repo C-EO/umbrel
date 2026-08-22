@@ -35,8 +35,8 @@ const variantSuffix: Record<MachineIconVariant, string> = {
 export const machineIconSrc = (osId: string, variant: MachineIconVariant = 'on') =>
 	`${machineIconSetBase(osId)}${variantSuffix[variant]}.webp`
 
-// Exhaustive over MachineState (like MachineStateBadge) so a new backend
-// state is a compile error here rather than silently rendering as powered-on
+// Exhaustive over MachineState so a new backend state is a compile error
+// here rather than silently rendering as powered-on
 const stateVariant: Record<MachineState, MachineIconVariant> = {
 	installing: 'loading',
 	starting: 'loading',

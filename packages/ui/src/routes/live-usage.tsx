@@ -1186,14 +1186,22 @@ function MachineRowStatus({machineId}: {machineId: string}) {
 	}
 
 	if (!machine || machine.state === 'running') return null
-	// Same dynamic-key pattern as machine-rail/fullscreen-console; every key
-	// exists as a literal t() call in machine-state-badge.tsx, so the
-	// translation updater still discovers them — and new states show up here
-	// without another hand-written mapping
+	// Keep every key literal: update-translations.js scans source text rather
+	// than evaluating dynamic keys. The exhaustive map also makes a new backend
+	// state a compile-time decision instead of leaking its raw key into the UI.
+	const stateLabels: Record<MachineState, string> = {
+		error: t('machines.state.error'),
+		installing: t('machines.state.installing'),
+		restarting: t('machines.state.restarting'),
+		running: t('machines.state.running'),
+		starting: t('machines.state.starting'),
+		stopped: t('machines.state.stopped'),
+		stopping: t('machines.state.stopping'),
+	}
 	const transient = (['installing', 'starting', 'stopping', 'restarting'] as MachineState[]).includes(machine.state)
 	return (
 		<span className='shrink-0 text-13 -tracking-2 text-white/40'>
-			{t(`machines.state.${machine.state}`) + (transient ? '...' : '')}
+			{stateLabels[machine.state] + (transient ? '...' : '')}
 		</span>
 	)
 }
@@ -1234,13 +1242,13 @@ function MachineRowMenuContent({machine, onOpenChange}: {machine: Machine; onOpe
 					disabled={restartDisabled}
 					onSelect={restartDisabled ? undefined : () => restart({id: machine.id})}
 				>
-					{t('restart')}
+					{t('machines.restart')}
 				</DropdownMenuItem>
 				{startable ? (
-					<DropdownMenuItem onSelect={() => start({id: machine.id})}>{t('start')}</DropdownMenuItem>
+					<DropdownMenuItem onSelect={() => start({id: machine.id})}>{t('machines.turn-on')}</DropdownMenuItem>
 				) : (
 					<DropdownMenuItem disabled={stopDisabled} onSelect={stopDisabled ? undefined : () => stop({id: machine.id})}>
-						{t('stop')}
+						{t('machines.shut-down')}
 					</DropdownMenuItem>
 				)}
 				<DropdownMenuItem
@@ -1248,7 +1256,7 @@ function MachineRowMenuContent({machine, onOpenChange}: {machine: Machine; onOpe
 					className='text-destructive2-lightest focus:text-destructive2-lightest data-[highlighted]:text-destructive2-lightest'
 					onSelect={forceStopDisabled ? undefined : () => forceStop({id: machine.id})}
 				>
-					{t('machines.force-stop')}
+					{t('machines.force-shut-down')}
 				</DropdownMenuItem>
 				<DropdownMenuItem
 					className='text-destructive2-lightest focus:text-destructive2-lightest data-[highlighted]:text-destructive2-lightest'

@@ -12,6 +12,7 @@ import yaml from 'js-yaml'
 import {z} from 'zod'
 
 import type Umbreld from '../../index.js'
+
 import {OWNER_USER_ID} from '../user/constants.js'
 import {
 	architectureForProfile,
@@ -38,6 +39,7 @@ export const FIRST_BOOT_SETUP_TIMEOUT_MS = 60 * 60 * 1_000
 export const WINDOWS_ARM_FIRST_BOOT_SETUP_TIMEOUT_MS = 4 * FIRST_BOOT_SETUP_TIMEOUT_MS
 
 export type MachineState = 'installing' | 'stopped' | 'starting' | 'running' | 'stopping' | 'restarting' | 'error'
+export type MachineInstallationState = 'preparing' | 'starting' | 'setting-up' | 'ready-for-setup'
 
 export type Machine = {
 	id: string
@@ -47,6 +49,7 @@ export type Machine = {
 	osVersion: string
 	osVariant?: string
 	state: MachineState
+	installationState?: MachineInstallationState
 	installProgress?: number
 	installOsId?: string
 	errorMessage?: string
@@ -821,6 +824,7 @@ export default class Machines {
 	#installJobs = new Map<string, MachineInstallJob>()
 	#installCredentials = new Map<string, MachineInstallCredentials>()
 	#installProgress = new Map<string, number>()
+	#installationStates = new Map<string, Extract<MachineInstallationState, 'preparing' | 'starting'>>()
 	#backupMachines = new Set<string>()
 	#backupActive = false
 	#guestApi: MachineGuestApi
@@ -1326,18 +1330,34 @@ export default class Machines {
 		const {firstBootSetup, installSource, installMedia, bootMedia, ...publicDefinition} = definition
 		const externalDiskAvailable = await this.#externalDiskAvailable(definition)
 		const state = externalDiskAvailable ? await this.#state(definition) : 'error'
+		const firstBootSetupActive = isFirstBootSetupActive(firstBootSetup, Date.now(), firstBootSetupTimeoutMs(definition))
+		const installationState =
+			this.#installationStates.get(definition.id) ??
+			(!installSource && state !== 'error'
+				? firstBootSetup
+					? firstBootSetupActive
+						? 'setting-up'
+						: 'ready-for-setup'
+					: (!!installMedia && installMedia !== 'media/seed.iso') || !!bootMedia
+						? 'ready-for-setup'
+						: undefined
+				: undefined)
 		return {
 			...publicDefinition,
 			ipAddress: machineIpAddressSchema.parse(definition.ipAddress),
 			memoryGb: definition.memoryMb / 1_024,
-			firstBootSetup: isFirstBootSetupActive(firstBootSetup, Date.now(), firstBootSetupTimeoutMs(definition)),
+			firstBootSetup: firstBootSetupActive,
 			installPending: !!installSource,
 			// Cloud-init seed media is an internal implementation detail. Installer
 			// media is user-managed when setup does not already own its lifecycle.
 			installationMediaAttached:
 				!firstBootSetup && ((!!installMedia && installMedia !== 'media/seed.iso') || !!bootMedia),
 			state,
-			installProgress: state === 'installing' ? (this.#installProgress.get(definition.id) ?? 0) : undefined,
+			installationState,
+			installProgress:
+				installationState && installationState !== 'ready-for-setup'
+					? (this.#installProgress.get(definition.id) ?? 100)
+					: undefined,
 			// The exact catalog image this install sources from. osId only stores
 			// the family, which cannot disambiguate variants or custom images.
 			installOsId: state === 'installing' ? definition.installSource?.osId : undefined,
@@ -1694,6 +1714,7 @@ export default class Machines {
 		if (this.#installJobs.has(definition.id)) throw new Error('[machine-install-in-progress]')
 		const controller = new AbortController()
 		this.#operations.set(definition.id, 'installing')
+		this.#installationStates.set(definition.id, 'preparing')
 		this.#errors.delete(definition.id)
 		this.#installCredentials.set(definition.id, credentials)
 		this.#installProgress.set(definition.id, 0)
@@ -1702,9 +1723,7 @@ export default class Machines {
 			try {
 				await this.#prepareMachineInstall(definition, credentials, controller.signal)
 				this.#installCredentials.delete(definition.id)
-				this.#operations.delete(definition.id)
-				this.#installProgress.delete(definition.id)
-				await this.#emitMachines()
+				this.#installationStates.set(definition.id, 'starting')
 				if (!controller.signal.aborted) await this.startMachine(definition.id)
 			} catch (error) {
 				if (!controller.signal.aborted) {
@@ -1715,6 +1734,7 @@ export default class Machines {
 			} finally {
 				this.#operations.delete(definition.id)
 				this.#installProgress.delete(definition.id)
+				this.#installationStates.delete(definition.id)
 				if (this.#installJobs.get(definition.id)?.controller === controller) this.#installJobs.delete(definition.id)
 				await this.#emitMachines().catch((error) =>
 					this.logger.error(`Failed emitting final machine install state for ${definition.id}`, error),
@@ -1816,6 +1836,7 @@ export default class Machines {
 		} else {
 			throw new Error('[machine-os-required]')
 		}
+
 		await this.#assertCreationSpace(
 			diskSizeGb,
 			diskDirectorySystemPath ? 0 : imageSizeMb,
@@ -2078,6 +2099,7 @@ export default class Machines {
 			this.#errors.delete(id)
 			this.#installCredentials.delete(id)
 			this.#installProgress.delete(id)
+			this.#installationStates.delete(id)
 			await this.#store.remove(id)
 			if (externalDisk) await fse.remove(externalDisk)
 			await this.#libvirt.cleanupRuntime(id)

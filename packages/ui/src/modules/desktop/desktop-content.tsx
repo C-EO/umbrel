@@ -2,7 +2,7 @@ import {motion, Variant} from 'motion/react'
 import {useMemo} from 'react'
 import {useLocation} from 'react-router-dom'
 
-import {useMachines, useMachinesLiveUpdates} from '@/features/machines/hooks/use-machines'
+import {useMachines} from '@/features/machines/hooks/use-machines'
 import type {Machine} from '@/features/machines/types'
 import {useShortcuts, type Shortcut} from '@/hooks/use-shortcuts'
 import {useWidgets} from '@/hooks/use-widgets'
@@ -30,11 +30,8 @@ export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
 	const widgets = useWidgets()
 	const {shortcuts} = useShortcuts()
 
-	// Machines pinned to the homescreen from the Machines feature. Mount the live
-	// updates here (not just inside the Machines overlay) so pinned icons and
-	// their context menus reflect state changes while the desktop is showing.
-	useMachinesLiveUpdates()
-	const {machines} = useMachines()
+	// Machines pinned to the homescreen consume the owner-only global cache.
+	const {machines} = useMachines({enabled: getQuery.data?.role === 'owner'})
 	const pinnedMachines = useMemo(() => machines.filter((machine) => machine.pinned), [machines])
 
 	// Merge apps, shortcuts and pinned machines into a single alphabetically sorted list

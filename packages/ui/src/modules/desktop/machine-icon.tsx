@@ -42,11 +42,11 @@ export function MachineIcon({machine}: {machine: Machine}) {
 				<ContextMenuItem onSelect={() => navigate(machinePath(machine.id))}>{t('machines.open')}</ContextMenuItem>
 				{machine.state === 'stopped' || machine.state === 'error' ? (
 					<ContextMenuItem onSelect={() => start({id: machine.id})}>
-						{machine.state === 'error' ? t('machines.start-again') : t('machines.start')}
+						{machine.state === 'error' ? t('machines.turn-on-again') : t('machines.turn-on')}
 					</ContextMenuItem>
 				) : (
 					<ContextMenuItem disabled={machine.state !== 'running'} onSelect={() => stop({id: machine.id})}>
-						{t('machines.stop')}
+						{t('machines.shut-down')}
 					</ContextMenuItem>
 				)}
 				{machine.state !== 'stopped' && machine.state !== 'installing' && (
@@ -54,7 +54,7 @@ export function MachineIcon({machine}: {machine: Machine}) {
 						className={contextMenuClasses.item.rootDestructive}
 						onSelect={() => forceStop({id: machine.id})}
 					>
-						{t('machines.force-stop')}
+						{t('machines.force-shut-down')}
 					</ContextMenuItem>
 				)}
 				<ContextMenuItem

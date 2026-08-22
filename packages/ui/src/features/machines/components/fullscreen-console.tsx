@@ -9,6 +9,7 @@ import {machinePath, machineStopTextClass} from '@/features/machines/constants'
 import {useMachineActions} from '@/features/machines/hooks/use-machine-actions'
 import {useMachine, useMachinesLiveUpdates} from '@/features/machines/hooks/use-machines'
 import {cn} from '@/lib/utils'
+import {trpcReact} from '@/trpc/trpc'
 import {t} from '@/utils/i18n'
 import {tw} from '@/utils/tw'
 
@@ -17,9 +18,11 @@ const consoleButtonClass = tw`flex size-7 items-center justify-center rounded-fu
 // Fullscreen console, opened in a new browser tab. Minimal chrome: a slim
 // header with the VM identity and power controls, display fills the rest.
 export default function FullscreenConsole() {
-	useMachinesLiveUpdates()
+	const userQ = trpcReact.user.get.useQuery()
+	const isOwner = userQ.data?.role === 'owner'
+	useMachinesLiveUpdates({enabled: isOwner})
 	const {machineId} = useParams<{machineId: string}>()
-	const {machine, isLoading} = useMachine(machineId)
+	const {machine, isLoading} = useMachine(machineId, {enabled: isOwner})
 	const {stop, restart} = useMachineActions()
 	const [isBrowserFullscreen, setIsBrowserFullscreen] = useState(false)
 
@@ -41,7 +44,7 @@ export default function FullscreenConsole() {
 		window.location.href = machinePath(machineId ?? '')
 	}
 
-	if (isLoading) return null
+	if (userQ.isLoading || isLoading) return null
 
 	if (!machine) {
 		return (
@@ -95,12 +98,15 @@ export default function FullscreenConsole() {
 							<RotateCw className='size-4' />
 						</button>
 					</MachinesTooltip>
-					<MachinesTooltip label={isBusy ? t(`machines.state.${machine.state}`) : t('machines.stop')} side='bottom'>
+					<MachinesTooltip
+						label={isBusy ? t(`machines.state.${machine.state}`) : t('machines.shut-down')}
+						side='bottom'
+					>
 						<button
 							className={consoleButtonClass}
 							onClick={() => stop({id: machine.id})}
 							disabled={machine.state !== 'running'}
-							aria-label={t('machines.stop')}
+							aria-label={t('machines.shut-down')}
 						>
 							{isBusy ? (
 								<Loader2 className='size-4 animate-spin' />

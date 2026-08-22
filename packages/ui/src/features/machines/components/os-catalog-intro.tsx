@@ -38,6 +38,12 @@ const CASCADE_START_MS = 500
 const CASCADE_STEP_MS = 150
 const WAKE_MS = 550
 
+// The Machines app icon doubles as every monitor's sleeping state: the header
+// above this intro renders it already, so it's warm in the browser cache and
+// the wall paints instantly even on slow links (e.g. Tailscale) while the
+// per-OS artwork streams in
+const MACHINES_APP_ICON = '/assets/dock/dock-machines.webp'
+
 type Stage = 'off' | 'loading' | 'on'
 
 // off → loading → on, on a per-monitor schedule
@@ -56,7 +62,7 @@ function useWakeStage(delay: number, forceOn: boolean) {
 	return forceOn ? 'on' : stage
 }
 
-export type IntroWallEntry = {id: string; name: string}
+export type IntroWallEntry = {id: string; name: string; onMobileWall?: boolean}
 
 function WallMonitor({
 	entry,
@@ -78,10 +84,22 @@ function WallMonitor({
 	const jitter = JITTER[index % JITTER.length]
 	const {color} = getOsVisuals(entry.id)
 
+	// A monitor may only leave the sleeping state once every wake artwork it
+	// will show has actually loaded — until then it stays on the cached app
+	// icon, so a slow connection sees machines wake as their art arrives
+	// instead of half-loaded pop-in
+	const wakeVariants = reducedMotion ? (['on'] as const) : (['loading', 'on'] as const)
+	const [loadedArt, setLoadedArt] = useState<ReadonlySet<string>>(new Set())
+	const markLoaded = (variant: string) =>
+		setLoadedArt((current) => (current.has(variant) ? current : new Set(current).add(variant)))
+	const artReady = wakeVariants.every((variant) => loadedArt.has(variant))
+	// What's actually on screen: the scheduled stage once the art is ready
+	const shown: 'sleeping' | 'loading' | 'on' = artReady && stage !== 'off' ? stage : 'sleeping'
+
 	// Idle float: once a monitor wakes it starts a slow bob and sway, each with
 	// its own period, amplitude, and phase so the wall never moves in unison.
 	// On departure the float releases so the glide starts from rest.
-	const floating = !leaving && !reducedMotion && stage === 'on'
+	const floating = !leaving && !reducedMotion && shown === 'on'
 	const floatAmp = 4 + (index % 3)
 	const floatDuration = 5.5 + (index % 4) * 0.7
 	const floatDelay = (index % 5) * 0.35
@@ -89,8 +107,9 @@ function WallMonitor({
 	return (
 		<div
 			// Straightening out of the resting lean is the departure's first beat:
-			// the pile becomes a formation just before it glides into the grid
-			className='transition-transform duration-300'
+			// the pile becomes a formation just before it glides into the grid.
+			// Monitors outside the curated mobile spread only exist from md up.
+			className={cn('transition-transform duration-300', !entry.onMobileWall && 'max-md:hidden')}
 			style={{transform: leaving ? undefined : `rotate(${jitter.r}deg) translateY(${jitter.y}px)`}}
 		>
 			{/* Hover layer: a springy perk-up — scale plus a counter-tilt against
@@ -121,28 +140,42 @@ function WallMonitor({
 					    underdamped spring gives the wake a playful overshoot pop. */}
 					<motion.div
 						layoutId={`catalog-icon-${entry.id}`}
-						animate={{scale: stage === 'on' ? 1 : 0.94}}
+						animate={{scale: shown === 'on' ? 1 : 0.94}}
 						transition={{...layoutMorphTransition, scale: {type: 'spring', stiffness: 320, damping: 15}}}
-						className='relative size-22 md:size-24'
+						className='relative size-18 md:size-24'
 					>
 						<div
 							aria-hidden
 							className={cn(
 								'absolute inset-1 rounded-full blur-2xl transition-opacity duration-500',
-								stage === 'on' ? 'opacity-50 group-hover/crt:opacity-80' : 'opacity-0',
+								shown === 'on' ? 'opacity-50 group-hover/crt:opacity-80' : 'opacity-0',
 							)}
 							style={{backgroundColor: color}}
 						/>
-						{/* Reduced motion only ever shows 'on' — skip fetching the other art */}
-						{(reducedMotion ? (['on'] as const) : (['off', 'loading', 'on'] as const)).map((variant) => (
+						<img
+							src={MACHINES_APP_ICON}
+							alt=''
+							draggable={false}
+							className={cn(
+								'absolute inset-0 size-full rounded-[22%] object-contain transition-opacity duration-300',
+								shown === 'sleeping' ? 'opacity-100' : 'opacity-0',
+							)}
+						/>
+						{wakeVariants.map((variant) => (
 							<img
 								key={variant}
 								src={machineIconSrc(entry.id, variant)}
 								alt=''
 								draggable={false}
+								// complete-check covers cached images whose load event
+								// fired before React attached the onLoad listener
+								ref={(el) => {
+									if (el?.complete && el.naturalWidth > 0) markLoaded(variant)
+								}}
+								onLoad={() => markLoaded(variant)}
 								className={cn(
 									'absolute inset-0 size-full object-contain transition-opacity duration-300',
-									stage === variant ? 'opacity-100' : 'opacity-0',
+									shown === variant ? 'opacity-100' : 'opacity-0',
 								)}
 							/>
 						))}
@@ -173,7 +206,7 @@ export function CatalogIntro({entries, onCommit}: {entries: IntroWallEntry[]; on
 	const copyState = leaving ? {opacity: 0, y: -6} : {opacity: 1, y: 0}
 
 	return (
-		<div className='flex flex-col items-center gap-8 p-6 md:p-12'>
+		<div className='flex flex-col items-center gap-6 px-4 py-6 md:p-12'>
 			<div className='flex flex-col items-center gap-2 pt-2 text-center'>
 				<motion.h1
 					initial={{opacity: 0, y: 8}}
@@ -193,17 +226,19 @@ export function CatalogIntro({entries, onCommit}: {entries: IntroWallEntry[]; on
 				</motion.p>
 			</div>
 
-			<div className='flex max-w-[680px] flex-wrap items-center justify-center gap-x-8 gap-y-10 py-4'>
-				{entries.map((entry, index) => (
-					<WallMonitor key={entry.id} entry={entry} index={index} leaving={leaving} onCommit={commit} />
-				))}
-			</div>
-
-			<motion.div initial={{opacity: 0, y: 8}} animate={copyState} transition={enter(2)} className='pb-2'>
+			{/* CTA sits above the wall so the action is never below the fold —
+			    the pile becomes atmosphere beneath the decision */}
+			<motion.div initial={{opacity: 0, y: 8}} animate={copyState} transition={enter(2)}>
 				<Button variant='primary' size='lg' onClick={commit}>
 					{t('machines.intro-cta')}
 				</Button>
 			</motion.div>
+
+			<div className='flex max-w-[680px] flex-wrap items-center justify-center gap-x-5 gap-y-7 py-2 pb-4 md:gap-x-8 md:gap-y-10 md:py-4'>
+				{entries.map((entry, index) => (
+					<WallMonitor key={entry.id} entry={entry} index={index} leaving={leaving} onCommit={commit} />
+				))}
+			</div>
 		</div>
 	)
 }

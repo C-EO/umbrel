@@ -18,7 +18,6 @@ import {useIsMember} from '@/features/files/hooks/use-home-path'
 import {useWatcherRefetch} from '@/features/files/hooks/use-watcher-refetch'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
-import {useMachinesLiveUpdates} from '@/features/machines/hooks/use-machines'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 
 const ShareInfoDialog = lazy(() => import('@/features/files/components/dialogs/share-info-dialog'))
@@ -31,7 +30,6 @@ const FormatDriveDialog = lazy(() => import('@/features/files/components/dialogs
 const CloudAddDialog = lazy(() => import('@/features/files/components/dialogs/cloud-add-dialog'))
 
 export default function FilesLayout() {
-	useMachinesLiveUpdates()
 	const {t} = useTranslation()
 	const {pathname} = useLocation()
 	const {setSelectedItems} = useFilesStore()

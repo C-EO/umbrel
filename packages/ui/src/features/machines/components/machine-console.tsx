@@ -52,7 +52,13 @@ export function MachineConsole({machineId}: {machineId: string}) {
 				rfb.resizeSession = true
 				rfb.showDotCursor = true
 				rfb.background = '#000'
-				rfb.addEventListener('connect', () => setConnectionState('connected'))
+				rfb.addEventListener('connect', () => {
+					setConnectionState('connected')
+					// noVNC only forwards keyboard input while its canvas has DOM focus,
+					// and by default nothing focuses it until the first click. Focus on
+					// every (re)connect so an opened machine is immediately interactive.
+					rfb?.focus()
+				})
 				rfb.addEventListener('disconnect', (event: CustomEvent<{clean: boolean}>) => {
 					if (disposed) return
 					if (closeCode === SUPERSEDED_CLOSE_CODE) {
@@ -177,8 +183,18 @@ export function MachineConsole({machineId}: {machineId: string}) {
 	}, [audioContext, machineId, sessionId])
 
 	return (
-		<div ref={root} className='absolute inset-0 bg-black'>
-			<div ref={screen} className='size-full overflow-hidden [&_canvas]:mx-auto [&_canvas]:block' />
+		<div ref={root} className='absolute inset-0 flex items-center justify-center bg-black'>
+			{/* Quantize the size noVNC requests (resizeSession uses this element's
+			    box) to whole VGA text cells — 16px rows, 8px columns. A fractional
+			    row count makes guest text consoles lay out lines past the visible
+			    framebuffer until the tty scrolls; cell-exact sizes remove that
+			    class of glitch, and the leftover pixels center out as bezel.
+			    Browsers without CSS round() ignore the style and keep size-full. */}
+			<div
+				ref={screen}
+				style={{height: 'round(down, 100%, 16px)', width: 'round(down, 100%, 8px)'}}
+				className='size-full overflow-hidden [&_canvas]:mx-auto [&_canvas]:block'
+			/>
 			{!muted && audioBlocked && (
 				<div className='pointer-events-none absolute top-3 right-3 z-10 grid size-7 place-items-center rounded-full bg-black/55 text-white/55 backdrop-blur'>
 					<VolumeX className='size-3.5' />

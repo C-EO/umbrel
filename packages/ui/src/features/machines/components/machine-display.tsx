@@ -175,7 +175,6 @@ function InstallingScreen({machine}: {machine: Machine}) {
 		<div className='absolute inset-0 flex flex-col items-center justify-center gap-4 bg-black md:gap-5'>
 			<OsIcon osId={machine.osId} state={machine.state} className='size-12 md:size-16' />
 			<div className='flex flex-col items-center gap-3'>
-				<span className='text-13 -tracking-2 text-white/50'>{t('machines.installing-os', {os: machine.osName})}</span>
 				<div className='w-32'>
 					<Progress value={machine.installProgress ?? 0} />
 				</div>
@@ -193,7 +192,7 @@ function StoppedScreen({machine}: {machine: Machine}) {
 			<Power className='size-8 text-white/25' />
 			<span className='text-13 -tracking-2 text-white/40'>{t('machines.machine-off')}</span>
 			<button onClick={() => start({id: machine.id})} className={screenActionButtonClass}>
-				{t('machines.start')}
+				{t('machines.turn-on')}
 			</button>
 		</div>
 	)
@@ -221,7 +220,7 @@ function ErrorScreen({machine}: {machine: Machine}) {
 				onClick={() => (retryingInstall ? retryInstall({id: machine.id}) : start({id: machine.id}))}
 				className={screenActionButtonClass}
 			>
-				{retryingInstall ? t('machines.retry-install') : t('machines.start-again')}
+				{retryingInstall ? t('machines.retry-install') : t('machines.turn-on-again')}
 			</button>
 		</div>
 	)

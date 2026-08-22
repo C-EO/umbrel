@@ -1,32 +1,37 @@
-import {Disc3, Loader2, MoreHorizontal, Pin, PinOff, Power, Settings, Square, Trash2} from 'lucide-react'
+import {Disc3, Loader2, MoreHorizontal, Pin, PinOff, Power, RotateCw, Settings, Square, Trash2} from 'lucide-react'
 import {AnimatePresence, motion} from 'motion/react'
-import {TbAlertTriangleFilled} from 'react-icons/tb'
 import {useNavigate} from 'react-router-dom'
 
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
 import {Progress} from '@/components/ui/progress'
 import {toast} from '@/components/ui/toast'
-import {MachineStateBadge} from '@/features/machines/components/machine-state-badge'
 import {MachinesTooltip} from '@/features/machines/components/machines-tooltip'
-import {OsIcon} from '@/features/machines/components/os-icon'
+import {machineIconSrc, OsIcon} from '@/features/machines/components/os-icon'
 import {
+	getOsVisuals,
 	layoutMorphTransition,
 	machinePath,
 	machineRowButtonClass,
-	machineStopBgClass,
+	machineStopTextClass,
 } from '@/features/machines/constants'
-import {useMachineActions} from '@/features/machines/hooks/use-machine-actions'
+import {getMachinesErrorMessage, useMachineActions} from '@/features/machines/hooks/use-machine-actions'
 import type {Machine} from '@/features/machines/types'
 import {prettyMbPair} from '@/features/machines/utils'
 import {cn} from '@/lib/utils'
 import {useConfirmation} from '@/providers/confirmation'
-import {useLinkToDialog} from '@/utils/dialog'
 import {t} from '@/utils/i18n'
 
 export default function MachinesList({machines}: {machines: Machine[]}) {
+	const running = machines.filter((machine) => machine.state === 'running').length
+
 	return (
 		<div className='flex flex-col gap-3 p-6 md:p-12'>
-			<h2 className='text-17 font-semibold -tracking-2 text-white/85'>{t('machines.installed-vms')}</h2>
+			<div className='flex items-baseline justify-between'>
+				<h2 className='text-17 font-semibold -tracking-2 text-white/85'>{t('machines.all-machines')}</h2>
+				<span className='text-13 -tracking-2 text-white/35 tabular-nums'>
+					{t('machines.running-summary', {running, total: machines.length})}
+				</span>
+			</div>
 			<div className='grid grid-cols-1 gap-3 lg:grid-cols-2'>
 				<AnimatePresence mode='popLayout' initial={true}>
 					{machines.map((machine, i) => (
@@ -38,9 +43,59 @@ export default function MachinesList({machines}: {machines: Machine[]}) {
 	)
 }
 
+// The living glow behind the monitor: breathes in the OS brand color while the
+// machine runs, holds a faint ember while it works, goes red on error, and
+// almost disappears when it sleeps. With no state pill on the row, this light
+// (plus the artwork itself) is the primary state channel.
+function MonitorGlow({machine}: {machine: Machine}) {
+	const {color} = getOsVisuals(machine.osId)
+	const settingUp = machine.installationState === 'setting-up'
+	const running = machine.state === 'running' && !settingUp
+	const isError = machine.state === 'error'
+	const working =
+		settingUp || machine.state === 'installing' || machine.state === 'starting' || machine.state === 'restarting'
+
+	return (
+		<motion.div
+			aria-hidden
+			className='absolute inset-1 rounded-full blur-2xl'
+			style={{backgroundColor: isError ? '#f63636' : color}}
+			animate={running ? {opacity: [0.42, 0.62, 0.42]} : {opacity: working ? 0.3 : isError ? 0.25 : 0.08}}
+			transition={running ? {duration: 4, repeat: Infinity, ease: 'easeInOut'} : {duration: 0.6}}
+		/>
+	)
+}
+
 function MachineRow({machine, index}: {machine: Machine; index: number}) {
 	const navigate = useNavigate()
 	const isError = machine.state === 'error'
+	const settingUp = machine.installationState === 'setting-up'
+	const iconState = settingUp ? 'installing' : machine.state
+
+	// Compact "used of total" storage pair, e.g. "4.2 of 15 GB"
+	const {downloaded: storageUsed, total: storageTotal} = prettyMbPair(
+		machine.storageUsedGb * 1_000,
+		machine.diskSizeGb * 1_000,
+	)
+
+	// Status after the version dot — working states narrate right here with a
+	// trailing ellipsis; only error owns the detail slot instead.
+	// Keys stay literal for the translation updater.
+	const statusLabel = settingUp
+		? `${t('machines.state.setting-up')}…`
+		: machine.state === 'running'
+			? t('machines.state.running')
+			: machine.state === 'stopped'
+				? t('machines.state.stopped')
+				: machine.state === 'installing'
+					? `${t('machines.state.installing')}…`
+					: machine.state === 'starting'
+						? `${t('machines.state.starting')}…`
+						: machine.state === 'stopping'
+							? `${t('machines.state.stopping')}…`
+							: machine.state === 'restarting'
+								? `${t('machines.state.restarting')}…`
+								: undefined
 
 	return (
 		// Non-interactive container: the primary open affordance is a real button
@@ -55,46 +110,68 @@ function MachineRow({machine, index}: {machine: Machine; index: number}) {
 			exit={{opacity: 0}}
 			transition={{delay: index * 0.02, duration: 0.2, ease: 'easeOut', ...layoutMorphTransition}}
 			className={cn(
-				'relative flex items-center justify-between gap-3 rounded-20 border border-white/10 bg-white/6 p-4 text-left transition-colors duration-300 hover:border-white/15 hover:bg-white/10',
-				isError && 'border-[#f63636]/40 bg-[#f63636]/[0.08] hover:border-[#f63636]/50 hover:bg-[#f63636]/[0.12]',
+				// settings-edge-material: same card surface as the Settings page tiles.
+				// Below sm the row becomes a centered column — monitor on top, copy
+				// beneath, controls at the bottom — since the horizontal layout can't
+				// fit a name, status, and two controls on a phone-width card.
+				'settings-edge-material relative flex flex-col items-center gap-3 rounded-24 bg-white/5 p-5 transition-colors duration-300 hover:bg-white/8 sm:flex-row sm:gap-4 sm:p-4',
+				isError && 'border border-[#f63636]/40 bg-[#f63636]/[0.08] hover:bg-[#f63636]/[0.12]',
 			)}
 		>
 			<button
 				type='button'
 				onClick={() => navigate(machinePath(machine.id))}
-				className='flex min-w-0 cursor-pointer items-center gap-2.5 text-left after:absolute after:inset-0 after:rounded-20 focus:outline-hidden focus-visible:after:ring-3 focus-visible:after:ring-white/20'
+				className='flex w-full min-w-0 cursor-pointer flex-col items-center gap-3 text-center after:absolute after:inset-0 after:rounded-24 focus:outline-hidden focus-visible:after:ring-3 focus-visible:after:ring-white/20 sm:flex-1 sm:flex-row sm:gap-4 sm:text-left'
 			>
-				<OsIcon osId={machine.osId} state={machine.state} className='size-10 md:size-12' />
-				<div className='flex min-w-0 flex-col gap-1'>
-					<div className='flex min-w-0 items-center gap-[7px]'>
-						<span className='min-w-0 truncate text-15 font-medium -tracking-2 text-white'>{machine.name}</span>
-						<MachineStateBadge state={machine.state} />
+				<div className='relative shrink-0'>
+					<MonitorGlow machine={machine} />
+					<OsIcon osId={machine.osId} state={iconState} className='relative size-24 sm:size-20' />
+					{/* Mobile only: the catalog tiles' monitor reflection off the card
+					    surface (the copy column below is `relative` to paint above it) */}
+					<div
+						aria-hidden
+						className='pointer-events-none absolute top-24 left-1/2 h-14 w-24 -translate-x-1/2 sm:hidden'
+					>
+						<div className='[mask-image:linear-gradient(to_bottom,black,transparent_75%)] opacity-[0.08] blur-[2px]'>
+							<OsIcon osId={machine.osId} state={iconState} className='size-24 -scale-y-100' />
+						</div>
 					</div>
-					<div className='flex min-w-0 items-center gap-1.5 text-13 font-medium -tracking-2 text-white/40'>
+				</div>
+				<div className='relative flex w-full min-w-0 flex-col items-center gap-1.5 sm:flex-1 sm:items-start'>
+					{/* No state pill: the artwork, glow, detail line and power button
+					    already tell the whole story */}
+					<span className='max-w-full min-w-0 truncate text-15 font-medium -tracking-2 text-white'>{machine.name}</span>
+					<div className='flex w-full min-w-0 items-center justify-center gap-1.5 text-12 -tracking-2 text-white/40 sm:justify-start'>
 						<span className='truncate'>{machine.osVersion}</span>
-						{machine.acceleration === 'tcg' && (
+						{statusLabel && (
 							<>
 								<span className='size-[3px] shrink-0 rounded-full bg-white/25' />
-								<span className='shrink-0 text-amber-300/70'>{t('machines.emulated')}</span>
+								<span className='shrink-0'>{statusLabel}</span>
 							</>
+						)}
+					</div>
+					{/* Detail slot: quiet specs everywhere (installing included, for
+					    consistency across the grid — the island carries the progress);
+					    only error narrates here */}
+					<div className='flex h-5 w-full items-center justify-center overflow-hidden sm:justify-start'>
+						{isError ? (
+							<span className='min-w-0 truncate text-12 -tracking-2 text-[#f63636]/80'>
+								{machine.errorMessage ? getMachinesErrorMessage(machine.errorMessage) : t('machines.error-title')}
+							</span>
+						) : (
+							<span className='truncate text-12 -tracking-2 text-white/30 tabular-nums'>
+								{t('machines.cores-count', {count: machine.cores})} · {t('machines.gb', {value: machine.memoryGb})} ·{' '}
+								{t('machines.storage-used-of-total', {used: storageUsed, total: storageTotal})}
+							</span>
 						)}
 					</div>
 				</div>
 			</button>
-			<div className='relative z-10 flex items-center gap-1.5 md:gap-2'>
-				{machine.state === 'installing' ? (
-					<>
-						<div className='flex w-32 items-center gap-2 pr-1'>
-							<Progress value={machine.installProgress ?? 0} />
-						</div>
-						<MachineMenu machine={machine} />
-					</>
-				) : (
-					<>
-						<MachineMenu machine={machine} />
-						<MachinePowerButton machine={machine} />
-					</>
-				)}
+			{/* Two controls, not three: restart lives in the menu. The reclaimed
+			    width goes to the name and detail line. */}
+			<div className='relative z-10 flex shrink-0 items-center gap-2 sm:gap-1.5'>
+				<MachineMenu machine={machine} withRestart />
+				<MachinePowerButton machine={machine} />
 			</div>
 		</motion.div>
 	)
@@ -105,13 +182,13 @@ function MachinePowerButton({machine}: {machine: Machine}) {
 
 	if (machine.state === 'running') {
 		return (
-			<MachinesTooltip label={t('machines.stop')}>
+			<MachinesTooltip label={t('machines.shut-down')}>
 				<button
 					className={machineRowButtonClass}
 					onClick={() => stop({id: machine.id})}
-					aria-label={t('machines.stop')}
+					aria-label={t('machines.shut-down')}
 				>
-					<div className={cn('size-[13px] rounded-[4px] md:size-[15px]', machineStopBgClass)} />
+					<Power className={cn('size-4 md:size-5', machineStopTextClass)} />
 				</button>
 			</MachinesTooltip>
 		)
@@ -123,8 +200,8 @@ function MachinePowerButton({machine}: {machine: Machine}) {
 		const label = retryingInstall
 			? t('machines.retry-install')
 			: machine.state === 'error'
-				? t('machines.start-again')
-				: t('machines.start')
+				? t('machines.turn-on-again')
+				: t('machines.turn-on')
 		return (
 			<MachinesTooltip label={label}>
 				<button
@@ -151,12 +228,23 @@ export function useUninstallMachine(machine: Machine) {
 	const confirm = useConfirmation()
 	const {uninstall} = useMachineActions()
 
+	// The machine's own error artwork (red power light, glitched screen) sets
+	// the destructive tone better than a generic warning triangle
+	const ErrorArtIcon = () => (
+		<img
+			src={machineIconSrc(machine.osId, 'error')}
+			alt=''
+			draggable={false}
+			className='mx-auto size-14 object-contain'
+		/>
+	)
+
 	return async () => {
 		try {
 			const {actionValue} = await confirm({
 				title: t('machines.uninstall-confirm-title', {name: machine.name}),
 				message: t('machines.uninstall-confirm-message'),
-				icon: TbAlertTriangleFilled,
+				icon: ErrorArtIcon,
 				actions: [
 					{label: t('machines.uninstall'), value: 'uninstall', variant: 'destructive'},
 					{label: t('cancel'), value: 'cancel', variant: 'default'},
@@ -192,10 +280,19 @@ function useEjectInstallMedia(machine: Machine) {
 	}
 }
 
-export function MachineMenu({machine, buttonClassName}: {machine: Machine; buttonClassName?: string}) {
+export function MachineMenu({
+	machine,
+	buttonClassName,
+	withRestart,
+}: {
+	machine: Machine
+	buttonClassName?: string
+	// The list rows have no dedicated restart button, so their menu carries it.
+	// The rail keeps its own restart button and leaves this off.
+	withRestart?: boolean
+}) {
 	const navigate = useNavigate()
-	const linkToDialog = useLinkToDialog()
-	const {setPinned, forceStop} = useMachineActions()
+	const {setPinned, forceStop, restart} = useMachineActions()
 	const handleUninstall = useUninstallMachine(machine)
 	const handleEjectInstallMedia = useEjectInstallMedia(machine)
 
@@ -215,25 +312,28 @@ export function MachineMenu({machine, buttonClassName}: {machine: Machine; butto
 					</button>
 				</DropdownMenuTrigger>
 			</MachinesTooltip>
-			<DropdownMenuContent align='start' className='w-60'>
-				<div className='mb-1 flex flex-col gap-2 rounded-8 bg-white/8 p-2'>
+			{/* p-1: match the homescreen context menu's tight padding */}
+			<DropdownMenuContent align='start' className='w-60 p-1'>
+				{/* Block cards share the menu items' radius so they nest concentrically
+				    inside the 20px menu surface at its p-1 inset */}
+				<div className='mb-1 flex flex-col gap-2 rounded-[var(--material-item-radius)] bg-white/8 p-3'>
 					<div className='flex items-center justify-between'>
 						<span className='text-13 font-medium -tracking-2 text-white'>{t('machines.storage')}</span>
 						<span className='text-11 font-semibold text-white'>
 							{storageUsed}
-							<span className='text-white/40'>/{storageTotal}</span>
+							<span className='text-white/40'> / {storageTotal}</span>
 						</span>
 					</div>
 					<Progress value={storagePercent} size='thicker' variant='primary' />
 				</div>
 				{machine.performanceWarning && (
-					<div className='mb-1 rounded-8 border border-amber-400/20 bg-amber-400/10 p-2 text-12 leading-snug text-amber-200/90'>
+					<div className='mb-1 rounded-[var(--material-item-radius)] border border-amber-400/20 bg-amber-400/10 p-3 text-12 leading-snug text-amber-200/90'>
 						{machine.performanceWarning}
 					</div>
 				)}
 				<DropdownMenuItem
 					className='gap-2 whitespace-nowrap'
-					onSelect={() => navigate(linkToDialog('machines-vm-settings', {id: machine.id}))}
+					onSelect={() => navigate(`${machinePath(machine.id)}/settings`)}
 				>
 					<Settings className='size-4 shrink-0' />
 					{t('machines.settings')}
@@ -251,6 +351,12 @@ export function MachineMenu({machine, buttonClassName}: {machine: Machine; butto
 						{t('machines.eject-install-media')}
 					</DropdownMenuItem>
 				)}
+				{withRestart && machine.state === 'running' && (
+					<DropdownMenuItem className='gap-2 whitespace-nowrap' onSelect={() => restart({id: machine.id})}>
+						<RotateCw className='size-4 shrink-0' />
+						{t('machines.restart')}
+					</DropdownMenuItem>
+				)}
 				{/* Force stop: the escape hatch for any non-stopped state — except
 				   'installing', where "Cancel install" (uninstall) is the right action */}
 				{machine.state !== 'stopped' && machine.state !== 'installing' && (
@@ -259,7 +365,7 @@ export function MachineMenu({machine, buttonClassName}: {machine: Machine; butto
 						onSelect={() => forceStop({id: machine.id})}
 					>
 						<Square className='size-4 shrink-0 fill-current' />
-						{t('machines.force-stop')}
+						{t('machines.force-shut-down')}
 					</DropdownMenuItem>
 				)}
 				<DropdownMenuItem

@@ -185,7 +185,13 @@ vi.mock('./libvirt.js', async () => {
 				await fsp.writeFile(nodePath.join(directory, 'nvram.fd'), 'nvram')
 			}
 
-			async start(definition: {id: string}) {
+			async start(definition: {
+				id: string
+				cores: number
+				memoryMb: number
+				firmware: 'uefi' | 'bios'
+				diskBus?: 'virtio' | 'sata'
+			}) {
 				libvirtControls.startCalls.push(definition.id)
 				await libvirtControls.startBarrier
 				this.states.set(definition.id, 'running')
@@ -359,7 +365,17 @@ describe('background machine installation', () => {
 			memoryGb: 1,
 		})
 		await pWaitFor(() => downloadControls.length === 1)
+		let releaseStart!: () => void
+		libvirtControls.startBarrier = new Promise<void>((resolve) => (releaseStart = resolve))
 		await downloadControls[0].resolve()
+		await pWaitFor(() => libvirtControls.startCalls.includes(machine.id))
+		expect((await machines.list()).find(({id}) => id === machine.id)).toMatchObject({
+			state: 'starting',
+			installationState: 'starting',
+			installProgress: 100,
+			installPending: false,
+		})
+		releaseStart()
 		await pWaitFor(async () => (await machines.list()).some(({id, state}) => id === machine.id && state === 'running'))
 
 		const machineDirectory = nodePath.join(root, 'machines', machine.id)
@@ -370,6 +386,7 @@ describe('background machine installation', () => {
 		const token = new URL(config.phone_home.url).pathname.split('/').at(-1)!
 		expect((await machines.list()).find(({id}) => id === machine.id)).toMatchObject({
 			firstBootSetup: true,
+			installationState: 'setting-up',
 			installationMediaAttached: false,
 		})
 		await expect(fse.pathExists(seedPath)).resolves.toBe(true)
@@ -377,7 +394,10 @@ describe('background machine installation', () => {
 		await expect(machines.completeFirstBootSetup(machine.id, token)).resolves.toBe(true)
 
 		expect(libvirtControls.ejectCalls).toContain(machine.id)
-		expect((await machines.list()).find(({id}) => id === machine.id)).toMatchObject({firstBootSetup: false})
+		expect((await machines.list()).find(({id}) => id === machine.id)).toMatchObject({
+			firstBootSetup: false,
+			installationState: undefined,
+		})
 		await expect(fse.pathExists(seedPath)).resolves.toBe(false)
 		const persisted = yaml.load(await fsp.readFile(nodePath.join(machineDirectory, 'machine.yaml'), 'utf8')) as {
 			firstBootSetup?: unknown
@@ -624,9 +644,10 @@ describe('background machine installation', () => {
 			await pWaitFor(async () =>
 				(await machines.list()).some(({id, state}) => id === machine.id && state === 'running'),
 			)
-			expect((await machines.list()).find(({id}) => id === machine.id)?.installationMediaAttached).toBe(
-				extension === 'iso',
-			)
+			expect((await machines.list()).find(({id}) => id === machine.id)).toMatchObject({
+				installationMediaAttached: extension === 'iso',
+				installationState: extension === 'iso' ? 'ready-for-setup' : undefined,
+			})
 		}
 
 		for (const extension of ['qcow2', 'vmdk', 'vdi', 'vhdx', 'vhd', 'ova']) {
@@ -663,6 +684,7 @@ describe('background machine installation', () => {
 		expect(libvirtControls.ejectCalls).toEqual([machine.id])
 		expect((await machines.list()).find(({id}) => id === machine.id)).toMatchObject({
 			installationMediaAttached: false,
+			installationState: undefined,
 		})
 		await expect(fse.pathExists(mediaPath)).resolves.toBe(false)
 		await expect(machines.ejectInstallMedia(machine.id)).resolves.toBe(true)

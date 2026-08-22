@@ -1,5 +1,4 @@
 import {Loader2, Maximize2, Pin, Power, RotateCw, Volume2, VolumeX, X} from 'lucide-react'
-import {motion} from 'motion/react'
 
 import {MachineMenu, useUninstallMachine} from '@/features/machines/components/machines-list'
 import {MachinesTooltip} from '@/features/machines/components/machines-tooltip'
@@ -19,12 +18,22 @@ export function MachineRail({machine}: {machine: Machine}) {
 	const isBusy = machine.state === 'starting' || machine.state === 'stopping' || machine.state === 'restarting'
 
 	return (
-		<motion.div
-			initial={{opacity: 0}}
-			animate={{opacity: 1}}
-			transition={{delay: 0.15, duration: 0.2, ease: 'easeOut'}}
-			className='flex w-full shrink-0 flex-row flex-wrap justify-center gap-3 xl:w-auto xl:flex-col xl:flex-nowrap xl:justify-start'
+		<div
+			// Beside the display (xl+) the rail slides in from the right; when it
+			// wraps below the display on smaller screens it just fades in
+			className='flex w-full shrink-0 animate-in flex-row flex-wrap justify-center gap-3 delay-150 duration-300 fill-mode-backwards fade-in xl:w-auto xl:flex-col xl:flex-nowrap xl:justify-start xl:slide-in-from-right-6'
 		>
+			<MachinesTooltip label={t('machines.open-fullscreen')} side='left'>
+				<a
+					href={machineFullscreenPath(machine.id)}
+					target='_blank'
+					rel='noreferrer'
+					className={machineRailButtonClass}
+					aria-label={t('machines.open-fullscreen')}
+				>
+					<Maximize2 className='size-5' />
+				</a>
+			</MachinesTooltip>
 			<MachinesTooltip
 				label={muted ? t('machines.console-enable-audio') : t('machines.console-mute-audio')}
 				side='left'
@@ -36,17 +45,6 @@ export function MachineRail({machine}: {machine: Machine}) {
 				>
 					{muted ? <VolumeX className='size-5' /> : <Volume2 className='size-5' />}
 				</button>
-			</MachinesTooltip>
-			<MachinesTooltip label={t('machines.open-fullscreen')} side='left'>
-				<a
-					href={machineFullscreenPath(machine.id)}
-					target='_blank'
-					rel='noreferrer'
-					className={machineRailButtonClass}
-					aria-label={t('machines.open-fullscreen')}
-				>
-					<Maximize2 className='size-5' />
-				</a>
 			</MachinesTooltip>
 			<MachinesTooltip
 				label={machine.pinned ? t('machines.unpin-from-homescreen') : t('machines.pin-to-homescreen')}
@@ -91,8 +89,8 @@ export function MachineRail({machine}: {machine: Machine}) {
 						machine.state === 'error' && machine.installPending
 							? t('machines.retry-install')
 							: machine.state === 'error'
-								? t('machines.start-again')
-								: t('machines.start')
+								? t('machines.turn-on-again')
+								: t('machines.turn-on')
 					}
 					side='left'
 				>
@@ -104,19 +102,19 @@ export function MachineRail({machine}: {machine: Machine}) {
 								: start({id: machine.id})
 						}
 						aria-label={
-							machine.state === 'error' && machine.installPending ? t('machines.retry-install') : t('machines.start')
+							machine.state === 'error' && machine.installPending ? t('machines.retry-install') : t('machines.turn-on')
 						}
 					>
 						<Power className='size-5' />
 					</button>
 				</MachinesTooltip>
 			) : (
-				<MachinesTooltip label={isBusy ? t(`machines.state.${machine.state}`) : t('machines.stop')} side='left'>
+				<MachinesTooltip label={isBusy ? t(`machines.state.${machine.state}`) : t('machines.shut-down')} side='left'>
 					<button
 						className={machineRailButtonClass}
 						onClick={() => stop({id: machine.id})}
 						disabled={machine.state !== 'running'}
-						aria-label={t('machines.stop')}
+						aria-label={t('machines.shut-down')}
 					>
 						{isBusy ? (
 							<Loader2 className='size-5 animate-spin' />
@@ -127,6 +125,6 @@ export function MachineRail({machine}: {machine: Machine}) {
 				</MachinesTooltip>
 			)}
 			<MachineMenu machine={machine} buttonClassName={machineRailButtonClass} />
-		</motion.div>
+		</div>
 	)
 }

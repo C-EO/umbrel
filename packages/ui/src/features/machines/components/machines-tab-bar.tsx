@@ -11,8 +11,12 @@ import {cn} from '@/lib/utils'
 import {t} from '@/utils/i18n'
 import {tw} from '@/utils/tw'
 
-const tabClass = tw`flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-full border border-white/8 bg-[rgba(35,35,35,0.64)] text-14 font-semibold -tracking-2 whitespace-nowrap text-white/85 backdrop-blur-md transition-[background-color,border-color,color,transform] duration-200 hover:bg-[rgba(55,55,55,0.64)] hover:text-white focus:outline-hidden focus-visible:ring-3 focus-visible:ring-white/20 active:scale-95`
-const tabActiveClass = tw`border-white/60 bg-[rgba(68,68,68,0.64)] text-white hover:bg-[rgba(68,68,68,0.64)]`
+// Same minimal surface + settings-card edge shine as the machine control
+// buttons. The transparent border reserves the active ring's 1px so pills
+// never shift when selection changes (it also supersedes the material's own
+// hairline, whose look survives via the box-shadow shine).
+const tabClass = tw`settings-edge-material flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-full border border-transparent bg-white/6 text-14 font-semibold -tracking-2 whitespace-nowrap text-white/85 transition-[background-color,border-color,color,transform] duration-200 hover:bg-white/12 hover:text-white focus:outline-hidden focus-visible:ring-3 focus-visible:ring-white/20 active:scale-95`
+const tabActiveClass = tw`border-white/60 bg-white/14 text-white hover:bg-white/14`
 
 // Each pill animates its own position during the column-width morph (the nav
 // itself is full-width and a scroll container, so animating it does nothing)
@@ -67,7 +71,10 @@ export function MachinesTabBar({machines}: {machines: Machine[]}) {
 	return (
 		<nav
 			ref={navRef}
-			className='-my-1 flex items-center gap-3 overflow-x-auto py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+			// py-1/-mt-1 reserve focus-ring room inside the scroll clip without
+			// shifting layout; -mb-3 tightens the layout's gap-5 below the pills
+			// to a visual 12px
+			className='-mt-1 -mr-2 -mb-3 flex items-center gap-2 overflow-x-auto py-1 pr-2 [scrollbar-width:none] md:mr-0 md:pr-0 [&::-webkit-scrollbar]:hidden'
 		>
 			<MachinesTooltip label={t('machines.all-machines')} side='bottom'>
 				<Tab to={MACHINES_PATH} end label={t('machines.all-machines')} className='w-10'>

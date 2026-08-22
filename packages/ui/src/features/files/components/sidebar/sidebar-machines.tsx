@@ -10,7 +10,7 @@ export function SidebarMachines() {
 
 	return (
 		<SidebarItem
-			item={{name: t('files-sidebar.machines'), path: MACHINES_PATH, type: 'directory'}}
+			item={{name: t('machines'), path: MACHINES_PATH, type: 'directory'}}
 			isActive={currentPath === MACHINES_PATH}
 			onClick={() => navigateToDirectory(MACHINES_PATH)}
 		/>

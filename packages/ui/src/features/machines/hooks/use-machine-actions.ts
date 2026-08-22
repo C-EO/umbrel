@@ -24,6 +24,12 @@ export function getMachinesErrorMessage(message: string) {
 			return t('machines-error.machine-install-interrupted')
 		case 'machine-install-retry-credentials-required':
 			return t('machines-error.machine-install-retry-credentials-required')
+		case 'machine-port-conflict':
+			return t('machines-error.machine-port-conflict')
+		case 'machine-shutdown-timeout':
+			return t('machines-error.machine-shutdown-timeout')
+		case 'machine-start-failed':
+			return t('machines-error.machine-start-failed')
 		default:
 			return message
 	}

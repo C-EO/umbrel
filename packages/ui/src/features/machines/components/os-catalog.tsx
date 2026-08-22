@@ -70,6 +70,12 @@ function groupOsImages(osImages: CatalogImage[]): OsFamily[] {
 // everything else follows in catalog order.
 const POPULAR_FAMILY_IDS = ['ubuntu', 'debian', 'windows-11', 'android']
 
+// The first-run pitch is a one-time moment per session: once the user commits
+// past it, remounts of this component (navigating to configure and back with
+// zero machines) go straight to the catalog. A page reload re-pitches, which
+// is correct — it's still a first run until a machine exists.
+let introDismissedThisSession = false
+
 // Pure OS picker: select a catalog entry or provide a local image, then move
 // directly to machine settings. Download/cache state stays internal to create.
 // Doubles as the first-time UX (when no machines exist) and the "+" add page.
@@ -83,9 +89,13 @@ export default function OsCatalog({intro: introRequested = false}: {intro?: bool
 	const moreFamilies = families.filter((family) => !POPULAR_FAMILY_IDS.includes(family.familyId))
 
 	// ?intro=1 forces the pitch on any catalog mount, for previewing it without
-	// deleting every machine
-	const [introDismissed, setIntroDismissed] = useState(false)
-	const introActive = (introRequested || searchParams.get('intro') === '1') && !introDismissed
+	// deleting every machine (and bypassing the session dismissal below)
+	const introForced = searchParams.get('intro') === '1'
+	// Committing past the pitch is remembered for the whole session (module
+	// scope), so navigating back — e.g. Cancel on the configure page while no
+	// machine exists yet — returns to the catalog, not the pitch again
+	const [introDismissed, setIntroDismissed] = useState(introForced ? false : introDismissedThisSession)
+	const introActive = (introRequested || introForced) && !introDismissed
 	// True while the intro→catalog handoff choreography plays, then cleared so
 	// its bespoke delays never leak into ordinary catalog reflows
 	const [introHandoff, setIntroHandoff] = useState(false)
@@ -98,14 +108,23 @@ export default function OsCatalog({intro: introRequested = false}: {intro?: bool
 	if (introActive) {
 		// Hold on a blank card rather than flashing catalog skeletons under the pitch
 		if (isLoading) return <div className='min-h-[420px]' />
+		// Desktop shows the whole catalog on the wall; phones keep only a curated
+		// recognizable spread (hidden via CSS below md) so the pile stays a
+		// single-glance composition there.
+		const MOBILE_WALL_IDS = ['ubuntu', 'debian', 'android', 'windows-11', 'custom', 'alpine', 'windows-xp']
 		const entries = [
-			...[...popularFamilies, ...moreFamilies].map((family) => ({id: family.familyId, name: family.name})),
-			{id: 'custom', name: t('machines.custom-machine')},
+			...[...popularFamilies, ...moreFamilies].map((family) => ({
+				id: family.familyId,
+				name: family.name,
+				onMobileWall: MOBILE_WALL_IDS.includes(family.familyId),
+			})),
+			{id: 'custom', name: t('machines.custom-machine'), onMobileWall: true},
 		]
 		return (
 			<CatalogIntro
 				entries={entries}
 				onCommit={() => {
+					introDismissedThisSession = true
 					setIntroDismissed(true)
 					setIntroHandoff(true)
 				}}
@@ -114,7 +133,7 @@ export default function OsCatalog({intro: introRequested = false}: {intro?: bool
 	}
 
 	return (
-		<div className='flex flex-col gap-8 p-6 md:p-12'>
+		<div className='flex flex-col gap-8 px-4 py-6 md:p-12'>
 			{isLoading ? (
 				<>
 					{/* Placeholder groups mirror the amd64 catalog — the fullest — with
@@ -178,8 +197,9 @@ const catalogGridClass = tw`grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4
 // nested in a fading card would be invisible for most of its flight, and a
 // clipping shell would crop it mid-glide. Interactive content must sit in a
 // positioned wrapper (e.g. `relative`) to paint and click above the fill.
-const osCardClass = tw`group relative flex flex-col items-center gap-4 rounded-20 p-4 pt-6 md:p-6`
-const osCardFillClass = tw`absolute inset-0 overflow-hidden rounded-20 border border-white/10 bg-white/6 transition-colors duration-300 group-hover:border-white/15 group-hover:bg-white/8`
+const osCardClass = tw`group relative flex flex-col items-center gap-4 rounded-24 p-4 pt-6 md:p-6`
+// settings-edge-material: same card surface as the Settings page tiles
+const osCardFillClass = tw`settings-edge-material absolute inset-0 overflow-hidden rounded-24 bg-white/5`
 
 // The intro→catalog handoff glide: monitors stream into their tiles one after
 // another on a long, decisive curve
@@ -211,7 +231,7 @@ function SkeletonCatalogGroup({count}: {count: number}) {
 // so swapping in the real card can't shift the layout.
 function SkeletonOsCard() {
 	return (
-		<div className='umbrel-pulse flex flex-col items-center gap-4 rounded-20 border border-white/10 bg-white/6 p-4 pt-6 md:p-6'>
+		<div className='umbrel-pulse settings-edge-material flex flex-col items-center gap-4 rounded-24 bg-white/5 p-4 pt-6 md:p-6'>
 			<div aria-hidden className='invisible flex flex-col items-center gap-2.5'>
 				<div className='size-24' />
 				<div className='flex flex-col items-center gap-1'>
@@ -297,7 +317,12 @@ function CatalogCard({
 				transition={surfaceTransition}
 				className={osCardFillClass}
 			>
-				<OsIconGlow osId={osId} className='top-5 left-1/2 size-24 -translate-x-1/2' />
+				{/* Hover affordance: the surface stays put — the machine's glow leans
+				    in and its monitor grows just a touch */}
+				<OsIconGlow
+					osId={osId}
+					className='top-5 left-1/2 size-24 -translate-x-1/2 transition-opacity duration-500 group-hover:opacity-70'
+				/>
 			</motion.div>
 			{/* relative: paints (and clicks) above the absolutely-positioned fill */}
 			<div className='relative flex flex-col items-center gap-2.5'>
@@ -309,13 +334,33 @@ function CatalogCard({
 					animate={{opacity: 1}}
 					transition={introMorph ? introGlideTransition(index) : {...layoutMorphTransition, opacity: surfaceTransition}}
 				>
-					<OsIcon osId={osId} className='size-24' />
+					{/* Scale via CSS on the img, not the motion wrapper — framer owns
+					    the wrapper's inline transform during the layoutId glide */}
+					<OsIcon osId={osId} className='size-24 transition-transform duration-300 group-hover:scale-[1.05]' />
+				</motion.div>
+				{/* The monitor's reflection off the card surface: a mirrored copy
+				    fading downward behind the copy (the copy wrapper below is
+				    `relative` so it always paints above). Fades in on the content
+				    beat so an intro-morph glide lands on a bare card first. */}
+				<motion.div
+					aria-hidden
+					initial={{opacity: 0}}
+					animate={{opacity: 1}}
+					transition={contentTransition}
+					className='pointer-events-none absolute top-24 left-1/2 h-14 w-24 -translate-x-1/2'
+				>
+					{/* Mirrors the icon's hover scale. Origin sits 48px down — the
+					    mirrored icon center — so the reflection grows away from the
+					    contact line exactly as the monitor grows toward it */}
+					<div className='origin-[50%_48px] [mask-image:linear-gradient(to_bottom,black,transparent_75%)] opacity-[0.08] blur-[2px] transition-transform duration-300 group-hover:scale-[1.05]'>
+						<OsIcon osId={osId} className='size-24 -scale-y-100' />
+					</div>
 				</motion.div>
 				<motion.div
 					initial={{opacity: 0, y: introMorph ? 6 : 0}}
 					animate={{opacity: 1, y: 0}}
 					transition={contentTransition}
-					className='flex flex-col items-center gap-1 text-center'
+					className='relative flex flex-col items-center gap-1 text-center'
 				>
 					<div className='text-17 font-medium -tracking-2 text-white'>{title}</div>
 					<div className='text-13 -tracking-2 text-white/40'>{subtitle}</div>
@@ -388,7 +433,8 @@ function OsCardAction({family}: {family: OsFamily}) {
 	return (
 		<DropdownMenu>
 			<CreateMachineMenuTrigger />
-			<DropdownMenuContent align='center' className='w-56'>
+			{/* p-1: match the homescreen context menu's tight padding */}
+			<DropdownMenuContent align='center' className='w-56 p-1'>
 				{family.images.map((image) => (
 					<DropdownMenuItem key={image.id} className='gap-3' onSelect={() => goToConfigure(image.id)}>
 						<div className='flex min-w-0 flex-1 flex-col gap-0.5'>
@@ -507,7 +553,8 @@ function CustomMachineCard({index, introMorph}: {index: number; introMorph?: boo
 				) : (
 					<DropdownMenu>
 						<CreateMachineMenuTrigger />
-						<DropdownMenuContent align='center' className='w-64'>
+						{/* p-1: match the homescreen context menu's tight padding */}
+						<DropdownMenuContent align='center' className='w-64 p-1'>
 							<DropdownMenuItem className='gap-2.5' onSelect={() => inputRef.current?.click()}>
 								<Upload className='size-4 shrink-0 opacity-60' />
 								{t('machines.upload-iso-description')}

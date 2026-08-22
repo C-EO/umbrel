@@ -30,6 +30,8 @@ interface IslandProps {
 	nonDismissable?: boolean
 	// When true, the island will expand and cannot be minimized. Useful for critical states like imminent reboots.
 	forceExpanded?: boolean
+	// Initial state only: pass false to appear minimized until the user taps it.
+	defaultExpanded?: boolean
 }
 
 interface IslandChildProps {
@@ -44,8 +46,8 @@ export const IslandExpanded = ({children}: IslandChildProps) => {
 	return <>{children}</>
 }
 
-export const Island = ({children, onClose, nonDismissable, forceExpanded}: IslandProps) => {
-	const [isExpanded, setIsExpanded] = useState(true)
+export const Island = ({children, onClose, nonDismissable, forceExpanded, defaultExpanded = true}: IslandProps) => {
+	const [isExpanded, setIsExpanded] = useState(defaultExpanded)
 	const islandRef = useRef<HTMLDivElement>(null)
 	const willChange = useWillChange()
 
