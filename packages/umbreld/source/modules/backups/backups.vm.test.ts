@@ -3,7 +3,7 @@ import {setTimeout} from 'node:timers/promises'
 import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from 'vitest'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
-import type {BackupsInProgress} from './backups.js'
+import {kopiaCacheSizeFlagsForInodes, type BackupsInProgress} from './backups.js'
 import {
 	bootWithExternalStorage,
 	createNetworkBackupShare,
@@ -116,6 +116,43 @@ describe.sequential('Backups repositories', () => {
 		)
 	})
 
+	test('keeps the cache on the data filesystem with limits appropriate for its inode capacity', async () => {
+		const output = await umbreld.vm.sshAsRoot(`
+set -eu
+REPOSITORY_ID='${externalRepositoryId}' node --input-type=module <<'NODE'
+import fs from 'node:fs'
+import path from 'node:path'
+
+const dataDirectory = '${vmDataDirectory}'
+const configDirectory = '/kopia/config'
+const config = JSON.parse(fs.readFileSync(path.join(configDirectory, process.env.REPOSITORY_ID + '.config'), 'utf8'))
+console.log(JSON.stringify({
+	totalInodes: fs.statfsSync(dataDirectory).files,
+	cacheDirectory: path.resolve(configDirectory, config.caching.cacheDirectory),
+	caching: config.caching,
+}))
+NODE
+`)
+		const {totalInodes, cacheDirectory, caching} = JSON.parse(output)
+
+		expect(cacheDirectory).toMatch(new RegExp(`^${vmDataDirectory}/kopia/cache/kopia/[a-f0-9]+$`))
+		if (kopiaCacheSizeFlagsForInodes(totalInodes).length > 0) {
+			expect(caching).toMatchObject({
+				maxCacheSize: 500 * 2 ** 20,
+				contentCacheSizeLimitBytes: 1000 * 2 ** 20,
+				maxMetadataCacheSize: 1000 * 2 ** 20,
+				metadataCacheSizeLimitBytes: 2000 * 2 ** 20,
+			})
+		} else {
+			expect(caching).toMatchObject({
+				maxCacheSize: 5000 * 2 ** 20,
+				maxMetadataCacheSize: 5000 * 2 ** 20,
+			})
+			expect(caching.contentCacheSizeLimitBytes).toBeUndefined()
+			expect(caching.metadataCacheSizeLimitBytes).toBeUndefined()
+		}
+	})
+
 	test('forgets a repository without deleting the repository data', async () => {
 		await umbreld.client.files.createDirectory.mutate({path: `${externalPath}/Forgotten`})
 		const repositoryId = await umbreld.client.backups.createRepository.mutate({
@@ -179,6 +216,7 @@ describe.sequential('Backups repositories', () => {
 		expect(files).not.toContain('external')
 		expect(files).not.toContain('network')
 		expect(files).not.toContain('thumbnails')
+		expect(files).not.toContain('kopia')
 
 		await expect(umbreld.client.backups.getRepositories.query()).resolves.toEqual(
 			expect.arrayContaining([

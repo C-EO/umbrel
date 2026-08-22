@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto'
+import {statfs} from 'node:fs/promises'
 import nodePath from 'node:path'
 import {setTimeout} from 'node:timers/promises'
 
@@ -40,6 +41,19 @@ export type RestoreStatus = ProgressStatus & {
 }
 
 export type BackupsInProgress = BackupProgress[]
+
+const constrainedKopiaCacheFilesystemInodes = 5_000_000
+
+export function kopiaCacheSizeFlagsForInodes(totalInodes: number) {
+	if (totalInodes <= 0 || totalInodes > constrainedKopiaCacheFilesystemInodes) return []
+
+	return [
+		'--content-cache-size-mb=500',
+		'--content-cache-size-limit-mb=1000',
+		'--metadata-cache-size-mb=1000',
+		'--metadata-cache-size-limit-mb=2000',
+	]
+}
 
 export default class Backups {
 	#umbreld: Umbreld
@@ -185,7 +199,9 @@ export default class Backups {
 			// Spawn process
 			const env = {
 				KOPIA_CHECK_FOR_UPDATES: 'false',
-				XDG_CACHE_HOME: '/kopia/cache',
+				// Keep the cache and logs on the data directory's filesystem. /kopia lives on
+				// the data partition which on Raspberry Pi installs is too small to hold the cache.
+				XDG_CACHE_HOME: `${this.#umbreld.dataDirectory}/kopia/cache`,
 				XDG_CONFIG_HOME: '/kopia/config',
 			}
 			const process = execa('kopia', flags, {env})
@@ -419,6 +435,7 @@ export default class Backups {
 	// We must be connected to a repository before we can backup to it
 	private async connect(repositoryId: string) {
 		const repository = await this.getRepository(repositoryId)
+		const cacheSizeFlags = await this.kopiaCacheSizeFlags()
 
 		const systemPath = this.#umbreld.files.virtualToSystemPathUnsafe(repository.path)
 		await this.kopia([
@@ -438,7 +455,21 @@ export default class Backups {
 			// continue to backup, kopia will see these as backups originating from
 			// different machines.
 			'--override-hostname=umbrel',
+			...cacheSizeFlags,
 		])
+	}
+
+	// Small fixed-inode filesystems can be exhausted by kopia's many cache files.
+	// Preserve kopia's defaults on larger filesystems where a bigger cache improves
+	// performance, and only apply conservative limits to constrained filesystems.
+	private async kopiaCacheSizeFlags() {
+		try {
+			const {files: totalInodes} = await statfs(this.#umbreld.dataDirectory)
+			return kopiaCacheSizeFlagsForInodes(totalInodes)
+		} catch (error) {
+			this.logger.error('Error inspecting data filesystem for kopia cache limits', error)
+			return []
+		}
 	}
 
 	// Wrapper for kopia commands that interact with a repository
@@ -613,6 +644,9 @@ export default class Backups {
 		// Ignore non critical directories that can be rebuilt and cause a lot of churn
 		ignoreFileContents.push('app-stores')
 		ignoreFileContents.push(this.#umbreld.files.thumbnails.thumbnailDirectory)
+
+		// Ignore kopia's own cache and logs otherwise backups include the backup cache
+		ignoreFileContents.push('kopia')
 
 		// Ignore temporary migration directory
 		ignoreFileContents.push('.temporary-migration')
