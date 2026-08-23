@@ -241,7 +241,7 @@ function parseImportableUmbrelPools(output: string): string[] {
 	const finishCurrentPool = () => {
 		if (!current) return
 		if (!/^umbrelos-[0-9a-f]+$/.test(current.poolName)) return
-		if (current.state !== 'ONLINE') return
+		if (current.state !== 'ONLINE' && current.state !== 'DEGRADED') return
 
 		poolNames.push(current.poolName)
 	}

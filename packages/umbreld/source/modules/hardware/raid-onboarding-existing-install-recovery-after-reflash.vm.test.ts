@@ -3,7 +3,7 @@ import pWaitFor from 'p-wait-for'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
-describe('RAID onboarding existing install recovery after boot disk reflash', () => {
+describe('Degraded RAID onboarding recovery after boot disk reflash', () => {
 	let umbreld: Awaited<ReturnType<typeof createTestVm>>
 	let firstDeviceId: string
 	let secondDeviceId: string
@@ -64,9 +64,10 @@ describe('RAID onboarding existing install recovery after boot disk reflash', ()
 		expect(marker.trim()).toBe('recovered')
 	})
 
-	test('reflashes the boot disk', async () => {
+	test('reflashes the boot disk with one RAID member disconnected', async () => {
 		await umbreld.vm.powerOff()
 		await umbreld.vm.reflash()
+		await umbreld.vm.disconnectNvme({slot: 2})
 		await umbreld.vm.powerOn()
 	})
 
@@ -74,6 +75,11 @@ describe('RAID onboarding existing install recovery after boot disk reflash', ()
 		await umbreld.waitForStartup({waitForUser: false})
 		const userExists = await umbreld.unauthenticatedClient.user.exists.query()
 		expect(userExists).toBe(false)
+	})
+
+	test('previous RAID install is degraded but still importable', async () => {
+		const importablePools = await umbreld.vm.sshAsRoot('zpool import -d /dev/disk/by-umbrel-id')
+		expect(importablePools).toContain('state: DEGRADED')
 	})
 
 	test('detects a recoverable previous RAID install', async () => {
@@ -94,7 +100,7 @@ describe('RAID onboarding existing install recovery after boot disk reflash', ()
 		const status = await umbreld.client.hardware.raid.getStatus.query()
 		expect(status.exists).toBe(true)
 		expect(status.raidType).toBe('failsafe')
-		expect(status.status).toBe('ONLINE')
+		expect(status.status).toBe('DEGRADED')
 		expect(status.devices?.map((device) => device.id).sort()).toEqual([firstDeviceId, secondDeviceId].sort())
 
 		const marker = await umbreld.vm.sshAsRoot(`cat ${markerPath}`)
