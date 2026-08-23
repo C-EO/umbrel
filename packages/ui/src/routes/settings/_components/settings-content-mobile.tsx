@@ -32,7 +32,7 @@ import {MemoryCardContent} from './memory-card-content'
 import {createSettingsCatalog, getSettingsPage, SettingsPageItem} from './settings-catalog'
 import {SettingsItemsGroup, SettingsSearch} from './settings-page-controls'
 import {useSettingsFilterLabels} from './settings-taxonomy'
-import {SettingsAccountAvatarLink} from './shared'
+import {SettingsAccountAvatar} from './shared'
 import {StorageCardContent} from './storage-card-content'
 
 const statCardClass = 'settings-edge-material h-full min-h-[104px] !rounded-24 !p-4'
@@ -196,7 +196,12 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 						/>
 					)}
 					<div className='relative z-10'>{desktopPreview}</div>
-					<SettingsAccountAvatarLink name={userQ.data.name} userId={userQ.data.userId} isMember={isMember} />
+					<SettingsAccountAvatar
+						name={userQ.data.name}
+						userId={userQ.data.userId}
+						avatarUrl={userQ.data.avatarUrl}
+						controlsVisibility='always'
+					/>
 				</div>
 				<h2
 					title={ownerHeading}

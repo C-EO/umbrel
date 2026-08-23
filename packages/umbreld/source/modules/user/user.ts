@@ -6,12 +6,14 @@ import type Umbreld from '../../index.js'
 import type {ViewPreferences} from '../files/files.js'
 
 import * as totp from '../utilities/totp.js'
+import {removeAccountAvatarDirectory} from './avatar.js'
 import {OWNER_USER_ID} from './constants.js'
 
 export type Member = {
 	id: string
 	name: string
 	hashedPassword: string
+	avatarHash?: string
 	// Per-member profile settings, mirroring the owner's user object
 	totpUri?: string
 	wallpaper?: string
@@ -29,6 +31,14 @@ export type DeletedMember = {
 }
 
 export type MemberRecord = Member | DeletedMember
+
+export type Account = {
+	userId: string
+	name: string
+	wallpaper?: string
+	language: string
+	avatarHash?: string
+}
 
 export type AccountLoginValidation =
 	| {valid: true; sessionIssuanceRevision: number}
@@ -242,17 +252,24 @@ export default class User {
 	}
 
 	// List all accounts on this device (no password hashes)
-	async listAccounts(): Promise<{userId: string; name: string; wallpaper?: string; language: string}[]> {
+	async listAccounts(): Promise<Account[]> {
 		const owner = await this.get()
 		const members = await this.listMembers()
 		const ownerLanguage = owner?.language ?? 'en'
 		return [
-			{userId: OWNER_USER_ID, name: owner?.name ?? '', wallpaper: owner?.wallpaper, language: ownerLanguage},
+			{
+				userId: OWNER_USER_ID,
+				name: owner?.name ?? '',
+				wallpaper: owner?.wallpaper,
+				language: ownerLanguage,
+				...(owner?.avatarHash ? {avatarHash: owner.avatarHash} : {}),
+			},
 			...members.map((member) => ({
 				userId: member.id,
 				name: member.name,
 				wallpaper: member.wallpaper,
 				language: member.language,
+				...(member.avatarHash ? {avatarHash: member.avatarHash} : {}),
 			})),
 		]
 	}
@@ -359,9 +376,23 @@ export default class User {
 		// Delete the user's private Home, trash, and associated metadata.
 		await this.#umbreld.files.deleteMemberDirectories(userId)
 
-		// Remove them from any share lists
-		await this.#umbreld.files.memberShares.removeUserFromShares(userId)
-		await this.#umbreld.apps.removeUserFromMemberShares(userId)
+		// These operations are independent and idempotent. Attempt all of them so
+		// one unavailable subsystem does not prevent the others from making progress.
+		const accountDataCleanup = await Promise.allSettled([
+			this.#umbreld.files.memberShares.removeUserFromShares(userId),
+			this.#umbreld.apps.removeUserFromMemberShares(userId),
+			removeAccountAvatarDirectory(this.#umbreld, userId),
+		])
+		const accountDataCleanupFailures = accountDataCleanup.filter(
+			(result): result is PromiseRejectedResult => result.status === 'rejected',
+		)
+		if (accountDataCleanupFailures.length === 1) throw accountDataCleanupFailures[0].reason
+		if (accountDataCleanupFailures.length > 1) {
+			throw new AggregateError(
+				accountDataCleanupFailures.map(({reason}) => reason),
+				`Failed to remove account data for ${userId}`,
+			)
+		}
 
 		await this.#store.getWriteLock(async ({get, set}) => {
 			const memberRecords = (await get('members')) ?? []
@@ -428,6 +459,66 @@ export default class User {
 		})
 		if (!found) throw new Error('User not found')
 		return true
+	}
+
+	async getAccountAvatarHash(userId: string) {
+		if (userId === OWNER_USER_ID) {
+			const owner = await this.get()
+			if (!owner) throw new Error('User not found')
+			return owner.avatarHash
+		}
+
+		const member = await this.getMember(userId)
+		if (!member) throw new Error('User not found')
+		return member.avatarHash
+	}
+
+	async setAccountAvatarHash(userId: string, avatarHash: string) {
+		if (!/^[a-f0-9]{64}$/.test(avatarHash)) throw new Error('Invalid avatar hash')
+		return this.#updateAccountAvatarHash(userId, avatarHash)
+	}
+
+	async removeAccountAvatarHash(userId: string) {
+		return this.#updateAccountAvatarHash(userId)
+	}
+
+	// Commit avatar metadata under the same store lock used by the rest of the
+	// account settings. The member is revalidated here because it may have been
+	// tombstoned while its upload was being processed.
+	async #updateAccountAvatarHash(userId: string, avatarHash?: string) {
+		let found = false
+		let previousHash: string | undefined
+
+		await this.#store.getWriteLock(async ({get, set, delete: deleteProperty}) => {
+			if (userId === OWNER_USER_ID) {
+				const owner = await get('user')
+				if (!owner) return
+				found = true
+				previousHash = owner.avatarHash
+				if (owner.avatarHash === avatarHash) return
+				if (avatarHash) await set('user.avatarHash', avatarHash)
+				else if (owner.avatarHash) await deleteProperty('user.avatarHash')
+				return
+			}
+
+			const memberRecords = (await get('members')) ?? []
+			let changed = false
+			const updatedMembers = memberRecords.map((member) => {
+				if (member.id !== userId || !isActiveMember(member)) return member
+				found = true
+				previousHash = member.avatarHash
+				if (member.avatarHash === avatarHash) return member
+				changed = true
+				if (avatarHash) return {...member, avatarHash}
+				const updatedMember = {...member}
+				delete updatedMember.avatarHash
+				return updatedMember
+			})
+			if (changed) await set('members', updatedMembers)
+		})
+
+		if (!found) throw new Error('User not found')
+		return previousHash
 	}
 
 	// Set any account's password

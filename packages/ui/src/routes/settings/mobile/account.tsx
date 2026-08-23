@@ -15,8 +15,10 @@ import {AnimatedInputError, Input, Labeled, PasswordInput} from '@/components/ui
 import {SegmentedControl} from '@/components/ui/segmented-control'
 import {usePassword} from '@/hooks/use-password'
 import {useUserName} from '@/hooks/use-user-name'
+import {AccountAvatarEditor} from '@/modules/auth/account-avatar-editor'
 import {ChangePasswordWarning, useSettingsDialogProps} from '@/routes/settings/_components/shared'
 import {SessionsPanel} from '@/routes/settings/sessions'
+import {trpcReact} from '@/trpc/trpc'
 
 export function AccountDrawer() {
 	const {t} = useTranslation()
@@ -24,6 +26,7 @@ export function AccountDrawer() {
 
 	const dialogProps = useSettingsDialogProps()
 	const navigate = useNavigate()
+	const userQ = trpcReact.user.get.useQuery()
 	const closeDialog = () => dialogProps.onOpenChange(false)
 
 	const tabs = [
@@ -44,6 +47,15 @@ export function AccountDrawer() {
 					<DrawerDescription>{t('account-description')}</DrawerDescription>
 				</DrawerHeader>
 				<DrawerScroller>
+					{userQ.data && (
+						<div className='mb-5 flex items-center gap-4 px-1'>
+							<AccountAvatarEditor account={userQ.data} size={72} />
+							<div className='min-w-0'>
+								<h2 className='text-18 truncate font-semibold -tracking-2 text-white'>{userQ.data.name}</h2>
+								<p className='text-13 text-white/40'>{t('users.member')}</p>
+							</div>
+						</div>
+					)}
 					<SegmentedControl
 						size='lg'
 						tabs={tabs}

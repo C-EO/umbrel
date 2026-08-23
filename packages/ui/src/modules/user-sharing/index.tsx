@@ -237,7 +237,7 @@ export function MemberSharePicker({
 									key={member.userId}
 									className='flex cursor-pointer items-center gap-3 p-3 transition-colors hover:bg-white/4'
 								>
-									<AccountAvatar name={member.name} userId={member.userId} size={28} />
+									<AccountAvatar name={member.name} userId={member.userId} avatarUrl={member.avatarUrl} size={28} />
 									<span className='min-w-0 flex-1 truncate text-14 font-medium -tracking-2 text-white/90'>
 										{member.name}
 									</span>

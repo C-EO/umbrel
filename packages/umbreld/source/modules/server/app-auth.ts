@@ -8,6 +8,7 @@ import {createProxyMiddleware} from 'http-proxy-middleware'
 import type Umbreld from '../../index.js'
 import {appGatewayTokenFromRequest, clearAppGatewayCookies, setAppGatewayCookie} from '../auth/app-gateway-cookie.js'
 import {SessionIssuanceInvalidatedError} from '../auth/auth.js'
+import {serializeAccountAvatar, serveAccountAvatar} from '../user/avatar-api.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 import {getDefaultWallpaper} from '../user/default-wallpaper.js'
 
@@ -126,6 +127,12 @@ export default function createAppAuthRouter(umbreld: Umbreld) {
 		allowAppHandoffFormAction(umbreld, request, response).then(() => next(), next)
 	})
 	router.use(express.json())
+	// Avatar bytes have immutable content-addressed URLs, so serve them before
+	// the blanket no-store policy for app-auth JSON responses.
+	router.get('/v1/account/avatar/:userId/:hash.webp', serveAccountAvatar(umbreld))
+	router.get('/v1/account/avatar/:userId/*', (_request, response) =>
+		response.status(404).set('Cache-Control', 'no-store').json({error: 'Not found'}),
+	)
 	router.use('/v1', (_request, response, next) => {
 		response.set('Cache-Control', 'no-store')
 		next()
@@ -136,7 +143,7 @@ export default function createAppAuthRouter(umbreld: Umbreld) {
 		const defaultWallpaper = await getDefaultWallpaper()
 		response.json(
 			(await umbreld.user.listAccounts()).map((account) => ({
-				...account,
+				...serializeAccountAvatar(account, 'app-auth'),
 				wallpaper: account.wallpaper ?? defaultWallpaper,
 			})),
 		)

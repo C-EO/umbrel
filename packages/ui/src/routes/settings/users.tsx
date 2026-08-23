@@ -43,7 +43,9 @@ import {useAppMemberShares} from '@/hooks/use-app-member-shares'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {cn} from '@/lib/utils'
 import {AccountAvatar} from '@/modules/auth/account-avatar'
+import {AccountAvatarEditor} from '@/modules/auth/account-avatar-editor'
 import {OWNER_USER_ID} from '@/modules/auth/constants'
+import {useAccountAvatar} from '@/modules/auth/use-account-avatar'
 import {
 	AnimatedRow,
 	EmptyCard,
@@ -82,7 +84,7 @@ type LocalView =
 	| {view: 'list'}
 	| {view: 'add'; inheritedAccess: NewUserInheritedAccess}
 	| {view: 'edit'; userId: string}
-	| {view: 'created'; userId: string; name: string; password: string}
+	| {view: 'created'; userId: string; name: string; password: string; avatarUrl?: string}
 type View = LocalView | {view: 'owner'; panel: OwnerPanel}
 
 const ownerPanels = new Set<OwnerPanel>(['overview', 'name', 'password', 'sessions'])
@@ -180,6 +182,7 @@ export default function UsersDialog() {
 	const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false)
 	const [name, setName] = useState('')
 	const [password, setPassword] = useState('')
+	const [avatarFile, setAvatarFile] = useState<File>()
 	const [pickedAppIds, setPickedAppIds] = useState<string[]>([])
 	const [pickedFolders, setPickedFolders] = useState<string[]>([])
 	const [shareAllApps, setShareAllApps] = useState(false)
@@ -238,6 +241,7 @@ export default function UsersDialog() {
 	const installedApps = appsQ.data ?? []
 
 	const createUser = trpcReact.user.createUser.useMutation()
+	const avatarMutation = useAccountAvatar()
 	const resetUserPassword = trpcReact.user.resetUserPassword.useMutation()
 	const deleteUser = trpcReact.user.deleteUser.useMutation()
 
@@ -263,6 +267,7 @@ export default function UsersDialog() {
 		setIsDeleteConfirmOpen(false)
 		setName('')
 		setPassword('')
+		setAvatarFile(undefined)
 		setPickedAppIds(defaults.pickedAppIds)
 		setPickedFolders(defaults.pickedFolderPaths)
 		setShareAllApps(defaults.shareAllApps)
@@ -293,6 +298,7 @@ export default function UsersDialog() {
 
 	const returnToList = () => {
 		setIsDeleteConfirmOpen(false)
+		setAvatarFile(undefined)
 		setResetPassword('')
 		setIsResettingPassword(false)
 		setIsManagingSessions(false)
@@ -306,9 +312,21 @@ export default function UsersDialog() {
 		if (view.view !== 'add' || !name.trim() || password.length < 6 || isCreating || !sharesReady) return
 
 		setIsCreating(true)
+		const selectedAvatarFile = avatarFile
 		const existingMemberIds = [...memberIds]
+		let account: Awaited<ReturnType<typeof createUser.mutateAsync>>
 		try {
-			const account = await createUser.mutateAsync({name: name.trim(), password})
+			account = await createUser.mutateAsync({name: name.trim(), password})
+		} catch (error) {
+			toast.error(t('users.create-failed'), {
+				area: 'settings',
+				description: error instanceof Error ? error.message : String(error),
+			})
+			setIsCreating(false)
+			return
+		}
+
+		try {
 			const accessChanges = planNewUserAccessChanges({
 				inheritedAppIds: view.inheritedAccess.appIds,
 				inheritedFolderPaths: view.inheritedAccess.folderPaths,
@@ -319,7 +337,7 @@ export default function UsersDialog() {
 				allowExternalStorage,
 				allowNetworkStorage,
 			})
-			await Promise.all([
+			const shareUpdates = Promise.all([
 				...accessChanges.appIdsToAdd.map((appId) => addAppForUser(appId, account.userId)),
 				...accessChanges.folderPathsToAdd.map((path) => addFolderForUser(path, account.userId)),
 				...accessChanges.appIdsToRemove.map((appId) => removeAppForUser(appId, account.userId, existingMemberIds)),
@@ -327,15 +345,29 @@ export default function UsersDialog() {
 					removeFolderForUser(path, account.userId, existingMemberIds),
 				),
 			])
+			const uploadAvatar = async () => {
+				if (!selectedAvatarFile) return undefined
+				try {
+					return (await avatarMutation.upload(account.userId, selectedAvatarFile)).avatarUrl ?? undefined
+				} catch (error) {
+					toast.error(t('avatar.save-failed'), {
+						area: 'settings',
+						description: error instanceof Error ? error.message : String(error),
+					})
+					return undefined
+				}
+			}
+			const [avatarUrl] = await Promise.all([uploadAvatar(), shareUpdates])
 
-			await utils.user.listAccounts.invalidate()
-			setLocalView({view: 'created', userId: account.userId, name: name.trim(), password})
+			await utils.user.listAccounts.invalidate().catch(() => undefined)
+			setLocalView({view: 'created', userId: account.userId, name: name.trim(), password, avatarUrl})
 		} catch (error) {
 			toast.error(t('users.create-failed'), {
 				area: 'settings',
 				description: error instanceof Error ? error.message : String(error),
 			})
 		} finally {
+			setAvatarFile(undefined)
 			setIsCreating(false)
 		}
 	}
@@ -711,7 +743,7 @@ export default function UsersDialog() {
 										className='group flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-white/4'
 										onClick={openOwnerView}
 									>
-										<AccountAvatar name={owner.name} userId={owner.userId} size={32} />
+										<AccountAvatar name={owner.name} userId={owner.userId} avatarUrl={owner.avatarUrl} size={32} />
 										<span className='min-w-0 flex-1 truncate text-14 font-medium -tracking-2 text-white/90'>
 											{owner.name}
 										</span>
@@ -756,7 +788,7 @@ export default function UsersDialog() {
 											className='group flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-white/4'
 											onClick={() => openEditView(member.userId)}
 										>
-											<AccountAvatar name={member.name} userId={member.userId} size={32} />
+											<AccountAvatar name={member.name} userId={member.userId} avatarUrl={member.avatarUrl} size={32} />
 											<span className='min-w-0 flex-1 truncate text-14 font-medium -tracking-2 text-white/90'>
 												{member.name}
 											</span>
@@ -790,7 +822,13 @@ export default function UsersDialog() {
 					</div>
 
 					<div className='flex flex-col items-center gap-4'>
-						<AddUserAvatar name={name} />
+						<AccountAvatarEditor
+							account={{name: name.trim(), userId: name.trim() || 'new-user'}}
+							disabled={isCreating}
+							deferredFile={avatarFile}
+							onDeferredFileChange={setAvatarFile}
+							className='w-full'
+						/>
 						<Input autoFocus placeholder={t('users.name-placeholder')} value={name} onValueChange={setName} />
 					</div>
 
@@ -827,7 +865,7 @@ export default function UsersDialog() {
 						animate={{scale: 1, opacity: 1}}
 						transition={{type: 'spring', stiffness: 300, damping: 20}}
 					>
-						<AccountAvatar name={view.name} userId={view.userId} size={96} />
+						<AccountAvatar name={view.name} userId={view.userId} avatarUrl={view.avatarUrl} size={96} />
 						<div className='absolute -right-1 -bottom-1 grid size-7 place-items-center rounded-full bg-brand'>
 							<TbCheck className='size-4 text-white' strokeWidth={3} />
 						</div>
@@ -865,38 +903,39 @@ export default function UsersDialog() {
 					<div className='flex flex-col gap-5'>
 						<div className='flex flex-col gap-3'>
 							<BackButton onClick={returnToList}>{t('users')}</BackButton>
-							<div className='flex items-center gap-3 pt-2'>
-								<AccountAvatar name={editingMember.name} userId={editingMember.userId} size={40} />
+							<div className={cn('flex gap-4 pt-2', isMobile ? 'flex-wrap' : 'items-center')}>
+								<AccountAvatarEditor account={editingMember} size={72} />
 								<div className='min-w-0 flex-1'>
-									<h2 className='truncate text-15 leading-snug font-semibold -tracking-2'>{editingMember.name}</h2>
-									<p className='text-12 leading-normal tracking-normal text-white/40 opacity-100'>
+									<h2 className='text-20 truncate leading-snug font-semibold -tracking-2'>{editingMember.name}</h2>
+									<p className='text-13 leading-normal tracking-normal text-white/40 opacity-100'>
 										{t('users.member')}
 									</p>
 								</div>
-								<Button size='default' className='shrink-0' onClick={() => setIsManagingSessions(true)}>
-									{t('active-logins.title')}
-								</Button>
-								<Button
-									size='default'
-									className='shrink-0'
-									onClick={() => {
-										setIsResettingPassword((value) => !value)
-										setResetPassword('')
-									}}
-								>
-									{t('users.reset-password')}
-								</Button>
-								<IconButton
-									icon={TbTrash}
-									size='icon-only'
-									aria-label={t('users.delete-user')}
-									className={cn('shrink-0 transition-colors hover:text-destructive', isDeleting && 'umbrel-pulse')}
-									disabled={isDeleting}
-									onClick={() => setIsDeleteConfirmOpen(true)}
-								/>
+								<div className={cn('flex shrink-0 items-center gap-2', isMobile && 'w-full justify-end')}>
+									<Button size='default' className='shrink-0' onClick={() => setIsManagingSessions(true)}>
+										{t('active-logins.title')}
+									</Button>
+									<Button
+										size='default'
+										className='shrink-0'
+										onClick={() => {
+											setIsResettingPassword((value) => !value)
+											setResetPassword('')
+										}}
+									>
+										{t('users.reset-password')}
+									</Button>
+									<IconButton
+										icon={TbTrash}
+										size='icon-only'
+										aria-label={t('users.delete-user')}
+										className={cn('shrink-0 transition-colors hover:text-destructive', isDeleting && 'umbrel-pulse')}
+										disabled={isDeleting}
+										onClick={() => setIsDeleteConfirmOpen(true)}
+									/>
+								</div>
 							</div>
 						</div>
-
 						<AnimatePresence initial={false}>
 							{isResettingPassword && (
 								<motion.div
@@ -948,7 +987,12 @@ export default function UsersDialog() {
 			<AlertDialogContent>
 				<AlertDialogHeader>
 					<div className='relative mx-auto w-fit'>
-						<AccountAvatar name={editingMember.name} userId={editingMember.userId} size={64} />
+						<AccountAvatar
+							name={editingMember.name}
+							userId={editingMember.userId}
+							avatarUrl={editingMember.avatarUrl}
+							size={64}
+						/>
 						<div className='absolute -top-1 -right-1 grid size-6 place-items-center rounded-full bg-destructive2 shadow-md'>
 							<TbTrash className='size-3.5 text-white' />
 						</div>
@@ -1059,27 +1103,6 @@ export default function UsersDialog() {
 }
 
 // ─── Shared ─────────────────────────────────────────────────────────
-
-// Large avatar preview that crossfades between gradients as the name is typed
-function AddUserAvatar({name, size = 96}: {name: string; size?: number}) {
-	const trimmed = name.trim()
-	return (
-		<div className='relative shrink-0' style={{width: size, height: size}}>
-			<AnimatePresence initial={false}>
-				<motion.div
-					key={trimmed}
-					className='absolute inset-0'
-					initial={{opacity: 0}}
-					animate={{opacity: 1}}
-					exit={{opacity: 0}}
-					transition={{duration: 0.3}}
-				>
-					<AccountAvatar name={trimmed} userId={trimmed} size={size} />
-				</motion.div>
-			</AnimatePresence>
-		</div>
-	)
-}
 
 // The pre-composed invite message shown after creating a user — the whole
 // card is one big copy button

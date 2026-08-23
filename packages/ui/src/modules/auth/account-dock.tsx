@@ -139,7 +139,12 @@ export function AccountDock({
 												: {...dockSpring, delay: hasMounted.current ? 0 : 0.06 + distance * 0.045}
 										}
 									>
-										<AccountAvatar name={account.name} userId={account.userId} size={AVATAR_SIZE} />
+										<AccountAvatar
+											name={account.name}
+											userId={account.userId}
+											avatarUrl={account.avatarUrl}
+											size={AVATAR_SIZE}
+										/>
 									</motion.button>
 								</motion.div>
 							)

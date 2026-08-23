@@ -11,6 +11,7 @@ import {
 import * as totp from '../utilities/totp.js'
 import type {Context} from '../server/trpc/context.js'
 import {privateProcedure, privateProcedureWithMembers, publicProcedure, router} from '../server/trpc/trpc.js'
+import {accountAvatarUrl, serializeAccountAvatar} from './avatar-api.js'
 import {OWNER_USER_ID} from './constants.js'
 import {getDefaultWallpaper} from './default-wallpaper.js'
 import type {AccountLoginValidation} from './user.js'
@@ -89,7 +90,7 @@ export default router({
 		if (!(await ctx.user.exists())) return []
 		const defaultWallpaper = await getDefaultWallpaper()
 		return (await ctx.user.listAccounts()).map((account) => ({
-			...account,
+			...serializeAccountAvatar(account),
 			wallpaper: account.wallpaper ?? defaultWallpaper,
 		}))
 	}),
@@ -308,6 +309,7 @@ export default router({
 			return {
 				userId: accountId,
 				name: member.name,
+				...(member.avatarHash ? {avatarUrl: accountAvatarUrl(accountId, member.avatarHash)} : {}),
 				role: 'member' as const,
 				homePath: `/Users/${accountId}`,
 				wallpaper: member.wallpaper ?? (await getDefaultWallpaper()),
@@ -321,6 +323,7 @@ export default router({
 		return {
 			userId: accountId,
 			name: user.name,
+			...(user.avatarHash ? {avatarUrl: accountAvatarUrl(accountId, user.avatarHash)} : {}),
 			role: 'owner' as const,
 			homePath: '/Home',
 			wallpaper: user.wallpaper,

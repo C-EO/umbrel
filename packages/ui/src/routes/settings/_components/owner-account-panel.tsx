@@ -8,7 +8,9 @@ import {listClass} from '@/components/ui/list'
 import {Switch} from '@/components/ui/switch'
 import {usePassword} from '@/hooks/use-password'
 import {useUserName} from '@/hooks/use-user-name'
+import {cn} from '@/lib/utils'
 import {AccountAvatar} from '@/modules/auth/account-avatar'
+import {AccountAvatarEditor} from '@/modules/auth/account-avatar-editor'
 import {ChangePasswordWarning} from '@/routes/settings/_components/shared'
 import {SessionsPanel} from '@/routes/settings/sessions'
 import {RouterOutput, trpcReact} from '@/trpc/trpc'
@@ -70,7 +72,7 @@ function OwnerAccountOverview({
 
 	return (
 		<div className='flex flex-col gap-5'>
-			<OwnerPanelHeader owner={owner} onBack={onBack} />
+			<OwnerPanelHeader owner={owner} onBack={onBack} editableAvatar />
 			<div className={listClass}>
 				<OwnerNavigationRow title={t('change-name')} description={owner.name} onClick={() => onPanelChange('name')} />
 				<OwnerNavigationRow
@@ -110,23 +112,36 @@ function OwnerPanelHeader({
 	title = owner.name,
 	description,
 	backLabel,
+	editableAvatar = false,
 }: {
 	owner: Account
 	onBack: () => void
 	title?: string
 	description?: string
 	backLabel?: string
+	editableAvatar?: boolean
 }) {
 	const {t} = useTranslation()
 
 	return (
 		<div className='flex flex-col gap-3'>
 			<BackButton onClick={onBack}>{backLabel ?? t('users')}</BackButton>
-			<div className='flex items-center gap-3 pt-2'>
-				<AccountAvatar name={owner.name} userId={owner.userId} size={40} />
+			<div className={cn('flex items-center pt-2', editableAvatar ? 'gap-4' : 'gap-3')}>
+				{editableAvatar ? (
+					<AccountAvatarEditor account={owner} size={72} controlsOffset='overlap' />
+				) : (
+					<AccountAvatar name={owner.name} userId={owner.userId} avatarUrl={owner.avatarUrl} size={40} />
+				)}
 				<div className='min-w-0 flex-1'>
-					<h2 className='truncate text-15 leading-snug font-semibold -tracking-2'>{title}</h2>
-					<p className='text-12 leading-normal tracking-normal text-white/40 opacity-100'>
+					<h2 className={cn('truncate leading-snug font-semibold -tracking-2', editableAvatar ? 'text-20' : 'text-15')}>
+						{title}
+					</h2>
+					<p
+						className={cn(
+							'leading-normal tracking-normal text-white/40 opacity-100',
+							editableAvatar ? 'text-13' : 'text-12',
+						)}
+					>
 						{description ?? t('users.owner')}
 					</p>
 				</div>
@@ -134,7 +149,6 @@ function OwnerPanelHeader({
 		</div>
 	)
 }
-
 function OwnerNavigationRow({title, description, onClick}: {title: string; description?: string; onClick: () => void}) {
 	return (
 		<button

@@ -561,7 +561,7 @@ function CustomMachineCard({index, introMorph}: {index: number; introMorph?: boo
 							</DropdownMenuItem>
 							<DropdownMenuItem className='gap-2.5' onSelect={() => setBrowserOpen(true)}>
 								<img src='/assets/dock/dock-files.png' alt='' className='size-4 shrink-0 rounded-[4px]' />
-								{t('machines.browse-iso-description')}
+								{t('files-action.browse-in-files')}
 							</DropdownMenuItem>
 						</DropdownMenuContent>
 					</DropdownMenu>

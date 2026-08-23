@@ -2,6 +2,7 @@ import nodePath from 'node:path'
 
 import z from 'zod'
 
+import {accountAvatarUrl} from '../user/avatar-api.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 
 import {
@@ -351,6 +352,7 @@ export default router({
 		const shares = await ctx.umbreld.files.memberShares.listForUser(userId)
 		return {
 			ownerName: owner?.name ?? '',
+			...(owner?.avatarHash ? {ownerAvatarUrl: accountAvatarUrl(OWNER_USER_ID, owner.avatarHash)} : {}),
 			shares: shares.map((share) => {
 				const segments = share.path.split('/').filter(Boolean)
 				const base =

@@ -1,9 +1,9 @@
+import {useState} from 'react'
+
 import {cn} from '@/lib/utils'
 
-// Accounts don't have profile pictures (yet), so give each one a deterministic
-// gradient avatar with their initial. The gradient is derived from their
-// immutable user id so it survives renames. The palette is 20 picks from
-// webgradients.com, chosen for variety and white-glyph contrast.
+// Every account always has this deterministic gradient fallback. An uploaded
+// image, when available, is layered on top without changing the layout.
 const MESHES = [
 	// True Sunset
 	'linear-gradient(to right, #fa709a 0%, #fee140 100%)',
@@ -56,11 +56,13 @@ function hashString(value: string) {
 export function AccountAvatar({
 	name,
 	userId,
+	avatarUrl,
 	size = 96,
 	className,
 }: {
 	name: string
 	userId: string
+	avatarUrl?: string
 	size?: number
 	className?: string
 }) {
@@ -70,7 +72,10 @@ export function AccountAvatar({
 	return (
 		<div
 			aria-hidden
-			className={cn('flex shrink-0 items-center justify-center rounded-full text-white select-none', className)}
+			className={cn(
+				'relative flex shrink-0 items-center justify-center overflow-hidden rounded-full text-white select-none',
+				className,
+			)}
 			style={{
 				width: size,
 				height: size,
@@ -84,6 +89,23 @@ export function AccountAvatar({
 			}}
 		>
 			{initial}
+			{avatarUrl && <UploadedAvatar key={avatarUrl} avatarUrl={avatarUrl} />}
 		</div>
+	)
+}
+
+function UploadedAvatar({avatarUrl}: {avatarUrl: string}) {
+	const [failed, setFailed] = useState(false)
+	if (failed) return null
+
+	return (
+		<img
+			alt=''
+			src={avatarUrl}
+			decoding='async'
+			draggable={false}
+			onError={() => setFailed(true)}
+			className='pointer-events-none absolute inset-0 size-full rounded-full object-cover'
+		/>
 	)
 }

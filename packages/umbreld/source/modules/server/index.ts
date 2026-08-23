@@ -26,6 +26,7 @@ import createAppAuthRouter from './app-auth.js'
 import {authorizeHttpRequest} from '../auth/http-request.js'
 
 import fileApi from '../files/api.js'
+import accountAvatarApi from '../user/avatar-api.js'
 
 export type ServerOptions = {umbreld: Umbreld}
 
@@ -228,6 +229,9 @@ class Server {
 
 		// Every file endpoint is mounted beneath an authentication-first subrouter.
 		this.app.use('/api/files', fileApi(this.umbreld))
+		// Account avatars use raw request streams for writes and public,
+		// content-addressed reads for the pre-login account picker.
+		this.app.use('/api/accounts', accountAvatarApi(this.umbreld))
 		// MCP has its own static bearer authentication and is deliberately
 		// mounted before the dashboard SPA fallback.
 		this.app.use('/mcp', this.umbreld.mcp.router)

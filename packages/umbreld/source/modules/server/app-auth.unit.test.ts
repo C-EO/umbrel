@@ -1,6 +1,18 @@
-import {describe, expect, test} from 'vitest'
+import {once} from 'node:events'
+import type {AddressInfo} from 'node:net'
+import nodePath from 'node:path'
 
-import {rewriteAppAuthDevProxyPath} from './app-auth.js'
+import express from 'express'
+import fse from 'fs-extra'
+import got from 'got'
+import {afterAll, beforeAll, describe, expect, test} from 'vitest'
+
+import Umbreld from '../../index.js'
+import temporaryDirectory from '../utilities/temporary-directory.js'
+import createAppAuthRouter, {rewriteAppAuthDevProxyPath} from './app-auth.js'
+
+const accountAvatarPath = (umbreld: Umbreld, userId: string, hash: string) =>
+	nodePath.join(umbreld.dataDirectory, 'avatars', userId, `${hash}.webp`)
 
 describe('app auth development proxy', () => {
 	test.each([
@@ -16,5 +28,56 @@ describe('app auth development proxy', () => {
 		['/@vite/client', '/@vite/client'],
 	])('rewrites %s to %s', (input, expected) => {
 		expect(rewriteAppAuthDevProxyPath(input)).toBe(expected)
+	})
+})
+
+describe('app auth account avatars', () => {
+	const directory = temporaryDirectory()
+	const hash = 'a'.repeat(64)
+	const image = Buffer.from('app-auth-avatar')
+	let server: ReturnType<express.Express['listen']>
+	let origin: string
+
+	beforeAll(async () => {
+		await directory.createRoot()
+		const umbreld = new Umbreld({dataDirectory: await directory.create()})
+		await umbreld.store.set('user', {
+			name: 'Owner',
+			hashedPassword: 'unused',
+			wallpaper: '/wallpapers/1.jpg',
+			avatarHash: hash,
+		})
+		await fse.outputFile(accountAvatarPath(umbreld, '0', hash), image)
+
+		const app = express()
+		app.use(createAppAuthRouter(umbreld))
+		server = app.listen(0, '127.0.0.1')
+		await once(server, 'listening')
+		origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+	})
+
+	afterAll(async () => {
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
+		await directory.destroyRoot()
+	})
+
+	test('returns app-auth-relative account URLs without exposing storage metadata', async () => {
+		const response = await got(`${origin}/v1/account/accounts`, {responseType: 'json'})
+		expect(response.headers['cache-control']).toBe('no-store')
+		expect(response.body).toEqual([
+			expect.objectContaining({
+				userId: '0',
+				avatarUrl: `/v1/account/avatar/0/${hash}.webp`,
+			}),
+		])
+		expect(JSON.stringify(response.body)).not.toContain('avatarHash')
+	})
+
+	test('serves the same immutable bytes without inheriting the JSON no-store policy', async () => {
+		const response = await got(`${origin}/v1/account/avatar/0/${hash}.webp`, {responseType: 'buffer'})
+		expect(response.body).toEqual(image)
+		expect(response.headers['cache-control']).toBe('private, max-age=31536000, immutable')
+		expect(response.headers.etag).toBe(`"${hash}"`)
+		expect(response.headers['x-content-type-options']).toBe('nosniff')
 	})
 })

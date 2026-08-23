@@ -1,6 +1,6 @@
 import {useCallback, useMemo, useState} from 'react'
 
-export type Account = {userId: string; name: string; wallpaper?: string; language?: string}
+export type Account = {userId: string; name: string; wallpaper?: string; language?: string; avatarUrl?: string}
 
 /** Places the owner in the middle, with members alternating outwards. */
 export function arrangeAccounts(rawAccounts: Account[]): {accounts: Account[]; ownerIndex: number} {

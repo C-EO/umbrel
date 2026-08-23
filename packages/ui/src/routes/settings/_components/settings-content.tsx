@@ -37,7 +37,7 @@ import {MemoryCardContent} from './memory-card-content'
 import {createSettingsCatalog, getSettingsPage, SettingsPageItem} from './settings-catalog'
 import {SettingsFilterPills, SettingsItemsGroup, SettingsSearch} from './settings-page-controls'
 import {SettingsFilterId, useSettingsFilterLabels} from './settings-taxonomy'
-import {SettingsAccountAvatarLink} from './shared'
+import {SettingsAccountAvatar} from './shared'
 import {SoftwareUpdateListRow} from './software-update-list-row'
 import {StorageCardContent} from './storage-card-content'
 import {WallpaperPicker} from './wallpaper-picker'
@@ -367,7 +367,7 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 					>
 						<div className='flex flex-col gap-3'>
 							<div className='flex shrink-0 flex-col items-center gap-5'>
-								<div className='relative isolate'>
+								<div className='relative isolate lg:translate-x-2'>
 									{wallpaper.id && (
 										<img
 											src={`/assets/wallpapers/generated-small/${wallpaper.id}.jpg`}
@@ -378,7 +378,12 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 									)}
 									<div className='relative z-10'>{desktopPreview}</div>
 									{userQ.data && (
-										<SettingsAccountAvatarLink name={userQ.data.name} userId={userQ.data.userId} isMember={isMember} />
+										<SettingsAccountAvatar
+											name={userQ.data.name}
+											userId={userQ.data.userId}
+											avatarUrl={userQ.data.avatarUrl}
+											controlsVisibility='hover'
+										/>
 									)}
 								</div>
 								<h2

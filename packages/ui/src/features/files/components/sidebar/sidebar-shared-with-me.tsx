@@ -21,7 +21,7 @@ export function SidebarOwnersUmbrel({name}: {name: string}) {
 				sharedWithMe ? (
 					// The owner's account id is the system-wide constant '0' (OWNER_USER_ID
 					// in umbreld), giving the same deterministic gradient as login/settings
-					<AccountAvatar name={sharedWithMe.ownerName} userId='0' size={20} />
+					<AccountAvatar name={sharedWithMe.ownerName} userId='0' avatarUrl={sharedWithMe.ownerAvatarUrl} size={20} />
 				) : undefined
 			}
 		/>

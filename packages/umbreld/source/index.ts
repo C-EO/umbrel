@@ -60,6 +60,7 @@ type StoreSchema = {
 	user: {
 		name: string
 		hashedPassword: string
+		avatarHash?: string
 		totpUri?: string
 		wallpaper?: string
 		language?: string

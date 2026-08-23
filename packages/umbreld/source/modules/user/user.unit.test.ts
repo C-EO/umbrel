@@ -1,8 +1,16 @@
+import nodePath from 'node:path'
+
+import fse from 'fs-extra'
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 
 import Umbreld from '../../index.js'
 import temporaryDirectory from '../utilities/temporary-directory.js'
 import * as totp from '../utilities/totp.js'
+
+const accountAvatarDirectory = (umbreld: Umbreld, userId: string) =>
+	nodePath.join(umbreld.dataDirectory, 'avatars', userId)
+const accountAvatarPath = (umbreld: Umbreld, userId: string, hash: string) =>
+	nodePath.join(accountAvatarDirectory(umbreld, userId), `${hash}.webp`)
 
 describe('member lifecycle', () => {
 	let directory: ReturnType<typeof temporaryDirectory>
@@ -96,6 +104,52 @@ describe('member lifecycle', () => {
 		expect(umbreld.files.cloud.removeUser).toHaveBeenCalledWith(member.userId)
 		expect(umbreld.files.deleteMemberDirectories).not.toHaveBeenCalled()
 		expect(await umbreld.store.get('members')).toEqual([{id: member.userId, deleted: true}])
+	})
+
+	test('removes a deleted member avatar directory and retries an interrupted avatar cleanup', async () => {
+		const member = await umbreld.user.createUser('Avatar owner', 'passwordpassword')
+		const hash = 'a'.repeat(64)
+		const avatarDirectory = accountAvatarDirectory(umbreld, member.userId)
+		await umbreld.user.setAccountAvatarHash(member.userId, hash)
+		await fse.outputFile(accountAvatarPath(umbreld, member.userId, hash), 'avatar')
+
+		const originalRemove = fse.remove.bind(fse)
+		const removeSpy = vi.spyOn(fse, 'remove').mockImplementation(async (path) => {
+			if (path === avatarDirectory) throw new Error('simulated avatar cleanup failure')
+			return originalRemove(path)
+		})
+		await expect(umbreld.user.deleteUser(member.userId)).rejects.toThrow('simulated avatar cleanup failure')
+		expect(await fse.pathExists(avatarDirectory)).toBe(true)
+		expect(await umbreld.store.get('members')).toEqual([{id: member.userId, deleted: true}])
+		expect(umbreld.files.memberShares.removeUserFromShares).toHaveBeenCalledWith(member.userId)
+		expect(umbreld.apps.removeUserFromMemberShares).toHaveBeenCalledWith(member.userId)
+
+		removeSpy.mockRestore()
+		await expect(umbreld.user.finishPendingDeletions()).resolves.toBeUndefined()
+		expect(await fse.pathExists(avatarDirectory)).toBe(false)
+		expect(await umbreld.store.get('members')).toEqual([{id: member.userId, deleted: true, cleanupComplete: true}])
+	})
+
+	test('does not rewrite member metadata when an existing account already has no avatar', async () => {
+		const member = await umbreld.user.createUser('No avatar', 'passwordpassword')
+		const originalWriteLock = umbreld.store.getWriteLock.bind(umbreld.store)
+		let memberWrites = 0
+		vi.spyOn(umbreld.store, 'getWriteLock').mockImplementation((job) =>
+			originalWriteLock(async (methods) =>
+				job({
+					...methods,
+					set: (async (property: string, value: unknown) => {
+						if (property === 'members') memberWrites += 1
+						return (methods.set as (property: string, value: unknown) => Promise<boolean>)(property, value)
+					}) as typeof methods.set,
+				}),
+			),
+		)
+
+		await expect(umbreld.user.removeAccountAvatarHash(member.userId)).resolves.toBeUndefined()
+		expect(memberWrites).toBe(0)
+		await expect(umbreld.user.removeAccountAvatarHash('Missing')).rejects.toThrow('User not found')
+		expect(memberWrites).toBe(0)
 	})
 
 	test('serializes display-name uniqueness checks with account renames', async () => {
