@@ -171,7 +171,12 @@ export function ListStorageManager() {
 		acceleratorDevice: acceleratorDevices[0]?.device,
 	})
 	const allPoolDrivesAttached = raidDevices.length === (raidStatus?.devices?.length ?? 0)
-	const showEnableFailsafe = isHddPool && raidType === 'storage' && allPoolDrivesAttached && raidDevices.length > 0
+	const showEnableFailsafe =
+		isHddPool &&
+		raidType === 'storage' &&
+		raidStatus?.topology === 'stripe' &&
+		allPoolDrivesAttached &&
+		raidDevices.length > 0
 
 	// Check if any RAID device doesn't have a matching physical device
 	const hasMissingDrive = raidStatus?.devices?.some((rd) => !allDevices.find((d) => d.id === rd.id))

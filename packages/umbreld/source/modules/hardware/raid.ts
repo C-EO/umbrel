@@ -519,21 +519,25 @@ export default class Raid {
 		const vdevs = Object.values(pool.vdevs)
 		const isDataVdev = (vdev: Vdev) => vdev.class === 'normal'
 		const dataVdevs = vdevs.filter(isDataVdev)
+		const rootVdev = dataVdevs.find((v) => v.vdev_type === 'root')
+		if (!rootVdev) return {exists: false}
 
 		// Determine RAID type from data topology only, ignoring accelerator vdev classes.
 		const isRaidz = dataVdevs.some((v) => v.vdev_type === 'raidz')
 		const isMirror = dataVdevs.some((v) => v.vdev_type === 'mirror')
-		const raidType = isRaidz || isMirror ? 'failsafe' : 'storage'
+		// A partial HDD transition can contain a mirror alongside unprotected root-level disks.
+		const hasUnprotectedDataVdev = dataVdevs.some(
+			(v) => v.parent === rootVdev.name && v.vdev_type !== 'raidz' && v.vdev_type !== 'mirror',
+		)
+		const raidType = (isRaidz || isMirror) && !hasUnprotectedDataVdev ? 'failsafe' : 'storage'
 		let topology: Topology = 'stripe'
 		if (isRaidz) topology = 'raidz'
 		if (isMirror) topology = 'mirror'
 
 		// Filter vdevs by type
-		const rootVdev = dataVdevs.find((v) => v.vdev_type === 'root')
 		const diskVdevs = dataVdevs.filter((v) => v.vdev_type === 'disk')
 		const fileVdevs = dataVdevs.filter((v) => v.vdev_type === 'file')
 		const mirrorVdevs = dataVdevs.filter((v) => v.vdev_type === 'mirror')
-		if (!rootVdev) return {exists: false}
 
 		// Parse expansion progress (only relevant for failsafe/raidz mode)
 		let expansion: ExpansionStatus | undefined
@@ -1337,7 +1341,8 @@ export default class Raid {
 		// Get the pool status
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error("RAID array doesn't exist")
-		if (pool.topology !== 'mirror') throw new Error('addMirror is only supported for mirror failsafe mode')
+		if (pool.raidType !== 'failsafe' || pool.topology !== 'mirror')
+			throw new Error('addMirror is only supported for mirror failsafe mode')
 
 		// Mirror pair must be two different devices
 		if (deviceIds[0] === deviceIds[1]) throw new Error('Mirror pair requires two different devices')
@@ -1394,6 +1399,8 @@ export default class Raid {
 		// Accelerators are layered on an existing HDD pool, never on SSD RAID.
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error("RAID array doesn't exist")
+		if (pool.raidType === 'storage' && pool.topology !== 'stripe')
+			throw new Error('Cannot add an accelerator while the storage array is only partially protected')
 		if ((await this.#getPoolDeviceType()) !== 'hdd')
 			throw new Error('Accelerators are only supported for HDD RAID arrays')
 		if (pool.accelerator?.exists) throw new Error('RAID array already has an accelerator')
@@ -1828,6 +1835,7 @@ export default class Raid {
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error('No RAID array exists')
 		if (pool.raidType !== 'storage') throw new Error('Can only transition from storage mode')
+		if (pool.topology !== 'stripe') throw new Error('Can only transition an unmirrored storage array')
 
 		// Mirror transition only supports HDD arrays
 		const deviceType = await this.#getPoolDeviceType()
