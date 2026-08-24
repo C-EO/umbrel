@@ -1,5 +1,16 @@
 import * as TooltipPrimitive from '@radix-ui/react-tooltip'
 
+import {materialSurfaceClasses} from '@/components/ui/shared/material'
+import {cn} from '@/lib/utils'
+import {tw} from '@/utils/tw'
+
+// The dark glass surface itself, shared with hand-positioned tooltips (e.g. the
+// dock, which anchors its own label so it tracks icon magnification).
+export const machinesTooltipClass = cn(
+	materialSurfaceClasses.contextMenu,
+	tw`relative isolate overflow-hidden rounded-full px-2.5 py-1 text-12 font-medium -tracking-2 whitespace-nowrap text-white`,
+)
+
 // Dark glass tooltip matching the Machines look. Wrap any focusable element:
 // <MachinesTooltip label="Restart"><button .../></MachinesTooltip>
 // Uses the Radix primitives directly (rather than components/ui/tooltip) so the
@@ -20,7 +31,10 @@ export function MachinesTooltip({
 				<TooltipPrimitive.Content
 					side={side}
 					sideOffset={8}
-					className='shadow-dropdown z-50 animate-in rounded-8 border-hpx border-white/10 bg-[#1e1e1e]/95 px-2.5 py-1.5 text-12 font-medium -tracking-2 whitespace-nowrap text-white/90 backdrop-blur-xl fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95'
+					className={cn(
+						machinesTooltipClass,
+						'z-50 animate-in fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
+					)}
 				>
 					{label}
 				</TooltipPrimitive.Content>

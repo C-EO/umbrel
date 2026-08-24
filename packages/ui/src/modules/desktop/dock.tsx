@@ -2,6 +2,7 @@ import {motion, useMotionValue} from 'motion/react'
 import React, {Suspense} from 'react'
 import {ErrorBoundary} from 'react-error-boundary'
 import {useLocation, useNavigate} from 'react-router-dom'
+import {useMedia} from 'react-use'
 
 import {Glass} from '@/components/ui/glass'
 import {getLastFilesPath} from '@/features/files/utils/last-files-path'
@@ -22,6 +23,7 @@ const LiveUsageDialog = React.lazy(() => import('@/routes/live-usage'))
 const WhatsNewModal = React.lazy(() => import('@/routes/whats-new-modal').then((m) => ({default: m.WhatsNewModal})))
 
 const DOCK_BOTTOM_PADDING_PX = 10
+const SHOW_DOCK_UTILITIES_QUERY = '(min-width: 496px)'
 
 const DOCK_DIMENSIONS_PX = {
 	preview: {
@@ -69,6 +71,7 @@ export function Dock() {
 	const settingsNotificationCount = useSettingsNotificationCount()
 	const {appsWithUpdates} = useAppsWithUpdates()
 	const isMobile = useIsMobile()
+	const showDockUtilities = useMedia(SHOW_DOCK_UTILITIES_QUERY)
 	const {iconSize, iconSizeZoomed, padding, dockHeight} = useDockDimensions()
 	const {wallpaperImgRef} = useWallpaper()
 
@@ -114,6 +117,7 @@ export function Dock() {
 						to={systemAppsKeyed['UMBREL_home'].systemAppTo}
 						open={pathname === '/'}
 						bg={systemAppsKeyed['UMBREL_home'].icon}
+						label={systemAppsKeyed['UMBREL_home'].name}
 						mouseX={mouseX}
 					/>
 					<DockItem
@@ -122,6 +126,7 @@ export function Dock() {
 						to={systemAppsKeyed['UMBREL_app-store'].systemAppTo}
 						open={pathname.startsWith(systemAppsKeyed['UMBREL_app-store'].systemAppTo)}
 						bg={systemAppsKeyed['UMBREL_app-store'].icon}
+						label={systemAppsKeyed['UMBREL_app-store'].name}
 						notificationCount={isMember ? undefined : appUpdateCount}
 						mouseX={mouseX}
 					/>
@@ -132,6 +137,7 @@ export function Dock() {
 						onClick={navigateToLastFilesPath}
 						open={pathname.startsWith('/files')}
 						bg={systemAppsKeyed['UMBREL_files'].icon}
+						label={systemAppsKeyed['UMBREL_files'].name}
 						mouseX={mouseX}
 					/>
 					{isOwner && (
@@ -141,6 +147,7 @@ export function Dock() {
 							to={systemAppsKeyed['UMBREL_machines'].systemAppTo}
 							open={pathname.startsWith(systemAppsKeyed['UMBREL_machines'].systemAppTo)}
 							bg={systemAppsKeyed['UMBREL_machines'].icon}
+							label={systemAppsKeyed['UMBREL_machines'].name}
 							mouseX={mouseX}
 						/>
 					)}
@@ -150,25 +157,33 @@ export function Dock() {
 						to={systemAppsKeyed['UMBREL_settings'].systemAppTo}
 						open={pathname.startsWith(systemAppsKeyed['UMBREL_settings'].systemAppTo)}
 						bg={systemAppsKeyed['UMBREL_settings'].icon}
+						label={systemAppsKeyed['UMBREL_settings'].name}
 						notificationCount={settingsNotificationCount}
 						mouseX={mouseX}
 					/>
-					<DockItem
-						iconSize={iconSize}
-						iconSizeZoomed={iconSizeZoomed}
-						to={{search: addLinkSearchParams({dialog: 'live-usage'})}}
-						open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
-						bg={systemAppsKeyed['UMBREL_live-usage'].icon}
-						mouseX={mouseX}
-					/>
-					<DockItem
-						iconSize={iconSize}
-						iconSizeZoomed={iconSizeZoomed}
-						to={systemAppsKeyed['UMBREL_widgets'].systemAppTo}
-						open={pathname.startsWith(systemAppsKeyed['UMBREL_widgets'].systemAppTo)}
-						bg={systemAppsKeyed['UMBREL_widgets'].icon}
-						mouseX={mouseX}
-					/>
+					{showDockUtilities && (
+						<>
+							<DockDivider iconSize={iconSize} />
+							<DockItem
+								iconSize={iconSize}
+								iconSizeZoomed={iconSizeZoomed}
+								to={{search: addLinkSearchParams({dialog: 'live-usage'})}}
+								open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
+								bg={systemAppsKeyed['UMBREL_live-usage'].icon}
+								label={systemAppsKeyed['UMBREL_live-usage'].name}
+								mouseX={mouseX}
+							/>
+							<DockItem
+								iconSize={iconSize}
+								iconSizeZoomed={iconSizeZoomed}
+								to={systemAppsKeyed['UMBREL_widgets'].systemAppTo}
+								open={pathname.startsWith(systemAppsKeyed['UMBREL_widgets'].systemAppTo)}
+								bg={systemAppsKeyed['UMBREL_widgets'].icon}
+								label={systemAppsKeyed['UMBREL_widgets'].name}
+								mouseX={mouseX}
+							/>
+						</>
+					)}
 				</Glass>
 			</motion.div>
 			<LogoutDialog />
@@ -263,7 +278,7 @@ export function DockBottomPositioner({children}: {children: React.ReactNode}) {
 // Clearer glass than the widget defaults: barely any blur or tint, hard refraction
 const dockGlassProps = {blur: 1.5, saturate: 1.3, brightness: 0.9, scale: 70, chroma: 0.2, bevel: 1.5} as const
 
-const dockClass = tw`mx-auto flex items-end gap-[0.7rem] rounded-2xl contrast-more:bg-neutral-700 px-3 shadow-dock-drop shrink-0`
+const dockClass = tw`mx-auto flex items-end gap-2.5 rounded-2xl contrast-more:bg-neutral-700 px-3 shadow-dock-drop shrink-0`
 const dockPreviewClass = tw`mx-auto flex items-end gap-4 rounded-2xl px-3 shadow-dock-drop shrink-0`
 
 const DockDivider = ({iconSize}: {iconSize: number}) => (
