@@ -119,6 +119,10 @@ function sourceReady(source: LensSource): boolean {
 		: source.complete && !!source.naturalWidth
 }
 
+function sourceUrl(source: LensSource): string {
+	return source.currentSrc || source.src
+}
+
 /**
  * Drives `canvas` as a refraction lens over `getSource()` (the object-fit:
  * cover wallpaper <img>, or a <video>). Alignment is read from live bounding
@@ -199,7 +203,7 @@ export function attachBackdropLens(
 		const crect = canvas.getBoundingClientRect()
 		const vrect = source.getBoundingClientRect()
 		const state = [
-			source.src,
+			sourceUrl(source),
 			cw,
 			ch,
 			crect.left,
@@ -231,9 +235,10 @@ export function attachBackdropLens(
 		}
 		gl!.viewport(0, 0, bw, bh)
 		// Videos change every frame; images only when the src swaps
-		if (isVideo || uploadedSrc !== source.src) {
+		const currentSourceUrl = sourceUrl(source)
+		if (isVideo || uploadedSrc !== currentSourceUrl) {
 			gl!.texImage2D(gl!.TEXTURE_2D, 0, gl!.RGBA, gl!.RGBA, gl!.UNSIGNED_BYTE, source)
-			uploadedSrc = source.src
+			uploadedSrc = currentSourceUrl
 		}
 
 		// Map lens css px → texture UV, honoring object-fit: cover cropping.

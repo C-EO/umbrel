@@ -15,7 +15,7 @@ import {arrayIncludes} from 'ts-extras'
 import {FadeInImg} from '@/components/ui/fade-in-img'
 import {cn} from '@/lib/utils'
 import {trpcReact} from '@/trpc/trpc'
-import {keyBy, preloadImage} from '@/utils/misc'
+import {keyBy} from '@/utils/misc'
 import {tw} from '@/utils/tw'
 
 type WallpaperBase = {
@@ -135,10 +135,61 @@ export const wallpapers = [
 		url: '/assets/wallpapers/22.jpg',
 		brandColorHsl: '92 52% 41%',
 	},
+	{
+		id: '23',
+		url: '/assets/wallpapers/23.jpg',
+		brandColorHsl: '24 90% 50%',
+	},
+	{
+		id: '24',
+		url: '/assets/wallpapers/24.jpg',
+		brandColorHsl: '209 85% 42%',
+	},
+	{
+		id: '25',
+		url: '/assets/wallpapers/25.jpg',
+		brandColorHsl: '174 75% 32%',
+	},
+	{
+		id: '26',
+		url: '/assets/wallpapers/26.jpg',
+		brandColorHsl: '14 96% 52%',
+	},
 ] as const satisfies readonly WallpaperBase[]
 
-export function getWallpaperThumbUrl(wallpaper: WallpaperBase) {
-	return `/assets/wallpapers/generated-thumbs/${wallpaper.id}.jpg`
+export type WallpaperAvifTier = 'large' | 'medium' | 'small' | 'thumbnails'
+
+export function getWallpaperAvifUrl(wallpaper: WallpaperBase, tier: WallpaperAvifTier) {
+	return `/assets/wallpapers/generated-avif/${tier}/${wallpaper.id}.avif`
+}
+
+export function WallpaperAvifSource({wallpaper, tier}: {wallpaper: WallpaperBase; tier: WallpaperAvifTier}) {
+	return <source type='image/avif' srcSet={getWallpaperAvifUrl(wallpaper, tier)} />
+}
+
+const wallpaperAvifLargeWidths: Partial<Record<string, number>> = {
+	// The original artwork is 1920×1080; do not label an upscale as a 2880px source.
+	'14': 1920,
+}
+
+export function getWallpaperAvifSrcSet(wallpaper: WallpaperBase) {
+	const largeWidth = (wallpaper.id && wallpaperAvifLargeWidths[wallpaper.id]) || 2880
+	return [
+		`${getWallpaperAvifUrl(wallpaper, 'medium')} 1440w`,
+		`${getWallpaperAvifUrl(wallpaper, 'large')} ${largeWidth}w`,
+	].join(', ')
+}
+
+const wallpaperSizes = '100vw'
+
+function FullWallpaperAvifSources({wallpaper}: {wallpaper: WallpaperBase}) {
+	return (
+		<>
+			{/* object-cover scales landscape wallpapers by viewport height in portrait, so always use the largest tier there. */}
+			<source media='(orientation: portrait)' type='image/avif' srcSet={getWallpaperAvifUrl(wallpaper, 'large')} />
+			<source type='image/avif' srcSet={getWallpaperAvifSrcSet(wallpaper)} sizes={wallpaperSizes} />
+		</>
+	)
 }
 
 export type Wallpaper = (typeof wallpapers)[number]
@@ -161,6 +212,9 @@ type WallpaperType = {
 	setWallpaperId: (id: WallpaperId) => void
 	wallpaperFullyVisible: boolean
 	setWallpaperFullyVisible: () => void
+	setWallpaperLoaded: (url: string) => void
+	setWallpaperLoadFailed: () => void
+	wallpaperLoadedUrl: string | undefined
 	/** The full-res wallpaper <img> — Glass surfaces refract from it on browsers without backdrop-filter: url() */
 	wallpaperImgRef: RefObject<HTMLImageElement | null>
 }
@@ -208,6 +262,7 @@ export function WallpaperProvider({
 }) {
 	const [isLoading, setIsLoading] = useState(true)
 	const [wallpaperFullyVisible, setWallpaperFullyVisible] = useState(false)
+	const [wallpaperLoadedUrl, setWallpaperLoadedUrl] = useState<string>()
 	const wallpaperImgRef = useRef<HTMLImageElement | null>(null)
 
 	const prevId = usePreviousDistinct(wallpaper.id)
@@ -218,10 +273,8 @@ export function WallpaperProvider({
 		if (wallpaper.id === prevId) return
 		setWallpaperFullyVisible(false)
 		setIsLoading(true)
-
-		// preload image
-		preloadImage(wallpaper.url).then(() => setIsLoading(false))
-	}, [wallpaper.url, wallpaper.id, prevId])
+		setWallpaperLoadedUrl(undefined)
+	}, [wallpaper.id, prevId])
 
 	return (
 		<WallPaperContext
@@ -234,6 +287,16 @@ export function WallpaperProvider({
 				},
 				wallpaperFullyVisible,
 				setWallpaperFullyVisible: () => setWallpaperFullyVisible(true),
+				setWallpaperLoaded: (url) => {
+					setWallpaperLoadedUrl(url)
+					setIsLoading(false)
+				},
+				setWallpaperLoadFailed: () => {
+					setWallpaperLoadedUrl(undefined)
+					setIsLoading(false)
+					setWallpaperFullyVisible(true)
+				},
+				wallpaperLoadedUrl,
 				wallpaperImgRef,
 			}}
 		>
@@ -278,57 +341,124 @@ export function Wallpaper({
 	stayBlurred?: boolean
 	isPreview?: boolean
 }) {
-	const {wallpaper, prevWallpaper, isLoading, wallpaperFullyVisible, setWallpaperFullyVisible, wallpaperImgRef} =
-		useWallpaper()
+	const {
+		wallpaper,
+		prevWallpaper,
+		isLoading,
+		wallpaperFullyVisible,
+		setWallpaperFullyVisible,
+		setWallpaperLoaded,
+		setWallpaperLoadFailed,
+		wallpaperImgRef,
+	} = useWallpaper()
 
 	if (!wallpaper || !wallpaper.id) return null
 
 	return (
 		<>
-			<FadeInImg
-				key={wallpaper.url + '-loading'}
-				src={getWallpaperThumbUrl(wallpaper)}
-				className={cn(
-					'pointer-events-none fixed inset-0 w-full scale-125 object-cover object-center blur-[var(--wallpaper-blur)] duration-700',
-					isPreview && 'absolute h-full',
-					!isPreview && 'h-lvh',
-					className,
-				)}
-			/>
-			{!isLoading && !stayBlurred && (
+			<picture>
+				<WallpaperAvifSource wallpaper={wallpaper} tier='thumbnails' />
 				<FadeInImg
-					key={wallpaper.url}
-					ref={isPreview ? undefined : wallpaperImgRef}
+					key={wallpaper.url + '-loading'}
 					src={wallpaper.url}
 					className={cn(
-						// Using black bg by default because sometimes we want to show the wallpaper before it's loaded, and over other elements
-						tw`pointer-events-none fixed inset-0 w-full animate-in bg-black object-cover object-center duration-700 fade-in`,
+						'pointer-events-none fixed inset-0 w-full scale-125 object-cover object-center blur-[var(--wallpaper-blur)] duration-700',
 						isPreview && 'absolute h-full',
 						!isPreview && 'h-lvh',
 						className,
 					)}
-					style={{
-						animation: !stayBlurred && 'animate-unblur 0.7s',
-					}}
+				/>
+			</picture>
+			{!stayBlurred && (
+				<FullWallpaperImage
+					key={wallpaper.url}
+					wallpaper={wallpaper}
+					isLoading={isLoading}
+					isPreview={isPreview}
+					className={className}
+					wallpaperImgRef={isPreview ? undefined : wallpaperImgRef}
+					onLoad={setWallpaperLoaded}
+					onLoadFailure={setWallpaperLoadFailed}
 					onAnimationEnd={setWallpaperFullyVisible}
 				/>
 			)}
 			{/* Put this last so that we can see it exiting over the new wallpaper */}
 			{prevWallpaper && !wallpaperFullyVisible && (
-				<div
-					key={prevWallpaper.url}
-					className={cn(
-						'pointer-events-none fixed inset-0 animate-out bg-cover bg-center duration-700 fill-mode-both fade-out zoom-out-125',
-						isPreview && 'absolute',
-						className,
-					)}
-					style={{
-						backgroundImage: `url(${prevWallpaper.url})`,
-					}}
-				/>
+				<picture key={prevWallpaper.url}>
+					<FullWallpaperAvifSources wallpaper={prevWallpaper} />
+					<img
+						src={prevWallpaper.url}
+						alt=''
+						aria-hidden='true'
+						className={cn(
+							'pointer-events-none fixed inset-0 size-full animate-out object-cover object-center duration-700 fill-mode-both fade-out zoom-out-125',
+							isPreview && 'absolute',
+							className,
+						)}
+					/>
+				</picture>
 			)}
 			{/* {isLoading && <div className='fixed left-0 top-0 '>Loading...</div>} */}
 		</>
+	)
+}
+
+type FullWallpaperImageProps = {
+	wallpaper: Wallpaper
+	isLoading: boolean
+	isPreview?: boolean
+	className?: string
+	wallpaperImgRef?: RefObject<HTMLImageElement | null>
+	onLoad: (url: string) => void
+	onLoadFailure: () => void
+	onAnimationEnd: () => void
+}
+
+function FullWallpaperImage({
+	wallpaper,
+	isLoading,
+	isPreview,
+	className,
+	wallpaperImgRef,
+	onLoad,
+	onLoadFailure,
+	onAnimationEnd,
+}: FullWallpaperImageProps) {
+	const [loadAttempt, setLoadAttempt] = useState<'responsive' | 'jpeg' | 'failed'>('responsive')
+
+	if (loadAttempt === 'failed') return null
+
+	return (
+		<picture>
+			{loadAttempt === 'responsive' && <FullWallpaperAvifSources wallpaper={wallpaper} />}
+			<FadeInImg
+				key={loadAttempt}
+				ref={wallpaperImgRef}
+				src={wallpaper.url}
+				data-wallpaper-full=''
+				className={cn(
+					// Using black bg by default because sometimes we want to show the wallpaper before it's loaded, and over other elements
+					tw`pointer-events-none fixed inset-0 w-full animate-in bg-black object-cover object-center duration-700 fade-in`,
+					isPreview && 'absolute h-full',
+					!isPreview && 'h-lvh',
+					className,
+				)}
+				style={{
+					// Mount immediately so the browser can fetch its chosen candidate, then reveal only after it loads.
+					animation: isLoading ? 'none' : 'animate-unblur 0.7s',
+				}}
+				onLoad={(event) => onLoad(event.currentTarget.currentSrc)}
+				onError={() => {
+					if (loadAttempt === 'responsive') {
+						setLoadAttempt('jpeg')
+						return
+					}
+					setLoadAttempt('failed')
+					onLoadFailure()
+				}}
+				onAnimationEnd={onAnimationEnd}
+			/>
+		</picture>
 	)
 }
 

@@ -71,7 +71,19 @@ export const WidgetContainer: React.FC<WidgetContainerProps> = ({className, ...p
 	return (
 		<Glass
 			as={interactive ? 'button' : 'div'}
-			tint='rgb(23 23 23 / 0.1)'
+			// A tight rim (rather than the default dome across the whole surface)
+			// keeps the centre optically flat so content reads crisply, and
+			// concentrates the refraction into a thick-glass edge.
+			bevel='18px'
+			edgeBlur={0}
+			blur={2.0}
+			scale={110}
+			chroma={0.35}
+			saturate={1.8}
+			brightness={0.82}
+			// Top-lit: light pools along the upper rim, the body sinks away from
+			// the wallpaper so text keeps its contrast over bright skies.
+			tint='linear-gradient(to bottom, rgb(255 255 255 / 0.08), rgb(12 14 18 / 0.24))'
 			refractionTarget={wallpaperImgRef}
 			className={cn(widgetContainerCva({variant}), interactive && widgetButtonClass, className)}
 			{...(props as React.HTMLAttributes<HTMLElement>)}

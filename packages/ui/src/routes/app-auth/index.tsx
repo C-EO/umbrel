@@ -14,12 +14,19 @@ import {OWNER_USER_ID} from '@/modules/auth/constants'
 import {LoginForm} from '@/modules/auth/login-form'
 import {useAccountLanguage} from '@/modules/auth/use-account-language'
 import {useAccountPicker, type Account} from '@/modules/auth/use-account-picker'
-import {useWallpaperCssVars, WallpaperId, wallpaperIds} from '@/providers/wallpaper'
+import {
+	useWallpaperCssVars,
+	WallpaperAvifSource,
+	WallpaperId,
+	wallpaperIds,
+	wallpapersKeyed,
+} from '@/providers/wallpaper'
 import {firstNameFromFullName} from '@/utils/misc'
 
 type Step = 'account' | 'password' | '2fa'
 type LoginAttempt = {userId: string}
 type LoginResponse = HandoffResponse | {error?: {code: number; message: string}}
+const appAuthFallbackWallpaperId = '23' satisfies WallpaperId
 
 function useAccounts() {
 	// isLoaded flips once the request settles (success or failure) — the page
@@ -80,6 +87,7 @@ export default function LoginWithUmbrel() {
 	const wallpaperId =
 		activeWallpaperId && arrayIncludes(wallpaperIds, activeWallpaperId) ? activeWallpaperId : fallbackWallpaperId
 	useWallpaperCssVars(wallpaperId)
+	const wallpaper = wallpapersKeyed[wallpaperId ?? appAuthFallbackWallpaperId]
 
 	const login = useLogin()
 	const loginIsPending = isPending || activeLoginAttemptRef.current !== undefined
@@ -197,10 +205,13 @@ export default function LoginWithUmbrel() {
 
 	return (
 		<>
-			<FadeInImg
-				src={`/assets/wallpapers/generated-thumbs/${wallpaperId}.jpg`}
-				className='pointer-events-none fixed inset-0 h-full w-full scale-125 object-cover object-center blur-[var(--wallpaper-blur)] duration-1000'
-			/>
+			<picture>
+				<WallpaperAvifSource wallpaper={wallpaper} tier='thumbnails' />
+				<FadeInImg
+					src={wallpaper.url}
+					className='pointer-events-none fixed inset-0 h-full w-full scale-125 object-cover object-center blur-[var(--wallpaper-blur)] duration-1000'
+				/>
+			</picture>
 			<div className='fixed inset-0 bg-black/50 contrast-more:bg-black' />
 			{/* Hold on the bare wallpaper until we know single vs multi account */}
 			{!accountsLoaded ? null : (
@@ -417,11 +428,11 @@ function useWallpaperId() {
 			.then(async (res) => {
 				// `unknown` because `any` is too loose
 				const id = (await res.text()) as unknown
-				const knownId = arrayIncludes(wallpaperIds, id) ? id : '18'
+				const knownId = arrayIncludes(wallpaperIds, id) ? id : appAuthFallbackWallpaperId
 				setWallpaper(knownId)
 			})
 			.catch(() => {
-				setWallpaper('18')
+				setWallpaper(appAuthFallbackWallpaperId)
 			})
 	}, [])
 

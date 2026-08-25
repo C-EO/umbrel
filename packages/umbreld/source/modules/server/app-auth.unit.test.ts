@@ -44,7 +44,7 @@ describe('app auth account avatars', () => {
 		await umbreld.store.set('user', {
 			name: 'Owner',
 			hashedPassword: 'unused',
-			wallpaper: '/wallpapers/1.jpg',
+			wallpaper: '16',
 			avatarHash: hash,
 		})
 		await fse.outputFile(accountAvatarPath(umbreld, '0', hash), image)

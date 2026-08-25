@@ -7,7 +7,7 @@ import {toFsPath} from '@/features/files/hooks/use-navigate'
 import {getLastFilesPath} from '@/features/files/utils/last-files-path'
 import {trpcReact} from '@/trpc/trpc'
 
-import {getWallpaperThumbUrl, wallpapers} from './wallpaper'
+import {getWallpaperAvifUrl, wallpapers} from './wallpaper'
 
 const prefetchStableMs = 500
 
@@ -99,11 +99,12 @@ export function Prefetcher() {
 		// as the store itself so the fetch is defined exactly once
 		queryClient.prefetchQuery(storefrontQueryOptions())
 
-		const prefetchThumbnails = wallpapers.map((wallpaper) => getWallpaperThumbUrl(wallpaper))
+		const prefetchThumbnails = wallpapers.map((wallpaper) => getWallpaperAvifUrl(wallpaper, 'thumbnails'))
 
 		prefetchThumbnails.forEach((url) => {
 			const link = document.createElement('link')
 			link.rel = 'prefetch'
+			link.type = 'image/avif'
 			link.href = url
 			document.head.appendChild(link)
 		})

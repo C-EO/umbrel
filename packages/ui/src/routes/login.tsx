@@ -23,7 +23,7 @@ import {LoginForm} from '@/modules/auth/login-form'
 import {useAccountLanguage} from '@/modules/auth/use-account-language'
 import {useAccountPicker, type Account} from '@/modules/auth/use-account-picker'
 import {useAuth} from '@/modules/auth/use-auth'
-import {getWallpaperThumbUrl, Wallpaper, wallpapersKeyed, type WallpaperId} from '@/providers/wallpaper'
+import {Wallpaper, WallpaperAvifSource, wallpapersKeyed, type WallpaperId} from '@/providers/wallpaper'
 import {trpcReact} from '@/trpc/trpc'
 import {firstNameFromFullName} from '@/utils/misc'
 
@@ -233,18 +233,25 @@ export default function Login() {
 			<Wallpaper stayBlurred className='transition-[filter] duration-700' />
 			<AnimatePresence>
 				{settledWallpaper && (
-					<motion.img
+					<motion.picture
 						key={settledWallpaper.id}
-						src={getWallpaperThumbUrl(settledWallpaper)}
 						initial={{opacity: 0}}
 						animate={{opacity: 1}}
 						exit={{opacity: 0}}
 						transition={{duration: 0.7}}
-						className={cn(
-							'pointer-events-none fixed inset-0 h-lvh w-full scale-125 object-cover object-center transition-[filter] duration-700',
-							chosen ? 'blur-[7px]' : 'blur-[18px]',
-						)}
-					/>
+						className='pointer-events-none fixed inset-0 h-lvh w-full'
+					>
+						<WallpaperAvifSource wallpaper={settledWallpaper} tier='thumbnails' />
+						<img
+							src={settledWallpaper.url}
+							alt=''
+							aria-hidden='true'
+							className={cn(
+								'size-full scale-125 object-cover object-center transition-[filter] duration-700',
+								chosen ? 'blur-[7px]' : 'blur-[18px]',
+							)}
+						/>
+					</motion.picture>
 				)}
 			</AnimatePresence>
 			<div className='fixed inset-0 bg-black/10' />

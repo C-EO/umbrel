@@ -167,6 +167,16 @@ html {
 		pointer-events: auto;
 	}
 
+	/* Full-click toasts stretch their action button over the whole capsule on
+	   desktop. On touch devices that makes every gesture originate from a button,
+	   which Sonner deliberately excludes from swipe-to-dismiss. Let touches hit
+	   the toast instead; the visible action button remains independently tappable. */
+	@media (hover: none) and (pointer: coarse) {
+		.toast-full-click-action::after {
+			pointer-events: none;
+		}
+	}
+
 	.umbrel-material-menu-item {
 		border-radius: var(--material-item-radius);
 	}

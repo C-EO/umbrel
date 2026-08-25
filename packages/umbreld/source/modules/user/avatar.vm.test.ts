@@ -10,7 +10,7 @@ const ownerPassword = 'moneyprintergobrrr'
 const memberPassword = 'member-password'
 const avatarFixtures = [
 	['PNG', nodePath.resolve(__dirname, '../files/fixtures/thumbnails/master-lossless-image.png')],
-	['JPEG', nodePath.resolve(__dirname, '../../../../ui/public/assets/wallpapers/generated-thumbs/16.jpg')],
+	['JPEG', nodePath.resolve(__dirname, '../../../../ui/public/assets/wallpapers/16.jpg')],
 	['WEBP', nodePath.resolve(__dirname, '../../../../ui/public/assets/mcp/opencode.webp')],
 ] as const
 

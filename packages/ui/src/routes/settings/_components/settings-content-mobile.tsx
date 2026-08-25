@@ -20,7 +20,7 @@ import {cn} from '@/lib/utils'
 import {DesktopPreviewConnected, DesktopPreviewFrame} from '@/modules/desktop/desktop-preview'
 import {WifiListRowConnectedDescription} from '@/modules/wifi/wifi-list-row-connected-description'
 import {useSheetStickyHeader} from '@/providers/sheet-sticky-header'
-import {useWallpaper} from '@/providers/wallpaper'
+import {useWallpaper, WallpaperAvifSource} from '@/providers/wallpaper'
 import {SettingsSummary} from '@/routes/settings/_components/settings-summary'
 import {trpcReact} from '@/trpc/trpc'
 import {firstNameFromFullName} from '@/utils/misc'
@@ -188,12 +188,15 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 			<div className='flex flex-col items-center gap-4 px-1'>
 				<div className='relative isolate'>
 					{wallpaper.id && (
-						<img
-							src={`/assets/wallpapers/generated-small/${wallpaper.id}.jpg`}
-							alt=''
-							aria-hidden='true'
-							className='pointer-events-none absolute top-5 left-1/2 -z-10 h-[154px] w-[260px] -translate-x-1/2 translate-y-5 scale-[0.96] rounded-10 object-cover opacity-65 blur-[22px] saturate-150'
-						/>
+						<picture>
+							<WallpaperAvifSource wallpaper={wallpaper} tier='small' />
+							<img
+								src={wallpaper.url}
+								alt=''
+								aria-hidden='true'
+								className='pointer-events-none absolute top-5 left-1/2 -z-10 h-[154px] w-[260px] -translate-x-1/2 translate-y-5 scale-[0.96] rounded-10 object-cover opacity-65 blur-[22px] saturate-150'
+							/>
+						</picture>
 					)}
 					<div className='relative z-10'>{desktopPreview}</div>
 					<SettingsAccountAvatar

@@ -33,7 +33,7 @@ import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {dashboardAuthHeaders, useAuthorizedHttpUrl, useAuthorizedHttpUrlQuery} from '@/modules/auth/http-auth'
-import {useWallpaper} from '@/providers/wallpaper'
+import {useWallpaper, WallpaperAvifSource} from '@/providers/wallpaper'
 import {trpcReact} from '@/trpc/trpc'
 
 const MAX_EDITOR_FILE_SIZE = 1_048_576 * 50 // 50MB
@@ -435,16 +435,19 @@ export default function TextViewer({item}: TextViewerProps) {
 				>
 					{/* Blurred wallpaper background — same technique as Sheet component */}
 					<div className='absolute inset-0 bg-black contrast-more:hidden'>
-						<div
-							className='absolute inset-0'
-							style={{
-								backgroundImage: `url(/assets/wallpapers/generated-thumbs/${wallpaper.id}.jpg)`,
-								backgroundSize: 'cover',
-								backgroundPosition: 'center',
-								transform: 'scale(1.2) rotate(180deg)',
-								filter: 'blur(48px) brightness(0.3) saturate(1.2)',
-							}}
-						/>
+						<picture>
+							<WallpaperAvifSource wallpaper={wallpaper} tier='thumbnails' />
+							<img
+								src={wallpaper.url}
+								alt=''
+								aria-hidden='true'
+								className='absolute inset-0 size-full object-cover object-center'
+								style={{
+									transform: 'scale(1.2) rotate(180deg)',
+									filter: 'blur(48px) brightness(0.3) saturate(1.2)',
+								}}
+							/>
+						</picture>
 					</div>
 					{/* Inner glow highlight — same as Sheet */}
 					<div className='pointer-events-none absolute inset-0 z-50 rounded-20 shadow-[2px_2px_2px_0px_rgba(255,255,255,0.05)_inset]' />

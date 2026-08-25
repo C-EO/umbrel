@@ -23,7 +23,7 @@ import {useQueryParams} from '@/hooks/use-query-params'
 import {cn} from '@/lib/utils'
 import {DesktopPreviewConnected, DesktopPreviewFrame} from '@/modules/desktop/desktop-preview'
 import {WifiListRowConnectedDescription} from '@/modules/wifi/wifi-list-row-connected-description'
-import {useWallpaper} from '@/providers/wallpaper'
+import {useWallpaper, WallpaperAvifSource} from '@/providers/wallpaper'
 import {LanguageDropdownContent, LanguageDropdownTrigger} from '@/routes/settings/_components/language-dropdown'
 import {SettingsSummary} from '@/routes/settings/_components/settings-summary'
 import {trpcReact} from '@/trpc/trpc'
@@ -369,12 +369,15 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 							<div className='flex shrink-0 flex-col items-center gap-5'>
 								<div className='relative isolate lg:translate-x-2'>
 									{wallpaper.id && (
-										<img
-											src={`/assets/wallpapers/generated-small/${wallpaper.id}.jpg`}
-											alt=''
-											aria-hidden='true'
-											className='pointer-events-none absolute top-5 left-3 -z-10 h-[154px] w-[263px] translate-y-5 scale-[0.96] rounded-10 object-cover opacity-65 blur-[22px] saturate-150'
-										/>
+										<picture>
+											<WallpaperAvifSource wallpaper={wallpaper} tier='small' />
+											<img
+												src={wallpaper.url}
+												alt=''
+												aria-hidden='true'
+												className='pointer-events-none absolute top-5 left-3 -z-10 h-[154px] w-[263px] translate-y-5 scale-[0.96] rounded-10 object-cover opacity-65 blur-[22px] saturate-150'
+											/>
+										</picture>
 									)}
 									<div className='relative z-10'>{desktopPreview}</div>
 									{userQ.data && (

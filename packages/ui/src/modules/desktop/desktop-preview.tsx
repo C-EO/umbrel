@@ -7,7 +7,7 @@ import {LoadingWidget} from '@/modules/widgets'
 import {BackdropBlurVariantContext} from '@/modules/widgets/shared/backdrop-blur-context'
 import {WidgetWrapper} from '@/modules/widgets/shared/widget-wrapper'
 import {useApps} from '@/providers/apps'
-import {useWallpaper} from '@/providers/wallpaper'
+import {useWallpaper, WallpaperAvifSource} from '@/providers/wallpaper'
 import {trpcReact} from '@/trpc/trpc'
 
 import {AppGrid} from './app-grid/app-grid'
@@ -25,7 +25,7 @@ import {Header} from './header'
  * widget type with placeholder dashes, zero API calls or iframes).
  *
  * Structure (bottom → top):
- *   1. Wallpaper — small pre-generated jpg, updates instantly on wallpaper change
+ *   1. Wallpaper — small AVIF with the source JPG as fallback, updates instantly on wallpaper change
  *   2. Content  — real components laid out at 1440×850, then scale3d(0.18) to ~259×153
  *   3. Dock     — DockPreview with fixed "preview" dimensions (viewport-independent)
  *
@@ -54,12 +54,14 @@ export function DesktopPreviewConnected() {
 	return (
 		<>
 			{/* Small wallpaper image — avoids loading the full-res Wallpaper component */}
-			<FadeInImg
-				key={wallpaper.wallpaper.id}
-				src={`/assets/wallpapers/generated-small/${wallpaper.wallpaper.id}.jpg`}
-				className='absolute inset-0 h-full w-full object-cover object-center'
-				style={{animation: 'animate-unblur 0.7s'}}
-			/>
+			<picture key={wallpaper.wallpaper.id}>
+				<WallpaperAvifSource wallpaper={wallpaper.wallpaper} tier='small' />
+				<FadeInImg
+					src={wallpaper.wallpaper.url}
+					className='absolute inset-0 h-full w-full object-cover object-center'
+					style={{animation: 'animate-unblur 0.7s'}}
+				/>
+			</picture>
 			<div
 				className='shrink-0 origin-top-left'
 				style={{

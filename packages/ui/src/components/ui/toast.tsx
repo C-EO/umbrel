@@ -1,3 +1,4 @@
+import {type ReactNode} from 'react'
 import * as SonnerPrimitive from 'sonner'
 
 import {AppIcon} from '@/components/app-icon'
@@ -5,6 +6,7 @@ import {materialSurfaceClasses} from '@/components/ui/shared/material'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {cn} from '@/lib/utils'
 import {playNotificationSound} from '@/utils/notification-sound'
+import {tabAttention} from '@/utils/tab-attention'
 import {tw} from '@/utils/tw'
 
 export function Toaster() {
@@ -76,7 +78,7 @@ function resolveOptions(options: ToastOptions = {}): SonnerPrimitive.ExternalToa
 		classNames: {
 			...opts.classNames,
 			actionButton: cn(
-				tw`cursor-pointer after:absolute after:inset-0 after:content-[''] group-hover/toast:bg-white/16`,
+				tw`toast-full-click-action cursor-pointer after:absolute after:inset-0 after:content-[''] group-hover/toast:bg-white/16`,
 				opts.classNames?.actionButton,
 			),
 			closeButton: cn(tw`z-10`, opts.classNames?.closeButton),
@@ -84,9 +86,21 @@ function resolveOptions(options: ToastOptions = {}): SonnerPrimitive.ExternalToa
 	}
 }
 
+function getTabTitle(message: ReactNode | (() => ReactNode)): string | undefined {
+	if (typeof message === 'string' || typeof message === 'number') return String(message)
+	return undefined
+}
+
+function notifyTab(message: ReactNode | (() => ReactNode)) {
+	tabAttention.notify({title: getTabTitle(message)})
+}
+
 const toastFunction = (message: Parameters<typeof SonnerPrimitive.toast>[0], opts?: ToastOptions) => {
 	playNotificationSound()
-	return SonnerPrimitive.toast(message, resolveOptions(opts))
+	const options = resolveOptions(opts)
+	const id = SonnerPrimitive.toast(message, options)
+	notifyTab(message)
+	return id
 }
 
 export const toast = Object.assign(toastFunction, {
@@ -95,28 +109,40 @@ export const toast = Object.assign(toastFunction, {
 	// (e.g. the source area's icon) to override it
 	success: (message: string, opts?: ToastOptions) => {
 		playNotificationSound()
-		return SonnerPrimitive.toast.success(message, {
+		const options = {
 			icon: <ToastStatusDot hexColor='#00AD79' />,
 			...resolveOptions(opts),
-		})
+		}
+		const id = SonnerPrimitive.toast.success(message, options)
+		notifyTab(message)
+		return id
 	},
 	info: (message: string, opts?: ToastOptions) => {
 		playNotificationSound()
-		return SonnerPrimitive.toast.info(message, {icon: <ToastStatusDot hexColor='#139EED' />, ...resolveOptions(opts)})
+		const options = {icon: <ToastStatusDot hexColor='#139EED' />, ...resolveOptions(opts)}
+		const id = SonnerPrimitive.toast.info(message, options)
+		notifyTab(message)
+		return id
 	},
 	warning: (message: string, opts?: ToastOptions) => {
 		playNotificationSound()
-		return SonnerPrimitive.toast.warning(message, {
+		const options = {
 			icon: <ToastStatusDot hexColor='#D7BF44' />,
 			...resolveOptions(opts),
-		})
+		}
+		const id = SonnerPrimitive.toast.warning(message, options)
+		notifyTab(message)
+		return id
 	},
 	error: (message: string, opts?: ToastOptions) => {
 		playNotificationSound()
-		return SonnerPrimitive.toast.error(message, {
+		const options = {
 			icon: <ToastStatusDot hexColor='#F45A5A' pulse />,
 			...resolveOptions(opts),
-		})
+		}
+		const id = SonnerPrimitive.toast.error(message, options)
+		notifyTab(message)
+		return id
 	},
 })
 

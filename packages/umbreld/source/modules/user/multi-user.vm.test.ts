@@ -151,6 +151,7 @@ describe('Multi-user accounts', () => {
 	let umbreld: Awaited<ReturnType<typeof createTestVm>>
 	let gitServer: Awaited<ReturnType<typeof runGitServer>>
 	let failed = false
+	const expectedDefaultWallpaper = '23'
 
 	const ownerCredentials = {
 		name: 'satoshi',
@@ -268,7 +269,7 @@ describe('Multi-user accounts', () => {
 
 	test('listAccounts() initially returns just the owner', async () => {
 		await expect(umbreld.client.user.listAccounts.query()).resolves.toStrictEqual([
-			{userId: '0', name: ownerCredentials.name, wallpaper: '22', language: 'en'},
+			{userId: '0', name: ownerCredentials.name, wallpaper: expectedDefaultWallpaper, language: 'en'},
 		])
 	})
 
@@ -311,8 +312,8 @@ describe('Multi-user accounts', () => {
 
 	test('listAccounts() returns the owner and the member', async () => {
 		const accounts = [
-			{userId: '0', name: ownerCredentials.name, wallpaper: '22', language: 'en'},
-			{userId: memberUserId, name: memberCredentials.name, wallpaper: '22', language: 'en'},
+			{userId: '0', name: ownerCredentials.name, wallpaper: expectedDefaultWallpaper, language: 'en'},
+			{userId: memberUserId, name: memberCredentials.name, wallpaper: expectedDefaultWallpaper, language: 'en'},
 		]
 		await expect(umbreld.client.user.listAccounts.query()).resolves.toStrictEqual(accounts)
 
@@ -362,7 +363,7 @@ describe('Multi-user accounts', () => {
 		await expect(umbreld.client.user.listAccounts.query()).resolves.toContainEqual({
 			userId: memberUserId,
 			name: memberCredentials.name,
-			wallpaper: '22',
+			wallpaper: expectedDefaultWallpaper,
 			language: 'en',
 		})
 	})
@@ -379,7 +380,7 @@ describe('Multi-user accounts', () => {
 		await expect(umbreld.unauthenticatedClient.user.listAccounts.query()).resolves.toContainEqual({
 			userId: memberUserId,
 			name: memberCredentials.name,
-			wallpaper: '22',
+			wallpaper: expectedDefaultWallpaper,
 			language: 'de',
 		})
 
@@ -1765,7 +1766,7 @@ mkdir -p '${umbreld.vm.dataDirectory}/network/future-nas/media'
 		memberWsCloseCountBeforeDeletion = memberWsCloseCount
 		await expect(umbreld.client.user.deleteUser.mutate({userId: memberUserId})).resolves.toBe(true)
 		await expect(umbreld.client.user.listAccounts.query()).resolves.toStrictEqual([
-			{userId: '0', name: ownerCredentials.name, wallpaper: '22', language: 'es'},
+			{userId: '0', name: ownerCredentials.name, wallpaper: expectedDefaultWallpaper, language: 'es'},
 		])
 	})
 

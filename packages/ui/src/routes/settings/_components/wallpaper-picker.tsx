@@ -1,7 +1,7 @@
 import {useEffect, useRef} from 'react'
 
 import {cn} from '@/lib/utils'
-import {useWallpaper, wallpapers} from '@/providers/wallpaper'
+import {useWallpaper, WallpaperAvifSource, wallpapers, type Wallpaper} from '@/providers/wallpaper'
 
 const ITEM_W = 40
 const GAP = 4
@@ -9,23 +9,26 @@ const ACTIVE_SCALE = 1.4
 
 function WallpaperItem({
 	active,
-	bg,
+	wallpaper,
 	onSelect,
 	className,
 	ref,
 }: {
 	active?: boolean
-	bg: string
+	wallpaper: Wallpaper
 	onSelect: () => void
 	className?: string
 	ref?: React.Ref<HTMLButtonElement>
 }) {
 	return (
 		<button
+			type='button'
 			ref={ref}
 			onClick={onSelect}
+			aria-label={`Wallpaper ${wallpaper.id}`}
+			aria-pressed={active}
 			className={cn(
-				'h-6 shrink-0 bg-white/10 bg-cover bg-center outline-hidden transition-all duration-200 hover:brightness-125 focus-visible:ring-1 focus-visible:ring-brand',
+				'relative h-6 shrink-0 overflow-hidden bg-white/10 outline-hidden transition-all duration-200 hover:brightness-125 focus-visible:ring-1 focus-visible:ring-brand',
 				active
 					? // NOTE: `mx-3` or whatever horizontal marging needs to be big enough to not cause the ring to get clipped from scrolling container
 						'mx-3 rounded-5 shadow-[0_0_14px_hsl(var(--color-brand)/0.72)] ring-2 ring-brand'
@@ -35,10 +38,19 @@ function WallpaperItem({
 			style={{
 				width: ITEM_W,
 				transform: `scale(${active ? ACTIVE_SCALE : 1})`,
-				backgroundImage: `url(${bg})`,
 				// transformOrigin: "left center",
 			}}
-		/>
+		>
+			<picture>
+				<WallpaperAvifSource wallpaper={wallpaper} tier='thumbnails' />
+				<img
+					src={wallpaper.url}
+					alt=''
+					aria-hidden='true'
+					className='pointer-events-none absolute inset-0 size-full object-cover object-center'
+				/>
+			</picture>
+		</button>
 	)
 }
 
@@ -88,7 +100,7 @@ export function WallpaperPicker({maxW}: {maxW?: number}) {
 							onSelect={() => {
 								setWallpaperId(w.id)
 							}}
-							bg={`/assets/wallpapers/generated-thumbs/${w.id}.jpg`}
+							wallpaper={w}
 						/>
 					))}
 					<div className='w-1 shrink-0' />

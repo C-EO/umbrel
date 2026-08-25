@@ -35,9 +35,9 @@ export function AppGridGradientMasking() {
 }
 
 function GradientMaskSide({side}: {side: 'left' | 'right'}) {
-	const {wallpaper, wallpaperFullyVisible, isLoading} = useWallpaper()
+	const {wallpaperLoadedUrl, wallpaperFullyVisible, isLoading} = useWallpaper()
 
-	if (!wallpaperFullyVisible || isLoading) return null
+	if (!wallpaperLoadedUrl || !wallpaperFullyVisible || isLoading) return null
 
 	return (
 		<div
@@ -47,7 +47,8 @@ function GradientMaskSide({side}: {side: 'left' | 'right'}) {
 			style={{
 				// For debugging:
 				// backgroundColor: 'red',
-				backgroundImage: `url(${wallpaper.url})`,
+				// Reuse the browser-selected AVIF candidate instead of fetching the JPG fallback again.
+				backgroundImage: `url(${wallpaperLoadedUrl})`,
 				backgroundAttachment: 'fixed',
 				WebkitMaskImage: `linear-gradient(to ${side}, transparent, black)`,
 				[side]: 'calc((100% - (var(--page-w) + var(--apps-padding-x) * 2)) / 2)',

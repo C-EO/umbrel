@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/drawer'
 import {FadeInImg} from '@/components/ui/fade-in-img'
 import {cn} from '@/lib/utils'
-import {useWallpaper, WallpaperId, wallpapers} from '@/providers/wallpaper'
+import {useWallpaper, WallpaperAvifSource, WallpaperId, wallpapers, type Wallpaper} from '@/providers/wallpaper'
 import {useSettingsDialogProps} from '@/routes/settings/_components/shared'
 
 export function WallpaperDrawer() {
@@ -38,7 +38,7 @@ export function WallpaperDrawer() {
 						{wallpapers.map((w, i) => (
 							<WallpaperItem
 								key={w.id}
-								bg={`/assets/wallpapers/generated-small/${w.id}.jpg`}
+								wallpaper={w}
 								active={w.id === wallpaper.id}
 								onSelect={() => selectWallpaper(w.id)}
 								className='animate-in fill-mode-both fade-in'
@@ -56,13 +56,13 @@ export function WallpaperDrawer() {
 
 function WallpaperItem({
 	active,
-	bg,
+	wallpaper,
 	onSelect,
 	className,
 	style,
 }: {
 	active?: boolean
-	bg: string
+	wallpaper: Wallpaper
 	onSelect: () => void
 	className?: string
 	style: React.CSSProperties
@@ -76,14 +76,23 @@ function WallpaperItem({
 
 	return (
 		<button
+			type='button'
 			ref={ref}
+			aria-label={`Wallpaper ${wallpaper.id}`}
+			aria-pressed={active}
 			className={cn('relative aspect-1.9 overflow-hidden rounded-10 bg-white/10', className)}
 			style={{
 				...style,
 			}}
 			onClick={onSelect}
 		>
-			<FadeInImg src={bg} className='absolute inset-0 h-full w-full rounded-10 object-cover object-center' />
+			<picture>
+				<WallpaperAvifSource wallpaper={wallpaper} tier='small' />
+				<FadeInImg
+					src={wallpaper.url}
+					className='absolute inset-0 h-full w-full rounded-10 object-cover object-center'
+				/>
+			</picture>
 			{/* Border */}
 			<div
 				className={cn(
