@@ -166,6 +166,31 @@ describe('member lifecycle', () => {
 		expect((await umbreld.user.listMembers()).filter((member) => member.name === 'Shared name')).toHaveLength(1)
 	})
 
+	test("reapplies Samba shares when the owner's display name changes", async () => {
+		let nameWhenSharesApplied: string | undefined
+		const applyShares = vi.spyOn(umbreld.files.samba, 'applyShares').mockImplementation(async () => {
+			nameWhenSharesApplied = (await umbreld.user.get())?.name
+			return undefined
+		})
+
+		await expect(umbreld.user.setAccountName('0', 'Renamed owner')).resolves.toBe(true)
+
+		expect(await umbreld.user.get()).toMatchObject({name: 'Renamed owner'})
+		expect(nameWhenSharesApplied).toBe('Renamed owner')
+		expect(applyShares).toHaveBeenCalledOnce()
+	})
+
+	test('attempts the Samba refresh when the RAID mirror fails after an owner rename', async () => {
+		vi.mocked(umbreld.hardware.raid.hasConfigStore).mockResolvedValue(true)
+		vi.spyOn(umbreld.hardware.raid.configStore, 'set').mockRejectedValueOnce(new Error('RAID mirror unavailable'))
+		const applyShares = vi.spyOn(umbreld.files.samba, 'applyShares').mockResolvedValue(undefined)
+
+		await expect(umbreld.user.setAccountName('0', 'Renamed owner')).rejects.toThrow('RAID mirror unavailable')
+
+		expect(await umbreld.user.get()).toMatchObject({name: 'Renamed owner'})
+		expect(applyShares).toHaveBeenCalledOnce()
+	})
+
 	test("copies the owner's language when creating a member, then keeps both preferences independent", async () => {
 		await umbreld.user.setAccountLanguage('0', 'fr')
 		const member = await umbreld.user.createUser('Alice', 'passwordpassword')

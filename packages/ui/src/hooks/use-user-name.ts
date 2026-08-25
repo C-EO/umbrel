@@ -16,7 +16,11 @@ export function useUserName({onSuccess}: {onSuccess: () => void}) {
 	const setMut = trpcReact.user.set.useMutation({
 		onSuccess: async () => {
 			await sleep(500)
-			await Promise.all([utils.user.get.invalidate(), utils.user.listAccounts.invalidate()])
+			await Promise.all([
+				utils.user.get.invalidate(),
+				utils.user.listAccounts.invalidate(),
+				utils.files.shares.invalidate(),
+			])
 			onSuccess()
 		},
 	})

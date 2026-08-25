@@ -574,10 +574,20 @@ export default class User {
 		})
 		if (!found) throw new Error('User not found')
 
-		// The RAID config store mirrors owner settings for recovery, but isn't
-		// involved in login-name uniqueness.
-		if (userId === OWNER_USER_ID && (await this.#umbreld.hardware.raid.hasConfigStore())) {
-			await this.#umbreld.hardware.raid.configStore.set('user.name', name)
+		if (userId === OWNER_USER_ID) {
+			// The RAID config store mirrors owner settings for recovery, while the
+			// client-facing /Home Samba share is derived from the owner's display name.
+			// Start both reconciliations so a failure in either one cannot prevent the
+			// other from being attempted, but still reject if the rename is not fully
+			// reflected in the system.
+			await Promise.all([
+				this.#umbreld.files.samba.applyShares(),
+				(async () => {
+					if (await this.#umbreld.hardware.raid.hasConfigStore()) {
+						await this.#umbreld.hardware.raid.configStore.set('user.name', name)
+					}
+				})(),
+			])
 		}
 		return true
 	}

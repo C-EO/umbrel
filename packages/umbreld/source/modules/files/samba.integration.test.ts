@@ -431,6 +431,43 @@ describe('samba', () => {
 		await expect(smb.exists('non-existent-file.txt')).resolves.toBe(false)
 	})
 
+	test("renames the /Home share when the owner's name changes", async () => {
+		await umbreld.client.files.addShare.mutate({path: '/Home'})
+		const oldHomeClient = await createSmbClient("satoshi's Umbrel")
+		await expect(oldHomeClient.exists('non-existent-file.txt')).resolves.toBe(false)
+		// Samba deliberately preserves active sessions across config reloads. Disconnect
+		// first so the final assertion proves a genuinely new client cannot use the old name.
+		oldHomeClient.disconnect()
+		await expect
+			.poll(async () => (await $`smbstatus -b -u umbrel`).stdout.includes('umbrel'), {
+				interval: 100,
+				timeout: 10_000,
+			})
+			.toBe(false)
+
+		await umbreld.client.user.set.mutate({name: 'Hal'})
+
+		const homeShare = (await umbreld.client.files.shares.query()).find((share) => share.path === '/Home')
+		expect(homeShare?.sharename).toBe("Hal's Umbrel")
+		await expect((await createSmbClient("Hal's Umbrel")).exists('non-existent-file.txt')).resolves.toBe(false)
+		await expect
+			.poll(
+				async () => {
+					const oldHomeClient = await createSmbClient("satoshi's Umbrel")
+					try {
+						await oldHomeClient.exists('non-existent-file.txt')
+						return 'share is still available'
+					} catch (error) {
+						return error instanceof Error ? error.message : String(error)
+					} finally {
+						oldHomeClient.disconnect()
+					}
+				},
+				{interval: 100, timeout: 10_000},
+			)
+			.toContain('STATUS_BAD_NETWORK_NAME')
+	})
+
 	// This test can be a little flaky (seemingly due to pure js samba client) so retry on failure
 	test('client can interact with share', {retry: 5}, async () => {
 		// Add home directory to shares
