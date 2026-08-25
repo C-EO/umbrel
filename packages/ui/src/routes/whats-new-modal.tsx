@@ -4,7 +4,7 @@ import {useTranslation} from 'react-i18next'
 import {TbChevronLeft, TbChevronRight} from 'react-icons/tb'
 
 import {Button} from '@/components/ui/button'
-import {Carousel, CarouselContent, CarouselItem, type CarouselApi} from '@/components/ui/carousel'
+import {Carousel, CarouselContent, CarouselDots, CarouselItem, type CarouselApi} from '@/components/ui/carousel'
 import {
 	ImmersiveDialog,
 	ImmersiveDialogContent,
@@ -50,50 +50,6 @@ const FEATURES = [
 		descriptionTKey: 'whats-new-umbrelos-1-7.more-languages-description',
 	},
 ]
-
-function DotIndicators({
-	currentIndex,
-	total,
-	onDotClick,
-	progress,
-}: {
-	currentIndex: number
-	total: number
-	onDotClick: (index: number) => void
-	progress: number
-}) {
-	return (
-		<div className='flex items-center justify-center gap-1'>
-			{Array.from({length: total}).map((_, index) => {
-				const isActive = index === currentIndex
-
-				return (
-					<button
-						key={index}
-						onClick={() => onDotClick(index)}
-						className='group p-1 transition-opacity hover:opacity-80'
-						aria-label={`Go to slide ${index + 1}`}
-						tabIndex={-1}
-					>
-						<div
-							className={cn(
-								'relative h-1.5 overflow-hidden rounded-full transition-all duration-300',
-								isActive ? 'w-10 bg-white/40 group-hover:bg-white/60' : 'w-1.5 bg-white/40 group-hover:bg-white/60',
-							)}
-						>
-							{isActive && (
-								<div
-									className='absolute inset-y-0 left-0 rounded-full bg-white transition-all duration-300 ease-linear'
-									style={{width: `${progress}%`}}
-								/>
-							)}
-						</div>
-					</button>
-				)
-			})}
-		</div>
-	)
-}
 
 export function WhatsNewModal() {
 	const {t} = useTranslation()
@@ -249,10 +205,10 @@ export function WhatsNewModal() {
 
 						{/* Dot Indicators */}
 						<div className='mt-5 px-4 md:px-8'>
-							<DotIndicators
-								currentIndex={currentIndex}
-								total={FEATURES.length}
-								onDotClick={handleDotClick}
+							<CarouselDots
+								activeIndex={currentIndex}
+								count={FEATURES.length}
+								onSelect={handleDotClick}
 								progress={progress}
 							/>
 						</div>

@@ -1,7 +1,5 @@
 import {VariantProps} from 'class-variance-authority'
-import {HTMLMotionProps, motion} from 'motion/react'
-import {CSSProperties, useEffect, useState} from 'react'
-import {useFirstMountState} from 'react-use'
+import {ButtonHTMLAttributes, CSSProperties, useEffect, useState} from 'react'
 import {arrayIncludes} from 'ts-extras'
 
 import {buttonVariants} from '@/components/ui/button'
@@ -22,12 +20,16 @@ if (typeof CSS !== 'undefined' && CSS.registerProperty) {
 type Props = {
 	progress?: number
 	state: AppStateOrLoading
-	onClick?: () => void
 } & VariantProps<typeof buttonVariants> &
-	HTMLMotionProps<'button'>
+	ButtonHTMLAttributes<HTMLButtonElement>
 
+/**
+ * An app action button (Install / Open / Update…) whose background can fill
+ * with live progress during a transition. Deliberately a plain, intrinsically
+ * sized button: the label crossfades via CSS and progress is a custom property,
+ * so grids can render many instances without layout measurement observers.
+ */
 export function ProgressButton({variant, size, progress, state, children, className, style, ...buttonProps}: Props) {
-	const isFirstRender = useFirstMountState()
 	const progressing = arrayIncludes(progressBarStates, state)
 
 	// Stops flicker when progressing done
@@ -41,9 +43,7 @@ export function ProgressButton({variant, size, progress, state, children, classN
 	}, [state, progressing])
 
 	const progressingStyle: CSSProperties = {
-		// Adding transitions so hover and other transitions work
 		transition: '--progress-button-progress 0.3s',
-		// ['--progress-button-bg' as string]: 'var(--color-brand)',
 		['--progress-button-progress' as string]: `${Math.round(progress ?? 0)}%`,
 		backgroundImage:
 			'linear-gradient(to right, var(--progress-button-bg) var(--progress-button-progress), transparent var(--progress-button-progress))',
@@ -52,11 +52,11 @@ export function ProgressButton({variant, size, progress, state, children, classN
 	}
 
 	return (
-		<motion.button
+		<button
 			data-progressing={progressing}
 			className={cn(
 				buttonVariants({size, variant}),
-				'whitespace-nowrap disabled:opacity-60',
+				'overflow-hidden whitespace-nowrap transition-[background-color,opacity] duration-300 ease-out disabled:opacity-60',
 				state === 'loading' && '!bg-white/10',
 				// Disable transition right when installing done for a sec to prevent flicker
 				state === 'ready' && !progressingDone && 'transition-none',
@@ -66,24 +66,26 @@ export function ProgressButton({variant, size, progress, state, children, classN
 				...(progressing ? progressingStyle : undefined),
 				...style,
 			}}
-			layout
-			disabled={!arrayIncludes(['not-installed', 'ready'], state)}
 			{...buttonProps}
+			disabled={isProgressButtonDisabled(state, buttonProps.disabled)}
 		>
-			{/* Child has `layout` too to prevent content from being scaled and stretched with the parent */}
-			{/* https://codesandbox.io/p/sandbox/framer-motion-2-scale-correction-z4tgr?file=%2Fsrc%2FApp.js&from-embed= */}
-			<motion.div
-				layout='position'
-				key={state}
-				initial={{opacity: 0}}
-				animate={{
-					opacity: 1,
-					transition: {opacity: {duration: 0.2, delay: state === 'loading' || isFirstRender ? 0 : 0.2}},
-				}}
-				// className='bg-red-500/50'
-			>
-				{children}
-			</motion.div>
-		</motion.button>
+			{/* Stable intrinsic wrapper; the keyed child re-fades when state changes */}
+			<span className='flex w-max items-center'>
+				<span key={state} className='flex animate-in items-center duration-200 fade-in'>
+					{children}
+				</span>
+			</span>
+		</button>
+	)
+}
+
+/** Loading and lifecycle transitions are never interactive, regardless of caller props. */
+export function isProgressButtonDisabled(state: AppStateOrLoading, callerDisabled = false) {
+	return (
+		callerDisabled ||
+		arrayIncludes(
+			['loading', 'installing', 'updating', 'uninstalling', 'starting', 'restarting', 'stopping'] as const,
+			state,
+		)
 	)
 }

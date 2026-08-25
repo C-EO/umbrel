@@ -141,6 +141,13 @@ html {
 		border-radius: var(--material-modal-radius);
 	}
 
+	/* App Store dialogs can sit over bright gallery/editorial artwork. Keep the
+	   stronger tint local so unrelated system dialogs retain the shared recipe. */
+	.umbrel-app-store-modal {
+		--material-tint-opacity: 0.6;
+		--material-brightness: 80%;
+	}
+
 	.umbrel-material-toast {
 		border-radius: var(--material-toast-radius);
 		/* Lighter, airier surface than menus: softer tint, gentler blur and a
@@ -366,6 +373,75 @@ html {
 	scale: 0.97;
 }
 
+/* The App Store's shared content reveal (the apps.umbrel.com feel): a gentle
+   rise while the blur melts away, on a long expo ease. Only a `from` keyframe,
+   so once an animation finishes the element holds no transform and sticky
+   descendants pin normally — but never put the rising variant on an ancestor
+   of position:sticky (the in-flight transform would unpin it). Stagger with
+   --store-reveal-delay; fill-mode both keeps elements hidden until their turn. */
+@keyframes umbrel-store-reveal {
+	from {
+		translate: 0 16px;
+		scale: 0.992;
+		opacity: 0;
+		filter: blur(10px);
+	}
+}
+
+/* Blur-and-fade only — safe alongside motion-driven transforms (the app
+   page's collapsing hero) and for chrome that shouldn't visibly move */
+@keyframes umbrel-store-reveal-soft {
+	from {
+		opacity: 0;
+		filter: blur(8px);
+	}
+}
+
+.umbrel-store-reveal {
+	animation: umbrel-store-reveal 640ms cubic-bezier(0.19, 1, 0.22, 1) both;
+	animation-delay: var(--store-reveal-delay, 0ms);
+}
+
+.umbrel-store-reveal-soft {
+	animation: umbrel-store-reveal-soft 640ms cubic-bezier(0.19, 1, 0.22, 1) both;
+	animation-delay: var(--store-reveal-delay, 0ms);
+}
+
+/* Per-card variant: shorter and subtler, cheap enough to run on every card
+   of a large grid at once */
+@keyframes umbrel-store-reveal-card {
+	from {
+		translate: 0 10px;
+		opacity: 0;
+	}
+}
+
+.umbrel-store-reveal-card {
+	animation: umbrel-store-reveal-card 500ms cubic-bezier(0.19, 1, 0.22, 1) both;
+	animation-delay: var(--store-reveal-delay, 0ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.umbrel-store-reveal,
+	.umbrel-store-reveal-soft,
+	.umbrel-store-reveal-card {
+		animation: none;
+	}
+}
+
+/* Soft ripple radiating from the newest release's dot in the app page's
+   "What's new" timeline (mirrors the apps.umbrel.com timeline) */
+@keyframes umbrel-ripple {
+	0% {
+		transform: scale(1);
+		opacity: 0.7;
+	}
+	100% {
+		transform: scale(2.8);
+		opacity: 0;
+	}
+}
+
 @property --distance1 {
 	syntax: '<length>'; /* <- defined as type length for the transition to work */
 	initial-value: 0;
@@ -394,6 +470,14 @@ html {
    top half of the fade mask while it's stuck so the rail reads as solid chrome
    rather than fading out under its own sticky position. */
 .umbrel-fade-scroller-y:has([data-settings-rail-stuck='true']) {
+	mask-image: linear-gradient(to bottom, red 0, red calc(100% - var(--distance2)), transparent);
+}
+
+/* The App Store pins collapsing chrome to the top of the sheet's scroller
+   (the store header and the app page hero) — same treatment: drop the top
+   half of the fade so the chrome reads as solid instead of fading out under
+   its own sticky position. */
+.umbrel-fade-scroller-y:has([data-sticky-chrome]) {
 	mask-image: linear-gradient(to bottom, red 0, red calc(100% - var(--distance2)), transparent);
 }
 

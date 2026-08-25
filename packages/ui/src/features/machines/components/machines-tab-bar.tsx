@@ -3,7 +3,7 @@ import {motion} from 'motion/react'
 import {useEffect, useRef} from 'react'
 import {NavLink, useLocation} from 'react-router-dom'
 
-import {MachinesTooltip} from '@/features/machines/components/machines-tooltip'
+import {DarkTooltip} from '@/components/ui/dark-tooltip'
 import {OsIcon} from '@/features/machines/components/os-icon'
 import {layoutMorphTransition, machinePath, MACHINES_ADD_PATH, MACHINES_PATH} from '@/features/machines/constants'
 import type {Machine} from '@/features/machines/types'
@@ -76,16 +76,16 @@ export function MachinesTabBar({machines}: {machines: Machine[]}) {
 			// to a visual 12px
 			className='-mt-1 -mr-2 -mb-3 flex items-center gap-2 overflow-x-auto py-1 pr-2 [scrollbar-width:none] md:mr-0 md:pr-0 [&::-webkit-scrollbar]:hidden'
 		>
-			<MachinesTooltip label={t('machines.all-machines')} side='bottom'>
+			<DarkTooltip label={t('machines.all-machines')} side='bottom'>
 				<Tab to={MACHINES_PATH} end label={t('machines.all-machines')} className='w-10'>
 					<LayoutGrid className='size-5' />
 				</Tab>
-			</MachinesTooltip>
-			<MachinesTooltip label={t('machines.add-machine')} side='bottom'>
+			</DarkTooltip>
+			<DarkTooltip label={t('machines.add-machine')} side='bottom'>
 				<Tab to={MACHINES_ADD_PATH} label={t('machines.add-machine')} className='w-10'>
 					<Plus className='size-5' />
 				</Tab>
-			</MachinesTooltip>
+			</DarkTooltip>
 			{machines.map((machine) => (
 				<Tab key={machine.id} to={machinePath(machine.id)} className='animate-in px-3 duration-300 fade-in'>
 					<OsIcon osId={machine.osId} state={machine.state} className='size-6' />

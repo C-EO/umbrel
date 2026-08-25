@@ -11,8 +11,8 @@ import {
 import {useEffect, useRef, useState} from 'react'
 import {Link, LinkProps} from 'react-router-dom'
 
+import {darkTooltipClass} from '@/components/ui/dark-tooltip'
 import {NotificationBadge} from '@/components/ui/notification-badge'
-import {machinesTooltipClass} from '@/features/machines/components/machines-tooltip'
 import {cn} from '@/lib/utils'
 
 type HTMLDivProps = HTMLMotionProps<'div'>
@@ -112,7 +112,7 @@ export function DockItem({
 						// Anchored off the dock baseline rather than the icon's top edge, so the
 						// label holds still while the icon breathes under the magnification spring
 						style={{x: '-50%', bottom: iconSizeZoomed + 7}}
-						className={cn(machinesTooltipClass, 'pointer-events-none absolute left-1/2')}
+						className={cn(darkTooltipClass, 'pointer-events-none absolute left-1/2')}
 					>
 						{label}
 					</motion.div>

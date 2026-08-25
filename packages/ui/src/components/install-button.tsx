@@ -18,9 +18,10 @@ type Props = {
 	state: AppStateOrLoading
 	onInstallClick?: () => void
 	onOpenClick?: () => void
+	disabled?: boolean
 }
 
-export function InstallButton({installSize, progress, state, onInstallClick, onOpenClick, ...props}: Props) {
+export function InstallButton({installSize, progress, state, onInstallClick, onOpenClick, disabled, ...props}: Props) {
 	return (
 		<ProgressButton
 			variant={state === 'updating' ? 'default' : 'primary'}
@@ -28,23 +29,34 @@ export function InstallButton({installSize, progress, state, onInstallClick, onO
 			state={state}
 			progress={progress}
 			onClick={() => {
-				if (state === 'not-installed') {
-					onInstallClick?.()
-				} else if (state === 'ready') {
-					onOpenClick?.()
+				switch (getInstallButtonAction(state)) {
+					case 'install':
+						return onInstallClick?.()
+					case 'open':
+						return onOpenClick?.()
+					case undefined:
+						return
 				}
 			}}
-			className='hover:bg-brand-lighter max-md:h-[30px] max-md:w-full max-md:text-13'
+			// Phones (below sm) get the compact full-width form; this is the
+			// breakpoint where the app page hero drops the actions to their own
+			// row (app-hero.tsx) — keep the two in sync
+			className='hover:bg-brand-lighter max-sm:h-[30px] max-sm:w-full max-sm:text-13'
 			style={{
 				['--progress-button-bg' as string]: state === 'updating' ? 'hsl(0 0 30%)' : 'hsl(var(--color-brand))',
 			}}
-			disabled={!arrayIncludes(['not-installed', 'ready'], state)}
-			initial={{borderRadius: 9999}}
+			disabled={disabled || !getInstallButtonAction(state)}
 			{...props}
 		>
 			<ButtonContentForState state={state} installSize={installSize} progress={progress} />
 		</ProgressButton>
 	)
+}
+
+export function getInstallButtonAction(state: AppStateOrLoading): 'install' | 'open' | undefined {
+	if (state === 'not-installed') return 'install'
+	if (arrayIncludes(['ready', 'running'], state)) return 'open'
+	return undefined
 }
 
 function ButtonContentForState({
@@ -82,9 +94,9 @@ function ButtonContentForState({
 		case 'running':
 			return t('app.open')
 		case 'starting':
-			return t('app.restarting') + '...'
-		case 'restarting':
 			return t('app.starting') + '...'
+		case 'restarting':
+			return t('app.restarting') + '...'
 		case 'stopping':
 			return t('app.stopping') + '...'
 		case 'uninstalling':
@@ -102,5 +114,5 @@ function ButtonContentForState({
 
 export const installButtonClass = cn(
 	tw`whitespace-nowrap disabled:bg-brand/60 disabled:opacity-100 bg-brand hover:bg-brand-lighter`,
-	tw`max-md:h-[30px] max-md:w-full max-md:text-13`,
+	tw`max-sm:h-[30px] max-sm:w-full max-sm:text-13`,
 )

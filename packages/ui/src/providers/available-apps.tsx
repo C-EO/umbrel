@@ -1,9 +1,9 @@
 import {createContext, useContext} from 'react'
 import {groupBy, indexBy, mapValues} from 'remeda'
 
-import {Category, UMBREL_APP_STORE_ID} from '@/modules/app-store/constants'
+import {UMBREL_APP_STORE_ID} from '@/constants/app-store'
+import {indexRegistryApps} from '@/lib/app-store-registry'
 import {RegistryApp, RouterOutput, trpcReact} from '@/trpc/trpc'
-import {keyBy} from '@/utils/misc'
 
 type AppsContextT =
 	| {
@@ -12,8 +12,13 @@ type AppsContextT =
 	| {
 			isLoading: false
 			repos: RouterOutput['appStore']['registry']
+			apps: RegistryApp[]
+			appsKeyed: Record<string, RegistryApp>
+			ambiguousAppIds: ReadonlySet<string>
 			repoAppsKeyed: Record<string, Record<string, RegistryApp>>
-			repoAppsGroupedByCategory: Record<string, Record<Category, RegistryApp[]>>
+			// Keyed by plain strings: manifests may declare categories umbrelOS
+			// doesn't know about yet
+			repoAppsGroupedByCategory: Record<string, Record<string, RegistryApp[]>>
 	  }
 
 const AppsContext = createContext<AppsContextT | null>(null)
@@ -32,12 +37,14 @@ export function AvailableAppsProvider({children}: {children: React.ReactNode}) {
 	}
 
 	const reposKeyed = indexBy(repos, (repo) => repo?.meta.id)
-	const repoAppsKeyed = mapValues(reposKeyed, (repo) => keyBy(repo?.apps ?? [], 'id'))
+	const {appsKeyed, ambiguousAppIds} = indexRegistryApps(repos)
+	const apps = repos.flatMap((repo) => repo?.apps ?? []).filter((app) => !ambiguousAppIds.has(app.id))
+	const repoAppsKeyed = mapValues(reposKeyed, (repo) => indexBy(repo?.apps ?? [], (app) => app.id))
 	const repoAppsGroupedByCategory = mapValues(reposKeyed, (repo) => groupBy(repo?.apps ?? [], (app) => app.category))
 
 	const providerProps: AppsContextT = appsQ.isLoading
 		? {isLoading: true}
-		: {repos, repoAppsKeyed, repoAppsGroupedByCategory, isLoading: false}
+		: {repos, apps, appsKeyed, ambiguousAppIds, repoAppsKeyed, repoAppsGroupedByCategory, isLoading: false}
 
 	return <AppsContext value={providerProps}>{children}</AppsContext>
 }
@@ -66,13 +73,12 @@ export function useAllAvailableApps() {
 
 	if (ctx.isLoading) return {isLoading: true} as const
 
-	const apps = ctx.repos.flatMap((repo) => repo?.apps ?? [])
-	const appsKeyed = keyBy(apps, 'id')
-
 	return {
 		isLoading: false,
-		apps,
-		appsKeyed,
+		apps: ctx.apps,
+		appsKeyed: ctx.appsKeyed,
+		ambiguousAppIds: ctx.ambiguousAppIds,
+		repoAppsKeyed: ctx.repoAppsKeyed,
 	} as const
 }
 

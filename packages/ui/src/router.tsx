@@ -8,12 +8,12 @@ import {createBrowserRouter, Outlet} from 'react-router-dom'
 
 import {CmdkMenu, CmdkProvider} from '@/components/cmdk'
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
+import {appStoreRoutes} from '@/features/app-store/routes'
 import {filesRoutes} from '@/features/files/routes'
 import {machinesConsoleRoutes, machinesRoutes} from '@/features/machines/routes'
 import {DesktopContextMenu} from '@/modules/desktop/desktop-context-menu'
 
 import {ErrorBoundaryPageFallback} from './components/ui/error-boundary-page-fallback'
-import {AppStoreLayout} from './layouts/app-store'
 import {BareLayout} from './layouts/bare/bare'
 import {OnboardingLayout} from './layouts/bare/onboarding'
 import {Desktop} from './layouts/desktop'
@@ -33,9 +33,6 @@ import {NotFound} from './routes/not-found'
 import {Notifications} from './routes/notifications'
 import {Settings} from './routes/settings'
 
-const AppPage = React.lazy(() => import('./routes/app-store/app-page'))
-const CategoryPage = React.lazy(() => import('./routes/app-store/category-page'))
-const Discover = React.lazy(() => import('./routes/app-store/discover'))
 const CommunityAppStoreHome = React.lazy(() => import('./routes/community-app-store'))
 const CommunityAppPage = React.lazy(() => import('./routes/community-app-store/app-page'))
 const EditWidgetsPage = React.lazy(() => import('./routes/edit-widgets'))
@@ -100,35 +97,9 @@ export const router = createBrowserRouter([
 				Component: SheetLayout,
 				children: [
 					...filesRoutes,
-					{
-						path: 'app-store',
-						element: (
-							<AvailableAppsProvider>
-								<AppStoreLayout />
-							</AvailableAppsProvider>
-						),
-						children: [
-							{
-								index: true,
-								Component: Discover,
-								ErrorBoundary: ErrorBoundaryCardFallback,
-							},
-							{
-								path: 'category/:categoryishId',
-								Component: CategoryPage,
-								ErrorBoundary: ErrorBoundaryCardFallback,
-							},
-						],
-					},
-					{
-						path: 'app-store/:appId',
-						element: (
-							<AvailableAppsProvider>
-								<AppPage />
-							</AvailableAppsProvider>
-						),
-						ErrorBoundary: ErrorBoundaryCardFallback,
-					},
+					// The root desktop tree already mounts AvailableAppsProvider, so
+					// app-store routes consume it without nesting another provider
+					...appStoreRoutes,
 					{
 						path: 'community-app-store/:appStoreId',
 						children: [

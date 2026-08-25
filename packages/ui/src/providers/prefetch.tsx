@@ -1,6 +1,7 @@
 import {useIsFetching, useQueryClient} from '@tanstack/react-query'
 import {useEffect, useState} from 'react'
 
+import {storefrontQueryOptions} from '@/features/app-store/data/storefront-query'
 import {USE_LIST_DIRECTORY_LOAD_ITEMS} from '@/features/files/constants'
 import {toFsPath} from '@/features/files/hooks/use-navigate'
 import {getLastFilesPath} from '@/features/files/utils/last-files-path'
@@ -94,11 +95,9 @@ export function Prefetcher() {
 			})
 			.catch(() => {})
 
-		// App Store discover page (external API, not tRPC)
-		queryClient.prefetchQuery({
-			queryKey: ['app-store', 'discover'],
-			queryFn: () => fetch('https://apps.umbrel.com/api/v2/umbrelos/app-store/discover').then((res) => res.json()),
-		})
+		// App Store storefront feed (external API, not tRPC) — same query options
+		// as the store itself so the fetch is defined exactly once
+		queryClient.prefetchQuery(storefrontQueryOptions())
 
 		const prefetchThumbnails = wallpapers.map((wallpaper) => getWallpaperThumbUrl(wallpaper))
 

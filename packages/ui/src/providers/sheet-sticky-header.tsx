@@ -5,14 +5,21 @@ import {ComponentPropsWithoutRef, createContext, useContext, useEffect, useState
 
 import {cn} from '@/lib/utils'
 
-// In the future, the child that sets the header content will should be responsible for this
-const SCROLL_THRESHOLD = 110
+const DEFAULT_SCROLL_THRESHOLD = 110
+// Once shown, the bar hides a little earlier than it appeared so tiny scroll
+// jitters around the threshold can't make it flicker
+const HIDE_HYSTERESIS = 30
 export const SHEET_HEADER_ID = 'sheet-header-root-id'
 
 type ContextT = {
 	showStickyHeader: boolean
 	hasStickyHeader: boolean
 	setHasStickyHeader: (has: boolean) => void
+	// Lets a page pick the scroll depth where the bar takes over (e.g. the app
+	// page hands over once its hero is half scrolled away)
+	setStickyThreshold: (threshold: number) => void
+	// The sheet's scroll viewport, so pages can measure content offsets
+	scrollRef: React.RefObject<HTMLDivElement | null> | null
 	// Lets a page suppress the sheet's floating close button while it renders its
 	// own close affordance (see settings on mobile, where a sticky controls rail
 	// would otherwise sit underneath it).
@@ -31,24 +38,24 @@ export function SheetStickyHeaderProvider({
 }) {
 	const [hasStickyHeader, setHasStickyHeader] = useState(false)
 	const [showScrollStickyHeader, setShowScrollStickyHeader] = useState(false)
+	const [threshold, setThreshold] = useState(DEFAULT_SCROLL_THRESHOLD)
 	const [hideCloseButton, setHideCloseButton] = useState(false)
 
 	useEffect(() => {
 		const el = scrollRef.current
 		const scrollHandler = () => {
 			const scrollTop = scrollRef.current?.scrollTop ?? 0
-			// console.log('scroll', scrollTop)
-			if (scrollTop > SCROLL_THRESHOLD && hasStickyHeader) {
-				setShowScrollStickyHeader(true)
-			} else {
-				setShowScrollStickyHeader(false)
-			}
+			setShowScrollStickyHeader((shown) => {
+				if (!hasStickyHeader) return false
+				return scrollTop > (shown ? threshold - HIDE_HYSTERESIS : threshold)
+			})
 		}
 
+		scrollHandler()
 		el?.addEventListener('scroll', scrollHandler, {passive: true})
 
 		return () => el?.removeEventListener('scroll', scrollHandler)
-	}, [scrollRef, hasStickyHeader])
+	}, [scrollRef, hasStickyHeader, threshold])
 
 	return (
 		<StickyContext
@@ -56,6 +63,8 @@ export function SheetStickyHeaderProvider({
 				showStickyHeader: showScrollStickyHeader,
 				hasStickyHeader,
 				setHasStickyHeader,
+				setStickyThreshold: setThreshold,
+				scrollRef,
 				hideCloseButton,
 				setHideCloseButton,
 			}}
@@ -74,13 +83,23 @@ export function useSheetStickyHeader() {
 
 // ---
 
-export function SheetStickyHeader(props: ComponentPropsWithoutRef<'div'>) {
-	const {setHasStickyHeader} = useSheetStickyHeader()
+export function SheetStickyHeader({
+	threshold,
+	...props
+}: ComponentPropsWithoutRef<'div'> & {
+	/** Scroll depth (px) where the bar takes over; defaults to the header height */
+	threshold?: number
+}) {
+	const {setHasStickyHeader, setStickyThreshold} = useSheetStickyHeader()
 
 	useEffect(() => {
 		setHasStickyHeader(true)
-		return () => setHasStickyHeader(false)
-	}, [setHasStickyHeader])
+		if (threshold !== undefined) setStickyThreshold(threshold)
+		return () => {
+			setHasStickyHeader(false)
+			setStickyThreshold(DEFAULT_SCROLL_THRESHOLD)
+		}
+	}, [setHasStickyHeader, setStickyThreshold, threshold])
 
 	return <Portal container={document.getElementById(SHEET_HEADER_ID)} {...props} />
 }
@@ -91,13 +110,25 @@ export function SheetStickyHeaderTarget() {
 	return (
 		<div
 			id={SHEET_HEADER_ID}
-			className={cn(
-				'umbrel-window-surface-top invisible absolute inset-x-0 top-0 z-50 h-[76px] border-b border-white/10 bg-black/50 px-5 backdrop-blur-xl empty:hidden',
-				showStickyHeader && 'visible',
-			)}
-			style={{
-				boxShadow: '2px 2px 2px 0px #FFFFFF0D inset',
-			}}
-		/>
+			// `inert` (rather than `invisible`) keeps the hidden bar out of the tab
+			// order and accessibility tree while still allowing the soft reveal
+			inert={!showStickyHeader}
+			className={cn('absolute inset-x-0 top-0 z-50 h-[76px] px-5', !showStickyHeader && 'pointer-events-none')}
+		>
+			{/* The surface fades as a layer BEHIND the portalled content, so shared
+			    elements gliding into the bar stay fully visible during their morph
+			    instead of fading in with the bar */}
+			<div
+				aria-hidden
+				className={cn(
+					'umbrel-window-surface-top absolute inset-0 -z-10 border-b border-white/10 bg-black/50 backdrop-blur-xl',
+					'transition-opacity duration-150 ease-out',
+					showStickyHeader ? 'opacity-100' : 'opacity-0',
+				)}
+				style={{
+					boxShadow: '2px 2px 2px 0px #FFFFFF0D inset',
+				}}
+			/>
+		</div>
 	)
 }

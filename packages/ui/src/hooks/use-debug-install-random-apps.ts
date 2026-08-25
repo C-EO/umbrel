@@ -1,10 +1,10 @@
 import {shuffle} from 'remeda'
 
-import {useAvailableApps} from '@/providers/available-apps'
+import {useAllAvailableApps} from '@/providers/available-apps'
 import {trpcReact} from '@/trpc/trpc'
 
 export function useDebugInstallRandomApps() {
-	const apps = useAvailableApps()
+	const apps = useAllAvailableApps()
 
 	const installMut = trpcReact.apps.install.useMutation({
 		onSuccess: () => {

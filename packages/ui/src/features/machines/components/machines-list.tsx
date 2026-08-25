@@ -2,10 +2,10 @@ import {Disc3, Loader2, MoreHorizontal, Pin, PinOff, Power, RotateCw, Settings, 
 import {AnimatePresence, motion} from 'motion/react'
 import {useNavigate} from 'react-router-dom'
 
+import {DarkTooltip} from '@/components/ui/dark-tooltip'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
 import {Progress} from '@/components/ui/progress'
 import {toast} from '@/components/ui/toast'
-import {MachinesTooltip} from '@/features/machines/components/machines-tooltip'
 import {machineIconSrc, OsIcon} from '@/features/machines/components/os-icon'
 import {
 	getOsVisuals,
@@ -182,7 +182,7 @@ function MachinePowerButton({machine}: {machine: Machine}) {
 
 	if (machine.state === 'running') {
 		return (
-			<MachinesTooltip label={t('machines.shut-down')}>
+			<DarkTooltip label={t('machines.shut-down')}>
 				<button
 					className={machineRowButtonClass}
 					onClick={() => stop({id: machine.id})}
@@ -190,7 +190,7 @@ function MachinePowerButton({machine}: {machine: Machine}) {
 				>
 					<Power className={cn('size-4 md:size-5', machineStopTextClass)} />
 				</button>
-			</MachinesTooltip>
+			</DarkTooltip>
 		)
 	}
 
@@ -203,7 +203,7 @@ function MachinePowerButton({machine}: {machine: Machine}) {
 				? t('machines.turn-on-again')
 				: t('machines.turn-on')
 		return (
-			<MachinesTooltip label={label}>
+			<DarkTooltip label={label}>
 				<button
 					className={machineRowButtonClass}
 					onClick={() => (retryingInstall ? retryInstall({id: machine.id}) : start({id: machine.id}))}
@@ -211,7 +211,7 @@ function MachinePowerButton({machine}: {machine: Machine}) {
 				>
 					<Power className='size-4 md:size-5' />
 				</button>
-			</MachinesTooltip>
+			</DarkTooltip>
 		)
 	}
 
@@ -305,13 +305,13 @@ export function MachineMenu({
 
 	return (
 		<DropdownMenu>
-			<MachinesTooltip label={t('machines.machine-options')}>
+			<DarkTooltip label={t('machines.machine-options')}>
 				<DropdownMenuTrigger asChild>
 					<button className={buttonClassName ?? machineRowButtonClass} aria-label={t('machines.machine-options')}>
 						<MoreHorizontal className='size-4 md:size-5' />
 					</button>
 				</DropdownMenuTrigger>
-			</MachinesTooltip>
+			</DarkTooltip>
 			{/* p-1: match the homescreen context menu's tight padding */}
 			<DropdownMenuContent align='start' className='w-60 p-1'>
 				{/* Block cards share the menu items' radius so they nest concentrically

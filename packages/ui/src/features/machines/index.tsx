@@ -3,9 +3,9 @@ import {Suspense, useCallback, useEffect, useState} from 'react'
 import {RiCloseCircleFill} from 'react-icons/ri'
 import {Outlet, useMatch, useNavigate, useParams} from 'react-router-dom'
 
+import {DarkTooltip} from '@/components/ui/dark-tooltip'
 import {MachineRail} from '@/features/machines/components/machine-rail'
 import {MachinesTabBar} from '@/features/machines/components/machines-tab-bar'
-import {MachinesTooltip} from '@/features/machines/components/machines-tooltip'
 import {layoutMorphTransition, MACHINES_CONFIGURE_PATH, MACHINES_PATH} from '@/features/machines/constants'
 import {useMachines} from '@/features/machines/hooks/use-machines'
 import {cn} from '@/lib/utils'
@@ -157,11 +157,11 @@ export default function MachinesLayout() {
 								<p className='text-15 leading-none -tracking-2 text-white/50'>{t('machines.tagline')}</p>
 							</div>
 						</div>
-						<MachinesTooltip label={t('close')} side='left'>
+						<DarkTooltip label={t('close')} side='left'>
 							<button onClick={close} aria-label={t('close')} className={dialogHeaderCircleButtonClass}>
 								<RiCloseCircleFill className='h-5 w-5 lg:h-6 lg:w-6' />
 							</button>
-						</MachinesTooltip>
+						</DarkTooltip>
 					</motion.div>
 
 					{!isLoading && machines.length > 0 && <MachinesTabBar machines={machines} />}

@@ -53,4 +53,20 @@ export default [
 			'@typescript-eslint/no-explicit-any': 'off',
 		},
 	},
+	{
+		files: ['src/modules/app-store/**/*.{js,jsx,ts,tsx}'],
+		rules: {
+			'no-restricted-imports': [
+				'error',
+				{
+					patterns: [
+						{
+							group: ['@/features/app-store', '@/features/app-store/**'],
+							message: 'Legacy App Store UI must depend on shared hooks/domain code, not the redesigned feature.',
+						},
+					],
+				},
+			],
+		},
+	},
 ]

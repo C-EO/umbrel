@@ -4,18 +4,25 @@ import {useTranslation} from 'react-i18next'
 import {arrayIncludes} from 'ts-extras'
 
 import {AppIcon} from '@/components/app-icon'
-import {appStateToString} from '@/components/cmdk'
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogContent, DialogFooter, DialogHeader, DialogPortal, DialogTitle} from '@/components/ui/dialog'
 import {useQueryParams} from '@/hooks/use-query-params'
+import {appStateToString} from '@/modules/app-store/app-state-strings'
 import {useApps, useUserApp} from '@/providers/apps'
 import {useAllAvailableApps} from '@/providers/available-apps'
 import {installedStates, progressStates, RegistryApp, trpcReact, UserApp} from '@/trpc/trpc'
 import {useDialogOpenProps} from '@/utils/dialog'
 
+import {getDependencyAlternatives} from '../dependency-alternatives'
 import {SelectDependencies} from '../select-dependencies-dialog'
 
-export function AppSettingsDialog() {
+export function AppSettingsDialog({
+	onInstallDependency,
+	makeDependencyPath,
+}: {
+	onInstallDependency?: (app: RegistryApp) => void
+	makeDependencyPath?: (app: RegistryApp) => string
+}) {
 	const {params} = useQueryParams()
 	const appId = params.get('app-settings-for')
 	const dependencyId = params.get('app-settings-dependency') ?? undefined
@@ -35,6 +42,8 @@ export function AppSettingsDialog() {
 			userAppsKeyed={userAppsKeyed}
 			availableApps={availableApps}
 			openDependency={dependencyId}
+			onInstallDependency={onInstallDependency}
+			makeDependencyPath={makeDependencyPath}
 		/>
 	)
 }
@@ -56,12 +65,16 @@ function AppSettingsDialogForApp({
 	userAppsKeyed,
 	availableApps,
 	openDependency,
+	onInstallDependency,
+	makeDependencyPath,
 }: {
 	app: UserApp
 	userApps: UserApp[]
 	userAppsKeyed: Record<string, UserApp>
 	availableApps: RegistryApp[]
 	openDependency?: string
+	onInstallDependency?: (app: RegistryApp) => void
+	makeDependencyPath?: (app: RegistryApp) => string
 }) {
 	const {t} = useTranslation()
 	const dialogProps = useDialogOpenProps('app-settings')
@@ -77,34 +90,17 @@ function AppSettingsDialogForApp({
 		},
 	})
 
-	const getAppsImplementing = (dependencyId: string) =>
-		availableApps
-			// Filter out community apps that aren't installed
-			.filter((registryApp) => {
-				const isCommunityApp = registryApp.appStoreId !== 'umbrel-app-store'
-				return !isCommunityApp || userAppsKeyed[registryApp.id]
-			})
-			// Prefer installed app over registry app
-			.map((registryApp) => userAppsKeyed?.[registryApp.id] ?? registryApp)
-			.filter((applicableApp) => applicableApp.implements?.includes(dependencyId))
-			.map((implementingApp) => implementingApp.id)
-
 	const dependencies = useMemo(
-		() =>
-			(app.dependencies ?? []).map((dependencyId) =>
-				[dependencyId, ...getAppsImplementing(dependencyId)].map((appId) => ({
-					dependencyId,
-					appId,
-				})),
-			),
-		[app.dependencies],
+		() => getDependencyAlternatives(app.dependencies, availableApps, userAppsKeyed),
+		[app.dependencies, availableApps, userAppsKeyed],
 	)
 
-	const areAllDependenciesInstalled = dependencies.every((alternatives) =>
-		alternatives.some((alternative) =>
+	const areAllDependenciesInstalled = dependencies.every(({dependencyId, appIds}) =>
+		appIds.some((appId) =>
 			userApps.some(
 				(installedApp) =>
-					installedApp.id === selectedDependencies[alternative.dependencyId] &&
+					installedApp.id === selectedDependencies[dependencyId] &&
+					installedApp.id === appId &&
 					arrayIncludes(installedStates, installedApp.state),
 			),
 		),
@@ -133,6 +129,7 @@ function AppSettingsDialogForApp({
 		<Dialog {...dialogProps}>
 			<DialogPortal>
 				<DialogContent
+					className='umbrel-app-store-modal'
 					onOpenAutoFocus={(e) => {
 						// `preventDefault` to prevent focus on first input
 						e.preventDefault()
@@ -152,8 +149,10 @@ function AppSettingsDialogForApp({
 							dependencies={dependencies}
 							selectedDependencies={selectedDependencies}
 							setSelectedDependencies={onSelectionChange}
-							onInstallClick={() => dialogProps.onOpenChange(false)}
+							onLeave={() => dialogProps.onOpenChange(false)}
 							highlightDependency={openDependency}
+							onInstallDependency={onInstallDependency}
+							makeDependencyPath={makeDependencyPath}
 						/>
 					) : null}
 					{hadChanges && (

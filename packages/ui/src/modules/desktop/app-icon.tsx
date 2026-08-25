@@ -9,10 +9,11 @@ import {arrayIncludes} from 'ts-extras'
 import {ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger} from '@/components/ui/context-menu'
 import {FadeInImg} from '@/components/ui/fade-in-img'
 import {contextMenuClasses} from '@/components/ui/shared/menu'
+import {registryAppPath} from '@/constants/app-store'
 import {canRestart, canStart, canStop, useAppInstall} from '@/hooks/use-app-install'
 import {useLaunchApp} from '@/hooks/use-launch-app'
+import {indexRegistryApps} from '@/lib/app-store-registry'
 import {cn} from '@/lib/utils'
-import {UMBREL_APP_STORE_ID} from '@/modules/app-store/constants'
 import {useAppUninstall} from '@/modules/apps/use-app-uninstall'
 import {useHasMembers} from '@/modules/user-sharing'
 import {useUserApp} from '@/providers/apps'
@@ -299,17 +300,8 @@ function ContextMenuItemLinkToAppStore({appId}: {appId: string}) {
 					if (!installedApp) return
 
 					const availableApps = await utils.appStore.registry.fetch()
-					const availableAppsFlat = availableApps.flatMap((group) =>
-						group.apps.map((app) => ({...app, registryId: group.meta.id})),
-					)
-					const appStoreApp = availableAppsFlat.find((app) => app.id === installedApp.id)
-
-					const registryId = appStoreApp?.registryId ?? UMBREL_APP_STORE_ID
-					if (registryId !== UMBREL_APP_STORE_ID) {
-						navigate(`/community-app-store/${registryId}/${appId}`)
-					} else {
-						navigate(`/app-store/${appId}`)
-					}
+					const appStoreApp = indexRegistryApps(availableApps).appsKeyed[installedApp.id]
+					if (appStoreApp) navigate(registryAppPath(appStoreApp))
 				}}
 			>
 				{t('desktop.app.context.go-to-store-page')}

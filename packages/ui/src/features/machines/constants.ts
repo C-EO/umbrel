@@ -9,10 +9,9 @@ export const machinePath = (machineId: string) => `${MACHINES_PATH}/${machineId}
 export const machineFullscreenPath = (machineId: string) => `${MACHINES_PATH}/${machineId}/fullscreen`
 
 // Shared timing for the layout morph between views (container resize and the
-// header/tab bar position shifts all move in lockstep)
-export const layoutMorphTransition = {
-	layout: {duration: 0.35, ease: [0.32, 0.72, 0, 1] as [number, number, number, number]},
-}
+// header/tab bar position shifts all move in lockstep) — now shared with other
+// features, re-exported here for the existing machines imports
+export {layoutMorphTransition} from '@/components/ui/shared/motion'
 
 export const MAX_DISK_SIZE_GB = 10_000
 export const MIN_MEMORY_GB = 1

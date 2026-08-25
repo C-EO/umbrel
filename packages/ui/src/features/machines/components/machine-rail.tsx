@@ -1,7 +1,7 @@
 import {Loader2, Maximize2, Pin, Power, RotateCw, Volume2, VolumeX, X} from 'lucide-react'
 
+import {DarkTooltip} from '@/components/ui/dark-tooltip'
 import {MachineMenu, useUninstallMachine} from '@/features/machines/components/machines-list'
-import {MachinesTooltip} from '@/features/machines/components/machines-tooltip'
 import {machineFullscreenPath, machineRailButtonClass, machineStopTextClass} from '@/features/machines/constants'
 import {useMachineActions} from '@/features/machines/hooks/use-machine-actions'
 import {useMachineAudioPreference} from '@/features/machines/hooks/use-machine-audio-preference'
@@ -23,7 +23,7 @@ export function MachineRail({machine}: {machine: Machine}) {
 			// wraps below the display on smaller screens it just fades in
 			className='flex w-full shrink-0 animate-in flex-row flex-wrap justify-center gap-3 delay-150 duration-300 fill-mode-backwards fade-in xl:w-auto xl:flex-col xl:flex-nowrap xl:justify-start xl:slide-in-from-right-6'
 		>
-			<MachinesTooltip label={t('machines.open-fullscreen')} side='left'>
+			<DarkTooltip label={t('machines.open-fullscreen')} side='left'>
 				<a
 					href={machineFullscreenPath(machine.id)}
 					target='_blank'
@@ -33,11 +33,8 @@ export function MachineRail({machine}: {machine: Machine}) {
 				>
 					<Maximize2 className='size-5' />
 				</a>
-			</MachinesTooltip>
-			<MachinesTooltip
-				label={muted ? t('machines.console-enable-audio') : t('machines.console-mute-audio')}
-				side='left'
-			>
+			</DarkTooltip>
+			<DarkTooltip label={muted ? t('machines.console-enable-audio') : t('machines.console-mute-audio')} side='left'>
 				<button
 					className={cn(machineRailButtonClass, muted && 'text-white/45')}
 					onClick={() => setMuted(!muted)}
@@ -45,8 +42,8 @@ export function MachineRail({machine}: {machine: Machine}) {
 				>
 					{muted ? <VolumeX className='size-5' /> : <Volume2 className='size-5' />}
 				</button>
-			</MachinesTooltip>
-			<MachinesTooltip
+			</DarkTooltip>
+			<DarkTooltip
 				label={machine.pinned ? t('machines.unpin-from-homescreen') : t('machines.pin-to-homescreen')}
 				side='left'
 			>
@@ -57,8 +54,8 @@ export function MachineRail({machine}: {machine: Machine}) {
 				>
 					<Pin className={cn('size-5', machine.pinned && 'fill-current')} />
 				</button>
-			</MachinesTooltip>
-			<MachinesTooltip label={t('machines.restart')} side='left'>
+			</DarkTooltip>
+			<DarkTooltip label={t('machines.restart')} side='left'>
 				<button
 					className={machineRailButtonClass}
 					onClick={() => restart({id: machine.id})}
@@ -67,13 +64,13 @@ export function MachineRail({machine}: {machine: Machine}) {
 				>
 					<RotateCw className='size-5' />
 				</button>
-			</MachinesTooltip>
+			</DarkTooltip>
 			{machine.state === 'installing' ? (
 				<>
 					<button className={machineRailButtonClass} disabled aria-label={t('machines.state.installing')}>
 						<Loader2 className='size-5 animate-spin' />
 					</button>
-					<MachinesTooltip label={t('machines.cancel-install')} side='left'>
+					<DarkTooltip label={t('machines.cancel-install')} side='left'>
 						<button
 							className={machineRailButtonClass}
 							onClick={cancelInstall}
@@ -81,10 +78,10 @@ export function MachineRail({machine}: {machine: Machine}) {
 						>
 							<X className={cn('size-5', machineStopTextClass)} />
 						</button>
-					</MachinesTooltip>
+					</DarkTooltip>
 				</>
 			) : machine.state === 'stopped' || machine.state === 'error' ? (
-				<MachinesTooltip
+				<DarkTooltip
 					label={
 						machine.state === 'error' && machine.installPending
 							? t('machines.retry-install')
@@ -107,9 +104,9 @@ export function MachineRail({machine}: {machine: Machine}) {
 					>
 						<Power className='size-5' />
 					</button>
-				</MachinesTooltip>
+				</DarkTooltip>
 			) : (
-				<MachinesTooltip label={isBusy ? t(`machines.state.${machine.state}`) : t('machines.shut-down')} side='left'>
+				<DarkTooltip label={isBusy ? t(`machines.state.${machine.state}`) : t('machines.shut-down')} side='left'>
 					<button
 						className={machineRailButtonClass}
 						onClick={() => stop({id: machine.id})}
@@ -122,7 +119,7 @@ export function MachineRail({machine}: {machine: Machine}) {
 							<Power className={cn('size-5', machineStopTextClass)} />
 						)}
 					</button>
-				</MachinesTooltip>
+				</DarkTooltip>
 			)}
 			<MachineMenu machine={machine} buttonClassName={machineRailButtonClass} />
 		</div>

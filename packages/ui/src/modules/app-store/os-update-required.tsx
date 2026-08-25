@@ -34,7 +34,7 @@ export function OSUpdateRequiredDialog({
 
 	return (
 		<AlertDialog open={open} onOpenChange={onOpenChange}>
-			<AlertDialogContent>
+			<AlertDialogContent className='umbrel-app-store-modal'>
 				<AlertDialogHeader icon={RiArrowUpLine}>
 					<AlertDialogTitle>{t('app.os-update-required.title')}</AlertDialogTitle>
 					<AlertDialogDescription>

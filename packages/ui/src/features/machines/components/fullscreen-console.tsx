@@ -2,8 +2,8 @@ import {Expand, Loader2, Minimize2, Power, RotateCw, Shrink} from 'lucide-react'
 import {useEffect, useState} from 'react'
 import {useParams} from 'react-router-dom'
 
+import {DarkTooltip} from '@/components/ui/dark-tooltip'
 import {MachineDisplay} from '@/features/machines/components/machine-display'
-import {MachinesTooltip} from '@/features/machines/components/machines-tooltip'
 import {OsIcon} from '@/features/machines/components/os-icon'
 import {machinePath, machineStopTextClass} from '@/features/machines/constants'
 import {useMachineActions} from '@/features/machines/hooks/use-machine-actions'
@@ -74,7 +74,7 @@ export default function FullscreenConsole() {
 					<span className='text-13 -tracking-2 text-white/70'>{t('machines.umbrel-machines')}</span>
 				</div>
 				<div className='flex items-center gap-1'>
-					<MachinesTooltip label={t('machines.fullscreen')} side='bottom'>
+					<DarkTooltip label={t('machines.fullscreen')} side='bottom'>
 						<button
 							className={consoleButtonClass}
 							onClick={toggleBrowserFullscreen}
@@ -82,13 +82,13 @@ export default function FullscreenConsole() {
 						>
 							{isBrowserFullscreen ? <Shrink className='size-4' /> : <Expand className='size-4' />}
 						</button>
-					</MachinesTooltip>
-					<MachinesTooltip label={t('machines.exit-fullscreen')} side='bottom'>
+					</DarkTooltip>
+					<DarkTooltip label={t('machines.exit-fullscreen')} side='bottom'>
 						<button className={consoleButtonClass} onClick={exitFullscreen} aria-label={t('machines.exit-fullscreen')}>
 							<Minimize2 className='size-4' />
 						</button>
-					</MachinesTooltip>
-					<MachinesTooltip label={t('machines.restart')} side='bottom'>
+					</DarkTooltip>
+					<DarkTooltip label={t('machines.restart')} side='bottom'>
 						<button
 							className={consoleButtonClass}
 							onClick={() => restart({id: machine.id})}
@@ -97,11 +97,8 @@ export default function FullscreenConsole() {
 						>
 							<RotateCw className='size-4' />
 						</button>
-					</MachinesTooltip>
-					<MachinesTooltip
-						label={isBusy ? t(`machines.state.${machine.state}`) : t('machines.shut-down')}
-						side='bottom'
-					>
+					</DarkTooltip>
+					<DarkTooltip label={isBusy ? t(`machines.state.${machine.state}`) : t('machines.shut-down')} side='bottom'>
 						<button
 							className={consoleButtonClass}
 							onClick={() => stop({id: machine.id})}
@@ -114,7 +111,7 @@ export default function FullscreenConsole() {
 								<Power className={cn('size-4', machineStopTextClass)} />
 							)}
 						</button>
-					</MachinesTooltip>
+					</DarkTooltip>
 				</div>
 			</header>
 			<div className='relative min-h-0 flex-1'>

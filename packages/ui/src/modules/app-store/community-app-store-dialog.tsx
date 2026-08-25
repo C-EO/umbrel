@@ -17,7 +17,7 @@ import {
 import {AnimatedInputError, Input} from '@/components/ui/input'
 import {Separator} from '@/components/ui/separator'
 import {toast} from '@/components/ui/toast'
-import {UMBREL_APP_STORE_ID} from '@/modules/app-store/constants'
+import {UMBREL_APP_STORE_ID} from '@/constants/app-store'
 import {trpcReact} from '@/trpc/trpc'
 import {useDialogOpenProps} from '@/utils/dialog'
 
@@ -85,7 +85,7 @@ export function CommunityAppStoreDialog() {
 	return (
 		<Dialog {...dialogProps}>
 			<DialogPortal>
-				<DialogScrollableContent showClose>
+				<DialogScrollableContent showClose className='umbrel-app-store-modal'>
 					<div className='umbrel-dialog-fade-scroller umbrel-stable-gutter flex flex-col gap-y-3 overflow-y-auto px-5 py-6'>
 						<DialogHeader>
 							<DialogTitle>{title}</DialogTitle>

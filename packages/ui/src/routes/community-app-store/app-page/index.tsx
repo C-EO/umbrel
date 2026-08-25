@@ -5,9 +5,10 @@ import {InstallButton} from '@/components/install-button'
 import {InstallButtonConnected} from '@/components/install-button-connected'
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
 import {Loading} from '@/components/ui/loading'
-import {AppContent} from '@/modules/app-store/app-page/app-content'
-import {appPageWrapperClass} from '@/modules/app-store/app-page/shared'
-import {TopHeader} from '@/modules/app-store/app-page/top-header'
+import {registryAppPath} from '@/constants/app-store'
+import {AppPageHero} from '@/features/app-store/components/app-page/app-hero'
+import {AppPageContent} from '@/features/app-store/components/app-page/app-page-content'
+import {appPageWrapperClass} from '@/features/app-store/components/app-page/shared'
 import {CommunityBadge} from '@/modules/community-app-store/community-badge'
 import {trpcReact} from '@/trpc/trpc'
 
@@ -19,14 +20,15 @@ export default function CommunityAppPage() {
 
 	const app = appStore?.apps.find((app) => app.id === appId)
 
-	if (!appStoreId) throw new Error('App store id expected.') // Putting before isLoading because we don't want to show the is loading state
+	if (!appStoreId) throw new Error('App store id expected.') // Before isLoading so we don't show a loading state
 	if (registryQ.isLoading) return <Loading />
 	if (!app) throw new Error('App not found. It may have been removed from the registry.')
 
 	return (
-		<div className={appPageWrapperClass}>
+		// Keyed by app so navigating between app pages remounts and replays the reveal
+		<div key={app.id} className={appPageWrapperClass}>
 			<CommunityBadge className='self-start' />
-			<TopHeader
+			<AppPageHero
 				app={app}
 				childrenRight={
 					<ErrorBoundary
@@ -40,9 +42,11 @@ export default function CommunityAppPage() {
 					</ErrorBoundary>
 				}
 			/>
-			<ErrorBoundary FallbackComponent={ErrorBoundaryCardFallback}>
-				<AppContent app={app} />
-			</ErrorBoundary>
+			<div className='flex flex-col gap-6 md:gap-8'>
+				<ErrorBoundary FallbackComponent={ErrorBoundaryCardFallback}>
+					<AppPageContent app={app} registryId={appStoreId} makeAppPath={registryAppPath} />
+				</ErrorBoundary>
+			</div>
 		</div>
 	)
 }

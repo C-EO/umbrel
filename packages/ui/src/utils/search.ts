@@ -1,6 +1,6 @@
 import Fuse from 'fuse.js'
 
-const fuseOptions = {
+export const fuseOptions = {
 	// https://www.fusejs.io/api/options.html
 	isCaseSensitive: false,
 	includeScore: false,

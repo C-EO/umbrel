@@ -5,11 +5,11 @@ import {RiCloseCircleFill} from 'react-icons/ri'
 import {useNavigate, useSearchParams} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
+import {DarkTooltip} from '@/components/ui/dark-tooltip'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
 import {Progress} from '@/components/ui/progress'
 import {toast} from '@/components/ui/toast'
 import type {FileSystemItem} from '@/features/files/types'
-import {MachinesTooltip} from '@/features/machines/components/machines-tooltip'
 import {CatalogIntro} from '@/features/machines/components/os-catalog-intro'
 import {OsIcon, OsIconGlow} from '@/features/machines/components/os-icon'
 import {layoutMorphTransition, MACHINES_CONFIGURE_PATH} from '@/features/machines/constants'
@@ -540,7 +540,7 @@ function CustomMachineCard({index, introMorph}: {index: number; introMorph?: boo
 					<div className='flex h-[30px] w-full items-center gap-2 text-13 font-medium -tracking-2 text-white/75'>
 						<span className='max-w-[40%] truncate'>{upload.name}</span>
 						<Progress value={item?.progress ?? 0} className='flex-1' />
-						<MachinesTooltip label={t('cancel')}>
+						<DarkTooltip label={t('cancel')}>
 							<button
 								className='shrink-0 opacity-50 transition-[opacity,transform] duration-200 hover:opacity-90 active:scale-90'
 								onClick={handleCancel}
@@ -548,7 +548,7 @@ function CustomMachineCard({index, introMorph}: {index: number; introMorph?: boo
 							>
 								<RiCloseCircleFill className='size-4' />
 							</button>
-						</MachinesTooltip>
+						</DarkTooltip>
 					</div>
 				) : (
 					<DropdownMenu>

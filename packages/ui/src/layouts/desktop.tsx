@@ -1,8 +1,9 @@
 import {useEffect} from 'react'
 
 import {useCmdkOpen} from '@/components/cmdk'
+import {AppSettingsDialogConnected} from '@/features/app-store/components/app-settings-dialog-connected'
+import {StoreActionsProvider} from '@/features/app-store/providers/store-actions'
 import {AppRequiresHttpsDialog} from '@/modules/app-store/app-page/app-requires-https-dialog'
-import {AppSettingsDialog} from '@/modules/app-store/app-page/app-settings-dialog'
 import {DefaultCredentialsDialog} from '@/modules/app-store/app-page/default-credentials-dialog'
 import {AppShareUsersDialog} from '@/modules/desktop/app-share-users-dialog'
 import {DesktopContent} from '@/modules/desktop/desktop-content'
@@ -43,9 +44,10 @@ function InstallFirstAppPage() {
 }
 
 function prefetchRouteChunks() {
-	import('@/routes/app-store/discover')
-	import('@/routes/app-store/app-page')
-	import('@/routes/app-store/category-page')
+	import('@/features/app-store')
+	import('@/features/app-store/components/discover')
+	import('@/features/app-store/components/app-page')
+	import('@/features/app-store/components/category')
 	import('@/routes/settings')
 	import('@/features/files')
 	import('@/routes/edit-widgets')
@@ -86,7 +88,9 @@ function DesktopPage() {
 				<DesktopWifiButtonConnected className={topRightPositionerClass} />
 			</div>
 			<DefaultCredentialsDialog />
-			<AppSettingsDialog />
+			<StoreActionsProvider>
+				<AppSettingsDialogConnected />
+			</StoreActionsProvider>
 			<AppShareUsersDialog />
 			<AppRequiresHttpsDialog />
 		</>

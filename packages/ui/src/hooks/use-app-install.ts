@@ -7,6 +7,8 @@ import {arrayIncludes} from 'ts-extras'
 import {toast} from '@/components/ui/toast'
 import {AppState, AppStateOrLoading, trpcReact} from '@/trpc/trpc'
 
+import {beginAppAction, finishAppAction} from './app-action-guard'
+
 // TODO: consider adding `stopped` and `unknown`
 /** States where we want to frequently poll (on the order of seconds) */
 export const pollStates = [
@@ -49,6 +51,34 @@ export function useAppState(appId: string): AppStateOrLoading {
 	// permanent "installing" (and flicker through stale states in the owner tab)
 	if (perAppQ.data && perAppQ.dataUpdatedAt > listQ.dataUpdatedAt) return perAppQ.data.state
 	return listQ.isLoading ? 'loading' : (listQ.data ?? 'not-installed')
+}
+
+/**
+ * State plus live install/update progress for one app, cheap enough to mount
+ * on every card in a grid: no mutations, zero requests while idle, and during
+ * a transition all observers share the single 2s poll of the per-app state
+ * endpoint (refetchInterval is per query key, not per observer).
+ */
+export function useAppInstallProgress(appId: string): {state: AppStateOrLoading; progress?: number} {
+	const utils = trpcReact.useUtils()
+	const state = useAppState(appId)
+	const isTransitioning = state !== 'loading' && arrayIncludes(pollStates, state)
+	const appStateQ = trpcReact.apps.state.useQuery(
+		{appId},
+		{enabled: isTransitioning, refetchInterval: isTransitioning ? 2000 : false},
+	)
+
+	// When a transition observed from here ends (e.g. another tab ran the
+	// mutation), refresh the list so derived statuses catch up
+	const prevIsTransitioning = usePrevious(isTransitioning)
+	useEffect(() => {
+		if (!isTransitioning && prevIsTransitioning === true) {
+			utils.apps.state.invalidate({appId})
+			utils.apps.list.invalidate()
+		}
+	}, [isTransitioning, prevIsTransitioning, utils, appId])
+
+	return {state, progress: isTransitioning ? appStateQ.data?.progress : undefined}
 }
 
 export function useUninstallAllApps() {
@@ -97,6 +127,10 @@ export function useAppInstall(id: string) {
 		// Invalidate latest app opens
 		utils.user.get.invalidate()
 	}
+	const settleAppAction = () => {
+		finishAppAction(id)
+		refreshAppStates()
+	}
 
 	const makeOptimisticOnMutate = (optimisticState: (typeof pollStates)[number]) => () => {
 		// Optimistic because actions do not return until complete
@@ -114,25 +148,25 @@ export function useAppInstall(id: string) {
 	const startMut = trpcReact.apps.start.useMutation({
 		onMutate: makeOptimisticOnMutate('starting'),
 		onError: (error) => toast.error(t('app.toast.start-failed'), {area: 'app-store', description: error.message}),
-		onSettled: refreshAppStates,
+		onSettled: settleAppAction,
 	})
 	const stopMut = trpcReact.apps.stop.useMutation({
 		onMutate: makeOptimisticOnMutate('stopping'),
 		onError: (error) => toast.error(t('app.toast.stop-failed'), {area: 'app-store', description: error.message}),
-		onSettled: refreshAppStates,
+		onSettled: settleAppAction,
 	})
 	const installMut = trpcReact.apps.install.useMutation({
 		onMutate: makeOptimisticOnMutate('installing'),
-		onSettled: refreshAppStates,
+		onSettled: settleAppAction,
 	})
 	const uninstallMut = trpcReact.apps.uninstall.useMutation({
 		onMutate: makeOptimisticOnMutate('uninstalling'),
-		onSettled: refreshAppStates,
+		onSettled: settleAppAction,
 	})
 	const restartMut = trpcReact.apps.restart.useMutation({
 		onMutate: makeOptimisticOnMutate('restarting'),
 		onError: (error) => toast.error(t('app.toast.restart-failed'), {area: 'app-store', description: error.message}),
-		onSettled: refreshAppStates,
+		onSettled: settleAppAction,
 	})
 
 	const progress = appStateQ.data?.progress
@@ -146,10 +180,14 @@ export function useAppInstall(id: string) {
 		}
 	}, [isTransitioning, prevIsTransitioning])
 
-	const start = async () => startMut.mutate({appId: id})
-	const stop = async () => stopMut.mutate({appId: id})
-	const install = async (alternatives?: Record<string, string>) => {
-		return installMut.mutate({appId: id, alternatives})
+	const start = () => {
+		if (beginAppAction(id)) startMut.mutate({appId: id})
+	}
+	const stop = () => {
+		if (beginAppAction(id)) stopMut.mutate({appId: id})
+	}
+	const install = (alternatives?: Record<string, string>) => {
+		if (beginAppAction(id)) installMut.mutate({appId: id, alternatives})
 	}
 	const getAppsToUninstallFirst = async () => {
 		const appsToUninstallFirst = await utils.apps.dependents.fetch(id)
@@ -158,13 +196,22 @@ export function useAppInstall(id: string) {
 		return appsToUninstallFirst
 	}
 	const uninstall = async () => {
-		const uninstallTheseFirst = await getAppsToUninstallFirst()
-		if (uninstallTheseFirst.length > 0) {
-			return {uninstallTheseFirst}
+		if (!beginAppAction(id)) return
+		try {
+			const uninstallTheseFirst = await getAppsToUninstallFirst()
+			if (uninstallTheseFirst.length > 0) {
+				finishAppAction(id)
+				return {uninstallTheseFirst}
+			}
+			uninstallMut.mutate({appId: id})
+		} catch (error) {
+			finishAppAction(id)
+			throw error
 		}
-		uninstallMut.mutate({appId: id})
 	}
-	const restart = async () => restartMut.mutate({appId: id})
+	const restart = () => {
+		if (beginAppAction(id)) restartMut.mutate({appId: id})
+	}
 
 	return {
 		start,

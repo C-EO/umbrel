@@ -1,5 +1,4 @@
 import {useCommandState} from 'cmdk'
-import {TFunction} from 'i18next'
 import {
 	ComponentPropsWithoutRef,
 	createContext,
@@ -32,11 +31,12 @@ import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useLaunchApp} from '@/hooks/use-launch-app'
 import {useShortcuts} from '@/hooks/use-shortcuts'
 import {cn} from '@/lib/utils'
+import {appStateToString} from '@/modules/app-store/app-state-strings'
 import {resolveShortcutUrl} from '@/modules/desktop/shortcut-dialog'
 import {resolveShortcutIcon, ShortcutIconImage} from '@/modules/desktop/shortcut-icon-image'
 import {systemAppsKeyed, useApps} from '@/providers/apps'
 import {useAvailableApps} from '@/providers/available-apps'
-import {AppState, trpcReact} from '@/trpc/trpc'
+import {trpcReact} from '@/trpc/trpc'
 
 import {AppIcon} from './app-icon'
 import {FadeScroller} from './fade-scroller'
@@ -443,21 +443,4 @@ const SearchItem = (props: ComponentPropsWithoutRef<typeof CommandItem>) => {
 			}}
 		/>
 	)
-}
-
-export function appStateToString(appState: AppState, t: TFunction) {
-	return {
-		'not-installed': t('app.install'),
-		installing: t('app.installing'),
-		ready: t('app.open'),
-		running: t('app.open'),
-		starting: t('app.restarting'),
-		restarting: t('app.starting'),
-		stopping: t('app.stopping'),
-		updating: t('app.updating'),
-		uninstalling: t('app.uninstalling'),
-		unknown: t('app.offline'),
-		stopped: t('app.offline'),
-		loading: t('loading'),
-	}[appState]
 }

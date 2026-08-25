@@ -104,5 +104,5 @@ function SheetCloseButton() {
 	// one outright when it renders its own (mobile settings' sticky controls rail).
 	if (showStickyHeader || hideCloseButton) return null
 
-	return <DialogCloseButton className='absolute top-5 right-5 z-[60]' />
+	return <DialogCloseButton className='absolute top-3 right-3 z-[60] sm:top-5 sm:right-5' />
 }
