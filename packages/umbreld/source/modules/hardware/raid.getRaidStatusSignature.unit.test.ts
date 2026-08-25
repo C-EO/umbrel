@@ -7,6 +7,7 @@ const basePool = () => ({
 	status: 'ONLINE' as const,
 	raidType: 'failsafe' as const,
 	topology: 'mirror' as const,
+	dataErrors: 0,
 	devices: [
 		{id: 'drive-a', status: 'ONLINE' as const},
 		{id: 'drive-b', status: 'ONLINE' as const},
@@ -69,8 +70,18 @@ describe('getRaidStatusSignature', () => {
 		expect(getRaidStatusSignature(storageMode)).not.toBe(getRaidStatusSignature(basePool()))
 	})
 
-	test('progress-style fields are ignored', () => {
-		const withExtras = {...basePool(), rebuild: {state: 'rebuilding', progress: 50}, usedSpace: 123} as never
+	test('pool data error count change changes the signature', () => {
+		const withDataErrors = {...basePool(), dataErrors: 2}
+		expect(getRaidStatusSignature(withDataErrors)).not.toBe(getRaidStatusSignature(basePool()))
+	})
+
+	test('progress, space, and per-device error counters are ignored', () => {
+		const withExtras = {
+			...basePool(),
+			rebuild: {state: 'rebuilding', progress: 50},
+			usedSpace: 123,
+			devices: basePool().devices.map((device) => ({...device, readErrors: 3, writeErrors: 4, checksumErrors: 5})),
+		} as never
 		expect(getRaidStatusSignature(withExtras)).toBe(getRaidStatusSignature(basePool()))
 	})
 })

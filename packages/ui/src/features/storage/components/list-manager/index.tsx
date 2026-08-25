@@ -23,6 +23,7 @@ import {InstallSsdDialog} from '../dialogs/install-ssd-dialog'
 import {ReplaceFailedDriveDialog} from '../dialogs/replace-failed-drive-dialog'
 import {SsdHealthDialog, useSsdHealthDialog} from '../dialogs/ssd-health-dialog'
 import {SwapDialog} from '../dialogs/swap-dialog'
+import {PoolDataErrorBanner} from '../pool-data-error-banner'
 import {StorageDonutChart} from '../storage-donut-chart'
 import {StorageModeDisplay} from '../storage-mode-display'
 import {StorageStats} from '../storage-stats'
@@ -365,6 +366,7 @@ export function ListStorageManager() {
 				>
 					<div className='flex h-full flex-col gap-6'>
 						<h1 className={immersiveDialogTitleClass}>{t('storage-manager')}</h1>
+						<PoolDataErrorBanner errorCount={raidStatus?.dataErrors} />
 
 						<div className='flex flex-col gap-6 md:flex-row md:items-start'>
 							{/* Left: mode, drives, acceleration */}
@@ -495,7 +497,10 @@ export function ListStorageManager() {
 					device={healthDialogDevice}
 					open={healthDialog.open}
 					onOpenChange={healthDialog.onOpenChange}
-					raidDevice={raidDevices.find((rd) => rd.id === healthDialogDevice.id)}
+					raidDevice={
+						raidDevices.find((raidDevice) => raidDevice.id === healthDialogDevice.id) ??
+						acceleratorDevices.find((accelerator) => accelerator.id === healthDialogDevice.id)?.device
+					}
 				/>
 			)}
 

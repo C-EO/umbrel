@@ -87,13 +87,19 @@ describe('RAID HDD storage mode accelerator replacement with an online device', 
 		expect(status.devices).toHaveLength(1)
 		expect(status.accelerator).toMatchObject({exists: true})
 		expect(status.accelerator?.devices).toHaveLength(1)
-		expect(status.accelerator?.devices?.[0]).toMatchObject({id: acceleratorDeviceId})
+		expect(status.accelerator?.devices?.[0]).toMatchObject({
+			id: acceleratorDeviceId,
+			readErrors: 0,
+			writeErrors: 0,
+			checksumErrors: 0,
+		})
 		expectSizeToBeWithinTenPercentOfGb(status.accelerator?.l2arcSize, expectedSingleAcceleratorL2arcSizeGb)
 		expectSizeToBeWithinTenPercentOfGb(status.accelerator?.specialSize, expectedSingleAcceleratorSpecialSizeGb)
 	})
 
 	test('replaces accelerator SSD while it is online', async () => {
 		replaceSubscription = umbreld.subscribeToEvents<ReplaceStatus>('raid:replace-progress')
+		await replaceSubscription.started
 
 		await umbreld.client.hardware.raid.replaceDevice.mutate({
 			oldDevice: acceleratorDeviceId,
@@ -156,7 +162,12 @@ describe('RAID HDD storage mode accelerator replacement with an online device', 
 	test('reports the replacement accelerator device with correct sizes', async () => {
 		const status = await umbreld.client.hardware.raid.getStatus.query()
 		expect(status.accelerator?.devices).toHaveLength(1)
-		expect(status.accelerator?.devices?.[0]).toMatchObject({id: replacementAcceleratorDeviceId})
+		expect(status.accelerator?.devices?.[0]).toMatchObject({
+			id: replacementAcceleratorDeviceId,
+			readErrors: 0,
+			writeErrors: 0,
+			checksumErrors: 0,
+		})
 		expectSizeToBeWithinTenPercentOfGb(status.accelerator?.l2arcSize, expectedSingleAcceleratorL2arcSizeGb)
 		expectSizeToBeWithinTenPercentOfGb(status.accelerator?.specialSize, expectedSingleAcceleratorSpecialSizeGb)
 	})

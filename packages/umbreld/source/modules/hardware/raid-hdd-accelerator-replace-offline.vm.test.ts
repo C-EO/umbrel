@@ -110,6 +110,7 @@ describe('RAID HDD accelerator replacement with an offline device', () => {
 
 	test('replaces one accelerator SSD while it is offline', async () => {
 		replaceSubscription = umbreld.subscribeToEvents<ReplaceStatus>('raid:replace-progress')
+		await replaceSubscription.started
 
 		await umbreld.client.hardware.raid.replaceDevice.mutate({
 			oldDevice: acceleratorDeviceId1,

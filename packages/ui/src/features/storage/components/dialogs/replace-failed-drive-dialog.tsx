@@ -51,9 +51,10 @@ export function ReplaceFailedDriveDialog({
 	const {t} = useTranslation()
 	const {setPendingOperation, clearPendingOperation} = usePendingRaidOperation()
 
-	// Check if a RAID operation is already in progress
+	// Failed-drive repair takes priority over a scrub. Umbreld cancels the scrub,
+	// starts the replacement, then retries the scrub once the pool is idle.
 	const activeOperation = useActiveRaidOperation()
-	const isOperationInProgress = !!activeOperation
+	const isOperationInProgress = !!activeOperation && activeOperation.type !== 'scrub'
 
 	if (!newDevice || !failedDevice) return null
 

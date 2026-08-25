@@ -22,12 +22,13 @@ import {ReplaceFailedDriveDialog} from './components/dialogs/replace-failed-driv
 import {SsdHealthDialog, useSsdHealthDialog} from './components/dialogs/ssd-health-dialog'
 import {SwapDialog} from './components/dialogs/swap-dialog'
 import {ListStorageManager} from './components/list-manager'
+import {PoolDataErrorBanner} from './components/pool-data-error-banner'
 import {SsdShape} from './components/ssd-shape'
 import {StorageDonutChart} from './components/storage-donut-chart'
 import {StorageModeDisplay} from './components/storage-mode-display'
 import {StorageStats} from './components/storage-stats'
 import {getDeviceHealth, StorageDevice, useStorage} from './hooks/use-storage'
-import {formatStorageSize, getPoolDeviceType} from './utils'
+import {formatStorageSize, getPoolDeviceType, hasRaidErrors} from './utils'
 
 // Umbrel Pro has 4 SSD slots
 const SLOT_INDICES = [0, 1, 2, 3] as const
@@ -116,7 +117,7 @@ function SsdStorageManager({isUmbrelPro}: {isUmbrelPro: boolean}) {
 		const isReadyToAdd = !!device && readyToAddIds.has(device.id)
 		const isInRaid = !!raidDevice
 		const isFailedDrive = raidDevice && raidDevice.raidStatus !== 'ONLINE'
-		const hasWarning = device && (isFailedDrive || getDeviceHealth(device).hasWarning)
+		const hasWarning = device && (isFailedDrive || getDeviceHealth(device).hasWarning || hasRaidErrors(raidDevice))
 		return {device, slotNumber, isReadyToAdd, isInRaid, raidDevice, isFailedDrive, hasWarning}
 	})
 
@@ -238,6 +239,7 @@ function SsdStorageManager({isUmbrelPro}: {isUmbrelPro: boolean}) {
 				>
 					<div className='flex h-full flex-col gap-6'>
 						<h1 className={immersiveDialogTitleClass}>{t('storage-manager')}</h1>
+						<PoolDataErrorBanner errorCount={raidStatus?.dataErrors} />
 
 						{/* Mode display */}
 						<div className='flex flex-col gap-2.5'>

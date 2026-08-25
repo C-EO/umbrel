@@ -1,5 +1,9 @@
 import {AnimatePresence, motion} from 'motion/react'
+import {useEffect} from 'react'
+import {useTranslation} from 'react-i18next'
+import {useNavigate} from 'react-router-dom'
 
+import {toast} from '@/components/ui/toast'
 import {BackupsIsland} from '@/features/backups/components/floating-island'
 import {useBackupProgress} from '@/features/backups/hooks/use-backups'
 import {AudioIsland} from '@/features/files/components/floating-islands/audio-island'
@@ -29,6 +33,8 @@ const spring = {
 }
 
 export function FloatingIslandContainer() {
+	const {t} = useTranslation()
+	const navigate = useNavigate()
 	// When any ImmersiveDialog is open, bump z-index so islands appear above it
 	const isImmersiveDialogOpen = useImmersiveDialogOpen()
 
@@ -70,6 +76,33 @@ export function FloatingIslandContainer() {
 	const showCloud = cloudActivities.some(cloudActivityHasWork)
 	// Show machines island only while a machine is installing
 	const showMachinesInstall = installingMachines.length > 0
+	const raidOperationType = raidProgress?.type
+	const raidOperationState = raidProgress?.state
+	const raidScrubErrors = raidProgress?.errors
+
+	useEffect(() => {
+		if (raidOperationType !== 'scrub' || raidOperationState !== 'finished') return
+
+		if ((raidScrubErrors ?? 0) > 0) {
+			toast.error(t('storage-manager.scrub.error-title'), {
+				id: 'raid-scrub-result',
+				area: 'settings',
+				description: t('storage-manager.scrub.error-description', {count: raidScrubErrors}),
+				duration: Infinity,
+				fullClick: true,
+				action: {
+					label: t('notifications.view'),
+					onClick: () => navigate('/settings/storage'),
+				},
+			})
+			return
+		}
+
+		toast.success(t('storage-manager.scrub.completed-toast'), {
+			id: 'raid-scrub-result',
+			area: 'settings',
+		})
+	}, [navigate, raidOperationState, raidOperationType, raidScrubErrors, t])
 
 	// Common animation props
 	const commonProps = {

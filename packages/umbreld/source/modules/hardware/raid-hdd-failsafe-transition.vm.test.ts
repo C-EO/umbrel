@@ -138,6 +138,7 @@ describe('RAID HDD storage to failsafe mirror transition', () => {
 
 		// Subscribe to transition progress events
 		transitionSubscription = umbreld.subscribeToEvents<FailsafeTransitionStatus>('raid:failsafe-transition-progress')
+		await transitionSubscription.started
 
 		// Start transition — for HDDs this is in-place (no reboot)
 		const result = await umbreld.client.hardware.raid.transitionToFailsafeMirror.mutate({

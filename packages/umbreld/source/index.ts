@@ -130,6 +130,11 @@ type StoreSchema = {
 	migration: {
 		menderToRugixAttempt?: number
 	}
+	// Runtime RAID maintenance state belongs in Umbreld's data store. The boot
+	// RAID config is reserved for locating, mounting, and recovering the pool.
+	raid?: {
+		nextScrubAt?: number
+	}
 	mcp?: McpStoreSettings
 	authorizedThunderboltDevices?: {
 		id: string

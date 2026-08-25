@@ -6,7 +6,13 @@ import type {CloudSyncActivity} from '../files/cloud-types.js'
 import type {FileChangeEvent} from '../files/watcher.js'
 import type {OperationsInProgress} from '../files/files.js'
 import type {BackupsInProgress, RestoreStatus} from '../backups/backups.js'
-import type {ExpansionStatus, FailsafeTransitionStatus, RebuildStatus, ReplaceStatus} from '../hardware/raid.js'
+import type {
+	ExpansionStatus,
+	FailsafeTransitionStatus,
+	RebuildStatus,
+	ReplaceStatus,
+	ScrubStatus,
+} from '../hardware/raid.js'
 import type {Machine, OsImage} from '../machines/machines.js'
 
 // Type assertion to ensure all events in EventTypes are defined in events
@@ -33,6 +39,7 @@ export const events = [
 	'raid:failsafe-transition-progress',
 	'raid:rebuild-progress',
 	'raid:replace-progress',
+	'raid:scrub-progress',
 	'machines:updated',
 	'machines:os-images-updated',
 	'raid:status-change',
@@ -79,6 +86,8 @@ export type EventTypes = {
 	'raid:rebuild-progress': RebuildStatus
 	// Fires when RAID replace progress changes
 	'raid:replace-progress': ReplaceStatus
+	// Fires repeatedly while a scrub is in progress and once with its result
+	'raid:scrub-progress': ScrubStatus
 	// Fires with a full snapshot of all virtual machines whenever any machine
 	// changes (state transitions, install progress, settings, pinning)
 	'machines:updated': Machine[]

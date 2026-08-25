@@ -2,7 +2,7 @@ import {useTranslation} from 'react-i18next'
 import {TbClock} from 'react-icons/tb'
 
 // Banner shown in storage dialogs when a RAID operation is in progress.
-// ZFS only allows one operation (expansion, rebuild, replace) at a time, so we
+// ZFS maintenance work (expansion, rebuild, replace, scrub) is coordinated, so we
 // inform the user and disable actions that would start a new operation.
 type OperationInProgressBannerProps = {
 	variant: 'wait' | 'shutdown-safe'

@@ -15,11 +15,13 @@ export type {RaidOperationType, RaidProgress}
 // t('storage-manager.operation.rebuilding')
 // t('storage-manager.operation.replacing')
 // t('storage-manager.operation.enabling-failsafe')
+// t('storage-manager.operation.scrubbing')
 export const raidOperationLabels: Record<RaidOperationType, string> = {
 	expansion: 'storage-manager.operation.expanding',
 	rebuild: 'storage-manager.operation.rebuilding',
 	replace: 'storage-manager.operation.replacing',
 	'failsafe-transition': 'storage-manager.operation.enabling-failsafe',
+	scrub: 'storage-manager.operation.scrubbing',
 }
 
 export function RaidIsland() {

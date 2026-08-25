@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type {RaidDevice, RaidStatus, StorageDevice} from './hooks/use-storage.ts'
-import {getPoolDeviceType, planFailsafeTransition, planMirrorAdditions} from './utils.ts'
+import {getPoolDeviceType, hasRaidErrors, planFailsafeTransition, planMirrorAdditions} from './utils.ts'
 
 const TB = 1_000_000_000_000
 
@@ -27,6 +27,14 @@ function poolDrive(overrides: {id?: string; roundedSize?: number}): RaidDevice {
 }
 
 const ids = (devices: Array<{id?: string}>) => devices.map((d) => d.id)
+
+test('hasRaidErrors detects every non-zero ZFS device error counter', () => {
+	assert.equal(hasRaidErrors(undefined), false)
+	assert.equal(hasRaidErrors({readErrors: 0, writeErrors: 0, checksumErrors: 0}), false)
+	assert.equal(hasRaidErrors({readErrors: 1, writeErrors: 0, checksumErrors: 0}), true)
+	assert.equal(hasRaidErrors({readErrors: 0, writeErrors: 1, checksumErrors: 0}), true)
+	assert.equal(hasRaidErrors({readErrors: 0, writeErrors: 0, checksumErrors: 1}), true)
+})
 
 test('getPoolDeviceType routes attached SSD and HDD pools to their matching manager', () => {
 	const pool = {

@@ -60,6 +60,129 @@ export type RebuildStatus = {
 	progress: number
 }
 
+export type ScrubStatus = {
+	state: 'scrubbing' | 'finished' | 'canceled'
+	progress: number
+	errors: number
+}
+
+export const RAID_SCRUB_ERROR_NOTIFICATION = 'raid-scrub-errors'
+
+export function shouldCreateScrubErrorNotification({
+	hasObservedScrub,
+	previous,
+	current,
+}: {
+	hasObservedScrub: boolean
+	previous?: ScrubStatus
+	current: ScrubStatus
+}): boolean {
+	return hasObservedScrub && previous?.state === 'scrubbing' && current.state === 'finished' && current.errors > 0
+}
+
+export type PoolMutation =
+	| 'RAID setup'
+	| 'RAID device addition'
+	| 'RAID mirror addition'
+	| 'RAID accelerator addition'
+	| 'device replacement'
+	| 'FailSafe transition'
+
+export type ScrubConflict =
+	| 'initial setup'
+	| 'FailSafe transition'
+	| 'device replacement'
+	| 'expansion'
+	| 'rebuild'
+	| 'scrub'
+	| PoolMutation
+
+export function getScrubConflict({
+	isInitialSetupInProgress,
+	isTransitioningToFailsafe,
+	isReplacing,
+	activePoolMutation,
+	expansion,
+	rebuild,
+	scrub,
+}: {
+	isInitialSetupInProgress: boolean
+	isTransitioningToFailsafe: boolean
+	isReplacing: boolean
+	activePoolMutation?: PoolMutation
+	expansion?: ExpansionStatus
+	rebuild?: RebuildStatus
+	scrub?: ScrubStatus
+}): ScrubConflict | undefined {
+	if (isInitialSetupInProgress) return 'initial setup'
+	if (isTransitioningToFailsafe) return 'FailSafe transition'
+	if (isReplacing) return 'device replacement'
+	if (activePoolMutation) return activePoolMutation
+	if (expansion?.state === 'expanding') return 'expansion'
+	if (rebuild?.state === 'rebuilding') return 'rebuild'
+	if (scrub?.state === 'scrubbing') return 'scrub'
+}
+
+export async function ensureScrubSchedule({
+	getNextScrubAt,
+	scheduleNextScrub,
+	onError,
+}: {
+	getNextScrubAt: () => Promise<number | undefined>
+	scheduleNextScrub: () => Promise<void>
+	onError: (error: unknown) => void
+}): Promise<void> {
+	try {
+		if (!(await getNextScrubAt())) await scheduleNextScrub()
+	} catch (error) {
+		// Startup must not fail because routine scheduling state is temporarily
+		// unavailable. The daily scheduler will retry the same work later.
+		onError(error)
+	}
+}
+
+export async function runScrubSchedulerTick({
+	now,
+	getNextScrubAt,
+	scheduleNextScrub,
+	getStatus,
+	scrub,
+	onExistingScrub,
+	onError,
+}: {
+	now: () => number
+	getNextScrubAt: () => Promise<number | undefined>
+	scheduleNextScrub: () => Promise<void>
+	getStatus: () => Promise<{scrub?: ScrubStatus}>
+	scrub: () => Promise<boolean>
+	onExistingScrub: () => void
+	onError: (error: unknown) => void
+}): Promise<void> {
+	try {
+		const nextScrubAt = await getNextScrubAt()
+		if (!nextScrubAt) {
+			await scheduleNextScrub()
+			return
+		}
+		if (now() < nextScrubAt) return
+
+		// An OpenZFS-initiated scrub (for example after RAIDZ expansion) also
+		// satisfies the monthly check, so don't start a redundant scrub tomorrow.
+		const pool = await getStatus()
+		if (pool.scrub?.state === 'scrubbing') {
+			onExistingScrub()
+			await scheduleNextScrub()
+			return
+		}
+
+		await scrub()
+	} catch (error) {
+		// The caller keeps the existing deadline when work is due, so a transient
+		// store/status failure or busy pool is retried by the next scheduler tick.
+		onError(error)
+	}
+}
+
 export type FailsafeMirrorTransitionPair = {
 	existingDeviceId: string
 	newDeviceId: string
@@ -99,6 +222,7 @@ type RaidStatusSignatureInput = {
 	status?: State
 	raidType?: RaidType
 	topology?: Topology
+	dataErrors?: number
 	devices?: Array<{id: string; status: State}>
 	accelerator?: {
 		exists: boolean
@@ -108,9 +232,10 @@ type RaidStatusSignatureInput = {
 
 // Build a stable signature of the pool's user-visible state so the pool monitor can detect
 // changes and emit a raid:status-change event. Covers pool existence and status, raid type
-// and topology, and data/accelerator membership with per-member status. Excludes progress
-// fields (dedicated events exist), error counters (too noisy) and space values (implied by
-// membership and topology). Device lists are sorted so vdev enumeration order doesn't matter.
+// and topology, the pool-level permanent data error count, and data/accelerator membership
+// with per-member status. Excludes progress fields (dedicated events exist), per-device error
+// counters (too noisy) and space values (implied by membership and topology). Device lists are
+// sorted so vdev enumeration order doesn't matter.
 export function getRaidStatusSignature(pool: RaidStatusSignatureInput): string {
 	const sortById = (devices: Array<{id: string; status: State}> = []) =>
 		devices.map(({id, status}) => ({id, status})).sort((a, b) => a.id.localeCompare(b.id))
@@ -120,6 +245,7 @@ export function getRaidStatusSignature(pool: RaidStatusSignatureInput): string {
 		status: pool.status,
 		raidType: pool.raidType,
 		topology: pool.topology,
+		dataErrors: pool.dataErrors ?? 0,
 		devices: sortById(pool.devices),
 		accelerator: {
 			exists: pool.accelerator?.exists ?? false,
@@ -198,19 +324,66 @@ type ZpoolStatusOutput = {
 	pools: Record<string, Pool>
 }
 
-type AcceleratorPoolDevice = {
+export type AcceleratorPoolDevice = {
 	id: string
 	status: State
+	readErrors: number
+	writeErrors: number
+	checksumErrors: number
 	l2arcPartition: string
 	l2arcSize: number
 	specialPartition: string
 	specialSize: number
 }
 
-type ParsedAccelerator = {
+export type ParsedAccelerator = {
 	devices: AcceleratorPoolDevice[]
 	totalL2arcSize: number
 	totalSpecialUsableSize: number
+}
+
+// Parse accelerator vdevs into one entry per physical SSD. Each accelerator
+// has an L2ARC partition and a special-vdev partition, so error counters are
+// summed to report the complete physical drive in status and Drive Health.
+export function parsePoolAccelerator(pool: Pick<Pool, 'vdevs'>): ParsedAccelerator {
+	const toDeviceId = (path: string) => path.replace('/dev/disk/by-umbrel-id/', '').replace(/-part\d+$/, '')
+	const getVdevSize = (vdev: Vdev) => vdev.phys_space || vdev.rep_dev_size || vdev.total_space || 0
+	const vdevs = Object.values(pool.vdevs)
+	const cacheVdevs = vdevs.filter((v) => v.vdev_type === 'disk' && v.class === 'l2cache' && v.path)
+	const specialVdevs = vdevs.filter((v) => v.vdev_type === 'disk' && v.class === 'special' && v.path)
+
+	const specialByDeviceId = new Map(specialVdevs.map((v) => [toDeviceId(v.path!), v]))
+	const devices: AcceleratorPoolDevice[] = cacheVdevs
+		.map((cacheVdev) => {
+			const id = toDeviceId(cacheVdev.path!)
+			const specialVdev = specialByDeviceId.get(id)
+			if (!specialVdev) return undefined
+
+			// Prefer the special vdev's bad state because it contains primary data;
+			// otherwise retain any bad cache state rather than masking it as ONLINE.
+			let status: State = cacheVdev.state
+			if (specialVdev.state !== 'ONLINE') status = specialVdev.state
+
+			return {
+				id,
+				status,
+				readErrors: cacheVdev.read_errors + specialVdev.read_errors,
+				writeErrors: cacheVdev.write_errors + specialVdev.write_errors,
+				checksumErrors: cacheVdev.checksum_errors + specialVdev.checksum_errors,
+				l2arcPartition: cacheVdev.path!,
+				l2arcSize: getVdevSize(cacheVdev),
+				specialPartition: specialVdev.path!,
+				specialSize: getVdevSize(specialVdev),
+			}
+		})
+		.filter((device): device is AcceleratorPoolDevice => device !== undefined)
+		.sort((a, b) => a.id.localeCompare(b.id))
+
+	return {
+		devices,
+		totalL2arcSize: devices.reduce((sum, device) => sum + device.l2arcSize, 0),
+		totalSpecialUsableSize: devices.length === 0 ? 0 : Math.min(...devices.map((device) => device.specialSize)),
+	}
 }
 
 type ConfigStore = {
@@ -284,9 +457,16 @@ export default class Raid {
 	temporaryDevicePath = '/tmp/umbrelos-temporary-migration-device.img'
 	#lastExpansionProgress = 0
 	#lastRebuildProgress = 0
+	#lastScrubProgress = 0
+	#isStartingScrub = false
+	#activePoolMutation?: PoolMutation
 	#stopPoolMonitor?: () => void
+	#stopScrubScheduler?: () => void
 	#lastEmittedExpansion?: ExpansionStatus
 	#lastEmittedRebuild?: RebuildStatus
+	#lastEmittedScrub?: ScrubStatus
+	#hasObservedScrub = false
+	#scrubErrorNotificationPending = false
 	#lastStatusSignature?: string
 	#lastEmittedReplace?: ReplaceStatus
 
@@ -322,6 +502,22 @@ export default class Raid {
 				})
 			},
 		})
+	}
+
+	async #withPoolMutation<T>(operation: PoolMutation, job: () => Promise<T>): Promise<T> {
+		if (this.#activePoolMutation)
+			throw new Error(`Cannot start ${operation} while ${this.#activePoolMutation} is in progress`)
+		if (this.#isStartingScrub) throw new Error(`Cannot start ${operation} while a RAID scrub is starting`)
+
+		// Reserve the pool synchronously, before the operation's first await. This
+		// closes the gap where a scrub could otherwise start during device checks or
+		// partitioning after the mutation had already decided the pool was idle.
+		this.#activePoolMutation = operation
+		try {
+			return await job()
+		} finally {
+			if (this.#activePoolMutation === operation) this.#activePoolMutation = undefined
+		}
 	}
 
 	async hasConfigStore() {
@@ -402,12 +598,23 @@ export default class Raid {
 			this.logger.error('Failed to complete FailSafe transition:', error)
 		})
 
-		// TODO: Monthly scrub
+		// Check daily for a due scrub. The persisted deadline survives Umbreld restarts,
+		// and a new/legacy pool gets its first scrub deadline 30 days from now.
+		if (await this.configStore.get('raid.poolName')) {
+			await ensureScrubSchedule({
+				getNextScrubAt: () => this.#umbreld.store.get('raid.nextScrubAt'),
+				scheduleNextScrub: () => this.#scheduleNextScrub(),
+				onError: (error) =>
+					this.logger.error('Failed to initialize the RAID scrub schedule; retrying in one day', error),
+			})
+			this.#startScrubScheduler()
+		}
 	}
 
 	async stop() {
 		this.logger.log('Stopping RAID')
 		this.#stopPoolMonitor?.()
+		this.#stopScrubScheduler?.()
 	}
 
 	async #updateConfigDevicePaths(): Promise<void> {
@@ -448,6 +655,38 @@ export default class Raid {
 						}
 					}
 
+					// Emit scrub progress and results
+					if (pool.scrub) {
+						const last = this.#lastEmittedScrub
+						if (
+							last?.state !== pool.scrub.state ||
+							last?.progress !== pool.scrub.progress ||
+							last?.errors !== pool.scrub.errors
+						) {
+							if (
+								shouldCreateScrubErrorNotification({
+									hasObservedScrub: this.#hasObservedScrub,
+									previous: last,
+									current: pool.scrub,
+								})
+							) {
+								this.#scrubErrorNotificationPending = true
+							}
+							this.#lastEmittedScrub = pool.scrub
+							this.#umbreld.eventBus.emit('raid:scrub-progress', pool.scrub)
+						}
+						this.#hasObservedScrub = true
+					}
+
+					if (this.#scrubErrorNotificationPending) {
+						try {
+							await this.#umbreld.notifications.add(RAID_SCRUB_ERROR_NOTIFICATION)
+							this.#scrubErrorNotificationPending = false
+						} catch (error) {
+							this.logger.error('Failed to save the RAID scrub error notification; retrying', error)
+						}
+					}
+
 					// Emit an event when the pool's user-visible state changes (status, membership,
 					// per-member status, raid type, topology). The first tick primes the signature
 					// silently so booting doesn't fire a spurious event.
@@ -462,6 +701,30 @@ export default class Raid {
 			},
 			{runInstantly: true},
 		)
+	}
+
+	#startScrubScheduler() {
+		this.#stopScrubScheduler = runEvery(
+			'1 day',
+			() =>
+				runScrubSchedulerTick({
+					now: Date.now,
+					getNextScrubAt: () => this.#umbreld.store.get('raid.nextScrubAt'),
+					scheduleNextScrub: () => this.#scheduleNextScrub(),
+					getStatus: () => this.getStatus(),
+					scrub: () => this.scrub(),
+					onExistingScrub: () => this.logger.log('A RAID scrub is already running; scheduling the next monthly scrub'),
+					// Leave a due deadline in the past so the daily scheduler retries as
+					// soon as transient errors or conflicting RAID work have cleared.
+					onError: (error) => this.logger.error('Scheduled RAID scrub deferred; retrying in one day', error),
+				}),
+			{runInstantly: false},
+		)
+	}
+
+	async #scheduleNextScrub(): Promise<void> {
+		const thirtyDays = 30 * 24 * 60 * 60 * 1000
+		await this.#umbreld.store.set('raid.nextScrubAt', Date.now() + thirtyDays)
 	}
 
 	// Get status of the main RAID pool with migration error if any
@@ -500,6 +763,7 @@ export default class Raid {
 		}>
 		mirrors?: string[][]
 		topology?: Topology
+		dataErrors?: number
 		accelerator?: {
 			exists: boolean
 			l2arcSize?: number
@@ -507,10 +771,14 @@ export default class Raid {
 			devices?: Array<{
 				id: string
 				status: State
+				readErrors: number
+				writeErrors: number
+				checksumErrors: number
 			}>
 		}
 		expansion?: ExpansionStatus
 		rebuild?: RebuildStatus
+		scrub?: ScrubStatus
 	}> {
 		// Get pool status from ZFS
 		const pool = await this.#getZpoolStatus(poolName)
@@ -588,6 +856,29 @@ export default class Raid {
 			rebuild = {state, progress}
 		}
 
+		// Parse scrub progress and the final error count
+		let scrub: ScrubStatus | undefined
+		if (pool.scan_stats?.function === 'SCRUB') {
+			const stats = pool.scan_stats
+			const stateMap = {SCANNING: 'scrubbing', FINISHED: 'finished', CANCELED: 'canceled'} as const
+			const state = stateMap[stats.state]
+
+			let progress: number
+			if (state === 'finished' || state === 'canceled') {
+				// Reset tracker when a scrub ends so the next scrub starts from 0
+				this.#lastScrubProgress = 0
+				progress = state === 'finished' ? 100 : 0
+			} else {
+				const rawProgress = stats.to_examine > 0 ? Math.floor((stats.issued / stats.to_examine) * 100) : 0
+				const cappedProgress = Math.min(rawProgress, 99)
+				// Never let progress go backwards
+				progress = Math.max(cappedProgress, this.#lastScrubProgress)
+				this.#lastScrubProgress = progress
+			}
+
+			scrub = {state, progress, errors: stats.errors}
+		}
+
 		const toDeviceId = (path: string) => path.replace('/dev/disk/by-umbrel-id/', '').replace(/-part\d+$/, '')
 
 		const devices = diskVdevs.map((device) => ({
@@ -605,8 +896,14 @@ export default class Raid {
 		// Calculate l2arc and special vdev sizes
 		// l2arc is striped so we sum all partition sizes
 		// special vdev is mirrored so we use the smallest partition size
-		const accelerator = this.#parsePoolAccelerator(pool)
-		const acceleratorDevices = accelerator.devices.map(({id, status}) => ({id, status}))
+		const accelerator = parsePoolAccelerator(pool)
+		const acceleratorDevices = accelerator.devices.map(({id, status, readErrors, writeErrors, checksumErrors}) => ({
+			id,
+			status,
+			readErrors,
+			writeErrors,
+			checksumErrors,
+		}))
 		const hasAccelerator = acceleratorDevices.length > 0
 
 		let mirrors: string[][] | undefined
@@ -716,6 +1013,7 @@ export default class Raid {
 			usedSpace,
 			freeSpace: usableSpace - usedSpace,
 			status: pool.state,
+			dataErrors: pool.error_count,
 			devices,
 			mirrors,
 			accelerator: {
@@ -726,7 +1024,73 @@ export default class Raid {
 			},
 			expansion,
 			rebuild,
+			scrub,
 		}
+	}
+
+	#assertNoScrubInProgress(pool: Awaited<ReturnType<Raid['getStatus']>>, operation: string): void {
+		if (this.#isStartingScrub || pool.scrub?.state === 'scrubbing') {
+			throw new Error(`Cannot ${operation} while a RAID scrub is in progress`)
+		}
+	}
+
+	async #cancelScrubForRepair(pool: Awaited<ReturnType<Raid['getStatus']>>): Promise<void> {
+		if (this.#isStartingScrub) throw new Error('Cannot replace a device while a RAID scrub is starting')
+		if (pool.scrub?.state !== 'scrubbing') return
+
+		this.logger.log(`Canceling scrub of RAID pool '${pool.name}' so device replacement can start`)
+		await $`zpool scrub -s ${pool.name}`
+
+		const canceled: ScrubStatus = {state: 'canceled', progress: 0, errors: pool.scrub.errors}
+		this.#lastScrubProgress = 0
+		this.#lastEmittedScrub = canceled
+		this.#umbreld.eventBus.emit('raid:scrub-progress', canceled)
+
+		// The repair takes priority, but the canceled scrub should still happen as
+		// soon as the pool is idle. Keeping its deadline due makes the daily
+		// scheduler retry after the replacement/resilver has completed.
+		await this.#umbreld.store
+			.set('raid.nextScrubAt', Date.now())
+			.catch((error) =>
+				this.logger.error('Failed to defer the canceled RAID scrub until after device replacement', error),
+			)
+	}
+
+	// Start a scrub and let the pool monitor report progress and completion.
+	async scrub(): Promise<boolean> {
+		const pool = await this.getStatus()
+		if (!pool.exists) throw new Error("RAID array doesn't exist")
+
+		if (this.#isStartingScrub) throw new Error('A RAID scrub is already in progress')
+		const conflict = getScrubConflict({
+			isInitialSetupInProgress: this.isInitialSetupInProgress,
+			isTransitioningToFailsafe: this.isTransitioningToFailsafe,
+			isReplacing: this.isReplacing,
+			activePoolMutation: this.#activePoolMutation,
+			expansion: pool.expansion,
+			rebuild: pool.rebuild,
+			scrub: pool.scrub,
+		})
+		if (conflict === 'scrub') throw new Error('A RAID scrub is already in progress')
+		if (conflict) throw new Error(`Cannot start a RAID scrub while ${conflict} is in progress`)
+
+		this.#isStartingScrub = true
+		try {
+			this.logger.log(`Starting scrub of RAID pool '${pool.name}'`)
+			await $`zpool scrub ${pool.name}`
+		} finally {
+			this.#isStartingScrub = false
+		}
+		await this.#scheduleNextScrub().catch((error) =>
+			this.logger.error('Failed to persist the next RAID scrub deadline', error),
+		)
+
+		const scrub: ScrubStatus = {state: 'scrubbing', progress: 0, errors: 0}
+		this.#lastScrubProgress = 0
+		this.#lastEmittedScrub = scrub
+		this.#hasObservedScrub = true
+		this.#umbreld.eventBus.emit('raid:scrub-progress', scrub)
+		return true
 	}
 
 	async #getZpoolStatus(poolName: string): Promise<Pool | undefined> {
@@ -736,51 +1100,6 @@ export default class Raid {
 			return zpoolStatus.pools?.[poolName]
 		} catch {
 			return undefined
-		}
-	}
-
-	// Parse accelerator vdevs from a pool into per-device info with aggregate sizes.
-	// Each physical accelerator device has two partitions: l2arc (read cache) and special (metadata).
-	// We match them by device id and combine into a single entry per device.
-	#parsePoolAccelerator(pool: Pool): ParsedAccelerator {
-		const toDeviceId = (path: string) => path.replace('/dev/disk/by-umbrel-id/', '').replace(/-part\d+$/, '')
-		const getVdevSize = (vdev: Vdev) => vdev.phys_space || vdev.rep_dev_size || vdev.total_space || 0
-		const vdevs = Object.values(pool.vdevs)
-		const cacheVdevs = vdevs.filter((v) => v.vdev_type === 'disk' && v.class === 'l2cache' && v.path)
-		const specialVdevs = vdevs.filter((v) => v.vdev_type === 'disk' && v.class === 'special' && v.path)
-
-		// Index special vdevs by device id for matching against cache vdevs
-		const specialByDeviceId = new Map(specialVdevs.map((v) => [toDeviceId(v.path!), v]))
-
-		// Build a complete device entry for each accelerator that has both partitions
-		const devices: AcceleratorPoolDevice[] = cacheVdevs
-			.map((cacheVdev) => {
-				const id = toDeviceId(cacheVdev.path!)
-				const specialVdev = specialByDeviceId.get(id)
-				if (!specialVdev) return undefined
-
-				// Default to cache status, but prefer special vdev status if it's bad since it's more critical
-				let status: State = cacheVdev.state
-				if (specialVdev.state !== 'ONLINE') status = specialVdev.state
-
-				return {
-					id,
-					status,
-					l2arcPartition: cacheVdev.path!,
-					l2arcSize: getVdevSize(cacheVdev),
-					specialPartition: specialVdev.path!,
-					specialSize: getVdevSize(specialVdev),
-				}
-			})
-			.filter((d): d is AcceleratorPoolDevice => d !== undefined)
-			.sort((a, b) => a.id.localeCompare(b.id))
-
-		return {
-			devices,
-			// l2arc is striped so we sum all partition sizes
-			totalL2arcSize: devices.reduce((sum, d) => sum + d.l2arcSize, 0),
-			// special vdev is mirrored so usable size is the smallest partition
-			totalSpecialUsableSize: devices.length === 0 ? 0 : Math.min(...devices.map((d) => d.specialSize)),
 		}
 	}
 
@@ -1156,8 +1475,14 @@ export default class Raid {
 	// 2. Create a ZFS pool from all data partitions
 	// 3. Write RAID config to boot partition to signal the boot process to mount the array
 	async setup(deviceIds: string[], raidType: RaidType, acceleratorDeviceIds?: string[]): Promise<boolean> {
+		return this.#withPoolMutation('RAID setup', () => this.#setup(deviceIds, raidType, acceleratorDeviceIds))
+	}
+
+	async #setup(deviceIds: string[], raidType: RaidType, acceleratorDeviceIds?: string[]): Promise<boolean> {
 		if (deviceIds.length === 0) throw new Error('At least one device is required')
 		if (raidType === 'failsafe' && deviceIds.length < 2) throw new Error('Failsafe mode requires at least two devices')
+		const currentPool = await this.getStatus()
+		if (currentPool.exists) this.#assertNoScrubInProgress(currentPool, 'set up RAID')
 		await this.#assertNotSystemDrives([...deviceIds, ...(acceleratorDeviceIds ?? [])])
 
 		const devices = deviceIds.map((id) => `/dev/disk/by-umbrel-id/${id}`)
@@ -1225,9 +1550,16 @@ export default class Raid {
 
 		// Write RAID config to boot partition
 		this.logger.log(`Writing RAID config to config partition`)
-		await this.configStore.set('raid', {poolName, state: 'normal', raidType, devices})
+		await this.configStore.set('raid', {
+			poolName,
+			state: 'normal',
+			raidType,
+			devices,
+		})
 
-		if (acceleratorDeviceIds?.length) await this.addAccelerator(acceleratorDeviceIds)
+		// Setup already owns the pool-mutation reservation, so call the private
+		// implementation instead of trying to acquire a nested reservation.
+		if (acceleratorDeviceIds?.length) await this.#addAccelerator(acceleratorDeviceIds)
 
 		this.logger.log('RAID setup complete')
 		return true
@@ -1290,11 +1622,16 @@ export default class Raid {
 	// Add one device to a stripe (storage) or raidz (failsafe SSD) array.
 	// Mirror failsafe arrays must use addMirror().
 	async addDevice(deviceId: string): Promise<boolean> {
+		return this.#withPoolMutation('RAID device addition', () => this.#addDevice(deviceId))
+	}
+
+	async #addDevice(deviceId: string): Promise<boolean> {
 		await this.#assertNotSystemDrives([deviceId])
 
 		// Get the pool status
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error("RAID array doesn't exist")
+		this.#assertNoScrubInProgress(pool, 'add a RAID device')
 		if (pool.topology === 'mirror')
 			throw new Error('addDevice is not supported for mirror failsafe mode, use addMirror')
 		if (pool.topology !== 'stripe' && pool.topology !== 'raidz')
@@ -1336,11 +1673,16 @@ export default class Raid {
 
 	// Add one mirror pair to a mirror (failsafe HDD) array.
 	async addMirror(deviceIds: [string, string]): Promise<boolean> {
+		return this.#withPoolMutation('RAID mirror addition', () => this.#addMirror(deviceIds))
+	}
+
+	async #addMirror(deviceIds: [string, string]): Promise<boolean> {
 		await this.#assertNotSystemDrives(deviceIds)
 
 		// Get the pool status
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error("RAID array doesn't exist")
+		this.#assertNoScrubInProgress(pool, 'add a RAID mirror')
 		if (pool.raidType !== 'failsafe' || pool.topology !== 'mirror')
 			throw new Error('addMirror is only supported for mirror failsafe mode')
 
@@ -1394,11 +1736,16 @@ export default class Raid {
 	// bulk data on HDDs. On a 2TB Umbrel dataset this is ~15GB. 64k would jump to ~150GB which is
 	// unpredictable on larger/different workloads, so we stay conservative.
 	async addAccelerator(deviceIds: string[]): Promise<boolean> {
+		return this.#withPoolMutation('RAID accelerator addition', () => this.#addAccelerator(deviceIds))
+	}
+
+	async #addAccelerator(deviceIds: string[]): Promise<boolean> {
 		await this.#assertNotSystemDrives(deviceIds)
 
 		// Accelerators are layered on an existing HDD pool, never on SSD RAID.
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error("RAID array doesn't exist")
+		this.#assertNoScrubInProgress(pool, 'add a RAID accelerator')
 		if (pool.raidType === 'storage' && pool.topology !== 'stripe')
 			throw new Error('Cannot add an accelerator while the storage array is only partially protected')
 		if ((await this.#getPoolDeviceType()) !== 'hdd')
@@ -1560,7 +1907,7 @@ export default class Raid {
 
 		const rawPool = await this.#getZpoolStatus(pool.name)
 		if (!rawPool) throw new Error('Pool not found')
-		const acceleratorDevices = this.#parsePoolAccelerator(rawPool).devices
+		const acceleratorDevices = parsePoolAccelerator(rawPool).devices
 		const acceleratorToReplace = acceleratorDevices.find((device) => device.id === oldDeviceId)
 		if (!acceleratorToReplace) throw new Error(`Device ${oldDeviceId} is not in the accelerator`)
 		const referenceAccelerator =
@@ -1614,6 +1961,10 @@ export default class Raid {
 
 	// Replace a storage or accelerator device in the RAID array.
 	async replaceDevice(oldDeviceId: string, newDeviceId: string): Promise<boolean> {
+		return this.#withPoolMutation('device replacement', () => this.#replaceDevice(oldDeviceId, newDeviceId))
+	}
+
+	async #replaceDevice(oldDeviceId: string, newDeviceId: string): Promise<boolean> {
 		await this.#assertNotSystemDrives([newDeviceId])
 
 		const newDevice = `/dev/disk/by-umbrel-id/${newDeviceId}`
@@ -1624,6 +1975,10 @@ export default class Raid {
 
 		const poolDeviceIds = pool.devices?.map((d) => d.id) ?? []
 		const acceleratorDeviceIds = pool.accelerator?.devices?.map((device) => device.id) ?? []
+		const replacingStorageDevice = poolDeviceIds.includes(oldDeviceId)
+		const replacingAcceleratorDevice = acceleratorDeviceIds.includes(oldDeviceId)
+		if (!replacingStorageDevice && !replacingAcceleratorDevice)
+			throw new Error(`Device ${oldDeviceId} is not in the RAID array or accelerator`)
 
 		// A device that's already a healthy member can't be a replacement, but replacing a
 		// member with its own physical disk is the documented ZFS recovery for a drive whose
@@ -1640,13 +1995,12 @@ export default class Raid {
 		}
 
 		if (this.isReplacing) throw new Error('Already replacing device')
+		await this.#cancelScrubForRepair(pool)
 		this.isReplacing = true
 
 		try {
-			if (poolDeviceIds.includes(oldDeviceId)) return await this.#replaceStorageDevice(pool, oldDeviceId, newDeviceId)
-			if (acceleratorDeviceIds.includes(oldDeviceId))
-				return await this.#replaceAcceleratorDevice(pool, oldDeviceId, newDeviceId)
-			throw new Error(`Device ${oldDeviceId} is not in the RAID array or accelerator`)
+			if (replacingStorageDevice) return await this.#replaceStorageDevice(pool, oldDeviceId, newDeviceId)
+			return await this.#replaceAcceleratorDevice(pool, oldDeviceId, newDeviceId)
 		} catch (error) {
 			this.isReplacing = false
 			throw error
@@ -1656,11 +2010,16 @@ export default class Raid {
 	// Transition an SSD storage array to a failsafe (raidz1) array.
 	// This creates a degraded raidz1 pool with the new disk and syncs data from the old pool.
 	async transitionToFailsafeRaidz(newDeviceId: string): Promise<boolean> {
+		return this.#withPoolMutation('FailSafe transition', () => this.#transitionToFailsafeRaidz(newDeviceId))
+	}
+
+	async #transitionToFailsafeRaidz(newDeviceId: string): Promise<boolean> {
 		await this.#assertNotSystemDrives([newDeviceId])
 
 		// Verify we're in a state that can be migrated
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error('No RAID array exists')
+		this.#assertNoScrubInProgress(pool, 'start a FailSafe transition')
 		if (pool.raidType !== 'storage') throw new Error('Can only transition from storage mode')
 
 		// Raidz transition only supports SSD arrays with a single existing device
@@ -1828,12 +2187,22 @@ export default class Raid {
 		pairs: FailsafeMirrorTransitionPair[],
 		acceleratorDeviceId?: string,
 	): Promise<boolean> {
+		return this.#withPoolMutation('FailSafe transition', () =>
+			this.#transitionToFailsafeMirror(pairs, acceleratorDeviceId),
+		)
+	}
+
+	async #transitionToFailsafeMirror(
+		pairs: FailsafeMirrorTransitionPair[],
+		acceleratorDeviceId?: string,
+	): Promise<boolean> {
 		if (pairs.length === 0) throw new Error('At least one mirror pair is required')
 		await this.#assertNotSystemDrives([...pairs.map((pair) => pair.newDeviceId), acceleratorDeviceId])
 
 		// Verify we're in a state that can be migrated
 		const pool = await this.getStatus()
 		if (!pool.exists) throw new Error('No RAID array exists')
+		this.#assertNoScrubInProgress(pool, 'start a FailSafe transition')
 		if (pool.raidType !== 'storage') throw new Error('Can only transition from storage mode')
 		if (pool.topology !== 'stripe') throw new Error('Can only transition an unmirrored storage array')
 

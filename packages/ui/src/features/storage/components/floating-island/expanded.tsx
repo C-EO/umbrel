@@ -26,6 +26,14 @@ export function ExpandedContent({operation}: {operation: RaidProgress}) {
 		if (operation.state === 'starting') {
 			return t('storage-manager.operation.starting')
 		}
+		if (operation.type === 'scrub') {
+			if (operation.state === 'finished' && operation.errors) {
+				return t('storage-manager.scrub.errors-found', {count: operation.errors})
+			}
+			if (operation.state === 'finished') return t('storage-manager.scrub.completed')
+			if (operation.state === 'canceled') return t('storage-manager.scrub.canceled')
+			return t('storage-manager.scrub.running')
+		}
 		return operation.state
 	}
 	const stateDescription = getStateDescription()

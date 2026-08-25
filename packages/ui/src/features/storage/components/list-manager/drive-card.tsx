@@ -4,21 +4,24 @@ import {TbPlus, TbRefreshDot} from 'react-icons/tb'
 import {cn} from '@/lib/utils'
 
 import {getDeviceHealth, RaidDevice, RaidDeviceStatus, raidStatusLabels, StorageDevice} from '../../hooks/use-storage'
-import {formatStorageSize} from '../../utils'
+import {formatStorageSize, hasRaidErrors} from '../../utils'
 import {DriveIcon, DriveLed, SsdChip} from './drive-visuals'
 
 // Resolve the LED color for a drive from its RAID membership and health
 function getDriveLed({
 	inPool,
 	raidStatus,
-	hasWarning,
+	hasHealthWarning,
+	hasErrors,
 }: {
 	inPool: boolean
 	raidStatus?: RaidDeviceStatus
-	hasWarning: boolean
+	hasHealthWarning: boolean
+	hasErrors: boolean
 }): DriveLed {
 	if (!inPool) return 'red'
-	if ((raidStatus && raidStatus !== 'ONLINE') || hasWarning) return 'red'
+	if ((raidStatus && raidStatus !== 'ONLINE') || hasHealthWarning) return 'red'
+	if (hasErrors) return 'amber'
 	return 'green'
 }
 
@@ -93,7 +96,12 @@ export function DriveCard({
 	pill?: React.ReactNode
 }) {
 	const {hasWarning} = getDeviceHealth(device)
-	const led = getDriveLed({inPool, raidStatus: raidDevice?.raidStatus, hasWarning})
+	const led = getDriveLed({
+		inPool,
+		raidStatus: raidDevice?.raidStatus,
+		hasHealthWarning: hasWarning,
+		hasErrors: hasRaidErrors(raidDevice),
+	})
 
 	// Not a <button> because the action slot renders its own buttons (nested buttons are invalid)
 	return (

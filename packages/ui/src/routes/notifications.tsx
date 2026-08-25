@@ -269,6 +269,28 @@ export function Notifications() {
 
 	// Get notification content based on notification type
 	const getNotificationContent = (notification: string): NotificationContent => {
+		if (notification === 'raid-scrub-errors') {
+			const onGoToStorageManager = () => {
+				clearNotification(notification)
+				navigate('/settings/storage')
+			}
+			return {
+				title: t('storage-manager.scrub.error-title'),
+				icon: <RiErrorWarningFill className='size-16 text-[#FF3434]' />,
+				description: t('notifications.raid.issue.description'),
+				action: (
+					<>
+						<Button variant='default' size='dialog' onClick={() => clearNotification(notification)} tabIndex={-1}>
+							{t('ok')}
+						</Button>
+						<AlertDialogAction variant='primary' onClick={onGoToStorageManager} tabIndex={0}>
+							{t('notifications.view')}
+						</AlertDialogAction>
+					</>
+				),
+			}
+		}
+
 		// Handle backup-failing notifications (both legacy and new format with repo ID)
 		if (notification === 'backups-failing' || notification.startsWith('backups-failing:')) {
 			const onGoToBackups = () => {

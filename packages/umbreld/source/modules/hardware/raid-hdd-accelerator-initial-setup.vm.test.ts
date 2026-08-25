@@ -89,7 +89,12 @@ describe('RAID HDD accelerator during initial storage setup', () => {
 		expect(status.devices).toHaveLength(1)
 		expect(status.accelerator).toMatchObject({exists: true})
 		expect(status.accelerator?.devices).toHaveLength(1)
-		expect(status.accelerator?.devices?.[0]).toMatchObject({id: acceleratorDeviceId1})
+		expect(status.accelerator?.devices?.[0]).toMatchObject({
+			id: acceleratorDeviceId1,
+			readErrors: 0,
+			writeErrors: 0,
+			checksumErrors: 0,
+		})
 		expectSizeToBeWithinTenPercentOfGb(status.accelerator?.l2arcSize, expectedSingleAcceleratorL2arcSizeGb)
 		expectSizeToBeWithinTenPercentOfGb(status.accelerator?.specialSize, expectedSingleAcceleratorSpecialSizeGb)
 	})
@@ -173,6 +178,9 @@ describe('RAID HDD mirrored accelerator during initial failsafe setup', () => {
 
 		const acceleratorIds = status.accelerator!.devices!.map((device) => device.id).sort()
 		expect(acceleratorIds).toEqual([acceleratorDeviceId1, acceleratorDeviceId2].sort())
+		for (const accelerator of status.accelerator!.devices!) {
+			expect(accelerator).toMatchObject({readErrors: 0, writeErrors: 0, checksumErrors: 0})
+		}
 		expectSizeToBeWithinTenPercentOfGb(status.accelerator?.l2arcSize, expectedStripedAcceleratorL2arcSizeGb)
 		expectSizeToBeWithinTenPercentOfGb(status.accelerator?.specialSize, expectedMirroredAcceleratorSpecialSizeGb)
 	})

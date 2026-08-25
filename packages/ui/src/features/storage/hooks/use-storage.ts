@@ -203,6 +203,18 @@ export function useStorage(options: UseStorageOptions = {}) {
 		},
 	)
 
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'raid:scrub-progress'},
+		{
+			onData(data) {
+				const status = data as {state: string}
+				if (status.state === 'finished' || status.state === 'canceled') {
+					refetchAll()
+				}
+			},
+		},
+	)
+
 	// Live-reload when block devices appear or disappear (throttled by the backend)
 	trpcReact.eventBus.listen.useSubscription(
 		{event: 'system:disk:change'},
@@ -299,12 +311,24 @@ export function useStorage(options: UseStorageOptions = {}) {
 	const availableHdds = availableDevices.filter((device) => device.type === 'hdd')
 	const availableSsds = availableDevices.filter((device) => device.type === 'ssd')
 
-	// Derived: Accelerator devices with their physical info merged in (undefined when detached)
-	const acceleratorDevices = (raidStatus?.accelerator?.devices ?? []).map((acceleratorDevice) => ({
-		id: acceleratorDevice.id,
-		status: acceleratorDevice.status,
-		device: allDevices.find((d) => d.id === acceleratorDevice.id),
-	}))
+	// Derived: Accelerator devices with physical health and both ZFS partition
+	// counters merged into one RaidDevice (undefined when detached).
+	const acceleratorDevices = (raidStatus?.accelerator?.devices ?? []).map((acceleratorDevice) => {
+		const storageDevice = allDevices.find((device) => device.id === acceleratorDevice.id)
+		return {
+			id: acceleratorDevice.id,
+			status: acceleratorDevice.status,
+			device: storageDevice
+				? {
+						...storageDevice,
+						raidStatus: acceleratorDevice.status,
+						readErrors: acceleratorDevice.readErrors,
+						writeErrors: acceleratorDevice.writeErrors,
+						checksumErrors: acceleratorDevice.checksumErrors,
+					}
+				: undefined,
+		}
+	})
 
 	// Derived: Total size of attached drives that aren't part of the pool or accelerator
 	const inactiveBytes = availableDevices.reduce((sum, device) => sum + device.size, 0)

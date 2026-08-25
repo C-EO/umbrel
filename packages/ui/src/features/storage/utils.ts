@@ -2,6 +2,12 @@ import prettyBytes from 'pretty-bytes'
 
 import type {RaidDevice, RaidStatus, StorageDevice} from './hooks/use-storage'
 
+type RaidErrorCounters = Pick<RaidDevice, 'readErrors' | 'writeErrors' | 'checksumErrors'>
+
+export function hasRaidErrors(device?: RaidErrorCounters): boolean {
+	return !!device && (device.readErrors > 0 || device.writeErrors > 0 || device.checksumErrors > 0)
+}
+
 export function getPoolDeviceType(
 	raidStatus: RaidStatus | undefined,
 	allDevices: StorageDevice[],

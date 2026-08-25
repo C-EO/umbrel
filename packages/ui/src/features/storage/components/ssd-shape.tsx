@@ -1,13 +1,20 @@
 import {useEffect, useId, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 // TODO: Consider changing TbBattery1 (low life) and TbHeartBroken (unhealthy) icons to something more intuitive
-import {TbActivityHeartbeat, TbAlertTriangleFilled, TbBattery1, TbFlame, TbHeartBroken} from 'react-icons/tb'
+import {
+	TbActivityHeartbeat,
+	TbAlertTriangle,
+	TbAlertTriangleFilled,
+	TbBattery1,
+	TbFlame,
+	TbHeartBroken,
+} from 'react-icons/tb'
 
 import {cn} from '@/lib/utils'
 import {formatTemperature} from '@/utils/temperature'
 
 import {getDeviceHealth, RaidDevice, raidStatusLabels, StorageDevice} from '../hooks/use-storage'
-import {formatStorageSize} from '../utils'
+import {formatStorageSize, hasRaidErrors} from '../utils'
 
 type SsdShapeProps = {
 	device: StorageDevice
@@ -35,17 +42,22 @@ export function SsdShape({
 
 	// Check for warnings
 	const {hasWarning, smartUnhealthy, lifeWarning, lifeRemaining, tempWarning, tempCritical} = getDeviceHealth(device)
+	const raidHasErrors = hasRaidErrors(raidDevice)
 
-	// Combined warning state: health warnings OR RAID device failure
-	const hasAnyWarning = hasWarning || isRaidDeviceFailed
+	// A failed RAID member or a SMART/temperature/wear issue stays red. ZFS error
+	// counters on an otherwise healthy online member are a lower-severity amber warning.
+	const hasCriticalWarning = hasWarning || isRaidDeviceFailed
+	const hasAmberWarning = raidHasErrors && !hasCriticalWarning
+	const hasAnyWarning = hasCriticalWarning || hasAmberWarning
 
 	// Build array of active warnings for cycling
 	// If RAID failure, only show that since any other warnings are not as important and can be seen in the health dialog
-	type WarningType = 'temperature' | 'unhealthy' | 'lowLife' | 'raidFailed'
+	type WarningType = 'temperature' | 'unhealthy' | 'lowLife' | 'raidFailed' | 'raidErrors'
 	const activeWarnings: WarningType[] = []
 	if (isRaidDeviceFailed) {
 		activeWarnings.push('raidFailed')
 	} else {
+		if (raidHasErrors) activeWarnings.push('raidErrors')
 		if (tempWarning || tempCritical) activeWarnings.push('temperature')
 		if (smartUnhealthy) activeWarnings.push('unhealthy')
 		if (lifeWarning) activeWarnings.push('lowLife')
@@ -136,10 +148,15 @@ export function SsdShape({
 								<stop offset='0%' stopColor='rgba(255, 255, 255, 0.15)' />
 								<stop offset='100%' stopColor='rgba(255, 255, 255, 0.05)' />
 							</>
-						) : hasAnyWarning ? (
+						) : hasCriticalWarning ? (
 							<>
 								<stop offset='0%' stopColor='#FF2F32' />
 								<stop offset='100%' stopColor='#991C1E' />
+							</>
+						) : hasAmberWarning ? (
+							<>
+								<stop offset='0%' stopColor='#F5A623' />
+								<stop offset='100%' stopColor='#8C5D14' />
 							</>
 						) : (
 							<>
@@ -199,14 +216,18 @@ export function SsdShape({
 					bottom: 30,
 					borderColor: isReadyToAdd
 						? 'rgba(255, 255, 255, 0.2)'
-						: hasAnyWarning
+						: hasCriticalWarning
 							? '#E22C2C'
-							: 'hsl(var(--color-brand))',
+							: hasAmberWarning
+								? '#F5A623'
+								: 'hsl(var(--color-brand))',
 					background: isReadyToAdd
 						? 'linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.08) 100%)'
-						: hasAnyWarning
+						: hasCriticalWarning
 							? 'linear-gradient(180deg, rgba(255, 255, 255, 0.37) 0%, rgba(255, 255, 255, 0.12) 100%)'
-							: 'linear-gradient(177.39deg, hsl(var(--color-brand) / 0.48) 0.11%, hsl(var(--color-brand) / 0.12) 99.89%)',
+							: hasAmberWarning
+								? 'linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0.1) 100%)'
+								: 'linear-gradient(177.39deg, hsl(var(--color-brand) / 0.48) 0.11%, hsl(var(--color-brand) / 0.12) 99.89%)',
 				}}
 			>
 				{/* SSD Size - we show usable size, with actual size crossed out if wasted */}
@@ -264,6 +285,17 @@ export function SsdShape({
 											{raidStatusLabels[raidDevice.raidStatus]
 												? t(raidStatusLabels[raidDevice.raidStatus])
 												: raidDevice.raidStatus}
+										</span>
+									</>
+								)}
+								{currentWarning === 'raidErrors' && (
+									<>
+										<TbAlertTriangle
+											className='size-4 text-white'
+											style={{filter: 'drop-shadow(0 0 6px rgba(255, 255, 255, 0.8))'}}
+										/>
+										<span className='text-center text-[13px] font-bold text-white'>
+											{t('storage-manager.health.warnings')}
 										</span>
 									</>
 								)}

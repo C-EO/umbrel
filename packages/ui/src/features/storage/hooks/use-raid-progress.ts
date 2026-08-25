@@ -17,18 +17,25 @@ type RebuildStatus = {
 
 type ReplaceStatus = RebuildStatus
 
+type ScrubStatus = {
+	state: 'scrubbing' | 'finished' | 'canceled'
+	progress: number
+	errors: number
+}
+
 type FailsafeTransitionStatus = {
 	state: 'syncing' | 'rebooting' | 'rebuilding' | 'complete' | 'error'
 	progress: number
 	error?: string
 }
 
-export type RaidOperationType = 'expansion' | 'rebuild' | 'replace' | 'failsafe-transition'
+export type RaidOperationType = 'expansion' | 'rebuild' | 'replace' | 'failsafe-transition' | 'scrub'
 
 export type RaidProgress = {
 	type: RaidOperationType
 	state: string
 	progress: number
+	errors?: number
 }
 
 // Hook to subscribe to all RAID progress events and return the active operation.
@@ -40,6 +47,7 @@ export function useRaidProgress(): RaidProgress | null {
 	const [rebuild, setRebuild] = useState<RebuildStatus | null>(null)
 	const [replace, setReplace] = useState<ReplaceStatus | null>(null)
 	const [failsafeTransition, setFailsafeTransition] = useState<FailsafeTransitionStatus | null>(null)
+	const [scrub, setScrub] = useState<ScrubStatus | null>(null)
 
 	// Subscribe to all RAID progress events
 	trpcReact.eventBus.listen.useSubscription(
@@ -115,6 +123,22 @@ export function useRaidProgress(): RaidProgress | null {
 		},
 	)
 
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'raid:scrub-progress'},
+		{
+			onData(data) {
+				const status = data as ScrubStatus
+				if (status.state === 'finished' || status.state === 'canceled') {
+					setTimeout(() => setScrub(null), 2000)
+				}
+				setScrub(status)
+			},
+			onError(err) {
+				console.error('eventBus.listen(raid:scrub-progress) subscription error', err)
+			},
+		},
+	)
+
 	// Determine which operation to display (priority order)
 	// Failsafe transition takes priority as it's a major operation
 	if (failsafeTransition) {
@@ -146,6 +170,15 @@ export function useRaidProgress(): RaidProgress | null {
 			type: 'expansion',
 			state: expansion.state,
 			progress: expansion.progress,
+		}
+	}
+
+	if (scrub) {
+		return {
+			type: 'scrub',
+			state: scrub.state,
+			progress: scrub.progress,
+			errors: scrub.errors,
 		}
 	}
 

@@ -5,7 +5,7 @@ import {TbPlus, TbShieldOff} from 'react-icons/tb'
 import {cn} from '@/lib/utils'
 
 import {getDeviceHealth, RaidDevice, RaidDeviceStatus, raidStatusLabels, StorageDevice} from '../../hooks/use-storage'
-import {formatStorageSize} from '../../utils'
+import {formatStorageSize, hasRaidErrors} from '../../utils'
 import {DriveIcon} from './drive-visuals'
 
 // Badge rendered between the two halves of a pair card
@@ -41,7 +41,7 @@ export function PairDriveCell({
 	const {t} = useTranslation()
 	const {hasWarning} = getDeviceHealth(device)
 	const isFailed = raidDevice && raidDevice.raidStatus !== 'ONLINE'
-	const led = inactive || isFailed || hasWarning ? 'red' : 'green'
+	const led = inactive || isFailed || hasWarning ? 'red' : hasRaidErrors(raidDevice) ? 'amber' : 'green'
 
 	return (
 		<div

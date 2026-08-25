@@ -88,6 +88,9 @@ const raid = router({
 		.input(z.object({oldDevice: z.string(), newDevice: z.string()}))
 		.mutation(async ({ctx, input}) => ctx.umbreld.hardware.raid.replaceDevice(input.oldDevice, input.newDevice)),
 
+	// Manually scrub the RAID pool
+	scrub: privateProcedure.mutation(async ({ctx}) => ctx.umbreld.hardware.raid.scrub()),
+
 	// Transition an SSD storage array to failsafe (raidz) mode
 	transitionToFailsafeRaidz: privateProcedure
 		.input(z.object({newDeviceId: z.string()}))

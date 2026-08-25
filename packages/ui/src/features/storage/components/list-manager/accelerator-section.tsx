@@ -3,16 +3,30 @@ import {TbPlus} from 'react-icons/tb'
 
 import {cn} from '@/lib/utils'
 
-import {RaidDeviceStatus, raidStatusLabels, RaidType, StorageDevice} from '../../hooks/use-storage'
-import {formatStorageSize} from '../../utils'
+import {
+	getDeviceHealth,
+	RaidDevice,
+	RaidDeviceStatus,
+	raidStatusLabels,
+	RaidType,
+	StorageDevice,
+} from '../../hooks/use-storage'
+import {formatStorageSize, hasRaidErrors} from '../../utils'
 import {AddIcon, DriveActionButton, ReplaceIcon} from './drive-card'
-import {SsdChip} from './drive-visuals'
+import {DriveLed, SsdChip} from './drive-visuals'
 import {PairCard, PairPlaceholderCell} from './mirror-pair-card'
 
 export type AcceleratorMember = {
 	id: string
 	status: RaidDeviceStatus
-	device?: StorageDevice
+	device?: RaidDevice
+}
+
+function getAcceleratorLed(member?: AcceleratorMember): DriveLed {
+	if (!member?.device) return 'none'
+	if (member.status !== 'ONLINE' || getDeviceHealth(member.device).hasWarning) return 'red'
+	if (hasRaidErrors(member.device)) return 'amber'
+	return 'none'
 }
 
 // Centered cell for one accelerator SSD inside a pair card
@@ -46,7 +60,11 @@ function AcceleratorCell({
 					{t('storage-manager.inactive')}
 				</span>
 			)}
-			<SsdChip sizeLabel={device ? formatStorageSize(device.size) : '—'} className={cn(!device && 'opacity-40')} />
+			<SsdChip
+				sizeLabel={device ? formatStorageSize(device.size) : '—'}
+				className={cn(!device && 'opacity-40')}
+				led={getAcceleratorLed(member)}
+			/>
 			<div className='flex flex-col items-center gap-0.5 text-center'>
 				<span className='max-w-full truncate text-[15px] font-medium text-white'>
 					{device ? device.name : t('storage-manager.missing-drive')}
@@ -75,12 +93,14 @@ function AcceleratorRow({
 	device,
 	subtitle,
 	inactive,
+	led,
 	onClick,
 	action,
 }: {
 	device: StorageDevice
 	subtitle?: string
 	inactive?: boolean
+	led?: DriveLed
 	onClick?: () => void
 	action?: React.ReactNode
 }) {
@@ -93,7 +113,7 @@ function AcceleratorRow({
 				onClick && 'cursor-pointer transition-colors hover:bg-white/10',
 			)}
 		>
-			<SsdChip sizeLabel={formatStorageSize(device.size)} />
+			<SsdChip sizeLabel={formatStorageSize(device.size)} led={led} />
 			<div className='min-w-0 flex-1'>
 				<div className='truncate text-[15px] font-medium text-white'>{device.name}</div>
 				<div className='truncate text-13 text-white/50'>{subtitle ?? device.serial}</div>
@@ -202,6 +222,7 @@ export function AcceleratorSection({
 		content = member.device ? (
 			<AcceleratorRow
 				device={member.device}
+				led={getAcceleratorLed(member)}
 				onClick={() => onHealthClick(member.device!)}
 				action={replaceAction(member)}
 			/>

@@ -9,11 +9,11 @@ import {formatTemperature} from '@/utils/temperature'
 import {tw} from '@/utils/tw'
 
 import {getDeviceHealth, RaidDevice, raidStatusLabels, StorageDevice} from '../../hooks/use-storage'
-import {formatStorageSize} from '../../utils'
+import {formatStorageSize, hasRaidErrors} from '../../utils'
 
 type Warning = {
 	message: string
-	advice: string
+	advice?: string
 }
 
 type SsdHealthDialogProps = {
@@ -31,12 +31,14 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 	const {smartUnhealthy, lifeRemaining, lifeWarning, tempWarning, tempCritical} = getDeviceHealth(device)
 	const isSsd = device.type === 'ssd'
 	const [temperatureUnit] = useTemperatureUnit()
+	const raidHasErrors = hasRaidErrors(raidDevice)
 
-	const healthStatus =
-		device.smartStatus === 'healthy'
-			? t('storage-manager.health.status-healthy')
-			: device.smartStatus === 'unhealthy'
-				? t('storage-manager.health.status-unhealthy')
+	const healthStatus = smartUnhealthy
+		? t('storage-manager.health.status-unhealthy')
+		: raidHasErrors
+			? t('storage-manager.health.warnings')
+			: device.smartStatus === 'healthy'
+				? t('storage-manager.health.status-healthy')
 				: t('storage-manager.health.status-unknown')
 
 	// Check if drive has failed in RAID
@@ -72,6 +74,16 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 			}),
 			advice: t('storage-manager.health.warning-temp-advice'),
 		})
+	}
+
+	if (raidDevice && raidDevice.readErrors > 0) {
+		warnings.push({message: t('storage-manager.health.read-errors', {count: raidDevice.readErrors})})
+	}
+	if (raidDevice && raidDevice.writeErrors > 0) {
+		warnings.push({message: t('storage-manager.health.write-errors', {count: raidDevice.writeErrors})})
+	}
+	if (raidDevice && raidDevice.checksumErrors > 0) {
+		warnings.push({message: t('storage-manager.health.checksum-errors', {count: raidDevice.checksumErrors})})
 	}
 
 	return (
@@ -132,13 +144,6 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 							</div>
 							<div className='text-sm'>
 								<p className='font-medium text-white/90'>{t('storage-manager.health.raid-failed-advice')}</p>
-								{(raidDevice.readErrors > 0 || raidDevice.writeErrors > 0 || raidDevice.checksumErrors > 0) && (
-									<div className='mt-3 flex gap-4 text-xs text-white/40'>
-										<span>{t('storage-manager.health.read-errors', {count: raidDevice.readErrors})}</span>
-										<span>{t('storage-manager.health.write-errors', {count: raidDevice.writeErrors})}</span>
-										<span>{t('storage-manager.health.checksum-errors', {count: raidDevice.checksumErrors})}</span>
-									</div>
-								)}
 							</div>
 						</div>
 					)}
@@ -154,7 +159,7 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 								{warnings.map((warning, index) => (
 									<div key={index} className='py-2 text-sm first:pt-0 last:pb-0'>
 										<p className='font-medium text-white/90'>{warning.message}</p>
-										<p className='mt-0.5 text-white/50'>{warning.advice}</p>
+										{warning.advice && <p className='mt-0.5 text-white/50'>{warning.advice}</p>}
 									</div>
 								))}
 							</div>
@@ -197,16 +202,16 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 										style={
 											{
 												backgroundColor:
-													device.smartStatus === 'healthy'
-														? '#00D084'
-														: device.smartStatus === 'unhealthy'
-															? '#F5A623'
+													smartUnhealthy || raidHasErrors
+														? '#F5A623'
+														: device.smartStatus === 'healthy'
+															? '#00D084'
 															: 'rgba(255,255,255,0.5)',
 												'--tw-ring-color':
-													device.smartStatus === 'healthy'
-														? 'rgba(0, 208, 132, 0.3)'
-														: device.smartStatus === 'unhealthy'
-															? 'rgba(245, 166, 35, 0.3)'
+													smartUnhealthy || raidHasErrors
+														? 'rgba(245, 166, 35, 0.3)'
+														: device.smartStatus === 'healthy'
+															? 'rgba(0, 208, 132, 0.3)'
 															: 'rgba(255, 255, 255, 0.15)',
 											} as React.CSSProperties
 										}

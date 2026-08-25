@@ -225,6 +225,7 @@ describe('RAID HDD multi-disk storage to failsafe mirror transition', () => {
 		const pidBefore = umbreld.vm.pid
 
 		transitionSubscription = umbreld.subscribeToEvents<FailsafeTransitionStatus>('raid:failsafe-transition-progress')
+		await transitionSubscription.started
 
 		const result = await umbreld.client.hardware.raid.transitionToFailsafeMirror.mutate({
 			pairs: [
