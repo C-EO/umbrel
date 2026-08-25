@@ -1,8 +1,8 @@
 ARG DEBIAN_VERSION=trixie
 # Debian Docker image tags lag behind snapshot.debian.org, so pin the base image
 # and apt repositories independently.
-ARG DEBIAN_IMAGE_SNAPSHOT_DATE=20260421
-ARG APT_SNAPSHOT_DATE=20260504
+ARG DEBIAN_IMAGE_SNAPSHOT_DATE=20260713
+ARG APT_SNAPSHOT_DATE=20260727
 ARG BASE_VARIANT=""
 
 ARG DOCKER_VERSION=28.5.0
