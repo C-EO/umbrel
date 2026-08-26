@@ -1107,6 +1107,12 @@ prepare_pi_cmdline() {
   cmdline=$(sed -E 's/console=serial0(,[0-9]+)? //' <<< "$cmdline")
   cmdline="${cmdline} console=ttyS0,115200"
 
+  # QEMU's USB NIC uses the same USB ID as an OpenBMC host link. Newer udev
+  # classifies that ID as link-local-only, so NetworkManager does not request
+  # the DHCP address required by QEMU's user-mode networking and port forwards.
+  # Acquire the address in the initramfs before userspace applies that policy.
+  cmdline="${cmdline} ip=dhcp"
+
   echo "$cmdline"
 }
 
