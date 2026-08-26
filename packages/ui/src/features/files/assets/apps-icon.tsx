@@ -2,8 +2,18 @@ import {SVGProps, useId} from 'react'
 
 export const AppsIcon = (props: SVGProps<SVGSVGElement>) => {
 	const id = useId()
+	// The viewBox is cropped to the cube's bounds (plus a 0.25 margin) rather than a looser
+	// box, so the glyph fills the square icon box the sidebar gives it instead of being
+	// letterboxed down to ~16px wide next to its 20px siblings.
 	return (
-		<svg width={15} height={18} viewBox='0 0 15 18' fill='none' xmlns='http://www.w3.org/2000/svg' {...props}>
+		<svg
+			width={14.5}
+			height={16.5}
+			viewBox='0.25 0.75 14.5 16.5'
+			fill='none'
+			xmlns='http://www.w3.org/2000/svg'
+			{...props}
+		>
 			<g filter={`url(#filter-${id})`}>
 				<path
 					d='M7.70623 8.79459C7.57331 8.87543 7.50684 8.91585 7.43305 8.9167C7.35927 8.91754 7.2919 8.87864 7.15716 8.80085L1.51977 5.54611C1.46272 5.51317 1.60535 5.59552 1.60249 5.59377C1.47862 5.51807 1.47585 5.21481 1.59833 5.13686C1.60116 5.13506 1.3865 5.26426 1.47237 5.21258L7.39013 1.61321C7.47462 1.56181 7.57136 1.53403 7.67025 1.53278C7.76915 1.53154 7.86656 1.55686 7.95232 1.60612L13.6712 4.90789C13.7797 4.97061 13.7509 5.11836 13.6438 5.18351L7.70623 8.79459Z'

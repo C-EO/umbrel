@@ -183,7 +183,7 @@ export function AccountAvatarEditor({
 						{t('files-action.upload')}
 					</DropdownMenuItem>
 					<DropdownMenuItem className='gap-2.5' onSelect={() => setBrowserOpen(true)}>
-						<img src='/assets/dock/dock-files.png' alt='' className='size-4 shrink-0 rounded-[4px]' />
+						<img src='/assets/dock/dock-files.webp' alt='' className='size-4 shrink-0 rounded-[4px]' />
 						{t('files-action.browse-in-files')}
 					</DropdownMenuItem>
 				</DropdownMenuContent>

@@ -9,9 +9,13 @@ import type {AuthorizedHttpUrlQuery} from '@/modules/auth/http-auth'
 export function AuthorizedUrlState({
 	query,
 	children,
+	dontCloseOnSpacebar,
 }: {
 	query: AuthorizedHttpUrlQuery
 	children: (url: string) => ReactNode
+	// Viewers that treat the spacebar as input (the text editor) must opt out of the
+	// close-on-space shortcut here too, or it applies for as long as the token is loading
+	dontCloseOnSpacebar?: boolean
 }) {
 	const {t} = useTranslation()
 
@@ -19,7 +23,7 @@ export function AuthorizedUrlState({
 	if (query.status === 'idle') return null
 
 	return (
-		<ViewerWrapper>
+		<ViewerWrapper dontCloseOnSpacebar={dontCloseOnSpacebar}>
 			{query.status === 'loading' ? (
 				<TbLoader className='size-6 animate-spin text-white/40' />
 			) : (

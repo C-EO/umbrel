@@ -23,6 +23,7 @@ import {useSheetStickyHeader} from '@/providers/sheet-sticky-header'
 import {useWallpaper, WallpaperAvifSource} from '@/providers/wallpaper'
 import {SettingsSummary} from '@/routes/settings/_components/settings-summary'
 import {trpcReact} from '@/trpc/trpc'
+import {focusRingClass} from '@/utils/element-classes'
 import {firstNameFromFullName} from '@/utils/misc'
 
 import {CpuCardContent} from './cpu-card-content'
@@ -250,21 +251,30 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 
 			{!isMember && (
 				<div className='grid grid-cols-2 gap-2.5'>
-					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': 'storage'})}}>
+					<Link
+						to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': 'storage'})}}
+						className={cn('block rounded-24', focusRingClass)}
+					>
 						<MobileStatCardTap>
 							<Card className={statCardClass}>
 								<StorageCardContent headerIcon={<MobileStatIcon icon={PiHardDriveFill} />} />
 							</Card>
 						</MobileStatCardTap>
 					</Link>
-					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': 'memory'})}}>
+					<Link
+						to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': 'memory'})}}
+						className={cn('block rounded-24', focusRingClass)}
+					>
 						<MobileStatCardTap>
 							<Card id={SETTINGS_SYSTEM_CARDS_ID} className={statCardClass}>
 								<MemoryCardContent headerIcon={<MobileStatIcon icon={PiCircuitryBold} />} />
 							</Card>
 						</MobileStatCardTap>
 					</Link>
-					<Link to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': 'cpu'})}}>
+					<Link
+						to={{search: addLinkSearchParams({dialog: 'live-usage', 'live-usage-tab': 'cpu'})}}
+						className={cn('block rounded-24', focusRingClass)}
+					>
 						<MobileStatCardTap>
 							<Card className={statCardClass}>
 								<CpuCardContent headerIcon={<MobileStatIcon icon={PiPulseBold} />} />

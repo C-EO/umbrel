@@ -19,7 +19,7 @@ export function TabSwitcher({
 						<button
 							key={opt.id}
 							className={[
-								'relative flex-1 rounded-full px-3 py-1 text-12 focus:ring-0 focus:outline-hidden',
+								'relative flex-1 rounded-full px-3 py-1 text-12 outline-hidden focus-visible:ring-2 focus-visible:ring-ring',
 								selected ? 'text-white' : 'text-white/60',
 							].join(' ')}
 							onClick={() => onChange(opt.id)}

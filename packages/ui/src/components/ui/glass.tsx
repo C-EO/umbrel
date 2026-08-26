@@ -179,6 +179,8 @@ type GlassProps = {
 	 * glass and this element — the lens can't see other content.
 	 */
 	refractionTarget?: React.RefObject<HTMLImageElement | HTMLVideoElement | null>
+	/** Always render from refractionTarget instead of Chromium's live backdrop. */
+	forceRefractionTarget?: boolean
 } & React.HTMLAttributes<HTMLElement>
 
 export function Glass({
@@ -193,6 +195,7 @@ export function Glass({
 	tint,
 	shine = true,
 	refractionTarget,
+	forceRefractionTarget = false,
 	className,
 	children,
 	...rest
@@ -204,9 +207,10 @@ export function Glass({
 	const [lens, setLens] = useState<Lens | null>(null)
 	const filterId = 'glass-' + useId().replace(/[^a-zA-Z0-9_-]/g, '')
 	const frosted = useContext(GlassFrostedContext)
+	const refractBackdrop = REFRACT && !forceRefractionTarget
 
 	useEffect(() => {
-		if (!REFRACT || frosted) return
+		if (!refractBackdrop || frosted) return
 		const host = hostRef.current
 		if (!host) return
 		let frame = 0
@@ -277,7 +281,7 @@ export function Glass({
 			// blob URL instead of publishing after cleanup
 			verRef.current++
 		}
-	}, [bevel, frosted])
+	}, [bevel, frosted, refractBackdrop])
 
 	useEffect(() => {
 		return () => {
@@ -287,9 +291,9 @@ export function Glass({
 
 	const contrast = useSyncExternalStore(subscribeContrast, () => CONTRAST_QUERY.matches)
 
-	// Safari/Firefox with a wallpaper backdrop we own: refract via WebGL from
-	// its pixels instead of frosted blur. The canvas stays hidden (and the
-	// frosted fallback active) until the lens has drawn its first frame.
+	// Refract a wallpaper target via WebGL on Safari/Firefox, or when a caller
+	// explicitly prefers a static target over Chromium's live backdrop. The
+	// canvas stays hidden until the lens has drawn its first frame.
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const [canvasLens, setCanvasLens] = useState(false)
 	// Keep the latest lens params in a ref so attachBackdropLens can read them
@@ -300,7 +304,7 @@ export function Glass({
 		lensParamsRef.current = {scale, chroma, bevel, saturate, brightness, blur}
 	})
 	useEffect(() => {
-		if (REFRACT || REDUCED || contrast || frosted || !refractionTarget) return
+		if (refractBackdrop || REDUCED || contrast || frosted || !refractionTarget) return
 		const canvas = canvasRef.current
 		if (!canvas) return
 		const detach = attachBackdropLens(
@@ -314,7 +318,7 @@ export function Glass({
 			detach()
 			setCanvasLens(false)
 		}
-	}, [refractionTarget, contrast, frosted])
+	}, [refractionTarget, contrast, frosted, refractBackdrop])
 
 	// Non-Chromium edge blur: a backdrop-blur overlay masked to the bevel band
 	// (four per-edge gradients fading over the bevel width — their union is a
@@ -322,7 +326,7 @@ export function Glass({
 	// fraction bevels track the element size without re-rendering per frame.
 	const edgeRef = useRef<HTMLDivElement>(null)
 	useEffect(() => {
-		if (REFRACT || contrast || frosted || edgeBlur <= 0) return
+		if (refractBackdrop || contrast || frosted || edgeBlur <= 0) return
 		const el = edgeRef.current
 		const host = hostRef.current
 		if (!el || !host) return
@@ -338,15 +342,15 @@ export function Glass({
 		const ro = new ResizeObserver(apply)
 		ro.observe(host)
 		return () => ro.disconnect()
-	}, [bevel, edgeBlur, contrast, frosted])
+	}, [bevel, edgeBlur, contrast, frosted, refractBackdrop])
 
 	// Fresh id per rebuild (and per edgeBlur — it lives inside the filter as
 	// stdDeviation) — Chromium caches filter output by id.
 	const id = lens ? `${filterId}-${lens.ver}-${edgeBlur}` : filterId
 	const backdropFilter =
-		contrast || canvasLens
+		contrast || canvasLens || (forceRefractionTarget && !!refractionTarget)
 			? undefined
-			: REFRACT && lens && !frosted
+			: refractBackdrop && lens && !frosted
 				? `url("#${id}") blur(${blur}px) saturate(${saturate}) brightness(${brightness})`
 				: `blur(${blur * 3}px) saturate(${saturate}) brightness(${brightness})`
 
@@ -363,7 +367,7 @@ export function Glass({
 	const Host = as
 	return (
 		<Host ref={hostRef} className={cn(!positioned && 'relative', 'isolate', className)} {...rest}>
-			{!REFRACT && !frosted && refractionTarget && (
+			{!refractBackdrop && !frosted && refractionTarget && (
 				<canvas
 					ref={canvasRef}
 					aria-hidden
@@ -382,7 +386,7 @@ export function Glass({
 					background: tint,
 				}}
 			/>
-			{!REFRACT && !frosted && !contrast && edgeBlur > 0 && (
+			{!refractBackdrop && !frosted && !contrast && edgeBlur > 0 && (
 				<div
 					ref={edgeRef}
 					aria-hidden
@@ -400,7 +404,7 @@ export function Glass({
 				/>
 			)}
 			{children}
-			{REFRACT && lens && !frosted && (
+			{refractBackdrop && lens && !frosted && (
 				<svg width={0} height={0} aria-hidden className='pointer-events-none fixed'>
 					<filter
 						id={id}

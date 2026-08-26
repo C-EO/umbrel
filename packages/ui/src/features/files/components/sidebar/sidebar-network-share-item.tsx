@@ -5,6 +5,7 @@ import {Droppable} from '@/features/files/components/shared/drag-and-drop'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {cn} from '@/lib/utils'
+import {focusRingClass} from '@/utils/element-classes'
 import {tw} from '@/utils/tw'
 
 const selectedClass = tw`
@@ -53,7 +54,11 @@ export function SidebarNetworkShareItem({host, rootPath, onEject, disabled}: Sid
 				}}
 				aria-label={t('files-action.eject-disk')}
 				disabled={disabled}
-				className={cn(disabled ? 'cursor-not-allowed opacity-50' : 'hover:text-white')}
+				className={cn(
+					'-m-0.5 rounded-full p-0.5',
+					focusRingClass,
+					disabled ? 'cursor-not-allowed opacity-50' : 'hover:text-white',
+				)}
 			>
 				<FaEject className='text-white/60' />
 			</button>

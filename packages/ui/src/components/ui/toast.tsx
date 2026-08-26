@@ -46,10 +46,10 @@ export function Toaster() {
 
 // The product area a toast comes from, shown as that area's icon
 const AREA_ICONS = {
-	files: '/assets/dock/dock-files.png',
-	settings: '/assets/dock/dock-settings.png',
-	'app-store': '/assets/dock/dock-app-store.png',
-	'live-usage': '/assets/dock/dock-live-usage.png',
+	files: '/assets/dock/dock-files.webp',
+	settings: '/assets/dock/dock-settings.webp',
+	'app-store': '/assets/dock/dock-app-store.webp',
+	'live-usage': '/assets/dock/dock-live-usage.webp',
 	machines: '/assets/dock/dock-machines.webp',
 	widgets: '/assets/dock/dock-widgets.png',
 	umbrelos: '/assets/umbrel-ios.png',

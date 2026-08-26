@@ -10,6 +10,7 @@ import {useIsFilesEmbedded} from '@/features/files/providers/files-capabilities-
 import {setLastFilesPath} from '@/features/files/utils/last-files-path'
 import {cn} from '@/lib/utils'
 import {trpcReact} from '@/trpc/trpc'
+import {focusRingClass} from '@/utils/element-classes'
 
 /**
  * File browser navigation controls that track visited folder paths.
@@ -114,7 +115,7 @@ export function NavigationControls() {
 			<motion.button
 				onClick={handleBack}
 				disabled={!canGoBack}
-				className={cn('p-0 hover:bg-transparent focus:ring-0 focus-visible:ring-0', {
+				className={cn('rounded-full p-0 hover:bg-transparent', focusRingClass, {
 					'opacity-50': !canGoBack,
 				})}
 				whileTap={{scale: 0.85}}
@@ -125,7 +126,7 @@ export function NavigationControls() {
 			<motion.button
 				onClick={handleForward}
 				disabled={!canGoForward}
-				className={cn('p-0 hover:bg-transparent focus:ring-0 focus-visible:ring-0', {
+				className={cn('rounded-full p-0 hover:bg-transparent', focusRingClass, {
 					'opacity-50': !canGoForward,
 				})}
 				whileTap={{scale: 0.85}}

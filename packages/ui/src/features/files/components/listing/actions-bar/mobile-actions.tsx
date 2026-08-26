@@ -22,6 +22,7 @@ import {usePreferences} from '@/features/files/hooks/use-preferences'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import {cn} from '@/lib/utils'
+import {focusRingClass} from '@/utils/element-classes'
 
 export function MobileActions({DropdownItems = null}: {DropdownItems?: React.ReactNode}) {
 	const {t} = useTranslation()
@@ -40,11 +41,7 @@ export function MobileActions({DropdownItems = null}: {DropdownItems?: React.Rea
 			    selection is meaningless */}
 			{mobilePrimaryAction ?? (
 				<Button
-					className={cn(
-						'h-[1.9rem] rounded-full px-3 text-13',
-						'focus:ring-0 focus:ring-offset-0 focus-visible:ring-0',
-						'focus:outline-hidden focus-visible:outline-hidden',
-					)}
+					className='h-[1.9rem] rounded-full px-3 text-13'
 					variant={isSelectingOnMobile ? 'secondary' : 'default'}
 					size='default'
 					aria-label={t('files-action.select')}
@@ -55,7 +52,7 @@ export function MobileActions({DropdownItems = null}: {DropdownItems?: React.Rea
 			)}
 
 			<DropdownMenu>
-				<DropdownMenuTrigger className='focus:ring-0 focus:ring-offset-0 focus:outline-hidden focus-visible:ring-0 focus-visible:outline-hidden'>
+				<DropdownMenuTrigger className={cn('-m-0.5 rounded-full p-0.5', focusRingClass)}>
 					<TbDots className='h-5 w-5' />
 				</DropdownMenuTrigger>
 				<DropdownMenuContent className='w-44' align='start'>

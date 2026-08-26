@@ -10,12 +10,14 @@ import {Drawer, DrawerContent, DrawerHeader, DrawerScroller, DrawerTitle} from '
 import {Loading} from '@/components/ui/loading'
 import {toast} from '@/components/ui/toast'
 import {useIsMobile} from '@/hooks/use-is-mobile'
+import {cn} from '@/lib/utils'
 import {finishBrowserLogout} from '@/modules/auth/logout'
 import {parseSessionUserAgent, SessionClient} from '@/modules/auth/session-user-agent'
 import {useConfirmation} from '@/providers/confirmation'
 import {useSettingsDialogProps} from '@/routes/settings/_components/shared'
 import {RouterOutput, trpcReact} from '@/trpc/trpc'
 import {languageCodeToDateLocale} from '@/utils/date-time'
+import {focusRingClass} from '@/utils/element-classes'
 
 type Session = RouterOutput['user']['listSessions'][number]
 
@@ -314,7 +316,10 @@ function BackButton({onClick, children}: {onClick: () => void; children: ReactNo
 	return (
 		<button
 			onClick={onClick}
-			className='-ml-1 flex items-center gap-0.5 self-start text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70'
+			className={cn(
+				'-mx-1 flex items-center gap-0.5 self-start rounded-4 px-1 text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70',
+				focusRingClass,
+			)}
 		>
 			<TbChevronLeft className='size-4' />
 			{children}

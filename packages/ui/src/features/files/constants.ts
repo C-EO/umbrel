@@ -34,6 +34,11 @@ export const EXTERNAL_STORAGE_PATH = '/External' as const
 export const NETWORK_STORAGE_PATH = '/Network' as const
 export const BACKUPS_PATH = '/Backups' as const
 
+// Roots whose direct children are created by umbrelOS itself (app data
+// directories by app installs, machine directories by Machines). Files never
+// offers to write into them: no uploads, new folders, paste or drops.
+export const SYSTEM_MANAGED_ROOT_PATHS: ReadonlySet<string> = new Set([APPS_PATH, MACHINES_PATH])
+
 // NOTE: Search and Recents are not real directories on disk. They are
 // pseudo-directories, i.e. they are handled client-side only and are just
 // virtual routes that show a flat list of file items returned by the backend

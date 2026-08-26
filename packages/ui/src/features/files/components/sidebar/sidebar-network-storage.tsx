@@ -13,6 +13,7 @@ import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
 import {useQueryParams} from '@/hooks/use-query-params'
 import {cn} from '@/lib/utils'
+import {focusRingClass} from '@/utils/element-classes'
 import {tw} from '@/utils/tw'
 
 export function SidebarNetworkStorage() {
@@ -123,7 +124,13 @@ function NetworkRootItem() {
 					navigate({search: addLinkSearchParams({dialog: 'files-add-network-share'})})
 				}}
 			>
-				<button className='flex items-center justify-center text-white/60 group-hover/plus:text-white'>
+				<button
+					aria-label={t('files-add-network-share.title')}
+					className={cn(
+						'-m-0.5 flex items-center justify-center rounded-full p-0.5 text-white/60 group-hover/plus:text-white',
+						focusRingClass,
+					)}
+				>
 					<FaPlus className='size-3' strokeWidth={5} />
 				</button>
 			</div>

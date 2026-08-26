@@ -36,7 +36,7 @@ function ScrollArea({
 				className={cn(
 					// Setting `block` to fix issues with radix `ScrollArea` component
 					// https://github.com/radix-ui/primitives/issues/926#issuecomment-1015279283
-					'flex h-full w-full rounded-[inherit] *:!block *:flex-grow',
+					'flex h-full w-full rounded-[inherit] outline-hidden *:!block *:flex-grow',
 					orientation === 'vertical' && 'flex-col',
 					scrollerClass,
 				)}

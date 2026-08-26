@@ -22,32 +22,24 @@ export const systemApps = [
 		systemApp: true,
 		systemAppTo: '/',
 	},
-	// For the dock...
-	{
-		id: 'UMBREL_home',
-		name: 'Home',
-		icon: '/assets/dock/dock-home.png',
-		systemApp: true,
-		systemAppTo: '/',
-	},
 	{
 		id: 'UMBREL_app-store',
 		name: 'App Store',
-		icon: '/assets/dock/dock-app-store.png',
+		icon: '/assets/dock/dock-app-store.webp',
 		systemApp: true,
 		systemAppTo: '/app-store',
 	},
 	{
 		id: 'UMBREL_files',
 		name: 'Files',
-		icon: '/assets/dock/dock-files.png',
+		icon: '/assets/dock/dock-files.webp',
 		systemApp: true,
 		systemAppTo: '/files',
 	},
 	{
 		id: 'UMBREL_settings',
 		name: 'Settings',
-		icon: '/assets/dock/dock-settings.png',
+		icon: '/assets/dock/dock-settings.webp',
 		systemApp: true,
 		systemAppTo: '/settings',
 	},
@@ -61,7 +53,7 @@ export const systemApps = [
 	{
 		id: 'UMBREL_live-usage',
 		name: 'Live Usage',
-		icon: '/assets/dock/dock-live-usage.png',
+		icon: '/assets/dock/dock-live-usage.webp',
 		systemApp: true,
 		// NOTE: using this will clear existing search params
 		// In practice, this means cmdk will clear params and clicking dock icon will not

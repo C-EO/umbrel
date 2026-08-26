@@ -1,11 +1,20 @@
 import {DragEndEvent, DragStartEvent} from '@dnd-kit/core'
 
-import {TRASH_PATH} from '@/features/files/constants'
+import {SYSTEM_MANAGED_ROOT_PATHS, TRASH_PATH} from '@/features/files/constants'
 import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FilesStore} from '@/features/files/store/use-files-store'
 import {FileSystemItem} from '@/features/files/types'
+
+// An uncommitted "New Folder" placeholder has no file behind it yet, so it can never be
+// dragged. A committed-but-not-yet-listed folder has no operations yet — allow it, since
+// the move mutation is enforced server-side anyway. Kept in sync with `allowsOperation`
+// in the file item, so a draggable item always produces a dragged item to render.
+function isMovable(item: FileSystemItem) {
+	if ('isNew' in item && item.isNew) return false
+	return item.operations.length === 0 || item.operations.includes('move')
+}
 
 export function useDragAndDrop() {
 	const isReadOnly = useIsFilesReadOnly()
@@ -18,7 +27,7 @@ export function useDragAndDrop() {
 	const handleDragStart = (event: DragStartEvent) => {
 		if (isReadOnly) return
 		const draggedItem = event.active.data.current as FileSystemItem
-		if (!draggedItem?.operations.includes('move')) return
+		if (!draggedItem || !isMovable(draggedItem)) return
 
 		// if the item is not already selected, reset the selection with the new item
 		if (!selectedItems.find((item) => item.path === draggedItem.path)) {
@@ -26,7 +35,9 @@ export function useDragAndDrop() {
 			setDraggedItems([draggedItem])
 		} else {
 			// if the item is already selected, use all selected items for dragging
-			setDraggedItems(selectedItems.filter((item) => item.operations.includes('move')))
+			const movableItems = selectedItems.filter(isMovable)
+			if (movableItems.length === 0) return
+			setDraggedItems(movableItems)
 		}
 	}
 
@@ -37,6 +48,13 @@ export function useDragAndDrop() {
 		if (!targetPath) {
 			clearDraggedItems()
 			return // dropped outside a valid drop target
+		}
+
+		// Drop targets for /Apps and /Machines are disabled, but guard here too so
+		// no drop surface can move items into a system-managed root
+		if (SYSTEM_MANAGED_ROOT_PATHS.has(targetPath)) {
+			clearDraggedItems()
+			return
 		}
 
 		// if the target is the trash, move the selected items to the trash

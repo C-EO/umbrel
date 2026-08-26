@@ -12,6 +12,10 @@ export function FilesDndOverlay() {
 	const totalItemsBeingDragged = draggedItems.length
 	const previewItems = draggedItems.slice(1, 4)
 
+	// A drag can start on an item that handleDragStart then declines to track, which would
+	// otherwise render FileItemIcon with an undefined item and crash the whole Files route.
+	if (!firstItem) return null
+
 	return (
 		<DragOverlay dropAnimation={null} modifiers={[snapCenterToCursor]}>
 			{

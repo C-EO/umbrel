@@ -4,12 +4,12 @@ import {useTranslation} from 'react-i18next'
 import {ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger} from '@/components/ui/context-menu'
 import {SidebarItem} from '@/features/files/components/sidebar/sidebar-item'
 import {useFavorites} from '@/features/files/hooks/use-favorites'
+import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 
 export function SidebarFavorites({favorites}: {favorites: (string | null)[]}) {
 	const {t} = useTranslation()
-	const {navigateToDirectory, currentPath} = useNavigate()
 	const {removeFavorite} = useFavorites()
 	const isReadOnly = useIsFilesReadOnly()
 
@@ -17,7 +17,6 @@ export function SidebarFavorites({favorites}: {favorites: (string | null)[]}) {
 		<AnimatePresence initial={false}>
 			{favorites.map((favoritePath: string | null) => {
 				if (!favoritePath) return null
-				const name = favoritePath.split('/').pop() || favoritePath
 
 				return (
 					<motion.div
@@ -30,15 +29,7 @@ export function SidebarFavorites({favorites}: {favorites: (string | null)[]}) {
 						<ContextMenu>
 							<ContextMenuTrigger asChild>
 								<div>
-									<SidebarItem
-										item={{
-											name: name,
-											path: favoritePath,
-											type: 'directory',
-										}}
-										isActive={currentPath === favoritePath}
-										onClick={() => navigateToDirectory(favoritePath)}
-									/>
+									<SidebarFavoriteItem path={favoritePath} />
 								</div>
 							</ContextMenuTrigger>
 							{!isReadOnly ? (
@@ -53,5 +44,20 @@ export function SidebarFavorites({favorites}: {favorites: (string | null)[]}) {
 				)
 			})}
 		</AnimatePresence>
+	)
+}
+
+function SidebarFavoriteItem({path}: {path: string}) {
+	const {navigateToDirectory, currentPath} = useNavigate()
+	// A machine's directory is named by its id; show the machine's name like the listing does
+	const {machine} = useMachineFolder(path)
+	const name = machine?.name ?? (path.split('/').pop() || path)
+
+	return (
+		<SidebarItem
+			item={{name, path, type: 'directory'}}
+			isActive={currentPath === path}
+			onClick={() => navigateToDirectory(path)}
+		/>
 	)
 }

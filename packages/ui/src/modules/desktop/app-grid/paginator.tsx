@@ -3,6 +3,7 @@ import {useEffect, useRef, useState} from 'react'
 
 import CaretRight from '@/components/caret-right'
 import {cn} from '@/lib/utils'
+import {focusRingOnWallpaperClass} from '@/utils/element-classes'
 
 const DATA_INDEX_ATTR = 'data-index'
 
@@ -89,7 +90,10 @@ export function ArrowButton({
 }
 
 const glassButtonCva = cva(
-	'shrink-0 w-10 h-10 rounded-full backdrop-blur-xs contrast-more:bg-neutral-800 contrast-more:backdrop-blur-none grid place-items-center bg-white/5 shadow-glass-button text-white/75 disabled:text-white/30 transition-all hover:bg-white/10 contrast-more:hover:bg-neutral-700 active:bg-white/5 cursor-default',
+	cn(
+		'shrink-0 w-10 h-10 rounded-full backdrop-blur-xs contrast-more:bg-neutral-800 contrast-more:backdrop-blur-none grid place-items-center bg-white/5 shadow-glass-button text-white/75 disabled:text-white/30 transition-all hover:bg-white/10 contrast-more:hover:bg-neutral-700 active:bg-white/5 cursor-default',
+		focusRingOnWallpaperClass,
+	),
 )
 
 // ---
@@ -100,11 +104,14 @@ function PaginatorPill({active, onClick}: {active?: boolean; onClick: () => void
 		<button
 			onClick={onClick}
 			// z-10 to make sure it's above peer elements so click target is bigger
-			className={cn('group z-10 -my-3 py-3', active && 'pointer-events-none')}
+			className={cn('group z-10 -my-3 rounded-full py-3 outline-hidden', active && 'pointer-events-none')}
 		>
 			<div
 				className={cn(
 					'h-1 w-3 rounded-full bg-white/20 transition-all group-hover:bg-white/30',
+					// The button is a padded hit area with no shape of its own, so the
+					// ring goes on the dot the user can actually see.
+					'group-focus-visible:ring-2 group-focus-visible:ring-ring',
 					active && 'w-5 bg-white',
 				)}
 			/>

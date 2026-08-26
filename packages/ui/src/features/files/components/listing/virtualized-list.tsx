@@ -501,10 +501,19 @@ export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 		)
 	}
 
+	// overflow-hidden, never overflow-auto: react-window's own outer element is the real
+	// scroller (it carries scrollAreaRef), so this container never needs to scroll — and it
+	// must not be able to. It measures itself with clientWidth/clientHeight, which shrink
+	// when it shows scrollbars of its own, which resizes the list, which changes whether it
+	// overflows: a feedback loop. Where scrollbars take layout space (Firefox on macOS with
+	// "Show scroll bars: Always"; ours are 11px only because ::-webkit-scrollbar is styled,
+	// which Firefox ignores) there is zero slack to absorb that — the list is sized flush to
+	// the padding box on both axes — so the two scrollbars trigger each other and the
+	// listing visibly shakes.
 	return (
 		<div
 			ref={containerRef}
-			className={`umbrel-files-fade-scroller h-full w-full overflow-auto px-3 lg:px-6 ${isScrolled ? 'scrolled' : ''}`}
+			className={`umbrel-files-fade-scroller h-full w-full overflow-hidden px-3 lg:px-6 ${isScrolled ? 'scrolled' : ''}`}
 		>
 			{/* Containment wrapper: the FixedSizeList is rendered wider than the content area
 			    (width + 24) to push its scrollbar into parent padding. Without this wrapper,

@@ -13,7 +13,7 @@ import {trpcReact} from '@/trpc/trpc'
 import {t} from '@/utils/i18n'
 import {tw} from '@/utils/tw'
 
-const consoleButtonClass = tw`flex size-7 items-center justify-center rounded-full text-white/60 transition-[background-color,color,transform] duration-200 hover:bg-white/10 hover:text-white focus:outline-hidden active:scale-90 disabled:pointer-events-none disabled:opacity-40`
+const consoleButtonClass = tw`flex size-7 items-center justify-center rounded-full text-white/60 transition-[background-color,color,transform] duration-200 hover:bg-white/10 hover:text-white outline-hidden focus-visible:ring-2 focus-visible:ring-ring active:scale-90 disabled:pointer-events-none disabled:opacity-40`
 
 // Fullscreen console, opened in a new browser tab. Minimal chrome: a slim
 // header with the VM identity and power controls, display fills the rest.

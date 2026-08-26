@@ -2,7 +2,9 @@ import {useTranslation} from 'react-i18next'
 import {useLocation} from 'react-router-dom'
 
 import {useIsSmallMobile} from '@/hooks/use-is-mobile'
+import {cn} from '@/lib/utils'
 import {useWallpaper} from '@/providers/wallpaper'
+import {focusRingOnWallpaperClass} from '@/utils/element-classes'
 import {cmdOrCtrl, platform} from '@/utils/misc'
 
 export function Search({onClick}: {onClick?: () => void}) {
@@ -10,7 +12,10 @@ export function Search({onClick}: {onClick?: () => void}) {
 	const isMobile = useIsSmallMobile()
 	return (
 		<button
-			className='z-10 animate-in rounded-full border border-white/5 bg-neutral-600/20 px-3 py-2.5 text-12 leading-inter-trimmed text-white/90 backdrop-blur-xs transition-colors duration-300 fill-mode-both fade-in hover:bg-neutral-600/30 active:bg-neutral-600/10'
+			className={cn(
+				'z-10 animate-in rounded-full border border-white/5 bg-neutral-600/20 px-3 py-2.5 text-12 leading-inter-trimmed text-white/90 backdrop-blur-xs transition-colors duration-300 fill-mode-both fade-in hover:bg-neutral-600/30 active:bg-neutral-600/10',
+				focusRingOnWallpaperClass,
+			)}
 			onClick={onClick}
 		>
 			{/* TODO: ideally, centralize shortcut preview and shortcut event listener so always in sync */}

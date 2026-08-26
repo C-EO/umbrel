@@ -740,7 +740,11 @@ export default function UsersDialog() {
 								owner && (
 									<button
 										type='button'
-										className='group flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-white/4'
+										className={cn(
+											'group flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-white/4',
+											'outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+											'first:rounded-t-12 last:rounded-b-12',
+										)}
 										onClick={openOwnerView}
 									>
 										<AccountAvatar name={owner.name} userId={owner.userId} avatarUrl={owner.avatarUrl} size={32} />
@@ -785,7 +789,11 @@ export default function UsersDialog() {
 										<button
 											key={member.userId}
 											type='button'
-											className='group flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-white/4'
+											className={cn(
+												'group flex w-full items-center gap-3 p-3 text-left transition-colors hover:bg-white/4',
+												'outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+												'first:rounded-t-12 last:rounded-b-12',
+											)}
 											onClick={() => openEditView(member.userId)}
 										>
 											<AccountAvatar name={member.name} userId={member.userId} avatarUrl={member.avatarUrl} size={32} />

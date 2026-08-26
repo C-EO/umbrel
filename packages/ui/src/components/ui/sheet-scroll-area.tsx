@@ -38,7 +38,11 @@ function ScrollArea({
 		 */}
 			<ScrollAreaPrimitive.Viewport
 				ref={mergeRefs([viewportRef, scrollerRef])}
-				className={cn(fade && scrollerClass, 'h-full w-full rounded-[inherit] [&>div]:!block', viewportClassName)}
+				className={cn(
+					fade && scrollerClass,
+					'h-full w-full rounded-[inherit] outline-hidden [&>div]:!block',
+					viewportClassName,
+				)}
 			>
 				{children}
 			</ScrollAreaPrimitive.Viewport>

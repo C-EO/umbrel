@@ -1,9 +1,10 @@
 import {useTranslation} from 'react-i18next'
 
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
-import {CLOUD_PATH} from '@/features/files/constants'
+import {CLOUD_PATH, MACHINES_PATH} from '@/features/files/constants'
 import {cloudAccountLabel, useCloudAccounts, useCloudProviders} from '@/features/files/hooks/use-cloud'
 import {useHomePath} from '@/features/files/hooks/use-home-path'
+import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {useIsFilesEmbedded} from '@/features/files/providers/files-capabilities-context'
 import {formatItemName} from '@/features/files/utils/format-filesystem-name'
@@ -44,6 +45,11 @@ export function PathBarMobile({path}: PathBarMobileProps) {
 			? cloudAccountLabel(cloudAccount, cloudAccounts, cloudProviders)
 			: t('files-sidebar.cloud')
 		: null
+
+	// /Machines shows its localized name and a machine's directory (named by
+	// its id) shows the machine's name, like the listing does
+	const isMachinesRoot = displayPath === MACHINES_PATH
+	const {machine} = useMachineFolder(displayPath)
 
 	return (
 		<div className='flex min-w-0 items-center gap-1.5'>
@@ -92,13 +98,17 @@ export function PathBarMobile({path}: PathBarMobileProps) {
 				{isBrowsingNetworkStorage && !isViewingNetworkDevices ? networkHostName : ''}
 				{isCloudRoot ? t('files-sidebar.cloud') : ''}
 				{isCloudAccount ? cloudAccountName : ''}
+				{isMachinesRoot ? t('machines') : ''}
+				{machine ? machine.name : ''}
 				{!isBrowsingTrash &&
 				!isBrowsingRecents &&
 				!isInHome &&
 				!isBrowsingExternalStorage &&
 				!isBrowsingNetworkStorage &&
 				!isCloudRoot &&
-				!isCloudAccount
+				!isCloudAccount &&
+				!isMachinesRoot &&
+				!machine
 					? `${formatItemName({name: segments[segments.length - 1] || t('files-sidebar.home')})}`
 					: ''}
 			</span>

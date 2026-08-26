@@ -250,7 +250,7 @@ function WidgetChecker({
 			</div>
 			{/* Invisible overlay button for the entire widget area */}
 			<button
-				className='absolute top-0 left-0 h-full w-full outline-hidden'
+				className='absolute top-0 left-0 h-full w-full rounded-12 outline-hidden focus-visible:ring-2 focus-visible:ring-ring sm:rounded-20'
 				onClick={() => onCheckedChange?.(!checked)}
 			/>
 		</div>

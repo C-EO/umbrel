@@ -24,6 +24,31 @@
 	body {
 		@apply antialiased;
 	}
+
+	/* App-wide keyboard focus ring.
+
+	   Without this, any focusable element that declares neither `outline-hidden`
+	   nor its own ring falls through to the browser's native focus ring, which
+	   paints in the OS accent colour (bright blue on macOS Chrome). Tailwind's
+	   preflight does not reset outlines, so nothing else in the app defends
+	   against it.
+
+	   `outline` rather than a box-shadow ring is deliberate for the GLOBAL default:
+	   a global box-shadow would collide with the shadow-based visuals this codebase
+	   leans on (file-item selection, button highlights, the glass surfaces). Per-site
+	   focus styles still use a box-shadow ring (`focusRingClass`), which follows the
+	   element's own radius but can be clipped by an `overflow-hidden` ancestor — add
+	   `focus-visible:ring-inset` at those sites.
+
+	   The fallback matters: if `--focus-ring` were ever missing, the whole
+	   declaration would be invalid at computed-value time and `outline-style` would
+	   resolve to `none` — silently removing focus indication app-wide.
+
+	   Lives in `@layer base` so any component's own focus utility always wins. */
+	:focus-visible {
+		outline: 2px solid var(--focus-ring, rgb(255 255 255 / 0.25));
+		outline-offset: 0;
+	}
 }
 
 ::view-transition-old(root),
@@ -60,6 +85,11 @@ html {
 	/* Space above the sheet. Putting here because it's used in multiple places for calculations */
 	--sheet-top: 2vh;
 	--wallpaper-blur: 12px;
+
+	/* Keyboard focus ring. Single source of truth: consumed by the `:focus-visible`
+	   rule above and by the `ring` colour in tailwind.config.ts, which backs the
+	   shared `focusRingClass`. */
+	--focus-ring: rgb(255 255 255 / 0.25);
 
 	/* System material recipe */
 	--material-tint-rgb: 0 0 0;
@@ -313,6 +343,20 @@ html {
 	background: transparent; /* Transparent track by default */
 	width: 11px;
 	height: 11px;
+}
+
+/* Firefox ignores ::-webkit-scrollbar entirely, so without this it renders full-width
+   native scrollbars — visually wrong on the dark glass UI, and wider than the gutters
+   the Files listing budgets for. `thin` lands close to the 11px above.
+
+   Gated on the engine lacking ::-webkit-scrollbar (i.e. Firefox): in Chromium a
+   non-auto `scrollbar-width` disables ::-webkit-scrollbar styling altogether, so
+   applying this unconditionally would throw away the richer rules above. */
+@supports not selector(::-webkit-scrollbar) {
+	* {
+		scrollbar-color: rgb(255 255 255 / 0.15) transparent;
+		scrollbar-width: thin;
+	}
 }
 
 ::-webkit-scrollbar-track {

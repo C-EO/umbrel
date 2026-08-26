@@ -49,7 +49,7 @@ const widgetButtonClass = tw`ring-white/25 focus:outline-hidden focus-visible:ri
 /** Make the widget a button if we pass an `onClick` */
 export const WidgetContainer: React.FC<WidgetContainerProps> = ({className, ...props}) => {
 	const variant = useContext(BackdropBlurVariantContext)
-	const {wallpaperImgRef} = useWallpaper()
+	const {staticWallpaperImgRef} = useWallpaper()
 	// tvOS-style hover tilt — handlers spread onto the glass host below (mouse
 	// only, respects reduced motion; drives transform without re-rendering)
 	const tilt = useTilt()
@@ -84,7 +84,8 @@ export const WidgetContainer: React.FC<WidgetContainerProps> = ({className, ...p
 			// Top-lit: light pools along the upper rim, the body sinks away from
 			// the wallpaper so text keeps its contrast over bright skies.
 			tint='linear-gradient(to bottom, rgb(255 255 255 / 0.08), rgb(12 14 18 / 0.24))'
-			refractionTarget={wallpaperImgRef}
+			refractionTarget={staticWallpaperImgRef}
+			forceRefractionTarget
 			className={cn(widgetContainerCva({variant}), interactive && widgetButtonClass, className)}
 			{...(props as React.HTMLAttributes<HTMLElement>)}
 			{...tilt}

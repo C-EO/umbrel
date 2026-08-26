@@ -549,7 +549,7 @@ export default function CreateMachine() {
 											onClick={() => setDiskBrowserOpen(true)}
 											disabled={isCreating}
 										>
-											<img src='/assets/dock/dock-files.png' alt='' className='size-4 rounded-[4px]' />
+											<img src='/assets/dock/dock-files.webp' alt='' className='size-4 rounded-[4px]' />
 											<span className='min-w-0 flex-1 truncate'>
 												{diskDirectory ?? t('machines.virtual-disk-location-default')}
 											</span>

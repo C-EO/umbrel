@@ -48,6 +48,7 @@ export default function MachinesLayout() {
 	const [closing, setClosing] = useState(false)
 	const isSettingsView = !!useMatch(`${MACHINES_PATH}/:machineId/settings`)
 	const isCreateView = !!useMatch(MACHINES_CONFIGURE_PATH)
+	const canImplicitlyDismiss = !isSettingsView && !isCreateView
 
 	// Warm all in-feature lazy chunks once the feature is open so navigating
 	// between pages never suspends (avoids blank flashes between views)
@@ -102,12 +103,13 @@ export default function MachinesLayout() {
 			// column; both-edges reserves symmetric gutters so it stays centered
 			className='fixed inset-0 z-30 overflow-y-auto overscroll-contain bg-black/50 backdrop-blur-xl [scrollbar-gutter:stable_both-edges]'
 		>
+			{!closing && canImplicitlyDismiss && <div className='fixed inset-0 z-0' onClick={close} />}
 			<motion.div
 				initial={{scale: 0.985}}
 				animate={{scale: closing ? 0.99 : 1}}
 				transition={{duration: 0.2, ease: 'easeOut'}}
 				className={cn(
-					'mx-auto flex min-h-full w-full flex-col gap-5 pt-8 pb-4 md:px-8 md:pt-12',
+					'relative z-10 mx-auto flex min-h-full w-full flex-col gap-5 pt-8 pb-4 md:px-8 md:pt-12',
 					// Machine-view fixed chrome, feeding the console's Fit cap below:
 					// 16px effective top padding (pt minus the chrome's rise) + tab
 					// bar (32) + one gap (20) + dock spacer (74/84) + pb (16) + 2px

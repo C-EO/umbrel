@@ -27,6 +27,7 @@ import {thunderboltAccessoryImage} from '@/routes/settings/thunderbolt'
 import {shouldShowWhatsNew} from '@/routes/whats-new'
 import {trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
+import {focusRingClass} from '@/utils/element-classes'
 
 function NotificationContent({children}: {children: string}) {
 	const {t} = useTranslation()
@@ -70,7 +71,11 @@ function NotificationContent({children}: {children: string}) {
 			{showReadMore && (
 				<button
 					onClick={() => setIsExpanded(true)}
-					className='self-center text-xs font-medium text-brand transition-opacity duration-300 hover:opacity-80'
+					tabIndex={isExpanded ? -1 : 0}
+					className={cn(
+						'self-center rounded-4 px-1 text-xs font-medium text-brand transition-opacity duration-300 hover:opacity-80',
+						focusRingClass,
+					)}
 					style={{
 						opacity: isExpanded ? 0 : 1,
 						pointerEvents: isExpanded ? 'none' : 'auto',

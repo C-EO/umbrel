@@ -3,6 +3,7 @@ import {matchSorter} from 'match-sorter'
 import {type IconType} from 'react-icons'
 import {BsFillQuestionCircleFill} from 'react-icons/bs'
 import {FaShield} from 'react-icons/fa6'
+import {HiMiniRectangleStack} from 'react-icons/hi2'
 import {IoIosSettings} from 'react-icons/io'
 import {
 	PiArrowCircleUpFill,
@@ -23,6 +24,7 @@ export type SettingsItemId =
 	| 'account'
 	| 'sessions'
 	| 'wallpaper'
+	| 'widgets'
 	| '2fa'
 	| 'users'
 	| 'language'
@@ -60,6 +62,7 @@ const SETTINGS_PAGE_ITEM_ORDER: SettingsItemId[] = [
 	'2fa',
 	'users',
 	'wallpaper',
+	'widgets',
 	'sessions',
 	'language',
 	'storage',
@@ -135,6 +138,17 @@ export function createSettingsCatalog(
 			description: t('wallpaper-description'),
 			to: '/settings/wallpaper',
 			keywords: [t('cmdk.change-wallpaper')],
+		},
+		{
+			kind: 'page',
+			id: 'widgets',
+			category: 'account',
+			command: {},
+			icon: HiMiniRectangleStack,
+			title: t('cmdk.widgets'),
+			description: t('widgets.description'),
+			to: '/edit-widgets',
+			keywords: [t('desktop.context-menu.edit-widgets')],
 		},
 		{
 			kind: 'page',
@@ -676,7 +690,7 @@ export function createSettingsCatalog(
 		},
 	]
 
-	const memberPreferenceItems = pageItems.filter(({id}) => id === 'wallpaper' || id === 'language')
+	const memberPreferenceItems = pageItems.filter(({id}) => id === 'wallpaper' || id === 'widgets' || id === 'language')
 	const visiblePageItems = isMember ? [...memberPageItems, ...memberPreferenceItems] : pageItems
 	const memberCommandIds = new Set<SettingsItemId>([
 		'account',

@@ -9,15 +9,19 @@ import {
 	APPS_PATH,
 	CLOUD_PATH,
 	EXTERNAL_STORAGE_PATH,
+	MACHINES_PATH,
 	NETWORK_STORAGE_PATH,
 	RECENTS_PATH,
+	SYSTEM_MANAGED_ROOT_PATHS,
 } from '@/features/files/constants'
 import {cloudAccountLabel, useCloudAccounts, useCloudProviders} from '@/features/files/hooks/use-cloud'
 import {useHomePath, useIsMember, useTrashPath} from '@/features/files/hooks/use-home-path'
+import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
 import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {formatItemName} from '@/features/files/utils/format-filesystem-name'
 import {cn} from '@/lib/utils'
+import {focusRingClass} from '@/utils/element-classes'
 import {firstNameFromFullName} from '@/utils/misc'
 
 type PathSegment = {
@@ -29,6 +33,7 @@ type PathSegment = {
 		| 'trash'
 		| 'recents'
 		| 'apps'
+		| 'machines'
 		| 'folder'
 		| 'external-storage'
 		| 'network-root'
@@ -74,6 +79,7 @@ export function PathBarDesktop({path}: {path: string}) {
 		const isUiTrash = displayPath.startsWith(trashPath)
 		const isUiRecents = displayPath.startsWith(RECENTS_PATH)
 		const isUiApps = displayPath.startsWith(APPS_PATH)
+		const isUiMachines = displayPath.startsWith(MACHINES_PATH)
 		const isUiNetwork = displayPath.startsWith(NETWORK_STORAGE_PATH)
 		const isUiExternal = displayPath.startsWith(EXTERNAL_STORAGE_PATH)
 
@@ -94,21 +100,23 @@ export function PathBarDesktop({path}: {path: string}) {
 					? {segment: t('files-sidebar.recents'), type: 'recents' as const, path: RECENTS_PATH}
 					: isUiApps
 						? {segment: t('files-sidebar.apps'), type: 'apps' as const, path: APPS_PATH}
-						: isUiCloudRoot || isUiCloudAccount
-							? {segment: t('files-sidebar.cloud'), type: 'cloud-account' as const, path: CLOUD_PATH}
-							: isUiExternal
-								? {
-										segment: displaySegments[1] || t('files-sidebar.external-storage'),
-										type: 'external-storage' as const,
-										path: `${EXTERNAL_STORAGE_PATH}/${displaySegments[1] || ''}`,
-									}
-								: isUiNetwork
+						: isUiMachines
+							? {segment: t('machines'), type: 'machines' as const, path: MACHINES_PATH}
+							: isUiCloudRoot || isUiCloudAccount
+								? {segment: t('files-sidebar.cloud'), type: 'cloud-account' as const, path: CLOUD_PATH}
+								: isUiExternal
 									? {
-											segment: displayPath === NETWORK_STORAGE_PATH ? t('files-sidebar.network-pathbar') : '',
-											type: 'network-root' as const,
-											path: NETWORK_STORAGE_PATH,
+											segment: displaySegments[1] || t('files-sidebar.external-storage'),
+											type: 'external-storage' as const,
+											path: `${EXTERNAL_STORAGE_PATH}/${displaySegments[1] || ''}`,
 										}
-									: {segment: t('files-sidebar.home'), type: 'home' as const, path: homePath}
+									: isUiNetwork
+										? {
+												segment: displayPath === NETWORK_STORAGE_PATH ? t('files-sidebar.network-pathbar') : '',
+												type: 'network-root' as const,
+												path: NETWORK_STORAGE_PATH,
+											}
+										: {segment: t('files-sidebar.home'), type: 'home' as const, path: homePath}
 
 		// Start with the root segment
 		const items: PathSegment[] = [
@@ -266,45 +274,56 @@ type PathSegmentProps = Omit<PathSegment, 'id'> & {
 	isStatic?: boolean
 }
 
-const PathSegment = ({segment, hasArrow, onClick, isStatic, path, type}: PathSegmentProps) => (
-	<li className='inline-flex' data-static={isStatic}>
-		<Droppable
-			as='button'
-			id={`path-segment-${path}`}
-			path={path}
-			onClick={onClick}
-			className='group inline-flex w-[--item-width] min-w-[42px] items-center gap-1 rounded-sm p-1 transition-[width] duration-300 ease-in-out hover:w-[--natural-width]'
-		>
-			<FileItemIcon
-				item={{
-					path,
-					type:
-						type === 'external-storage'
-							? 'external-storage'
-							: type === 'network-root'
-								? 'network-root'
-								: type === 'network-share'
-									? 'network-share'
-									: type === 'cloud-account'
-										? 'cloud-account'
-										: 'directory',
-					name: segment,
-					operations: [],
-					size: 0,
-					modified: 0,
-				}}
-				className='h-4 w-4 opacity-70 transition-opacity group-hover:opacity-100'
-			/>
-			<span
+const PathSegment = ({segment, hasArrow, onClick, isStatic, path, type}: PathSegmentProps) => {
+	// A machine's directory is named by its id; show the machine's name like the listing does
+	const {machine} = useMachineFolder(path)
+	const label = machine ? machine.name : segment && formatItemName({name: segment})
+
+	return (
+		<li className='inline-flex' data-static={isStatic}>
+			<Droppable
+				as='button'
+				id={`path-segment-${path}`}
+				path={path}
+				onClick={onClick}
+				// Nothing can be dropped into a system-managed root (/Apps, /Machines)
+				disabled={SYSTEM_MANAGED_ROOT_PATHS.has(path)}
 				className={cn(
-					'group-hover:[mask-image:none] [.has-overflow_&]:[mask-image:linear-gradient(to_left,transparent_0%,black_40px)]',
-					'overflow-hidden text-xs opacity-70 transition-opacity group-hover:opacity-100',
-					segment && 'ml-1',
+					'group inline-flex w-[--item-width] min-w-[42px] items-center gap-1 rounded-sm p-1 transition-[width] duration-300 ease-in-out hover:w-[--natural-width]',
+					focusRingClass,
 				)}
 			>
-				{segment && formatItemName({name: segment})}
-			</span>
-			{hasArrow && <CaretRightIcon className='mt-[1px] ml-1 shrink-0 text-white/50' />}
-		</Droppable>
-	</li>
-)
+				<FileItemIcon
+					item={{
+						path,
+						type:
+							type === 'external-storage'
+								? 'external-storage'
+								: type === 'network-root'
+									? 'network-root'
+									: type === 'network-share'
+										? 'network-share'
+										: type === 'cloud-account'
+											? 'cloud-account'
+											: 'directory',
+						name: segment,
+						operations: [],
+						size: 0,
+						modified: 0,
+					}}
+					className='h-4 w-4 opacity-70 transition-opacity group-hover:opacity-100'
+				/>
+				<span
+					className={cn(
+						'group-hover:[mask-image:none] [.has-overflow_&]:[mask-image:linear-gradient(to_left,transparent_0%,black_40px)]',
+						'overflow-hidden text-xs opacity-70 transition-opacity group-hover:opacity-100',
+						label && 'ml-1',
+					)}
+				>
+					{label}
+				</span>
+				{hasArrow && <CaretRightIcon className='mt-[1px] ml-1 shrink-0 text-white/50' />}
+			</Droppable>
+		</li>
+	)
+}

@@ -51,8 +51,12 @@ export function EmbeddedFiles({
 				// Forward optional aliasing so nested consumers (like use-navigate)
 				// can transparently remap logical roots to alternate physical roots.
 				pathAliases,
+				// Machines is hidden too: snapshots only alias /Home and /Apps, so the
+				// item would show the live directory inside the snapshot browser
 				hiddenSidebarItems:
-					mode === 'read-only' ? {network: true, external: true, trash: true, rewind: true, cloud: true} : undefined,
+					mode === 'read-only'
+						? {network: true, external: true, trash: true, rewind: true, cloud: true, machines: true}
+						: undefined,
 			}}
 		>
 			<div className={['grid grid-cols-1 lg:grid-cols-[224px_1fr]', className].join(' ')}>

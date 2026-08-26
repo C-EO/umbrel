@@ -61,6 +61,10 @@ export default {
 				'brand-lighter': 'hsl(var(--color-brand-lighter) / <alpha-value>)',
 				'brand-lightest': 'hsl(var(--color-brand-lightest) / <alpha-value>)',
 				//
+				// Keyboard focus ring. Defined in index.css so the global
+				// `:focus-visible` outline and `ring-ring` stay the same colour.
+				ring: 'var(--focus-ring)',
+				//
 				destructive: '#E03E3E',
 				destructive2: '#E22C2C',
 				'destructive2-lighter': '#F53737',

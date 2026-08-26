@@ -70,15 +70,19 @@ function SheetContent({
 				<div className='absolute inset-0 bg-black contrast-more:hidden'>
 					{/* Fade in the wallpaper to avoid a flash when the sheet opens. The
 					    tint layer above stays constant so the fade happens under it. */}
-					<picture>
-						<WallpaperAvifSource wallpaper={wallpaper} tier='thumbnails' />
-						<img
-							src={wallpaper.url}
-							alt=''
-							aria-hidden='true'
-							className='umbrel-window-wallpaper absolute inset-0 size-full object-cover object-center opacity-0'
-						/>
-					</picture>
+					{/* An empty src resolves to the current document, so fall back to the
+					    plain black underneath until a wallpaper is actually resolved */}
+					{wallpaper.url && (
+						<picture>
+							<WallpaperAvifSource wallpaper={wallpaper} tier='thumbnails' />
+							<img
+								src={wallpaper.url}
+								alt=''
+								aria-hidden='true'
+								className='umbrel-window-wallpaper absolute inset-0 size-full object-cover object-center opacity-0'
+							/>
+						</picture>
+					)}
 					<div className='umbrel-window-tint absolute inset-0' />
 				</div>
 				{children}

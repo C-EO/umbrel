@@ -22,6 +22,7 @@ import {Separator} from '@/components/ui/separator'
 import {LOADING_DASH} from '@/constants'
 import {
 	APPS_PATH as FILES_APPS_PATH,
+	MACHINES_PATH as FILES_MACHINES_PATH,
 	RECENTS_PATH as FILES_RECENTS_PATH,
 	TRASH_PATH as FILES_TRASH_PATH,
 } from '@/features/files/constants'
@@ -172,25 +173,6 @@ function CmdkContent() {
 					</CommandItem>
 				</>
 			)}
-			<CommandItem
-				icon={systemAppsKeyed['UMBREL_home'].icon}
-				onSelect={() => {
-					navigate({pathname: '/', search: new URLSearchParams({dialog: 'add-shortcut'}).toString()})
-					setOpen(false)
-				}}
-			>
-				{t('cmdk.add-shortcut')}
-			</CommandItem>
-			<SearchItem
-				icon={systemAppsKeyed['UMBREL_home'].icon}
-				value={systemAppsKeyed['UMBREL_home'].name}
-				onSelect={() => {
-					navigate(systemAppsKeyed['UMBREL_home'].systemAppTo)
-					setOpen(false)
-				}}
-			>
-				{systemAppsKeyed['UMBREL_home'].name}
-			</SearchItem>
 			<SearchItem
 				icon={systemAppsKeyed['UMBREL_app-store'].icon}
 				value={systemAppsKeyed['UMBREL_app-store'].name}
@@ -237,6 +219,19 @@ function CmdkContent() {
 			>
 				{t('files-sidebar.apps')}
 			</SearchItem>
+			{!isMember && (
+				<SearchItem
+					icon={systemAppsKeyed['UMBREL_files'].icon}
+					// Distinct from the Machines app item above: cmdk keys items by value
+					value={`${systemAppsKeyed['UMBREL_files'].name} ${t('machines')}`}
+					onSelect={() => {
+						navigate(`/files${FILES_MACHINES_PATH}`)
+						setOpen(false)
+					}}
+				>
+					{t('machines')}
+				</SearchItem>
+			)}
 			<SearchItem
 				icon={systemAppsKeyed['UMBREL_files'].icon}
 				value={t('files-sidebar.trash')}

@@ -64,6 +64,7 @@ export function Sidebar({className}: {className?: string}) {
 	const showTrash = !hidden.trash
 	const showRewind = !hidden.rewind && !isMember
 	const showCloud = !hidden.cloud
+	const showMachines = !hidden.machines && !isMember
 
 	return (
 		<nav className={cn('flex flex-col', className)} aria-label={t('files-sidebar.navigation')}>
@@ -73,7 +74,7 @@ export function Sidebar({className}: {className?: string}) {
 					<SidebarHome />
 					{!isMember && <SidebarRecents />}
 					{(!isMember || hasSharedApps) && <SidebarApps />}
-					{!isMember && <SidebarMachines />}
+					{showMachines && <SidebarMachines />}
 				</SidebarSection>
 
 				{/* Owner's Umbrel, shown to members only when the owner has shared something from their home */}

@@ -31,7 +31,7 @@ function PopoverContent({
 				className={cn(
 					materialSurfaceClasses.popover,
 					floatingContentAnimationClass,
-					'z-50 min-w-[8rem] p-1 text-white',
+					'z-50 min-w-[8rem] p-1 text-white outline-hidden',
 					className,
 				)}
 				{...props}

@@ -5,6 +5,7 @@ import {AppsListing} from '@/features/files/components/listing/apps-listing'
 import {CloudAccountListing} from '@/features/files/components/listing/cloud-account-listing'
 import {CloudAccountsListing} from '@/features/files/components/listing/cloud-accounts-listing'
 import {DirectoryListing} from '@/features/files/components/listing/directory-listing'
+import {MachinesListing} from '@/features/files/components/listing/machines-listing'
 import {RecentsListing} from '@/features/files/components/listing/recents-listing'
 import {SearchListing} from '@/features/files/components/listing/search-listing'
 import {TrashListing} from '@/features/files/components/listing/trash-listing'
@@ -61,6 +62,14 @@ export const filesRoutes: RouteObject[] = [
 				// which would instead be rendered by the DirectoryListing component
 				path: 'Apps',
 				element: <AppsListing />,
+			},
+			{
+				// "Machines" and not "Machines/*": machine directories are created by
+				// Machines, so the root offers no uploads, new folders, paste or drops.
+				// Inside a machine the DirectoryListing follows the backend's
+				// (read-only) operations.
+				path: 'Machines',
+				element: <MachinesListing />,
 			},
 			{
 				// "Trash/*" and not "Trash" because we want to disable new folder, upload, etc.

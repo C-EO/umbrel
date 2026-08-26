@@ -185,9 +185,16 @@ export default function TextViewer({item}: TextViewerProps) {
 	// Fetch file content
 	useEffect(() => {
 		if (viewUrl.status !== 'ready') return
+		// Arrow-navigating between files reuses this component instance (the viewer is
+		// rendered without a key), so clear the previous file's outcome first — otherwise
+		// an error card latches on and the old content stays visible while the new file loads.
+		let isStale = false
+		setError(null)
+		setLoading(true)
 		const fetchContent = async () => {
 			try {
 				const response = await fetch(viewUrl.url)
+				if (isStale) return
 				if (!response.ok) {
 					setError(response.status === 404 ? 'not-found' : 'fetch-error')
 					setLoading(false)
@@ -195,6 +202,7 @@ export default function TextViewer({item}: TextViewerProps) {
 				}
 
 				const arrayBuffer = await response.arrayBuffer()
+				if (isStale) return
 
 				try {
 					const text = decodeUtf8Text(arrayBuffer)
@@ -208,12 +216,18 @@ export default function TextViewer({item}: TextViewerProps) {
 
 				setLoading(false)
 			} catch {
+				if (isStale) return
 				setError('fetch-error')
 				setLoading(false)
 			}
 		}
 
 		fetchContent()
+
+		// A slow response for the previous file must not overwrite the current one
+		return () => {
+			isStale = true
+		}
 	}, [item.path, item.size, viewUrl.status, viewUrl.url])
 
 	// Load language extension
@@ -345,7 +359,11 @@ export default function TextViewer({item}: TextViewerProps) {
 	}, [languageExtension, ext])
 
 	if (viewUrl.status !== 'ready') {
-		return <AuthorizedUrlState query={viewUrl}>{() => null}</AuthorizedUrlState>
+		return (
+			<AuthorizedUrlState query={viewUrl} dontCloseOnSpacebar>
+				{() => null}
+			</AuthorizedUrlState>
+		)
 	}
 
 	// Error states — glassmorphic error cards
@@ -435,19 +453,23 @@ export default function TextViewer({item}: TextViewerProps) {
 				>
 					{/* Blurred wallpaper background — same technique as Sheet component */}
 					<div className='absolute inset-0 bg-black contrast-more:hidden'>
-						<picture>
-							<WallpaperAvifSource wallpaper={wallpaper} tier='thumbnails' />
-							<img
-								src={wallpaper.url}
-								alt=''
-								aria-hidden='true'
-								className='absolute inset-0 size-full object-cover object-center'
-								style={{
-									transform: 'scale(1.2) rotate(180deg)',
-									filter: 'blur(48px) brightness(0.3) saturate(1.2)',
-								}}
-							/>
-						</picture>
+						{/* An empty src resolves to the current document, so fall back to the
+						    plain black underneath until a wallpaper is actually resolved */}
+						{wallpaper.url && (
+							<picture>
+								<WallpaperAvifSource wallpaper={wallpaper} tier='thumbnails' />
+								<img
+									src={wallpaper.url}
+									alt=''
+									aria-hidden='true'
+									className='absolute inset-0 size-full object-cover object-center'
+									style={{
+										transform: 'scale(1.2) rotate(180deg)',
+										filter: 'blur(48px) brightness(0.3) saturate(1.2)',
+									}}
+								/>
+							</picture>
+						)}
 					</div>
 					{/* Inner glow highlight — same as Sheet */}
 					<div className='pointer-events-none absolute inset-0 z-50 rounded-20 shadow-[2px_2px_2px_0px_rgba(255,255,255,0.05)_inset]' />

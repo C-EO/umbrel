@@ -76,6 +76,18 @@ describe('settings catalog search', () => {
 		expect(getDefaultSettingsCommandItems(catalog()).map(({id}) => id)).toEqual(['wallpaper', 'backups', 'restart'])
 	})
 
+	it('places widgets directly below wallpaper for owners and members', () => {
+		for (const settingsCatalog of [catalog(), createSettingsCatalog(t, {deviceName: 'Umbrel Home', isMember: true})]) {
+			const accountIds = getSettingsPage(settingsCatalog, {filter: 'account'}).items.map(({id}) => id)
+			const wallpaperIndex = accountIds.indexOf('wallpaper')
+			const widgets = getSettingsPage(settingsCatalog).items.find(({id}) => id === 'widgets')
+
+			expect(wallpaperIndex).toBeGreaterThanOrEqual(0)
+			expect(accountIds[wallpaperIndex + 1]).toBe('widgets')
+			expect(widgets?.description).toBe('widgets.description')
+		}
+	})
+
 	it('gates owner-only settings for members', () => {
 		const memberCatalog = createSettingsCatalog(t, {
 			deviceName: 'Umbrel Home',
@@ -91,7 +103,7 @@ describe('settings catalog search', () => {
 		expect(page.items.every(({category}) => category === 'account')).toBe(true)
 		expect(page.items.find(({id}) => id === 'change-name')?.description).toBe('Alice Member')
 		expect(pageIds).toEqual(
-			expect.arrayContaining(['change-name', 'change-password', '2fa', 'sessions', 'wallpaper', 'language']),
+			expect.arrayContaining(['change-name', 'change-password', '2fa', 'sessions', 'wallpaper', 'widgets', 'language']),
 		)
 		expect(pageIds).not.toContain('avatar')
 		expect(getSettingsCommandTarget(accountCommand)).toEqual({

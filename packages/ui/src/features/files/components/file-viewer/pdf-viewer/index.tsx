@@ -1,7 +1,8 @@
-import {useEffect, useState} from 'react'
+import {useEffect, useRef, useState} from 'react'
 
 import {AuthorizedUrlState} from '@/features/files/components/file-viewer/authorized-url-state'
 import {ViewerWrapper} from '@/features/files/components/file-viewer/viewer-wrapper'
+import {useFilesStore} from '@/features/files/store/use-files-store'
 import {FileSystemItem} from '@/features/files/types'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useAuthorizedHttpUrlQuery} from '@/modules/auth/http-auth'
@@ -14,6 +15,8 @@ export default function PdfViewer({item}: PdfViewerProps) {
 	const [dimensions, setDimensions] = useState({width: 0, height: 0})
 	const encodedPath = encodeURIComponent(item.path)
 	const isMobile = useIsMobile()
+	const setViewerItem = useFilesStore((s) => s.setViewerItem)
+	const hasStartedDownloadRef = useRef(false)
 	const authorizedUrl = useAuthorizedHttpUrlQuery(
 		isMobile ? `/api/files/download?path=${encodedPath}` : `/api/files/view?path=${encodedPath}`,
 	)
@@ -23,7 +26,14 @@ export default function PdfViewer({item}: PdfViewerProps) {
 			// This runs after the async URL token request, so opening a new tab here
 			// is blocked as an unsolicited popup on mobile browsers. A same-tab
 			// navigation remains reliable and the browser back action returns to Files.
+			if (hasStartedDownloadRef.current) return
+			hasStartedDownloadRef.current = true
 			window.location.assign(authorizedUrl.url)
+			// The download responds with Content-Disposition: attachment, so the page is
+			// never unloaded and nothing else would clear the viewer — mobile renders no
+			// ViewerWrapper to dismiss. Leaving it set makes reopening the same PDF a
+			// silent no-op, since every effect dependency stays identical.
+			setViewerItem(null)
 			return
 		}
 
@@ -41,7 +51,7 @@ export default function PdfViewer({item}: PdfViewerProps) {
 		window.addEventListener('resize', updateDimensions)
 
 		return () => window.removeEventListener('resize', updateDimensions)
-	}, [authorizedUrl.status, authorizedUrl.url, isMobile])
+	}, [authorizedUrl.status, authorizedUrl.url, isMobile, setViewerItem])
 
 	return (
 		<AuthorizedUrlState query={authorizedUrl}>

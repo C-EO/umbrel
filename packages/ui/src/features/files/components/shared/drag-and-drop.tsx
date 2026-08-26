@@ -122,11 +122,13 @@ export const Droppable = <T extends ElementType = 'div'>({
 	const isReadyToDrop = isOver && isOverValidDropTarget
 	const renderedChildren = typeof children === 'function' ? children(isReadyToDrop) : children
 
+	// Keep the requested element (e.g. a path bar crumb stays a button) even
+	// when it isn't a drop target
 	if (disabled || isTouchDevice || isReadOnly)
 		return (
-			<div className={className} {...props}>
+			<Component className={className} {...props}>
 				{renderedChildren}
-			</div>
+			</Component>
 		)
 
 	return (

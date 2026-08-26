@@ -421,7 +421,7 @@ export default function MachineSettings() {
 														<button
 															type='button'
 															disabled={disabled}
-															className='flex h-full w-[58px] shrink-0 items-center gap-1 rounded-l-full border-r border-white/6 pl-3.5 text-11 font-semibold text-white/70 uppercase transition-colors outline-none hover:bg-white/5 hover:text-white disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent'
+															className='flex h-full w-[58px] shrink-0 items-center gap-1 rounded-l-full border-r border-white/6 pl-3.5 text-11 font-semibold text-white/70 uppercase outline-hidden transition-colors hover:bg-white/5 hover:text-white focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent'
 														>
 															{forward.protocol}
 															<ChevronDown className='size-3 opacity-50' />

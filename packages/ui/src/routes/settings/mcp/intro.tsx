@@ -108,7 +108,7 @@ export function IntroView({
 							transition={{duration: 0.4, delay: 0.85}}
 						>
 							<Button variant='primary' size='dialog' onClick={onResume ?? (() => setView('picker'))}>
-								{t(onResume ? 'mcp-enable' : 'mcp-intro-cta')}
+								{onResume ? t('mcp-enable') : t('mcp-intro-cta')}
 							</Button>
 							{onResume && (
 								<p className='mt-2 max-w-80 text-12 leading-tight text-white/35'>{t('mcp-enable-description')}</p>

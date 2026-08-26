@@ -13,6 +13,7 @@ import {usePreviousDistinct} from 'react-use'
 import {arrayIncludes} from 'ts-extras'
 
 import {FadeInImg} from '@/components/ui/fade-in-img'
+import {Wallpaper23VideoSources} from '@/components/wallpaper-23-video-sources'
 import {cn} from '@/lib/utils'
 import {trpcReact} from '@/trpc/trpc'
 import {keyBy} from '@/utils/misc'
@@ -164,6 +165,11 @@ export function getWallpaperAvifUrl(wallpaper: WallpaperBase, tier: WallpaperAvi
 }
 
 export function WallpaperAvifSource({wallpaper, tier}: {wallpaper: WallpaperBase; tier: WallpaperAvifTier}) {
+	// While the remote wallpaper is still resolving we hold `nullWallpaper`, whose id is
+	// undefined. A <source> is picked on `type` support alone — never on whether the file
+	// loads — so emitting `.../undefined.avif` would commit an AVIF-capable browser to a
+	// 404 with no fallback to the sibling <img>.
+	if (!wallpaper.id) return null
 	return <source type='image/avif' srcSet={getWallpaperAvifUrl(wallpaper, tier)} />
 }
 
@@ -215,8 +221,10 @@ type WallpaperType = {
 	setWallpaperLoaded: (url: string) => void
 	setWallpaperLoadFailed: () => void
 	wallpaperLoadedUrl: string | undefined
-	/** The full-res wallpaper <img> — Glass surfaces refract from it on browsers without backdrop-filter: url() */
-	wallpaperImgRef: RefObject<HTMLImageElement | null>
+	/** The full-res wallpaper media — Glass surfaces refract from it on browsers without backdrop-filter: url() */
+	wallpaperImgRef: RefObject<HTMLImageElement | HTMLVideoElement | null>
+	/** A static full-size wallpaper image for surfaces that should not sample a video wallpaper. */
+	staticWallpaperImgRef: RefObject<HTMLImageElement | null>
 }
 
 const WallPaperContext = createContext<WallpaperType>(null as any)
@@ -263,7 +271,8 @@ export function WallpaperProvider({
 	const [isLoading, setIsLoading] = useState(true)
 	const [wallpaperFullyVisible, setWallpaperFullyVisible] = useState(false)
 	const [wallpaperLoadedUrl, setWallpaperLoadedUrl] = useState<string>()
-	const wallpaperImgRef = useRef<HTMLImageElement | null>(null)
+	const wallpaperImgRef = useRef<HTMLImageElement | HTMLVideoElement | null>(null)
+	const staticWallpaperImgRef = useRef<HTMLImageElement | null>(null)
 
 	const prevId = usePreviousDistinct(wallpaper.id)
 
@@ -298,6 +307,7 @@ export function WallpaperProvider({
 				},
 				wallpaperLoadedUrl,
 				wallpaperImgRef,
+				staticWallpaperImgRef,
 			}}
 		>
 			{children}
@@ -350,6 +360,7 @@ export function Wallpaper({
 		setWallpaperLoaded,
 		setWallpaperLoadFailed,
 		wallpaperImgRef,
+		staticWallpaperImgRef,
 	} = useWallpaper()
 
 	if (!wallpaper || !wallpaper.id) return null
@@ -369,19 +380,34 @@ export function Wallpaper({
 					)}
 				/>
 			</picture>
-			{!stayBlurred && (
-				<FullWallpaperImage
-					key={wallpaper.url}
-					wallpaper={wallpaper}
-					isLoading={isLoading}
-					isPreview={isPreview}
-					className={className}
-					wallpaperImgRef={isPreview ? undefined : wallpaperImgRef}
-					onLoad={setWallpaperLoaded}
-					onLoadFailure={setWallpaperLoadFailed}
-					onAnimationEnd={setWallpaperFullyVisible}
-				/>
-			)}
+			{!stayBlurred &&
+				(wallpaper.id === '23' ? (
+					<FullWallpaperVideo
+						key={wallpaper.url}
+						wallpaper={wallpaper}
+						isLoading={isLoading}
+						isPreview={isPreview}
+						className={className}
+						wallpaperImgRef={isPreview ? undefined : wallpaperImgRef}
+						staticWallpaperImgRef={isPreview ? undefined : staticWallpaperImgRef}
+						onLoad={setWallpaperLoaded}
+						onLoadFailure={setWallpaperLoadFailed}
+						onAnimationEnd={setWallpaperFullyVisible}
+					/>
+				) : (
+					<FullWallpaperImage
+						key={wallpaper.url}
+						wallpaper={wallpaper}
+						isLoading={isLoading}
+						isPreview={isPreview}
+						className={className}
+						wallpaperImgRef={isPreview ? undefined : wallpaperImgRef}
+						staticWallpaperImgRef={isPreview ? undefined : staticWallpaperImgRef}
+						onLoad={setWallpaperLoaded}
+						onLoadFailure={setWallpaperLoadFailed}
+						onAnimationEnd={setWallpaperFullyVisible}
+					/>
+				))}
 			{/* Put this last so that we can see it exiting over the new wallpaper */}
 			{prevWallpaper && !wallpaperFullyVisible && (
 				<picture key={prevWallpaper.url}>
@@ -408,7 +434,8 @@ type FullWallpaperImageProps = {
 	isLoading: boolean
 	isPreview?: boolean
 	className?: string
-	wallpaperImgRef?: RefObject<HTMLImageElement | null>
+	wallpaperImgRef?: RefObject<HTMLImageElement | HTMLVideoElement | null>
+	staticWallpaperImgRef?: RefObject<HTMLImageElement | null>
 	onLoad: (url: string) => void
 	onLoadFailure: () => void
 	onAnimationEnd: () => void
@@ -420,11 +447,19 @@ function FullWallpaperImage({
 	isPreview,
 	className,
 	wallpaperImgRef,
+	staticWallpaperImgRef,
 	onLoad,
 	onLoadFailure,
 	onAnimationEnd,
 }: FullWallpaperImageProps) {
 	const [loadAttempt, setLoadAttempt] = useState<'responsive' | 'jpeg' | 'failed'>('responsive')
+	const setImageRef = useCallback(
+		(image: HTMLImageElement | null) => {
+			if (wallpaperImgRef) wallpaperImgRef.current = image
+			if (staticWallpaperImgRef) staticWallpaperImgRef.current = image
+		},
+		[staticWallpaperImgRef, wallpaperImgRef],
+	)
 
 	if (loadAttempt === 'failed') return null
 
@@ -433,7 +468,7 @@ function FullWallpaperImage({
 			{loadAttempt === 'responsive' && <FullWallpaperAvifSources wallpaper={wallpaper} />}
 			<FadeInImg
 				key={loadAttempt}
-				ref={wallpaperImgRef}
+				ref={setImageRef}
 				src={wallpaper.url}
 				data-wallpaper-full=''
 				className={cn(
@@ -459,6 +494,74 @@ function FullWallpaperImage({
 				onAnimationEnd={onAnimationEnd}
 			/>
 		</picture>
+	)
+}
+
+function FullWallpaperVideo(props: FullWallpaperImageProps) {
+	const {wallpaper, isLoading, isPreview, className, wallpaperImgRef, staticWallpaperImgRef, onLoad, onAnimationEnd} =
+		props
+	const loadNotifiedRef = useRef(false)
+	const notifyLoaded = useCallback(() => {
+		if (loadNotifiedRef.current) return
+		loadNotifiedRef.current = true
+		onLoad(wallpaper.url)
+	}, [onLoad, wallpaper.url])
+	const setVideoRef = useCallback(
+		(video: HTMLVideoElement | null) => {
+			if (wallpaperImgRef) wallpaperImgRef.current = video
+		},
+		[wallpaperImgRef],
+	)
+	const setStaticImageRef = useCallback(
+		(image: HTMLImageElement | null) => {
+			if (staticWallpaperImgRef) staticWallpaperImgRef.current = image
+		},
+		[staticWallpaperImgRef],
+	)
+
+	return (
+		<>
+			{staticWallpaperImgRef && (
+				<img
+					ref={setStaticImageRef}
+					src={wallpaper.url}
+					alt=''
+					aria-hidden='true'
+					data-wallpaper-static-source=''
+					className={cn(
+						'pointer-events-none fixed inset-0 w-full object-cover object-center opacity-0',
+						isPreview && 'absolute h-full',
+						!isPreview && 'h-lvh',
+						className,
+					)}
+				/>
+			)}
+			<video
+				ref={setVideoRef}
+				autoPlay
+				loop
+				muted
+				playsInline
+				disablePictureInPicture
+				preload='auto'
+				poster={wallpaper.url}
+				aria-hidden='true'
+				data-wallpaper-full=''
+				className={cn(
+					tw`pointer-events-none fixed inset-0 w-full animate-in bg-black object-cover object-center opacity-100 transition-opacity duration-700 fade-in`,
+					isPreview && 'absolute h-full',
+					!isPreview && 'h-lvh',
+					className,
+				)}
+				style={{
+					animation: isLoading ? 'none' : 'animate-unblur 0.7s',
+				}}
+				onPlaying={notifyLoaded}
+				onAnimationEnd={onAnimationEnd}
+			>
+				<Wallpaper23VideoSources />
+			</video>
+		</>
 	)
 }
 

@@ -16,7 +16,7 @@ import {cn} from '@/lib/utils'
 import {useApps} from '@/providers/apps'
 import {tw} from '@/utils/tw'
 
-export const radioButtonClass = tw`rounded-12 bg-white/5 p-5 text-left flex justify-between items-center gap-2 flex-wrap shadow-button-highlight-soft-hpx outline-hidden duration-300 hover:bg-white/6 transition-[background,color,box-shadow] focus-visible:ring-4 ring-white/5 focus-visible:ring-offset-1 ring-offset-white/20`
+export const radioButtonClass = tw`rounded-12 bg-white/5 p-5 text-left flex justify-between items-center gap-2 flex-wrap shadow-button-highlight-soft-hpx outline-hidden duration-300 hover:bg-white/6 transition-[background,color,box-shadow] focus-visible:ring-2 focus-visible:ring-ring`
 export const radioTitleClass = tw`text-15 font-medium -tracking-2`
 export const radioDescriptionClass = tw`text-13 opacity-90 -tracking-2`
 

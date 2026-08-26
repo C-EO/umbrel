@@ -14,6 +14,7 @@ import {AccountAvatarEditor} from '@/modules/auth/account-avatar-editor'
 import {ChangePasswordWarning} from '@/routes/settings/_components/shared'
 import {SessionsPanel} from '@/routes/settings/sessions'
 import {RouterOutput, trpcReact} from '@/trpc/trpc'
+import {focusRingClass} from '@/utils/element-classes'
 
 type Account = RouterOutput['user']['listAccounts'][number]
 
@@ -153,7 +154,11 @@ function OwnerNavigationRow({title, description, onClick}: {title: string; descr
 	return (
 		<button
 			type='button'
-			className='group flex min-h-[58px] w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/4'
+			className={cn(
+				'group flex min-h-[58px] w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/4',
+				'outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
+				'first:rounded-t-12 last:rounded-b-12',
+			)}
 			onClick={onClick}
 		>
 			<div className='min-w-0 flex-1'>
@@ -257,7 +262,10 @@ function BackButton({onClick, children}: {onClick: () => void; children: React.R
 		<button
 			type='button'
 			onClick={onClick}
-			className='-ml-1 flex items-center gap-0.5 self-start text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70'
+			className={cn(
+				'-mx-1 flex items-center gap-0.5 self-start rounded-4 px-1 text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70',
+				focusRingClass,
+			)}
 		>
 			<TbChevronLeft className='size-4' />
 			{children}

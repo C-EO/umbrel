@@ -1,6 +1,7 @@
 import {useEffect, useRef} from 'react'
 import {useNavigate as useRouterNavigate} from 'react-router-dom'
 
+import {SYSTEM_MANAGED_ROOT_PATHS} from '@/features/files/constants'
 import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
@@ -132,6 +133,9 @@ export function useFilesKeyboardShortcuts({
 				if (e.key === 'v') {
 					// If Rewind is open, ignore paste to prevent collision dialogs
 					if (document.querySelector('[data-rewind="open"]')) return
+					// /Apps and /Machines offer no paste target; their listings hide
+					// every other write affordance too
+					if (SYSTEM_MANAGED_ROOT_PATHS.has(currentPath)) return
 					e.preventDefault()
 					pasteItemsFromClipboard({toDirectory: currentPath})
 					return

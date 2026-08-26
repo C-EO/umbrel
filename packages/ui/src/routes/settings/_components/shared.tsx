@@ -6,8 +6,10 @@ import {TbChevronLeft} from 'react-icons/tb'
 import {useNavigate} from 'react-router-dom'
 
 import {ErrorAlert} from '@/components/ui/alert'
+import {cn} from '@/lib/utils'
 import {AccountAvatarEditor, type AccountAvatarControlsVisibility} from '@/modules/auth/account-avatar-editor'
 import {afterDelayedClose} from '@/utils/dialog'
+import {focusRingClass} from '@/utils/element-classes'
 import {tw} from '@/utils/tw'
 
 export const cardErrorClass = tw`text-14 font-medium -tracking-3 animate-pulse leading-snug text-destructive2-lightest`
@@ -51,7 +53,10 @@ export function BackButton({onClick, children}: {onClick: () => void; children: 
 		<button
 			type='button'
 			onClick={onClick}
-			className='-ml-1 flex items-center gap-0.5 self-start text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70'
+			className={cn(
+				'-mx-1 flex items-center gap-0.5 self-start rounded-4 px-1 text-13 font-medium -tracking-2 text-white/50 transition-colors hover:text-white/70',
+				focusRingClass,
+			)}
 		>
 			<TbChevronLeft className='size-4' />
 			{children}

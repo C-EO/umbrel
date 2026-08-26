@@ -28,6 +28,7 @@ export type FilesCapabilities = {
 		trash?: boolean
 		rewind?: boolean
 		cloud?: boolean
+		machines?: boolean
 	}
 }
 

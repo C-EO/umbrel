@@ -114,10 +114,11 @@ export function Dock() {
 					<DockItem
 						iconSize={iconSize}
 						iconSizeZoomed={iconSizeZoomed}
-						to={systemAppsKeyed['UMBREL_home'].systemAppTo}
-						open={pathname === '/'}
-						bg={systemAppsKeyed['UMBREL_home'].icon}
-						label={systemAppsKeyed['UMBREL_home'].name}
+						to={systemAppsKeyed['UMBREL_files'].systemAppTo}
+						onClick={navigateToLastFilesPath}
+						open={pathname.startsWith('/files')}
+						bg={systemAppsKeyed['UMBREL_files'].icon}
+						label={systemAppsKeyed['UMBREL_files'].name}
 						mouseX={mouseX}
 					/>
 					<DockItem
@@ -128,16 +129,6 @@ export function Dock() {
 						bg={systemAppsKeyed['UMBREL_app-store'].icon}
 						label={systemAppsKeyed['UMBREL_app-store'].name}
 						notificationCount={isMember ? undefined : appUpdateCount}
-						mouseX={mouseX}
-					/>
-					<DockItem
-						iconSize={iconSize}
-						iconSizeZoomed={iconSizeZoomed}
-						to={systemAppsKeyed['UMBREL_files'].systemAppTo}
-						onClick={navigateToLastFilesPath}
-						open={pathname.startsWith('/files')}
-						bg={systemAppsKeyed['UMBREL_files'].icon}
-						label={systemAppsKeyed['UMBREL_files'].name}
 						mouseX={mouseX}
 					/>
 					{isOwner && (
@@ -162,27 +153,15 @@ export function Dock() {
 						mouseX={mouseX}
 					/>
 					{showDockUtilities && (
-						<>
-							<DockDivider iconSize={iconSize} />
-							<DockItem
-								iconSize={iconSize}
-								iconSizeZoomed={iconSizeZoomed}
-								to={{search: addLinkSearchParams({dialog: 'live-usage'})}}
-								open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
-								bg={systemAppsKeyed['UMBREL_live-usage'].icon}
-								label={systemAppsKeyed['UMBREL_live-usage'].name}
-								mouseX={mouseX}
-							/>
-							<DockItem
-								iconSize={iconSize}
-								iconSizeZoomed={iconSizeZoomed}
-								to={systemAppsKeyed['UMBREL_widgets'].systemAppTo}
-								open={pathname.startsWith(systemAppsKeyed['UMBREL_widgets'].systemAppTo)}
-								bg={systemAppsKeyed['UMBREL_widgets'].icon}
-								label={systemAppsKeyed['UMBREL_widgets'].name}
-								mouseX={mouseX}
-							/>
-						</>
+						<DockItem
+							iconSize={iconSize}
+							iconSizeZoomed={iconSizeZoomed}
+							to={{search: addLinkSearchParams({dialog: 'live-usage'})}}
+							open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
+							bg={systemAppsKeyed['UMBREL_live-usage'].icon}
+							label={systemAppsKeyed['UMBREL_live-usage'].name}
+							mouseX={mouseX}
+						/>
 					)}
 				</Glass>
 			</motion.div>
@@ -216,19 +195,13 @@ export function DockPreview() {
 			}}
 		>
 			<DockItem
-				bg={systemAppsKeyed['UMBREL_home'].icon}
+				bg={systemAppsKeyed['UMBREL_files'].icon}
 				mouseX={mouseX}
 				iconSize={iconSize}
 				iconSizeZoomed={iconSizeZoomed}
 			/>
 			<DockItem
 				bg={systemAppsKeyed['UMBREL_app-store'].icon}
-				mouseX={mouseX}
-				iconSize={iconSize}
-				iconSizeZoomed={iconSizeZoomed}
-			/>
-			<DockItem
-				bg={systemAppsKeyed['UMBREL_files'].icon}
 				mouseX={mouseX}
 				iconSize={iconSize}
 				iconSizeZoomed={iconSizeZoomed}
@@ -245,15 +218,8 @@ export function DockPreview() {
 				iconSize={iconSize}
 				iconSizeZoomed={iconSizeZoomed}
 			/>
-			<DockDivider iconSize={iconSize} />
 			<DockItem
 				bg={systemAppsKeyed['UMBREL_live-usage'].icon}
-				mouseX={mouseX}
-				iconSize={iconSize}
-				iconSizeZoomed={iconSizeZoomed}
-			/>
-			<DockItem
-				bg={systemAppsKeyed['UMBREL_widgets'].icon}
 				mouseX={mouseX}
 				iconSize={iconSize}
 				iconSizeZoomed={iconSizeZoomed}
@@ -276,13 +242,7 @@ export function DockBottomPositioner({children}: {children: React.ReactNode}) {
 }
 
 // Clearer glass than the widget defaults: barely any blur or tint, hard refraction
-const dockGlassProps = {blur: 1.5, saturate: 1.3, brightness: 0.9, scale: 70, chroma: 0.2, bevel: 1.5} as const
+const dockGlassProps = {blur: 1.5, saturate: 1.4, brightness: 0.9, scale: 70, chroma: 0.24, bevel: 1.0} as const
 
 const dockClass = tw`mx-auto flex items-end gap-2.5 rounded-2xl contrast-more:bg-neutral-700 px-3 shadow-dock-drop shrink-0`
 const dockPreviewClass = tw`mx-auto flex items-end gap-4 rounded-2xl px-3 shadow-dock-drop shrink-0`
-
-const DockDivider = ({iconSize}: {iconSize: number}) => (
-	<div className='br grid w-1 place-items-center' style={{height: iconSize}}>
-		<div className='h-7 border-r border-white/10' />
-	</div>
-)

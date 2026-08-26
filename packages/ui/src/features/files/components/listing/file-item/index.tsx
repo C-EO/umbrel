@@ -35,6 +35,17 @@ export const FileItem = ({item, items}: FileItemProps) => {
 
 	const [isEditingName, setIsEditingName] = useState(false)
 
+	// The "New Folder" placeholder is only a name being typed — it has no file behind it
+	// until Enter commits it, so it can never take part in drag and drop.
+	const isUnsavedPlaceholder = 'isNew' in item && !!item.isNew
+
+	// Once committed, a folder is rendered optimistically until the server listing lands,
+	// so its operations are still unknown (empty). Treat unknown as permissive — disabling
+	// drag, drop and rename for the round-trip makes the new folder look broken, and every
+	// mutation stays enforced server-side either way.
+	const allowsOperation = (operation: FileSystemItem['operations'][number]) =>
+		!isUnsavedPlaceholder && (item.operations.length === 0 || item.operations.includes(operation))
+
 	const renamingItemPath = useFilesStore((state) => state.renamingItemPath)
 	const setRenamingItemPath = useFilesStore((state) => state.setRenamingItemPath)
 	const isUploading = 'isUploading' in item && item.isUploading
@@ -162,7 +173,8 @@ export const FileItem = ({item, items}: FileItemProps) => {
 		if (selectedItems.length !== 1) return
 
 		// check if the rename operation is allowed for this item
-		if (isReadOnly || !item.operations?.includes('rename')) return
+		// (an optimistic item's operations are still unknown — see allowsOperation above)
+		if (isReadOnly || (item.operations.length > 0 && !item.operations.includes('rename'))) return
 
 		// helper function to check if the event target is an input
 		function isInInput(event: KeyboardEvent) {
@@ -215,11 +227,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 				id={`${view}-view-file-item-${item.path}`}
 				path={item.path}
 				disabled={
-					isReadOnly ||
-					!!isUploading ||
-					item.type !== 'directory' ||
-					!item.operations.includes('writable') ||
-					!isItemInteractive
+					isReadOnly || !!isUploading || item.type !== 'directory' || !allowsOperation('writable') || !isItemInteractive
 				}
 				className={view === 'icons' ? 'h-full rounded-12' : 'rounded-lg'}
 			>
@@ -227,7 +235,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 					id={`${view}-view-file-item-${item.path}`}
 					item={item}
 					className={view === 'icons' ? 'h-full' : undefined}
-					disabled={isReadOnly || !!isUploading || !item.operations.includes('move') || !isItemInteractive}
+					disabled={isReadOnly || !!isUploading || !allowsOperation('move') || !isItemInteractive}
 				>
 					<div
 						onClick={(e) => handleClick(e, item, items)}

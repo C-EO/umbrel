@@ -8,6 +8,7 @@ import {useNavigate as useRouterNavigate} from 'react-router-dom'
 import {ContextMenuItem, ContextMenuShortcut} from '@/components/ui/context-menu'
 import {DropdownMenuItem} from '@/components/ui/dropdown-menu'
 import {IconButton} from '@/components/ui/icon-button'
+import {toast} from '@/components/ui/toast'
 import {AddFolderIcon} from '@/features/files/assets/add-folder-icon'
 import {CloudBanner} from '@/features/files/components/cloud-banner'
 import {Listing} from '@/features/files/components/listing'
@@ -24,6 +25,7 @@ import {useIsFilesEmbedded, useIsFilesReadOnly} from '@/features/files/providers
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FilesStore} from '@/features/files/store/use-files-store'
 import {isValidCloudDestination} from '@/features/files/utils/cloud'
+import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
 import {dashboardAuthHeaders} from '@/modules/auth/http-auth'
 import {trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
@@ -96,14 +98,39 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 		const filePath = currentPath + '/' + name
 		try {
 			// Create empty file via upload endpoint
-			await fetch(`/api/files/upload?path=${encodeURIComponent(filePath)}&collision=keep-both`, {
+			const response = await fetch(`/api/files/upload?path=${encodeURIComponent(filePath)}&collision=keep-both`, {
 				method: 'POST',
 				body: '',
 				headers: {...dashboardAuthHeaders(), 'Content-Type': 'text/plain; charset=utf-8'},
 			})
+			if (!response.ok) {
+				const {error: message} = await response.json().catch(() => ({error: response.statusText}))
+				toast.error(t('files-error.create-file', {message: getFilesErrorMessage(message || response.statusText)}), {
+					area: 'files',
+				})
+				return
+			}
+			// `keep-both` means the server may have picked a different name than we guessed
+			// (our uniqueness check only sees the loaded page of the listing), so the
+			// response path is the only authoritative one
+			const {path: createdPath} = (await response.json()) as {path: string}
 			await utils.files.list.invalidate({path: currentPath})
+			// The editor derives read-only from `operations`, so they have to be real
+			// before its first render — it seeds `isEditing` from them once and never remounts.
+			// Fall back to the parent's operations (known writable, we checked above) so a
+			// hiccup here opens an editable file rather than silently opening nothing.
+			const operations = await utils.files.pathOperations
+				.fetch({path: createdPath})
+				.catch(() => listing?.operations ?? [])
 			// Open the new file in the editor
-			setViewerItem({name, path: filePath, type: 'text/plain', size: 0, modified: Date.now(), operations: []})
+			setViewerItem({
+				name: createdPath.split('/').pop() ?? name,
+				path: createdPath,
+				type: 'text/plain',
+				size: 0,
+				modified: Date.now(),
+				operations,
+			})
 		} catch {
 			// Silently fail — the file listing will show the new file if it was created
 		}
