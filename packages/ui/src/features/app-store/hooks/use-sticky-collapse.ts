@@ -1,79 +1,106 @@
 import {useMotionValue, useTransform, type MotionValue} from 'motion/react'
-import {useLayoutEffect, useState} from 'react'
+import {useLayoutEffect, useRef, useState} from 'react'
 
 import {useSheetStickyHeader} from '@/providers/sheet-sticky-header'
 
+const PIN_HYSTERESIS = 2
+
 /**
- * Scroll progress (0 → 1 over `distance`px) of a sticky wrapper collapsing
- * against the top of the sheet's scroller — shared by the store header and
- * the app page hero. Built to be correct at any mount time:
+ * Scroll-linked collapse motion for a visual tree rendered outside the sheet
+ * scroller. The anchor is an explicit in-flow placeholder for that tree.
  *
- * - The scroll position is owned here and synced from the container at mount
- *   (and again a frame later, after any scroll restoration has applied), so
- *   chrome mounting into an already-scrolled page renders its correct state
- *   immediately instead of waiting for the next scroll event.
- * - The pin offset is measured from the wrapper's NEXT SIBLING, not the
- *   wrapper itself: a stuck wrapper's rect is pinned to the viewport and
- *   reads wrong, but siblings stay in normal flow — subtracting the flex row
- *   gap and the wrapper's height from the sibling's content offset gives the
- *   wrapper's natural position in every scroll state.
+ * Geometry is measured only on mount/resize. Scroll frames update MotionValues
+ * directly, so the icon, title, controls, and actions can scrub continuously
+ * without a React render or a layout read on every frame.
  */
 export function useStickyCollapse(
-	wrapperRef: React.RefObject<HTMLDivElement | null>,
+	anchor: HTMLElement | null,
 	distance: number,
-): MotionValue<number> {
-	const {scrollRef} = useSheetStickyHeader()
+): {progress: MotionValue<number>; wrapperY: MotionValue<number>; pinned: boolean; settled: boolean} {
+	const {scrollElement} = useSheetStickyHeader()
 	const scrollY = useMotionValue(0)
-	const [stickStart, setStickStart] = useState(0)
+	const stickStart = useMotionValue(0)
+	const pinnedRef = useRef(false)
+	const [pinned, setPinned] = useState(false)
+	const settledRef = useRef(false)
+	const [settled, setSettled] = useState(false)
+
+	const wrapperY = useTransform(() => Math.max(0, stickStart.get() - scrollY.get()))
+	const progress = useTransform(() => Math.min(1, Math.max(0, (scrollY.get() - stickStart.get()) / distance)))
 
 	useLayoutEffect(() => {
-		const scroller = scrollRef?.current
-		const wrapper = wrapperRef.current
-		if (!scroller || !wrapper) return
-
-		let frame = 0
-		const sync = () => {
-			scrollY.set(scroller.scrollTop)
-			const parent = wrapper.parentElement
-			const sibling = wrapper.nextElementSibling
-			if (!parent || !sibling) return
-			const gap = parseFloat(getComputedStyle(parent).rowGap) || 0
-			setStickStart(
-				Math.max(
-					0,
-					Math.round(
-						sibling.getBoundingClientRect().top -
-							scroller.getBoundingClientRect().top +
-							scroller.scrollTop -
-							gap -
-							wrapper.offsetHeight,
-					),
-				),
-			)
+		if (!scrollElement || !anchor) {
+			pinnedRef.current = false
+			setPinned(false)
+			settledRef.current = false
+			setSettled(false)
+			return
 		}
-		const scheduleSync = () => {
-			if (frame) return
-			frame = requestAnimationFrame(() => {
-				frame = 0
-				sync()
+
+		let scrollFrame = 0
+		let measureFrame = 0
+
+		const syncScroll = () => {
+			const nextScrollY = scrollElement.scrollTop
+			scrollY.set(nextScrollY)
+
+			const threshold = stickStart.get() - (pinnedRef.current ? PIN_HYSTERESIS : 0)
+			const nextPinned = nextScrollY >= threshold
+			if (nextPinned !== pinnedRef.current) {
+				pinnedRef.current = nextPinned
+				setPinned(nextPinned)
+			}
+
+			const settleThreshold = stickStart.get() + distance
+			const nextSettled = nextScrollY >= settleThreshold
+			if (nextSettled !== settledRef.current) {
+				settledRef.current = nextSettled
+				setSettled(nextSettled)
+			}
+		}
+
+		const measure = () => {
+			const viewportTop = scrollElement.getBoundingClientRect().top
+			const anchorTop = anchor.getBoundingClientRect().top
+			stickStart.set(Math.max(0, anchorTop - viewportTop + scrollElement.scrollTop))
+			syncScroll()
+		}
+
+		const scheduleScrollSync = () => {
+			if (scrollFrame) return
+			scrollFrame = requestAnimationFrame(() => {
+				scrollFrame = 0
+				syncScroll()
+			})
+		}
+		const scheduleMeasure = () => {
+			if (measureFrame) return
+			measureFrame = requestAnimationFrame(() => {
+				measureFrame = 0
+				measure()
 			})
 		}
 
-		sync()
-		// Once more next frame, after any scroll restoration has applied
-		scheduleSync()
-		scroller.addEventListener('scroll', scheduleSync, {passive: true})
-		window.addEventListener('resize', scheduleSync)
-		// The wrapper's height can change without a scroll (search hides the rail)
-		const observer = new ResizeObserver(scheduleSync)
-		observer.observe(wrapper)
-		return () => {
-			scroller.removeEventListener('scroll', scheduleSync)
-			window.removeEventListener('resize', scheduleSync)
-			observer.disconnect()
-			cancelAnimationFrame(frame)
-		}
-	}, [scrollRef, wrapperRef, scrollY])
+		measure()
+		// Scroll restoration runs against the persistent viewport after route
+		// rendering, so read its final position again on the next frame.
+		scheduleScrollSync()
+		scrollElement.addEventListener('scroll', scheduleScrollSync, {passive: true})
+		window.addEventListener('resize', scheduleMeasure)
 
-	return useTransform(scrollY, [stickStart, stickStart + distance], [0, 1], {clamp: true})
+		const resizeObserver = new ResizeObserver(scheduleMeasure)
+		resizeObserver.observe(scrollElement)
+		resizeObserver.observe(anchor)
+		if (anchor.parentElement) resizeObserver.observe(anchor.parentElement)
+
+		return () => {
+			scrollElement.removeEventListener('scroll', scheduleScrollSync)
+			window.removeEventListener('resize', scheduleMeasure)
+			resizeObserver.disconnect()
+			cancelAnimationFrame(scrollFrame)
+			cancelAnimationFrame(measureFrame)
+		}
+	}, [anchor, scrollElement, scrollY, stickStart])
+
+	return {progress, wrapperY, pinned, settled}
 }

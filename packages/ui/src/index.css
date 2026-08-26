@@ -483,14 +483,6 @@ html {
 	mask-image: linear-gradient(to bottom, red 0, red calc(100% - var(--distance2)), transparent);
 }
 
-/* The App Store pins collapsing chrome to the top of the sheet's scroller
-   (the store header and the app page hero) — same treatment: drop the top
-   half of the fade so the chrome reads as solid instead of fading out under
-   its own sticky position. */
-.umbrel-fade-scroller-y:has([data-sticky-chrome]) {
-	mask-image: linear-gradient(to bottom, red 0, red calc(100% - var(--distance2)), transparent);
-}
-
 .umbrel-fade-scroller-x {
 	mask-image: linear-gradient(to right, transparent, red var(--distance1) calc(100% - var(--distance2)), transparent);
 }

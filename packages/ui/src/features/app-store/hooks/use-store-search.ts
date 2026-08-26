@@ -1,4 +1,4 @@
-import {useDeferredValue, useEffect, useRef, useState} from 'react'
+import {useCallback, useDeferredValue, useEffect, useRef, useState} from 'react'
 import {useSearchParams} from 'react-router-dom'
 
 /**
@@ -11,7 +11,10 @@ export function useStoreSearch() {
 	const [query, setQuery] = useState(searchParams.get('q') ?? '')
 	const deferredQuery = useDeferredValue(query)
 
-	const inputRef = useRef<HTMLInputElement>(null)
+	const activeInputRef = useRef<HTMLInputElement | null>(null)
+	const setActiveInput = useCallback((input: HTMLInputElement | null) => {
+		activeInputRef.current = input
+	}, [])
 
 	useEffect(() => {
 		if (deferredQuery) searchParams.set('q', deferredQuery)
@@ -26,11 +29,11 @@ export function useStoreSearch() {
 			if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)
 				return
 			e.preventDefault()
-			inputRef.current?.focus()
+			activeInputRef.current?.focus()
 		}
 		window.addEventListener('keydown', handler)
 		return () => window.removeEventListener('keydown', handler)
 	}, [])
 
-	return {inputRef, query, deferredQuery, setQuery}
+	return {query, deferredQuery, setQuery, setActiveInput}
 }

@@ -41,7 +41,10 @@ vi.mock('@/trpc/trpc', () => ({
 	},
 }))
 vi.mock('@/components/install-button', () => ({InstallButton: () => null}))
-vi.mock('@/components/install-button-connected', () => ({InstallButtonConnected: () => null}))
+vi.mock('@/components/install-button-connected', () => ({
+	InstallButtonConnectedController: ({children}: {children: React.ReactNode}) => children,
+	InstallButtonConnectedView: () => null,
+}))
 vi.mock('@/features/app-store/components/app-page/app-hero', () => ({AppPageHero: () => null}))
 vi.mock('@/features/app-store/components/app-page/app-page-content', () => ({AppPageContent: vi.fn(() => null)}))
 vi.mock('@/modules/community-app-store/community-badge', () => ({CommunityBadge: () => null}))

@@ -5,7 +5,11 @@ import {useTranslation} from 'react-i18next'
 import {useNavigate, useParams} from 'react-router-dom'
 
 import {InstallButton} from '@/components/install-button'
-import {InstallButtonConnected} from '@/components/install-button-connected'
+import {
+	InstallButtonConnectedController,
+	InstallButtonConnectedView,
+	type InstallButtonConnectedHandle,
+} from '@/components/install-button-connected'
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
 import {Loading} from '@/components/ui/loading'
 import {registryAppPath} from '@/constants/app-store'
@@ -40,7 +44,7 @@ export default function AppPage() {
 	// Optional release history; any failure just falls back to local notes
 	const releasesQ = useQuery({...appReleasesQueryOptions(appId ?? ''), enabled: Boolean(appId)})
 
-	const installButtonRef = useRef<{triggerInstall: (highlightDependency?: string) => void}>(null)
+	const installButtonRef = useRef<InstallButtonConnectedHandle>(null)
 
 	if (isLoading || isLoadingApps || isLoadingUserApps) return <Loading />
 	if (!app) throw new Error('App not found')
@@ -67,22 +71,22 @@ export default function AppPage() {
 			{/* Keyed by app so navigating between app pages (same route, new
 			    params — e.g. via related apps) remounts and replays the reveal */}
 			<div key={app.id} className={appPageWrapperClass}>
-				<AppPageHero
-					app={app}
-					childrenRight={
-						<div className='flex items-center gap-3 max-sm:flex-col max-sm:items-stretch md:gap-4'>
-							<ErrorBoundary
-								fallback={
-									<div className='pointer-events-none opacity-50'>
-										<InstallButton state='not-installed' />
-									</div>
-								}
-							>
-								<InstallButtonConnected ref={installButtonRef} app={app} />
-							</ErrorBoundary>
-						</div>
+				<ErrorBoundary
+					fallback={
+						<AppPageHero
+							app={app}
+							renderActions={() => (
+								<div className='pointer-events-none opacity-50'>
+									<InstallButton state='not-installed' />
+								</div>
+							)}
+						/>
 					}
-				/>
+				>
+					<InstallButtonConnectedController ref={installButtonRef} app={app}>
+						<AppPageHero app={app} renderActions={() => <InstallButtonConnectedView />} />
+					</InstallButtonConnectedController>
+				</ErrorBoundary>
 				<div className='flex flex-col gap-6 md:gap-8'>
 					<ErrorBoundary FallbackComponent={ErrorBoundaryCardFallback}>
 						<AppPageContent

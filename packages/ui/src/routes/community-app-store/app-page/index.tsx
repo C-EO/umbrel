@@ -2,7 +2,7 @@ import {ErrorBoundary} from 'react-error-boundary'
 import {useParams} from 'react-router-dom'
 
 import {InstallButton} from '@/components/install-button'
-import {InstallButtonConnected} from '@/components/install-button-connected'
+import {InstallButtonConnectedController, InstallButtonConnectedView} from '@/components/install-button-connected'
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
 import {Loading} from '@/components/ui/loading'
 import {registryAppPath} from '@/constants/app-store'
@@ -28,20 +28,22 @@ export default function CommunityAppPage() {
 		// Keyed by app so navigating between app pages remounts and replays the reveal
 		<div key={app.id} className={appPageWrapperClass}>
 			<CommunityBadge className='self-start' />
-			<AppPageHero
-				app={app}
-				childrenRight={
-					<ErrorBoundary
-						fallback={
+			<ErrorBoundary
+				fallback={
+					<AppPageHero
+						app={app}
+						renderActions={() => (
 							<div className='pointer-events-none opacity-50'>
 								<InstallButton state='not-installed' />
 							</div>
-						}
-					>
-						<InstallButtonConnected app={app} />
-					</ErrorBoundary>
+						)}
+					/>
 				}
-			/>
+			>
+				<InstallButtonConnectedController app={app}>
+					<AppPageHero app={app} renderActions={() => <InstallButtonConnectedView />} />
+				</InstallButtonConnectedController>
+			</ErrorBoundary>
 			<div className='flex flex-col gap-6 md:gap-8'>
 				<ErrorBoundary FallbackComponent={ErrorBoundaryCardFallback}>
 					<AppPageContent app={app} registryId={appStoreId} makeAppPath={registryAppPath} />

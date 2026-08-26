@@ -7,7 +7,11 @@ import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 
 import type {RegistryApp, UserApp} from '@/trpc/trpc'
 
-import {InstallButtonConnected} from './install-button-connected'
+import {
+	InstallButtonConnected,
+	InstallButtonConnectedController,
+	InstallButtonConnectedView,
+} from './install-button-connected'
 
 const fixtures = vi.hoisted(() => ({
 	app: {
@@ -25,6 +29,9 @@ const fixtures = vi.hoisted(() => ({
 	} as UserApp,
 	launch: vi.fn(),
 	update: vi.fn(),
+	appInstallHook: vi.fn(() => ({state: 'ready', progress: undefined, install: vi.fn()})),
+	dependenciesDialog: vi.fn(),
+	osUpdateDialog: vi.fn(),
 }))
 
 vi.mock('react-i18next', async (importOriginal) => ({
@@ -32,7 +39,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
 	useTranslation: () => ({t: (key: string) => key}),
 }))
 vi.mock('@/hooks/use-app-install', () => ({
-	useAppInstall: () => ({state: 'ready', progress: undefined, install: vi.fn()}),
+	useAppInstall: fixtures.appInstallHook,
 }))
 vi.mock('@/hooks/use-launch-app', () => ({useLaunchApp: () => fixtures.launch}))
 vi.mock('@/hooks/use-update-app', () => ({
@@ -44,9 +51,17 @@ vi.mock('@/providers/apps', () => ({
 vi.mock('@/providers/available-apps', () => ({
 	useAllAvailableApps: () => ({apps: [fixtures.app], ambiguousAppIds: new Set(), isLoading: false}),
 }))
-vi.mock('@/modules/app-store/select-dependencies-dialog', () => ({SelectDependenciesDialog: () => null}))
+vi.mock('@/modules/app-store/select-dependencies-dialog', () => ({
+	SelectDependenciesDialog: (props: unknown) => {
+		fixtures.dependenciesDialog(props)
+		return null
+	},
+}))
 vi.mock('@/modules/app-store/os-update-required', () => ({
-	OSUpdateRequiredDialog: ({open}: {open: boolean}) => (open ? <div role='dialog'>os-update-required</div> : null),
+	OSUpdateRequiredDialog: (props: {open: boolean}) => {
+		fixtures.osUpdateDialog(props)
+		return props.open ? <div role='dialog'>os-update-required</div> : null
+	},
 }))
 vi.mock('@/trpc/trpc', () => ({
 	installedStates: ['ready', 'running', 'stopped'],
@@ -93,5 +108,28 @@ describe('InstallButtonConnected', () => {
 
 		act(() => openButton?.click())
 		expect(fixtures.launch).toHaveBeenCalledWith(fixtures.app.id)
+	})
+
+	test('shares one behavioral controller and one dialog set across two action renderers', () => {
+		act(() =>
+			root.render(
+				<MemoryRouter>
+					<InstallButtonConnectedController app={fixtures.app}>
+						<div data-testid='expanded'>
+							<InstallButtonConnectedView />
+						</div>
+						<div data-testid='compact'>
+							<InstallButtonConnectedView />
+						</div>
+					</InstallButtonConnectedController>
+				</MemoryRouter>,
+			),
+		)
+
+		expect(fixtures.appInstallHook).toHaveBeenCalledTimes(1)
+		expect(fixtures.dependenciesDialog).toHaveBeenCalledTimes(1)
+		expect(fixtures.osUpdateDialog).toHaveBeenCalledTimes(1)
+		expect(container.querySelector('[data-testid="expanded"] button')).not.toBeNull()
+		expect(container.querySelector('[data-testid="compact"] button')).not.toBeNull()
 	})
 })

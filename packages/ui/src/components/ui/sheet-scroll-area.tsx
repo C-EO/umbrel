@@ -6,7 +6,7 @@ import {useFadeScroller} from '@/components/fade-scroller'
 import {cn} from '@/lib/utils'
 
 type Props = React.ComponentPropsWithoutRef<typeof ScrollAreaPrimitive.Root> & {
-	viewportRef?: React.RefObject<HTMLDivElement | null>
+	viewportRef?: React.Ref<HTMLDivElement>
 	viewportClassName?: string
 	scrollbarClassName?: string
 	fade?: boolean

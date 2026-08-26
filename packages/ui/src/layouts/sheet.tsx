@@ -1,4 +1,4 @@
-import {Suspense, useLayoutEffect, useRef, useState} from 'react'
+import {Suspense, useCallback, useLayoutEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {Outlet, useLocation, useNavigate} from 'react-router-dom'
 
@@ -22,10 +22,16 @@ export function SheetLayout() {
 	const [open, setOpen] = useState(true)
 
 	const scrollRef = useRef<HTMLDivElement>(null)
+	const [scrollElement, setScrollElement] = useState<HTMLDivElement | null>(null)
+	const setScrollViewport = useCallback((element: HTMLDivElement | null) => {
+		scrollRef.current = element
+		setScrollElement(element)
+	}, [])
 
 	useScrollRestoration(scrollRef, getSheetScrollRestorationAction)
 
 	const isSettingsRoute = /^\/settings(\/|$)/.test(location.pathname)
+	const isAppStoreRoute = /^\/(?:community-)?app-store(\/|$)/.test(location.pathname)
 	// Desktop Files manages its own viewport-relative heights (sidebar reaches
 	// below the dock line), so the dock spacer would only add phantom scroll
 	const isFilesRoute = /^\/files(\/|$)/.test(location.pathname)
@@ -44,7 +50,7 @@ export function SheetLayout() {
 	return (
 		<>
 			<Sheet open={open} onOpenChange={setOpen} modal={false}>
-				<SheetStickyHeaderProvider scrollRef={scrollRef}>
+				<SheetStickyHeaderProvider scrollElement={scrollElement}>
 					{/* NOTE: If you change these width/max-width values, also update the
 					   text editor width in features/files/components/file-viewer/text-viewer/index.tsx
 					   which derives its sizing from these same breakpoints. */}
@@ -70,8 +76,14 @@ export function SheetLayout() {
 						<ScrollArea
 							className='umbrel-window-surface-top h-full'
 							fade={!isFilesRoute}
-							viewportRef={scrollRef}
-							viewportClassName={cn(isSettingsRoute && 'lg:!overflow-hidden lg:[&>div]:!h-full')}
+							viewportRef={setScrollViewport}
+							viewportClassName={cn(
+								isSettingsRoute && 'lg:!overflow-hidden lg:[&>div]:!h-full',
+								// Search changes the Store header's in-flow height. Let the
+								// scroll-linked motion retain its exact depth instead of having
+								// browser scroll anchoring silently subtract the rail height.
+								isAppStoreRoute && '[overflow-anchor:none]',
+							)}
 							scrollbarClassName={cn(isSettingsRoute && 'lg:hidden')}
 						>
 							<div

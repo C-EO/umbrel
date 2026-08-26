@@ -1,5 +1,5 @@
 import prettyBytes from 'pretty-bytes'
-import {useImperativeHandle, useState} from 'react'
+import {createContext, useContext, useImperativeHandle, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {arrayIncludes} from 'ts-extras'
 
@@ -18,66 +18,85 @@ import {installedStates, RegistryApp, trpcReact} from '@/trpc/trpc'
 
 import {InstallButton} from './install-button'
 
-export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: React.Ref<unknown>}) {
+export type InstallButtonConnectedHandle = {
+	triggerInstall: (highlightDependency?: string) => void
+}
+
+type LoadingController = {
+	status: 'loading'
+	app: RegistryApp
+	installSize: string | undefined
+	progress: number | undefined
+}
+
+type ReadyController = {
+	status: 'ready'
+	app: RegistryApp
+	installSize: string | undefined
+	progress: number | undefined
+	installState: ReturnType<typeof useAppInstall>['state']
+	install: () => void
+	open: () => void
+	update: () => void
+	updatePending: boolean
+	canOfferUpdate: boolean
+	isAppIdAmbiguous: boolean
+}
+
+type InstallController = LoadingController | ReadyController
+const InstallButtonControllerContext = createContext<InstallController | null>(null)
+
+/**
+ * Owns install/update/dependency state once while allowing the expanded hero
+ * and compact toolbar to render native-sized action controls from that same
+ * controller. Dialogs also live here, so duplicated visual triggers never
+ * create independent flows.
+ */
+export function InstallButtonConnectedController({
+	app,
+	children,
+	ref,
+}: {
+	app: RegistryApp
+	children: React.ReactNode
+	ref?: React.Ref<InstallButtonConnectedHandle>
+}) {
 	const {t} = useTranslation()
 	const appInstall = useAppInstall(app.id)
-	// Members browse the app store read-only, only the owner can install
 	const isMember = trpcReact.user.get.useQuery().data?.role === 'member'
 	const {apps, ambiguousAppIds} = useAllAvailableApps()
-	const [showDepsDialog, setShowDepsDialog] = useState(false)
-	const [showOSUpdateRequiredDialog, setShowOSUpdateRequiredDialog] = useState(false)
 	const {userAppsKeyed, isLoading} = useApps()
 	const openApp = useLaunchApp()
 	const updateApp = useUpdateApp(app.id)
-	const [selections, setSelections] = useState({} as Record<string, string>)
+	const [showDepsDialog, setShowDepsDialog] = useState(false)
+	const [showOSUpdateRequiredDialog, setShowOSUpdateRequiredDialog] = useState(false)
+	const selections = useRef({} as Record<string, string>).current
 	const [highlightDependency, setHighlightDependency] = useState<string | undefined>(undefined)
 
-	useImperativeHandle(ref, () => ({
-		triggerInstall(highlightDependency?: string) {
-			setHighlightDependency(highlightDependency)
-			triggerInstall()
-		},
-	}))
+	const ready = !isLoading && Boolean(userAppsKeyed && apps && ambiguousAppIds)
+	const isAppIdAmbiguous = Boolean(ambiguousAppIds?.has(app.id))
+	const isInstalled = (appId: string) =>
+		Boolean(userAppsKeyed && arrayIncludes(installedStates, userAppsKeyed[appId]?.state))
+	const dependencies =
+		ready && apps && userAppsKeyed && ambiguousAppIds
+			? getDependencyAlternatives(app.dependencies, apps, userAppsKeyed, ambiguousAppIds)
+			: []
 
-	if (isLoading || !userAppsKeyed || !apps || !ambiguousAppIds) {
-		return (
-			<InstallButton
-				key={app.id}
-				installSize={app.installSize ? prettyBytes(app.installSize) : undefined}
-				progress={appInstall.progress}
-				state='loading'
-			/>
-		)
-	}
-
-	const isInstalled = (appId: string) => arrayIncludes(installedStates, userAppsKeyed[appId]?.state)
-
-	const selectAlternative = (dependencyId: string, appId: string | undefined) => {
-		if (appId) selections[dependencyId] = appId
-		else delete selections[dependencyId]
-		setSelections({...selections})
-	}
-
-	const isAppIdAmbiguous = ambiguousAppIds.has(app.id)
-	const dependencies = getDependencyAlternatives(app.dependencies, apps, userAppsKeyed, ambiguousAppIds)
-
-	// Auto-select the first installed alternative, naturally preferring the original
-	// app when it is installed as well.
-	dependencies.forEach(({dependencyId, appIds}) => {
-		appIds.forEach((appId) => {
-			if (!selections[dependencyId] && isInstalled(appId)) {
-				selectAlternative(dependencyId, appId)
-			}
+	if (ready) {
+		// Preserve an installed alternative across both action renderers.
+		dependencies.forEach(({dependencyId, appIds}) => {
+			appIds.forEach((appId) => {
+				if (!selections[dependencyId] && isInstalled(appId)) selections[dependencyId] = appId
+			})
 		})
-	})
+	}
 
-	// TODO: Also check if app is ready? `&& userAppsKeyed[dep].state === 'ready'`
-	// Will want to mark apps as in progress so we don't show that an app needs to be installed first
 	const areAllAlternativesSelectedAndInstalled = dependencies.every(({dependencyId, appIds}) =>
 		appIds.some((appId) => selections[dependencyId] === appId && isInstalled(appId)),
 	)
 
 	const install = () => {
+		if (!ready) return
 		if (isMember) {
 			toast(t('app-store.ask-owner-to-install'), {area: 'app-store'})
 			return
@@ -91,29 +110,27 @@ export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: Reac
 			return
 		}
 		if (dependencies.length > 0) {
-			return setShowDepsDialog(true)
+			setShowDepsDialog(true)
+			return
 		}
 		appInstall.install()
 	}
 
-	function triggerInstall() {
-		install()
-	}
+	useImperativeHandle(ref, () => ({
+		triggerInstall(dependencyId?: string) {
+			setHighlightDependency(dependencyId)
+			install()
+		},
+	}))
 
 	const verifyInstall = (selectedDeps: Record<string, string>) => {
 		if (isAppIdAmbiguous) return
-		// Currently always the case because AppPermissionsDialog checks
-		if (areAllAlternativesSelectedAndInstalled) {
-			appInstall.install(selectedDeps)
-		}
+		if (areAllAlternativesSelectedAndInstalled) appInstall.install(selectedDeps)
 	}
 
-	// Open remains the primary installed-app action. Updates are offered
-	// separately so an incompatible update never blocks launching the app.
-	const userApp = userAppsKeyed[app.id]
+	const userApp = userAppsKeyed?.[app.id]
 	const updateAvailable = !isMember && !!userApp && isAppUpdateAvailable(userApp.version, app)
-	const canOfferUpdate = updateAvailable && canPresentUpdateAction(appInstall.state)
-
+	const canOfferUpdate = ready && updateAvailable && canPresentUpdateAction(appInstall.state)
 	const update = () => {
 		if (isAppIdAmbiguous) {
 			toast(t('app-store.app-id-conflict'), {area: 'app-store'})
@@ -127,50 +144,99 @@ export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: Reac
 		updateApp.update()
 	}
 
+	const installSize = app.installSize ? prettyBytes(app.installSize) : undefined
+	const controller: InstallController = ready
+		? {
+				status: 'ready',
+				app,
+				installSize,
+				progress: appInstall.progress,
+				installState: appInstall.state,
+				install,
+				open: () => openApp(app.id),
+				update,
+				updatePending: updateApp.isPending,
+				canOfferUpdate,
+				isAppIdAmbiguous,
+			}
+		: {status: 'loading', app, installSize, progress: appInstall.progress}
+
+	return (
+		<InstallButtonControllerContext value={controller}>
+			{children}
+			{ready && (
+				<>
+					<SelectDependenciesDialog
+						appId={app.id}
+						dependencies={dependencies}
+						open={showDepsDialog}
+						onOpenChange={setShowDepsDialog}
+						onNext={verifyInstall}
+						highlightDependency={highlightDependency}
+					/>
+					<OSUpdateRequiredDialog
+						app={app}
+						open={showOSUpdateRequiredDialog}
+						onOpenChange={setShowOSUpdateRequiredDialog}
+					/>
+				</>
+			)}
+		</InstallButtonControllerContext>
+	)
+}
+
+export function InstallButtonConnectedView() {
+	const {t} = useTranslation()
+	const controller = useContext(InstallButtonControllerContext)
+	if (!controller) throw new Error('InstallButtonConnectedView must be used within InstallButtonConnectedController')
+
+	if (controller.status === 'loading') {
+		return (
+			<InstallButton
+				key={controller.app.id}
+				installSize={controller.installSize}
+				progress={controller.progress}
+				state='loading'
+			/>
+		)
+	}
+
 	return (
 		<div className='flex flex-col gap-1.5'>
 			<div className='flex items-center gap-3 max-sm:flex-col max-sm:items-stretch md:gap-4'>
 				<InstallButton
-					// `key` to prevent framer-motion from thinking install buttons from different pages are the same and animating between them
-					key={app.id}
-					installSize={app.installSize ? prettyBytes(app.installSize) : undefined}
-					// progress={userApp?.installProgress}
-					// state={userApp?.state || 'initial'}
-					progress={appInstall.progress}
-					state={appInstall.state}
-					onInstallClick={install}
-					onOpenClick={() => openApp(app.id)}
-					disabled={isAppIdAmbiguous && appInstall.state === 'not-installed'}
+					key={controller.app.id}
+					installSize={controller.installSize}
+					progress={controller.progress}
+					state={controller.installState}
+					onInstallClick={controller.install}
+					onOpenClick={controller.open}
+					disabled={controller.isAppIdAmbiguous && controller.installState === 'not-installed'}
 				/>
-				{canOfferUpdate && (
+				{controller.canOfferUpdate && (
 					<Button
 						size='lg'
-						onClick={update}
-						disabled={isAppIdAmbiguous || updateApp.isPending}
+						onClick={controller.update}
+						disabled={controller.isAppIdAmbiguous || controller.updatePending}
 						className='max-sm:h-[30px] max-sm:w-full max-sm:text-13'
 					>
 						{t('app-updates.update')}
 					</Button>
 				)}
 			</div>
-			{isAppIdAmbiguous && (
+			{controller.isAppIdAmbiguous && (
 				<p className='max-w-64 text-right text-11 leading-tight text-amber-200/70 max-sm:text-center'>
 					{t('app-store.app-id-conflict')}
 				</p>
 			)}
-			<SelectDependenciesDialog
-				appId={app.id}
-				dependencies={dependencies}
-				open={showDepsDialog}
-				onOpenChange={setShowDepsDialog}
-				onNext={verifyInstall}
-				highlightDependency={highlightDependency}
-			/>
-			<OSUpdateRequiredDialog
-				app={app}
-				open={showOSUpdateRequiredDialog}
-				onOpenChange={setShowOSUpdateRequiredDialog}
-			/>
 		</div>
+	)
+}
+
+export function InstallButtonConnected({app, ref}: {app: RegistryApp; ref?: React.Ref<InstallButtonConnectedHandle>}) {
+	return (
+		<InstallButtonConnectedController app={app} ref={ref}>
+			<InstallButtonConnectedView />
+		</InstallButtonConnectedController>
 	)
 }
