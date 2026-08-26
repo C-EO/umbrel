@@ -14,11 +14,12 @@ import {RewindOverlay} from '@/features/files/components/rewind'
 import {RewindOverlayProvider} from '@/features/files/components/rewind/overlay-context'
 import {Sidebar} from '@/features/files/components/sidebar'
 import {MobileSidebarWrapper} from '@/features/files/components/sidebar/mobile-sidebar-wrapper'
-import {useIsMember} from '@/features/files/hooks/use-home-path'
+import {MachineFoldersProvider} from '@/features/files/hooks/use-machine-folder'
 import {useWatcherRefetch} from '@/features/files/hooks/use-watcher-refetch'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import {useIsMobile} from '@/hooks/use-is-mobile'
+import {trpcReact} from '@/trpc/trpc'
 
 const ShareInfoDialog = lazy(() => import('@/features/files/components/dialogs/share-info-dialog'))
 const ShareUsersDialog = lazy(() => import('@/features/files/components/dialogs/share-users-dialog'))
@@ -39,7 +40,8 @@ export default function FilesLayout() {
 	const isMobile = useIsMobile()
 	const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
 	const isReadOnly = useIsFilesReadOnly()
-	const isMember = useIsMember()
+	const {data: user} = trpcReact.user.get.useQuery()
+	const isMember = user?.role === 'member'
 
 	// One subscription for the whole Files surface: refreshes every mounted
 	// listing (main view, /Apps, /Trash, sidebar trash) on external changes
@@ -64,73 +66,75 @@ export default function FilesLayout() {
 	}, [pathname, setSelectedItems, setViewerItem, setIsSelectingOnMobile])
 
 	return (
-		<FilesDndWrapper>
-			<RewindOverlayProvider>
-				<SheetHeader className='flex flex-col gap-4 md:flex-row md:items-center md:gap-0'>
-					<div className='flex items-center gap-4'>
-						{isMobile ? (
-							<HiMenuAlt2
-								role='button'
-								className='h-5 w-5 text-white/90'
-								onClick={() => setIsMobileSidebarOpen(true)}
-							/>
-						) : null}
-						<SheetTitle className='mr-2 leading-none lg:mr-0 lg:min-w-[224px] lg:text-36'>{t('files')}</SheetTitle>
-					</div>
-				</SheetHeader>
-				<ErrorBoundary FallbackComponent={ErrorBoundaryCardFallback}>
-					{/* FileViewer renders the viewerItem from the store */}
-					<FileViewer />
-
-					<div className='mt-[-0.5rem] grid grid-cols-1 lg:grid-cols-[224px_1fr]'>
-						{/* Sidebar */}
-						{isMobile ? (
-							<MobileSidebarWrapper isOpen={isMobileSidebarOpen} onClose={() => setIsMobileSidebarOpen(false)}>
-								<Sidebar className='h-[calc(100svh-140px)]' />
-							</MobileSidebarWrapper>
-						) : (
-							<Sidebar className='h-[calc(100vh-176px)]' />
-						)}
-
-						<div className='flex flex-col gap-3 lg:gap-5'>
-							<ActionsBarProvider>
-								<ActionsBar />
-								{/* Renders either DirectoryListing, AppsListing, RecentsListing, or TrashListing */}
-								<Outlet />
-							</ActionsBarProvider>
+		<MachineFoldersProvider enabled={user?.role === 'owner'}>
+			<FilesDndWrapper>
+				<RewindOverlayProvider>
+					<SheetHeader className='flex flex-col gap-4 md:flex-row md:items-center md:gap-0'>
+						<div className='flex items-center gap-4'>
+							{isMobile ? (
+								<HiMenuAlt2
+									role='button'
+									className='h-5 w-5 text-white/90'
+									onClick={() => setIsMobileSidebarOpen(true)}
+								/>
+							) : null}
+							<SheetTitle className='mr-2 leading-none lg:mr-0 lg:min-w-[224px] lg:text-36'>{t('files')}</SheetTitle>
 						</div>
-					</div>
+					</SheetHeader>
+					<ErrorBoundary FallbackComponent={ErrorBoundaryCardFallback}>
+						{/* FileViewer renders the viewerItem from the store */}
+						<FileViewer />
 
-					{/* Rewind overlay rendered at root so that it doesn't disappear on Files re-render if user changes screensize*/}
-					<RewindOverlay />
-
-					{/* Lazy loaded dialogs on non-read-only mode */}
-					{!isReadOnly ? (
-						<>
-							{!isMember && (
-								<Suspense>
-									<ShareInfoDialog />
-								</Suspense>
+						<div className='mt-[-0.5rem] grid grid-cols-1 lg:grid-cols-[224px_1fr]'>
+							{/* Sidebar */}
+							{isMobile ? (
+								<MobileSidebarWrapper isOpen={isMobileSidebarOpen} onClose={() => setIsMobileSidebarOpen(false)}>
+									<Sidebar className='h-[calc(100svh-140px)]' />
+								</MobileSidebarWrapper>
+							) : (
+								<Sidebar className='h-[calc(100vh-176px)]' />
 							)}
-							<Suspense>
-								<ShareUsersDialog />
-							</Suspense>
-							<Suspense>
-								<PermanentlyDeleteConfirmationDialog />
-							</Suspense>
-							<Suspense>
-								<AddNetworkShareDialog />
-							</Suspense>
-							<Suspense>
-								<FormatDriveDialog />
-							</Suspense>
-							<Suspense>
-								<CloudAddDialog />
-							</Suspense>
-						</>
-					) : null}
-				</ErrorBoundary>
-			</RewindOverlayProvider>
-		</FilesDndWrapper>
+
+							<div className='flex flex-col gap-3 lg:gap-5'>
+								<ActionsBarProvider>
+									<ActionsBar />
+									{/* Renders either DirectoryListing, AppsListing, RecentsListing, or TrashListing */}
+									<Outlet />
+								</ActionsBarProvider>
+							</div>
+						</div>
+
+						{/* Rewind overlay rendered at root so that it doesn't disappear on Files re-render if user changes screensize*/}
+						<RewindOverlay />
+
+						{/* Lazy loaded dialogs on non-read-only mode */}
+						{!isReadOnly ? (
+							<>
+								{!isMember && (
+									<Suspense>
+										<ShareInfoDialog />
+									</Suspense>
+								)}
+								<Suspense>
+									<ShareUsersDialog />
+								</Suspense>
+								<Suspense>
+									<PermanentlyDeleteConfirmationDialog />
+								</Suspense>
+								<Suspense>
+									<AddNetworkShareDialog />
+								</Suspense>
+								<Suspense>
+									<FormatDriveDialog />
+								</Suspense>
+								<Suspense>
+									<CloudAddDialog />
+								</Suspense>
+							</>
+						) : null}
+					</ErrorBoundary>
+				</RewindOverlayProvider>
+			</FilesDndWrapper>
+		</MachineFoldersProvider>
 	)
 }

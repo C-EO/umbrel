@@ -2,6 +2,7 @@ import {Droppable} from '@/features/files/components/shared/drag-and-drop'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
 import {RECENTS_PATH, SYSTEM_MANAGED_ROOT_PATHS} from '@/features/files/constants'
 import {formatItemName} from '@/features/files/utils/format-filesystem-name'
+import type {Machine} from '@/features/machines/types'
 import {cn} from '@/lib/utils'
 import {focusRingClass} from '@/utils/element-classes'
 import {tw} from '@/utils/tw'
@@ -25,9 +26,10 @@ export interface SidebarItemProps {
 	disabled?: boolean
 	// Replaces the default file-type icon (e.g. the owner's avatar on a member's shared home)
 	icon?: React.ReactNode
+	machine?: Machine | null
 }
 
-export function SidebarItem({item, isActive, onClick, disabled = false, icon}: SidebarItemProps) {
+export function SidebarItem({item, isActive, onClick, disabled = false, icon, machine}: SidebarItemProps) {
 	return (
 		<Droppable
 			id={`sidebar-${item.path}`}
@@ -59,7 +61,9 @@ export function SidebarItem({item, isActive, onClick, disabled = false, icon}: S
 				)}
 			>
 				{/* We add default modified, size, and operations to satisfy FileItemIcon's expected FileSystemItem type */}
-				{icon ?? <FileItemIcon item={{...item, modified: 0, size: 0, operations: []}} className='h-5 w-5' />}
+				{icon ?? (
+					<FileItemIcon item={{...item, modified: 0, size: 0, operations: []}} machine={machine} className='h-5 w-5' />
+				)}
 				<span className='truncate'>{formatItemName({name: item.name, maxLength: 21})}</span>
 			</button>
 		</Droppable>

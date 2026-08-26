@@ -41,7 +41,7 @@ import {
 } from '@/features/files/constants'
 import {useCloudAccounts} from '@/features/files/hooks/use-cloud'
 import {useCloudBadge} from '@/features/files/hooks/use-cloud-badge'
-import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
+import {MachineFolderMetadata} from '@/features/files/hooks/use-machine-folder'
 import {useNetworkDeviceType} from '@/features/files/hooks/use-network-device-type'
 import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
 import {useShares} from '@/features/files/hooks/use-shares'
@@ -51,21 +51,40 @@ import {splitFileName} from '@/features/files/utils/format-filesystem-name'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
 import {isDirectoryAnExternalDrivePartition} from '@/features/files/utils/is-directory-an-external-drive-partition'
 import {OsIcon} from '@/features/machines/components/os-icon'
+import type {Machine} from '@/features/machines/types'
 import {useAuthorizedHttpUrl} from '@/modules/auth/http-auth'
 import {trpcReact} from '@/trpc/trpc'
 
-interface FileItemIcon {
+interface FileItemIconProps {
 	item: FileSystemItem
+	// undefined resolves metadata from the Files-level map; null means the
+	// caller already resolved the path and found no matching machine.
+	machine?: Machine | null
 	onlySVG?: boolean
 	className?: string
 	useAnimatedIcon?: boolean
 	isHovered?: boolean
 }
 
-export const FileItemIcon = ({item, onlySVG, className, useAnimatedIcon = false, isHovered = false}: FileItemIcon) => {
+export const FileItemIcon = (props: FileItemIconProps) => {
+	if (props.machine !== undefined) return <FileItemIconContent {...props} machine={props.machine ?? undefined} />
+	return (
+		<MachineFolderMetadata path={props.item.path}>
+			{({machine}) => <FileItemIconContent {...props} machine={machine} />}
+		</MachineFolderMetadata>
+	)
+}
+
+const FileItemIconContent = ({
+	item,
+	machine,
+	onlySVG,
+	className,
+	useAnimatedIcon = false,
+	isHovered = false,
+}: FileItemIconProps) => {
 	const {t} = useTranslation()
 	const {isPathShared} = useShares()
-	const {machine} = useMachineFolder(item.path)
 	const isShared = isPathShared(item.path)
 	const cloudProvider = useCloudBadge(item.path)
 	// Flavor branding only matters for the handful of icons that carry a badge

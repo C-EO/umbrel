@@ -346,14 +346,15 @@ html {
 }
 
 /* Firefox ignores ::-webkit-scrollbar entirely, so without this it renders full-width
-   native scrollbars — visually wrong on the dark glass UI, and wider than the gutters
-   the Files listing budgets for. `thin` lands close to the 11px above.
+   native scrollbars in the virtualized Files listing — visually wrong on the dark glass
+   UI, and wider than the gutters the listing budgets for. `thin` lands close to the 11px above.
 
-   Gated on the engine lacking ::-webkit-scrollbar (i.e. Firefox): in Chromium a
-   non-auto `scrollbar-width` disables ::-webkit-scrollbar styling altogether, so
-   applying this unconditionally would throw away the richer rules above. */
+	 Gated on the engine lacking ::-webkit-scrollbar (i.e. Firefox): in Chromium a
+	 non-auto `scrollbar-width` disables ::-webkit-scrollbar styling altogether, so
+	 applying this unconditionally would throw away the richer rules above. Keep it
+	 scoped so deliberately hidden scrollbars elsewhere retain `scrollbar-width: none`. */
 @supports not selector(::-webkit-scrollbar) {
-	* {
+	.umbrel-files-virtual-scroller {
 		scrollbar-color: rgb(255 255 255 / 0.15) transparent;
 		scrollbar-width: thin;
 	}

@@ -6,16 +6,17 @@ import {EditableName} from '@/features/files/components/listing/file-item/editab
 import {TruncatedFilename} from '@/features/files/components/listing/file-item/truncated-filename'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
 import {useIsTouchDevice} from '@/features/files/hooks/use-is-touch-device'
-import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
 import type {FileSystemItem} from '@/features/files/types'
 import {formatFilesystemSize} from '@/features/files/utils/format-filesystem-size'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
 import {isDirectoryAnExternalDrivePartition} from '@/features/files/utils/is-directory-an-external-drive-partition'
 import {isDirectoryAnUmbrelBackup} from '@/features/files/utils/is-directory-an-umbrel-backup'
+import type {Machine} from '@/features/machines/types'
 import {cn} from '@/lib/utils'
 
 interface IconsViewFileItemProps {
 	item: FileSystemItem
+	machine: Machine | undefined
 	isEditingName: boolean
 	onEditingNameComplete: () => void
 	fadedContent?: boolean
@@ -23,12 +24,12 @@ interface IconsViewFileItemProps {
 
 export const IconsViewFileItem = ({
 	item,
+	machine,
 	isEditingName,
 	onEditingNameComplete,
 	fadedContent,
 }: IconsViewFileItemProps) => {
 	const {t} = useTranslation()
-	const {machine} = useMachineFolder(item.path)
 	const displayName = machine?.name ?? item.name
 	const isUploading = 'isUploading' in item && item.isUploading
 	const uploadingProgress = isUploading && 'progress' in item ? item.progress : 0
@@ -47,7 +48,13 @@ export const IconsViewFileItem = ({
 			{/* We pass in isActive so that the trigger for hovering can be on a parent div */}
 			{/* TODO: set isHovered to true when the item's context menu is open */}
 			<div className='flex justify-center'>
-				<FileItemIcon item={item} className='h-14 w-14' useAnimatedIcon={!isTouchDevice} isHovered={isHovered} />
+				<FileItemIcon
+					item={item}
+					machine={machine ?? null}
+					className='h-14 w-14'
+					useAnimatedIcon={!isTouchDevice}
+					isHovered={isHovered}
+				/>
 			</div>
 			<div className={cn('relative w-full flex-col items-center', fadedContent && 'opacity-50')}>
 				{isEditingName && !machine ? (

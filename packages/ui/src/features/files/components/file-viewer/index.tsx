@@ -48,7 +48,7 @@ export const FileViewer: React.FC = () => {
 
 	// render the viewer with error boundary fallback
 	return (
-		<ViewerErrorBoundary>
+		<ViewerErrorBoundary key={viewerItem.path}>
 			<Suspense>
 				<Viewer item={viewerItem} />
 			</Suspense>

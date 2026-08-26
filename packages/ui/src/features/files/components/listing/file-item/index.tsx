@@ -4,13 +4,16 @@ import {IconsViewFileItem} from '@/features/files/components/listing/file-item/i
 import {ListViewFileItem} from '@/features/files/components/listing/file-item/list-view-file-item'
 import {Draggable, Droppable} from '@/features/files/components/shared/drag-and-drop'
 import {useItemClick} from '@/features/files/hooks/use-item-click'
+import {MachineFolderMetadata} from '@/features/files/hooks/use-machine-folder'
 import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
 import {usePreferences} from '@/features/files/hooks/use-preferences'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
+import {canPerformFileOperation} from '@/features/files/utils/file-capabilities'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
 import {isDirectoryAnUmbrelBackup} from '@/features/files/utils/is-directory-an-umbrel-backup'
+import type {Machine} from '@/features/machines/types'
 import {cn} from '@/lib/utils'
 
 interface FileItemProps {
@@ -23,7 +26,13 @@ function whenTouchOrPen<E>(handler: React.PointerEventHandler<E>): React.Pointer
 	return (event) => (event.pointerType !== 'mouse' ? handler(event) : undefined)
 }
 
-export const FileItem = ({item, items}: FileItemProps) => {
+export const FileItem = (props: FileItemProps) => (
+	<MachineFolderMetadata path={props.item.path}>
+		{({machine}) => <FileItemContent {...props} machine={machine} />}
+	</MachineFolderMetadata>
+)
+
+const FileItemContent = ({item, items, machine}: FileItemProps & {machine: Machine | undefined}) => {
 	const {handleClick, handleDoubleClick} = useItemClick()
 	const isItemSelected = useFilesStore((state) => state.isItemSelected)
 	const selectedItems = useFilesStore((state) => state.selectedItems)
@@ -39,12 +48,8 @@ export const FileItem = ({item, items}: FileItemProps) => {
 	// until Enter commits it, so it can never take part in drag and drop.
 	const isUnsavedPlaceholder = 'isNew' in item && !!item.isNew
 
-	// Once committed, a folder is rendered optimistically until the server listing lands,
-	// so its operations are still unknown (empty). Treat unknown as permissive — disabling
-	// drag, drop and rename for the round-trip makes the new folder look broken, and every
-	// mutation stays enforced server-side either way.
 	const allowsOperation = (operation: FileSystemItem['operations'][number]) =>
-		!isUnsavedPlaceholder && (item.operations.length === 0 || item.operations.includes(operation))
+		!isUnsavedPlaceholder && canPerformFileOperation(item, operation)
 
 	const renamingItemPath = useFilesStore((state) => state.renamingItemPath)
 	const setRenamingItemPath = useFilesStore((state) => state.setRenamingItemPath)
@@ -173,8 +178,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 		if (selectedItems.length !== 1) return
 
 		// check if the rename operation is allowed for this item
-		// (an optimistic item's operations are still unknown — see allowsOperation above)
-		if (isReadOnly || (item.operations.length > 0 && !item.operations.includes('rename'))) return
+		if (isReadOnly || isUnsavedPlaceholder || !canPerformFileOperation(item, 'rename')) return
 
 		// helper function to check if the event target is an input
 		function isInInput(event: KeyboardEvent) {
@@ -206,7 +210,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 		return () => {
 			window.removeEventListener('keydown', handleKeyDown)
 		}
-	}, [isReadOnly, isSelected, item.name, item.operations, selectedItems.length])
+	}, [isReadOnly, isSelected, isUnsavedPlaceholder, item, selectedItems.length])
 
 	return (
 		<div
@@ -263,6 +267,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 							{view === 'icons' ? (
 								<IconsViewFileItem
 									item={item}
+									machine={machine}
 									isEditingName={isEditingFileName}
 									onEditingNameComplete={handlNameEditingComplete}
 									fadedContent={!isItemInteractive}
@@ -271,6 +276,7 @@ export const FileItem = ({item, items}: FileItemProps) => {
 							{view === 'list' ? (
 								<ListViewFileItem
 									item={item}
+									machine={machine}
 									isEditingName={isEditingFileName}
 									onEditingNameComplete={handlNameEditingComplete}
 									fadedContent={!isItemInteractive}

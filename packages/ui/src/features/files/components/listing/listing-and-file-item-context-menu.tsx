@@ -30,6 +30,7 @@ import {useRewindAction} from '@/features/files/hooks/use-rewind-action'
 import {useShares} from '@/features/files/hooks/use-shares'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
+import {canPerformFileOperation} from '@/features/files/utils/file-capabilities'
 import {
 	isDirectoryANetworkDevice,
 	isDirectoryANetworkShare,
@@ -143,21 +144,21 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 			const isUnmountedNetworkHost = isDirectoryANetworkDevice(item.path) && !doesHostHaveMountedShares(item.path)
 			const canOpen = hasOneSelectedItem && !isUnmountedNetworkHost && !isDirectoryAnUmbrelBackup(item.name)
 			const canRename =
-				hasOneSelectedItem && item.operations.includes('rename') && !isDirectoryAnUmbrelBackup(item.name)
+				hasOneSelectedItem && canPerformFileOperation(item, 'rename') && !isDirectoryAnUmbrelBackup(item.name)
 			const canDownload = !isUnmountedNetworkHost // disable for unmounted network hosts
-			const canCut = selectedItems.every((itm) => itm.operations.includes('move'))
-			const canCopy = selectedItems.every((itm) => itm.operations.includes('copy')) && !isUnmountedNetworkHost
+			const canCut = selectedItems.every((item) => canPerformFileOperation(item, 'move'))
+			const canCopy = selectedItems.every((item) => canPerformFileOperation(item, 'copy')) && !isUnmountedNetworkHost
 			const canPaste =
 				hasItemsInClipboard() &&
 				hasOneSelectedItem &&
 				!isItemInClipboard(item) &&
 				item.type === 'directory' &&
-				item.operations.includes('writable')
-			const canTrash = item.operations.includes('trash')
-			const canPermanentlyDelete = item.operations.includes('delete')
+				canPerformFileOperation(item, 'writable')
+			const canTrash = canPerformFileOperation(item, 'trash')
+			const canPermanentlyDelete = canPerformFileOperation(item, 'delete')
 			const canExtract = selectedItems.every(
 				(itm) =>
-					itm.operations.includes('unarchive') &&
+					canPerformFileOperation(itm, 'unarchive') &&
 					SUPPORTED_ARCHIVE_EXTRACT_EXTENSIONS.some((ext) => itm.name.toLowerCase().endsWith(ext)),
 			)
 
@@ -166,7 +167,7 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 				hasOneSelectedItem &&
 				!isPathShared(item.path) &&
 				!isAddingShare &&
-				item.operations.includes('share') &&
+				canPerformFileOperation(item, 'share') &&
 				!isDirectoryAnUmbrelBackup(item.name)
 			const canRemoveShare = !isMember && hasOneSelectedItem && isPathShared(item.path) && !isRemovingShare
 
@@ -185,7 +186,7 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 				hasOneSelectedItem &&
 				!isPathFavorite(item.path) &&
 				!isAddingFavorite &&
-				item.operations.includes('favorite') &&
+				canPerformFileOperation(item, 'favorite') &&
 				!isDirectoryAnUmbrelBackup(item.name)
 			const canRemoveFavorite = hasOneSelectedItem && isPathFavorite(item.path) && !isRemovingFavorite
 			const canArchive = !(isViewingNetworkDevices || isViewingNetworkShares || isDirectoryAnUmbrelBackup(item.name))

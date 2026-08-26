@@ -5,6 +5,7 @@ import {FileViewerSlice} from '@/features/files/store/slices/file-viewer-slice'
 import {NewFolderSlice} from '@/features/files/store/slices/new-folder-slice'
 import {SelectionSlice} from '@/features/files/store/slices/selection-slice'
 import type {FileSystemItem} from '@/features/files/types'
+import {canPerformFileOperation} from '@/features/files/utils/file-capabilities'
 
 type ClipboardMode = 'copy' | 'cut' | null
 
@@ -34,7 +35,7 @@ export const createClipboardSlice: StateCreator<
 		if (!items.length) {
 			return get().clearClipboard()
 		}
-		const copyableItems = items.filter((item) => item.operations.includes('copy'))
+		const copyableItems = items.filter((item) => canPerformFileOperation(item, 'copy'))
 		set({clipboardItems: copyableItems, clipboardMode: 'copy'})
 	},
 
@@ -43,7 +44,7 @@ export const createClipboardSlice: StateCreator<
 		if (!items.length) {
 			return get().clearClipboard()
 		}
-		const movableItems = items.filter((item) => item.operations.includes('move'))
+		const movableItems = items.filter((item) => canPerformFileOperation(item, 'move'))
 		set({clipboardItems: movableItems, clipboardMode: 'cut'})
 	},
 

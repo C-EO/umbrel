@@ -71,6 +71,7 @@ export function useNewFolder() {
 			size: 0,
 			modified: new Date().getTime(),
 			operations: [],
+			capabilitiesPending: true,
 		}
 
 		// Move from top-pinned placeholder to sorted incoming item

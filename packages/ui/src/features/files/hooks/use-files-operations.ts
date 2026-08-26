@@ -7,6 +7,7 @@ import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
+import {canPerformFileOperation} from '@/features/files/utils/file-capabilities'
 import {splitFileName} from '@/features/files/utils/format-filesystem-name'
 import {authorizedHttpUrl} from '@/modules/auth/http-auth'
 import {useConfirmation} from '@/providers/confirmation'
@@ -51,7 +52,7 @@ export function useFilesOperations() {
 		writablePath?: string
 	}) => {
 		if (isReadOnly) return false
-		if (itemOperation && (items.length === 0 || !items.every((item) => item.operations.includes(itemOperation)))) {
+		if (itemOperation && (items.length === 0 || !items.every((item) => canPerformFileOperation(item, itemOperation)))) {
 			return false
 		}
 		if (!writablePath) return true

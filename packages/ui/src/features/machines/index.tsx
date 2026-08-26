@@ -1,5 +1,5 @@
 import {motion} from 'motion/react'
-import {Suspense, useCallback, useEffect, useState} from 'react'
+import {Suspense, useCallback, useEffect, useState, type MouseEvent as ReactMouseEvent} from 'react'
 import {RiCloseCircleFill} from 'react-icons/ri'
 import {Outlet, useMatch, useNavigate, useParams} from 'react-router-dom'
 
@@ -66,6 +66,7 @@ export default function MachinesLayout() {
 		setClosing(true)
 		setTimeout(() => navigate('/'), 150)
 	}, [navigate])
+	const stopImplicitDismiss = (event: ReactMouseEvent<HTMLElement>) => event.stopPropagation()
 
 	// Escape closes the overlay via the same fade-out path as the close button.
 	// Routed create/settings pages own form state, so Escape must stay on those
@@ -102,8 +103,8 @@ export default function MachinesLayout() {
 			// ones (index) would otherwise toggle the scrollbar and shift the centered
 			// column; both-edges reserves symmetric gutters so it stays centered
 			className='fixed inset-0 z-30 overflow-y-auto overscroll-contain bg-black/50 backdrop-blur-xl [scrollbar-gutter:stable_both-edges]'
+			onClick={!closing && canImplicitlyDismiss ? close : undefined}
 		>
-			{!closing && canImplicitlyDismiss && <div className='fixed inset-0 z-0' onClick={close} />}
 			<motion.div
 				initial={{scale: 0.985}}
 				animate={{scale: closing ? 0.99 : 1}}
@@ -126,6 +127,7 @@ export default function MachinesLayout() {
 				   pills sideways. On the console route it also rises into most of
 				   the column's top padding, easing on the same curve as the morph. */}
 				<div
+					onClick={stopImplicitDismiss}
 					className={cn(
 						'mx-auto flex w-full max-w-[1054px] flex-col gap-5 transition-[margin] duration-[350ms] ease-[cubic-bezier(0.32,0.72,0,1)] md:max-w-[990px]',
 						hideHeader && '-mt-4 md:-mt-8',
@@ -183,6 +185,7 @@ export default function MachinesLayout() {
 					   itself sits dead center with the rail balancing it on the right */}
 					{machine && <div aria-hidden className='hidden w-12 shrink-0 xl:block' />}
 					<motion.div
+						onClick={stopImplicitDismiss}
 						layout
 						style={{borderRadius: isMachineView ? 12 : 24}}
 						transition={layoutMorphTransition}
@@ -206,7 +209,11 @@ export default function MachinesLayout() {
 							</Suspense>
 						</motion.div>
 					</motion.div>
-					{machine && <MachineRail machine={machine} />}
+					{machine && (
+						<div className='w-full shrink-0 xl:w-auto' onClick={stopImplicitDismiss}>
+							<MachineRail machine={machine} />
+						</div>
+					)}
 				</div>
 
 				{/* Machine view: no grow spacer and the dock spacer pulls up over the

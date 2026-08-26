@@ -8,6 +8,7 @@ import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
+import {canPerformFileOperation} from '@/features/files/utils/file-capabilities'
 import {getFileViewer} from '@/features/files/utils/get-file-viewer'
 import {
 	getGridColumnCount,
@@ -144,8 +145,8 @@ export function useFilesKeyboardShortcuts({
 					e.preventDefault()
 					const selected = selectedItemsRef.current
 					if (selected.length === 0) return
-					const canTrash = selected[0].operations.includes('trash')
-					const canDelete = selected[0].operations.includes('delete')
+					const canTrash = canPerformFileOperation(selected[0], 'trash')
+					const canDelete = canPerformFileOperation(selected[0], 'delete')
 					if (canDelete) {
 						routerNavigate(linkToDialog('files-permanently-delete-confirmation'))
 					} else if (canTrash) {
@@ -221,8 +222,7 @@ export function useFilesKeyboardShortcuts({
 					e.preventDefault()
 					if (nextIndex !== currentIndex) {
 						const nextItem = previewable[nextIndex]
-						setViewerItem(nextItem, mode)
-						setSelectedItems([nextItem])
+						if (setViewerItem(nextItem, mode)) setSelectedItems([nextItem])
 					}
 					return
 				}

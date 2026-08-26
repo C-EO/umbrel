@@ -7,11 +7,15 @@ import {SelectionSlice} from '@/features/files/store/slices/selection-slice'
 import {FileSystemItem} from '@/features/files/types'
 
 export type ViewerMode = 'preview' | 'open' | null
+type ActiveViewerMode = Exclude<ViewerMode, null>
+type ViewerNavigationGuard = (item: FileSystemItem, mode: ActiveViewerMode) => boolean
 
 export interface FileViewerSlice {
 	viewerItem: FileSystemItem | null
 	viewerMode: ViewerMode
-	setViewerItem: (item: FileSystemItem | null, mode?: ViewerMode) => void
+	viewerNavigationGuard: ViewerNavigationGuard | null
+	setViewerItem: (item: FileSystemItem | null, mode?: ViewerMode) => boolean
+	setViewerNavigationGuard: (guard: ViewerNavigationGuard | null) => void
 }
 
 export const createFileViewerSlice: StateCreator<
@@ -19,8 +23,25 @@ export const createFileViewerSlice: StateCreator<
 	[],
 	[],
 	FileViewerSlice
-> = (set) => ({
+> = (set, get) => ({
 	viewerItem: null,
 	viewerMode: null,
-	setViewerItem: (item, mode) => set({viewerItem: item, viewerMode: item ? (mode ?? 'open') : null}),
+	viewerNavigationGuard: null,
+	setViewerItem: (item, mode) => {
+		const {viewerItem, viewerNavigationGuard} = get()
+		const nextMode = mode ?? 'open'
+		if (
+			item &&
+			viewerItem &&
+			item.path !== viewerItem.path &&
+			viewerNavigationGuard &&
+			!viewerNavigationGuard(item, nextMode)
+		) {
+			return false
+		}
+
+		set({viewerItem: item, viewerMode: item ? nextMode : null})
+		return true
+	},
+	setViewerNavigationGuard: (guard) => set({viewerNavigationGuard: guard}),
 })

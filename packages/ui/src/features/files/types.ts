@@ -20,6 +20,7 @@ export interface FileSystemItem extends UmbreldFileSystemItem {
 	progress?: number // upload progress in percentage 0-100
 	speed?: number // upload speed in bytes per second
 	tempId?: string // we don't use path since an item with the same name can be uploaded to the same path
+	capabilitiesPending?: boolean // true only for an optimistic item awaiting authoritative backend operations
 }
 
 export interface UploadStats {

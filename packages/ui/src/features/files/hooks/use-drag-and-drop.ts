@@ -6,14 +6,12 @@ import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FilesStore} from '@/features/files/store/use-files-store'
 import {FileSystemItem} from '@/features/files/types'
+import {canPerformFileOperation} from '@/features/files/utils/file-capabilities'
 
-// An uncommitted "New Folder" placeholder has no file behind it yet, so it can never be
-// dragged. A committed-but-not-yet-listed folder has no operations yet — allow it, since
-// the move mutation is enforced server-side anyway. Kept in sync with `allowsOperation`
-// in the file item, so a draggable item always produces a dragged item to render.
+// An uncommitted "New Folder" placeholder has no file behind it yet, so it can never be dragged.
 function isMovable(item: FileSystemItem) {
 	if ('isNew' in item && item.isNew) return false
-	return item.operations.length === 0 || item.operations.includes('move')
+	return canPerformFileOperation(item, 'move')
 }
 
 export function useDragAndDrop() {

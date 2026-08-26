@@ -16,10 +16,11 @@ import {
 } from '@/features/files/constants'
 import {cloudAccountLabel, useCloudAccounts, useCloudProviders} from '@/features/files/hooks/use-cloud'
 import {useHomePath, useIsMember, useTrashPath} from '@/features/files/hooks/use-home-path'
-import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
+import {MachineFolderMetadata} from '@/features/files/hooks/use-machine-folder'
 import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
 import {formatItemName} from '@/features/files/utils/format-filesystem-name'
+import type {Machine} from '@/features/machines/types'
 import {cn} from '@/lib/utils'
 import {focusRingClass} from '@/utils/element-classes'
 import {firstNameFromFullName} from '@/utils/misc'
@@ -275,8 +276,32 @@ type PathSegmentProps = Omit<PathSegment, 'id'> & {
 }
 
 const PathSegment = ({segment, hasArrow, onClick, isStatic, path, type}: PathSegmentProps) => {
-	// A machine's directory is named by its id; show the machine's name like the listing does
-	const {machine} = useMachineFolder(path)
+	return (
+		<MachineFolderMetadata path={path}>
+			{({machine}) => (
+				<PathSegmentContent
+					segment={segment}
+					hasArrow={hasArrow}
+					onClick={onClick}
+					isStatic={isStatic}
+					path={path}
+					type={type}
+					machine={machine}
+				/>
+			)}
+		</MachineFolderMetadata>
+	)
+}
+
+const PathSegmentContent = ({
+	segment,
+	hasArrow,
+	onClick,
+	isStatic,
+	path,
+	type,
+	machine,
+}: PathSegmentProps & {machine: Machine | undefined}) => {
 	const label = machine ? machine.name : segment && formatItemName({name: segment})
 
 	return (
@@ -312,6 +337,7 @@ const PathSegment = ({segment, hasArrow, onClick, isStatic, path, type}: PathSeg
 						modified: 0,
 					}}
 					className='h-4 w-4 opacity-70 transition-opacity group-hover:opacity-100'
+					machine={machine ?? null}
 				/>
 				<span
 					className={cn(

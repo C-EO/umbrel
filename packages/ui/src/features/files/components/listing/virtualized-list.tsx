@@ -442,6 +442,7 @@ export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 			{({onItemsRendered, ref}: InfiniteLoaderRenderProps) => (
 				<FixedSizeList
 					ref={ref as React.Ref<FixedSizeList>}
+					className='umbrel-files-virtual-scroller'
 					height={height}
 					width={width + getGridScrollerPadding(isMobile)} // Push scrollbar into parent padding (px-3 mobile / px-6 desktop)
 					innerElementType={InnerElementWithEndSpacer}
@@ -479,6 +480,7 @@ export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 				{({onItemsRendered, ref}: InfiniteLoaderRenderProps) => (
 					<FixedSizeGrid
 						ref={ref as React.Ref<FixedSizeGrid>}
+						className='umbrel-files-virtual-scroller'
 						height={height}
 						width={width + getGridScrollerPadding(isMobile)}
 						innerElementType={InnerElementWithEndSpacer}

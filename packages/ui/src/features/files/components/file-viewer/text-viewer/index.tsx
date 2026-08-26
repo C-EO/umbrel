@@ -30,6 +30,7 @@ import {umbrelTheme} from '@/features/files/components/file-viewer/text-viewer/u
 import {ViewerWrapper} from '@/features/files/components/file-viewer/viewer-wrapper'
 import {APPS_PATH} from '@/features/files/constants'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
+import type {ViewerMode} from '@/features/files/store/slices/file-viewer-slice'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {dashboardAuthHeaders, useAuthorizedHttpUrl, useAuthorizedHttpUrlQuery} from '@/modules/auth/http-auth'
@@ -101,6 +102,7 @@ interface TextViewerProps {
 }
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error'
+type PendingNavigation = {item: FileSystemItem; mode: ViewerMode}
 
 function decodeUtf8Text(arrayBuffer: ArrayBuffer) {
 	const text = new TextDecoder('utf-8', {fatal: true}).decode(arrayBuffer)
@@ -139,6 +141,8 @@ export default function TextViewer({item}: TextViewerProps) {
 	const {t} = useTranslation()
 	const viewerMode = useFilesStore((s) => s.viewerMode)
 	const setViewerItem = useFilesStore((s) => s.setViewerItem)
+	const setViewerNavigationGuard = useFilesStore((s) => s.setViewerNavigationGuard)
+	const setSelectedItems = useFilesStore((s) => s.setSelectedItems)
 	const isReadOnly = useIsFilesReadOnly() || !item.operations.includes('writable')
 	const utils = trpcReact.useUtils()
 	const {wallpaper} = useWallpaper()
@@ -159,8 +163,10 @@ export default function TextViewer({item}: TextViewerProps) {
 	const [showSearch, setShowSearch] = useState(false)
 	const [searchQuery, setSearchQuery] = useState('')
 	const [showDiscardDialog, setShowDiscardDialog] = useState(false)
+	const [pendingNavigation, setPendingNavigation] = useState<PendingNavigation | null>(null)
 	const searchInputRef = useRef<HTMLInputElement>(null)
 	const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+	const saveAbortControllerRef = useRef<AbortController | null>(null)
 	const savingRef = useRef(false)
 
 	const hasUnsavedChanges = content !== null && originalContent !== null && content !== originalContent
@@ -185,15 +191,13 @@ export default function TextViewer({item}: TextViewerProps) {
 	// Fetch file content
 	useEffect(() => {
 		if (viewUrl.status !== 'ready') return
-		// Arrow-navigating between files reuses this component instance (the viewer is
-		// rendered without a key), so clear the previous file's outcome first — otherwise
-		// an error card latches on and the old content stays visible while the new file loads.
 		let isStale = false
+		const controller = new AbortController()
 		setError(null)
 		setLoading(true)
 		const fetchContent = async () => {
 			try {
-				const response = await fetch(viewUrl.url)
+				const response = await fetch(viewUrl.url, {signal: controller.signal})
 				if (isStale) return
 				if (!response.ok) {
 					setError(response.status === 404 ? 'not-found' : 'fetch-error')
@@ -215,7 +219,8 @@ export default function TextViewer({item}: TextViewerProps) {
 				}
 
 				setLoading(false)
-			} catch {
+			} catch (error) {
+				if (error instanceof DOMException && error.name === 'AbortError') return
 				if (isStale) return
 				setError('fetch-error')
 				setLoading(false)
@@ -227,13 +232,41 @@ export default function TextViewer({item}: TextViewerProps) {
 		// A slow response for the previous file must not overwrite the current one
 		return () => {
 			isStale = true
+			controller.abort()
 		}
 	}, [item.path, item.size, viewUrl.status, viewUrl.url])
 
 	// Load language extension
 	useEffect(() => {
-		loadLanguageExtension(item.name, item.type).then(setLanguageExtension)
+		let isStale = false
+		setLanguageExtension(null)
+		loadLanguageExtension(item.name, item.type).then((extension) => {
+			if (!isStale) setLanguageExtension(extension)
+		})
+		return () => {
+			isStale = true
+		}
 	}, [item.name, item.type])
+
+	// Item-to-item navigation must not silently discard editor changes. The guard
+	// applies centrally to keyboard navigation and any other viewer item switch.
+	useEffect(() => {
+		if (!hasUnsavedChanges) return
+		setViewerNavigationGuard((nextItem, nextMode) => {
+			setPendingNavigation({item: nextItem, mode: nextMode})
+			setShowDiscardDialog(true)
+			return false
+		})
+		return () => setViewerNavigationGuard(null)
+	}, [hasUnsavedChanges, setViewerNavigationGuard])
+
+	useEffect(
+		() => () => {
+			saveAbortControllerRef.current?.abort()
+			if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
+		},
+		[],
+	)
 
 	// beforeunload handler
 	useEffect(() => {
@@ -248,12 +281,17 @@ export default function TextViewer({item}: TextViewerProps) {
 		if (!editable || content === null || savingRef.current) return
 		savingRef.current = true
 		setSaveState('saving')
+		const controller = new AbortController()
+		saveAbortControllerRef.current = controller
+		const path = item.path
+		const contentToSave = content
 
 		try {
-			const response = await fetch(`/api/files/upload?path=${encodeURIComponent(item.path)}&collision=replace`, {
+			const response = await fetch(`/api/files/upload?path=${encodeURIComponent(path)}&collision=replace`, {
 				method: 'POST',
-				body: content,
+				body: contentToSave,
 				headers: {...dashboardAuthHeaders(), 'Content-Type': 'text/plain; charset=utf-8'},
+				signal: controller.signal,
 			})
 
 			if (!response.ok) {
@@ -263,19 +301,21 @@ export default function TextViewer({item}: TextViewerProps) {
 				return
 			}
 
-			setOriginalContent(content)
+			setOriginalContent(contentToSave)
 			setSaveState('saved')
 			setLastSavedAt(new Date())
 			// Invalidate directory listing so modified date updates
-			const dirPath = item.path.split('/').slice(0, -1).join('/')
+			const dirPath = path.split('/').slice(0, -1).join('/')
 			utils.files.list.invalidate({path: dirPath})
 			if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
 			saveTimeoutRef.current = setTimeout(() => setSaveState('idle'), 2000)
-		} catch {
+		} catch (error) {
+			if (error instanceof DOMException && error.name === 'AbortError') return
 			setSaveState('error')
 			if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current)
 			saveTimeoutRef.current = setTimeout(() => setSaveState('idle'), 3000)
 		} finally {
+			if (saveAbortControllerRef.current === controller) saveAbortControllerRef.current = null
 			savingRef.current = false
 		}
 	}, [content, editable, item.path])
@@ -289,11 +329,22 @@ export default function TextViewer({item}: TextViewerProps) {
 		setTimeout(() => setViewerItem(null), 150)
 	}, [hasUnsavedChanges, setViewerItem])
 
-	const handleDiscardAndClose = useCallback(() => {
+	const handleDiscard = useCallback(() => {
 		setShowDiscardDialog(false)
+		if (pendingNavigation) {
+			setViewerNavigationGuard(null)
+			setViewerItem(pendingNavigation.item, pendingNavigation.mode)
+			setSelectedItems([pendingNavigation.item])
+			return
+		}
 		setIsClosing(true)
 		setTimeout(() => setViewerItem(null), 150)
-	}, [setViewerItem])
+	}, [pendingNavigation, setSelectedItems, setViewerItem, setViewerNavigationGuard])
+
+	const handleDiscardDialogOpenChange = useCallback((open: boolean) => {
+		setShowDiscardDialog(open)
+		if (!open) setPendingNavigation(null)
+	}, [])
 
 	// Keyboard shortcuts: Cmd+S, Cmd+F, Escape
 	useEffect(() => {
@@ -685,14 +736,14 @@ export default function TextViewer({item}: TextViewerProps) {
 			</ViewerWrapper>
 
 			{/* Discard unsaved changes dialog */}
-			<AlertDialog open={showDiscardDialog} onOpenChange={setShowDiscardDialog}>
+			<AlertDialog open={showDiscardDialog} onOpenChange={handleDiscardDialogOpenChange}>
 				<AlertDialogContent>
 					<AlertDialogHeader>
 						<AlertDialogTitle>{t('files-text-editor.discard-title')}</AlertDialogTitle>
 						<AlertDialogDescription>{t('files-text-editor.discard-description')}</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogAction variant='destructive' onClick={handleDiscardAndClose}>
+						<AlertDialogAction variant='destructive' onClick={handleDiscard}>
 							{t('files-text-editor.discard-confirm')}
 						</AlertDialogAction>
 						<AlertDialogCancel>{t('cancel')}</AlertDialogCancel>

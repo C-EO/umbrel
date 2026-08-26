@@ -7,27 +7,33 @@ import {EditableName} from '@/features/files/components/listing/file-item/editab
 import {TruncatedFilename} from '@/features/files/components/listing/file-item/truncated-filename'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
 import {FILE_TYPE_MAP} from '@/features/files/constants'
-import {useMachineFolder} from '@/features/files/hooks/use-machine-folder'
 import type {FileSystemItem} from '@/features/files/types'
 import {formatFilesystemDate} from '@/features/files/utils/format-filesystem-date'
 import {formatFilesystemSize} from '@/features/files/utils/format-filesystem-size'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
 import {isDirectoryAnExternalDrivePartition} from '@/features/files/utils/is-directory-an-external-drive-partition'
 import {isDirectoryAnUmbrelBackup} from '@/features/files/utils/is-directory-an-umbrel-backup'
+import type {Machine} from '@/features/machines/types'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useLanguage} from '@/hooks/use-language'
 import {cn} from '@/lib/utils'
 
 interface ListViewFileItemProps {
 	item: FileSystemItem
+	machine: Machine | undefined
 	isEditingName: boolean
 	onEditingNameComplete: () => void
 	fadedContent?: boolean
 }
 
-export function ListViewFileItem({item, isEditingName, onEditingNameComplete, fadedContent}: ListViewFileItemProps) {
+export function ListViewFileItem({
+	item,
+	machine,
+	isEditingName,
+	onEditingNameComplete,
+	fadedContent,
+}: ListViewFileItemProps) {
 	const {t} = useTranslation()
-	const {machine} = useMachineFolder(item.path)
 	const displayName = machine?.name ?? item.name
 	const isUploading = 'isUploading' in item && item.isUploading
 	const uploadingProgress = isUploading && 'progress' in item ? item.progress : 0
@@ -44,7 +50,7 @@ export function ListViewFileItem({item, isEditingName, onEditingNameComplete, fa
 		return (
 			<div className={cn('flex items-center gap-2 rounded-lg px-3 py-2', isUploading && 'opacity-70')}>
 				<div className='flex-shrink-0'>
-					<FileItemIcon item={item} className='h-7 w-7' />
+					<FileItemIcon item={item} machine={machine ?? null} className='h-7 w-7' />
 				</div>
 				<div className={cn('flex flex-1 items-center justify-between overflow-hidden', fadedContent && 'opacity-50')}>
 					<div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
@@ -89,7 +95,7 @@ export function ListViewFileItem({item, isEditingName, onEditingNameComplete, fa
 			<div className={`flex-[5] ${tableStyles}`}>
 				<div className='flex items-center gap-1.5'>
 					<div className='flex-shrink-0'>
-						<FileItemIcon item={item} className='h-5 w-5' />
+						<FileItemIcon item={item} machine={machine ?? null} className='h-5 w-5' />
 					</div>
 					<div className={cn('min-w-0', fadedContent && 'opacity-50')}>
 						{isEditingName && !machine ? (
