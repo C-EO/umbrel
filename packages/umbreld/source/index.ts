@@ -274,15 +274,6 @@ export default class Umbreld {
 		// the local time is set which then fail with SSL cert errors.
 		await waitForSystemTime(this, 10)
 
-		// We need to forcefully clean Docker state before being able to safely continue
-		// If an existing container is listening on port 80 we'll crash, if an old version
-		// of Umbrel wasn't shutdown properly, bringing containers up can fail.
-		// Skip this in dev mode otherwise we get very slow reloads since this cleans
-		// up app containers on every source code change.
-		if (!this.developmentMode) {
-			await this.apps.cleanDockerState().catch((error) => this.logger.error(`Failed to clean Docker state`, error))
-		}
-
 		// LAN ingress is the browser-facing boundary. Start it before the internal
 		// dashboard server and apps so public ports are owned by ingress and app-port
 		// nftables rules are in place before app proxies begin accepting traffic.
