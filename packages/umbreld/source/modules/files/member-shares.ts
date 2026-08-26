@@ -3,6 +3,9 @@ import fse from 'fs-extra'
 import type Umbreld from '../../index.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 import type {FileChangeEvent} from './watcher.js'
+import AsyncBurstCache from '../utilities/async-burst-cache.js'
+
+const WATCHER_SNAPSHOT_TTL_MS = 1000
 
 // A path the owner has shared with member accounts. Paths are always in the
 // owner namespace (/Home, /Apps, /External, /Network) and access covers the
@@ -19,9 +22,11 @@ export default class MemberShares {
 	#umbreld: Umbreld
 	logger: Umbreld['logger']
 	#removeFileChangeListener?: () => void
+	#watcherShares: AsyncBurstCache<MemberShare[]>
 
 	constructor(umbreld: Umbreld) {
 		this.#umbreld = umbreld
+		this.#watcherShares = new AsyncBurstCache(() => this.list(), WATCHER_SNAPSHOT_TTL_MS)
 		const {name} = this.constructor
 		this.logger = umbreld.logger.createChildLogger(`files:${name.toLocaleLowerCase()}`)
 	}
@@ -34,6 +39,10 @@ export default class MemberShares {
 	async #handleFileChange(event: FileChangeEvent) {
 		if (event.type !== 'delete') return
 		const virtualDeletedPath = this.#umbreld.files.systemToVirtualPath(event.path)
+		const shares = await this.#watcherShares.get()
+		if (!shares.some((share) => share.path === virtualDeletedPath || share.path.startsWith(`${virtualDeletedPath}/`))) {
+			return
+		}
 		await this.removeWithin(virtualDeletedPath)
 	}
 
@@ -111,6 +120,7 @@ export default class MemberShares {
 	// Drop the cached per-user share lists so changes apply immediately
 	invalidateCache() {
 		this.#listForUserCache.clear()
+		this.#watcherShares.clear()
 	}
 
 	async listForUser(userId: string): Promise<MemberShare[]> {
@@ -213,7 +223,7 @@ export default class MemberShares {
 			const otherShares = shares.filter((existingShare) => existingShare.path !== path)
 			await set('files.memberShares', [...otherShares, share])
 		})
-		this.#listForUserCache.clear()
+		this.invalidateCache()
 		await this.#emitChange(previousSharedWith, sharedWith)
 
 		this.logger.log(`Shared '${path}' with ${sharedWith === 'all' ? 'all users' : sharedWith.join(', ')}`)
@@ -232,7 +242,7 @@ export default class MemberShares {
 			removed = remainingShares.length !== shares.length
 			if (removed) await set('files.memberShares', remainingShares)
 		})
-		this.#listForUserCache.clear()
+		this.invalidateCache()
 		if (removed) {
 			await this.#emitChange(removedSharedWith)
 			this.logger.log(`Stopped sharing '${path}'`)
@@ -258,7 +268,7 @@ export default class MemberShares {
 		})
 		if (removedShares.length === 0) return false
 
-		this.#listForUserCache.clear()
+		this.invalidateCache()
 		await this.#emitChange(...removedShares.map((share) => share.sharedWith))
 		for (const share of removedShares) this.logger.log(`Stopped sharing '${share.path}'`)
 		return true
@@ -280,7 +290,7 @@ export default class MemberShares {
 				.filter((share) => (share.sharedWith === 'all' ? hasMembers : share.sharedWith.length > 0))
 			await set('files.memberShares', updatedShares)
 		})
-		this.#listForUserCache.clear()
+		this.invalidateCache()
 		await this.#emitChange([userId])
 	}
 }

@@ -15,6 +15,20 @@ import type {
 } from '../hardware/raid.js'
 import type {Machine, OsImage} from '../machines/machines.js'
 
+// A Watchman callback can contain hundreds of thousands of paths. Emitting the
+// whole array at once creates one promise and one copy of each listener's work
+// per path, which can exhaust V8 before the consumers drain. This is a rolling
+// concurrency ceiling, not an event-count cap: all events are still delivered,
+// and each free slot immediately takes the next one. 1,024 retains high batch
+// throughput while bounding simultaneous handler/store/filesystem work.
+export const FILE_EVENT_EMIT_CONCURRENCY = 1024
+
+// A listener that never settles must not permanently occupy one of those slots.
+// Timing out releases only the scheduler slot; it does not cancel the listener.
+// If many listeners exceed this deadline, their still-running work can temporarily
+// exceed the rolling ceiling; the once-per-batch warning makes that visible.
+export const FILE_EVENT_EMIT_TIMEOUT_MS = 1000
+
 // Type assertion to ensure all events in EventTypes are defined in events
 type MissingInEvents = Exclude<keyof EventTypes, (typeof events)[number]>
 type _AssertEveryKeyIsListed = MissingInEvents extends never ? true : [`✘ Add these to events →`, MissingInEvents]
@@ -121,6 +135,51 @@ export default class EventBus {
 		this.#umbreld = umbreld
 		const {name} = this.constructor
 		this.logger = umbreld.logger.createChildLogger(name.toLocaleLowerCase())
+	}
+
+	// Preserve every file event while bounding the promises and handler work
+	// admitted at once. Each worker takes the next event as soon as its current
+	// event settles, rather than waiting at an all-or-nothing chunk barrier. A
+	// timeout releases only the scheduler slot: the original emit promise remains
+	// alive and can settle normally without blocking future file events.
+	async emitFileChanges(
+		events: FileChangeEvent[],
+		{
+			concurrency = FILE_EVENT_EMIT_CONCURRENCY,
+			timeoutMs = FILE_EVENT_EMIT_TIMEOUT_MS,
+		}: {concurrency?: number; timeoutMs?: number} = {},
+	) {
+		if (!Number.isSafeInteger(concurrency) || concurrency < 1)
+			throw new Error('File event concurrency must be positive')
+		if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1) throw new Error('File event timeout must be positive')
+
+		let nextEventIndex = 0
+		let loggedTimeout = false
+		const emitNext = async () => {
+			while (nextEventIndex < events.length) {
+				const event = events[nextEventIndex++]
+
+				let timeout: ReturnType<typeof setTimeout> | undefined
+				try {
+					const timedOut = await Promise.race([
+						this.emit('files:watcher:change', event).then(() => false),
+						new Promise<true>((resolve) => {
+							timeout = setTimeout(() => resolve(true), timeoutMs)
+						}),
+					])
+					if (timedOut && !loggedTimeout) {
+						loggedTimeout = true
+						this.logger.error(
+							`File event handlers exceeded ${timeoutMs}ms; continuing to dispatch the remaining events`,
+						)
+					}
+				} finally {
+					if (timeout) clearTimeout(timeout)
+				}
+			}
+		}
+
+		await Promise.all(Array.from({length: Math.min(concurrency, events.length)}, emitNext))
 	}
 
 	// Stream events

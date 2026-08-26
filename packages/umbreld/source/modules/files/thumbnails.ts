@@ -30,6 +30,15 @@ const SUPPORTED_THUMBNAIL_EXTENSIONS = [
 	'.avi',
 ]
 
+// A media import can produce a supported-image event for every file at once.
+// Bound the combined set of unique debounced, queued, and running background
+// paths so that burst cannot retain one timer/promise/path per image. Work above
+// the cap skips only opportunistic pre-generation: the Files UI still generates
+// any missing thumbnail through the separate on-demand queue when requested.
+// 10,000 leaves a substantial warm-cache window without making memory scale
+// with an arbitrarily large library.
+export const MAX_BACKGROUND_THUMBNAIL_WORK = 10_000
+
 export default class Thumbnails {
 	#umbreld: Umbreld
 	logger: Umbreld['logger']
@@ -55,6 +64,7 @@ export default class Thumbnails {
 	deviceIdtoUuidMap = new Map<number, string>()
 	// Map to store debounced background thumbnail tasks per filepath
 	#backgroundThumbnailDebouncers = new Map<string, DebouncedFunction<() => Promise<void>>>()
+	#backgroundThumbnailWork = new Set<string>()
 	#removeFileChangeListener?: () => void
 	#removeDiskChangeListener?: () => void
 	#isPruning = false
@@ -100,15 +110,25 @@ export default class Thumbnails {
 		let debouncer = this.#backgroundThumbnailDebouncers.get(systemPath)
 
 		if (!debouncer) {
+			// A job for this path already passed its debounce window and is queued or
+			// running. Coalesce further changes into that work item.
+			if (this.#backgroundThumbnailWork.has(systemPath)) return
+			if (this.#backgroundThumbnailWork.size >= MAX_BACKGROUND_THUMBNAIL_WORK) return
+			this.#backgroundThumbnailWork.add(systemPath)
+
 			const generateThumbnailAndCleanup = async () => {
-				// Destroy the debouncer now that it's fired to avoid memory leaks
+				// The path remains in backgroundThumbnailWork until all queued work
+				// settles, preventing duplicate admission while generation is pending.
 				this.#backgroundThumbnailDebouncers.delete(systemPath)
 
-				// Generate the thumbnail
-				await this.#generateThumbnail(systemPath, {background: true}).catch((error) => {
-					// We catch errors here to prevent unhandled rejections, since this debounced function runs later and outside the original call context.
+				try {
+					await this.#generateThumbnail(systemPath, {background: true})
+				} catch (error) {
+					// This debounced function runs outside the original event call.
 					this.logger.error(`Failed to generate thumbnail for ${systemPath}`, error)
-				})
+				} finally {
+					this.#backgroundThumbnailWork.delete(systemPath)
+				}
 			}
 
 			// Create a debounced version with a 1-second delay
@@ -126,17 +146,17 @@ export default class Thumbnails {
 	async #handleFileChange(event: FileChangeEvent) {
 		const systemPath = event.path
 
+		// Deletes never generate thumbnails. Reject them before extension checks
+		// or filesystem stats, which are especially wasteful during subtree
+		// removal storms.
+		if (event.type !== 'create' && event.type !== 'update') return
+
 		// Skip directories and file types that are not supported for thumbnails
 		if (!(await this.#isValidFileForThumbnail(systemPath))) return
 
-		// Only handle create and update events
-		// We don't need to handle delete events. We could explicitly remove the thumbnail here, but the LRU cleanup job will remove the thumbnail eventually.
-		// We don't need to handle rename or move events because we name the thumbnail based on the file's inode, filesystem ID, and date modified, which don't change when the file is renamed or moved.
-		if (event.type === 'create' || event.type === 'update') {
-			// Generate the thumbnail in the background queue
-			// We use a debouncer to prevent multiple thumbnail creations for the same file when it is being actively written to (e.g., during upload, unarchiving, etc)
-			this.#debouncedGenerateThumbnail(systemPath)
-		}
+		// Generate the thumbnail in the background queue. Per-path debouncing
+		// coalesces active writes; the global bound drops excess opportunistic work.
+		this.#debouncedGenerateThumbnail(systemPath)
 	}
 
 	// Check if a file type is supported for thumbnails
@@ -384,5 +404,8 @@ export default class Thumbnails {
 
 		// Cancel debounced background thumbnail tasks
 		this.#backgroundThumbnailDebouncers.forEach((debouncer) => debouncer.cancel())
+		this.#backgroundThumbnailDebouncers.clear()
+		this.#backgroundThumbnailWork.clear()
+		this.backgroundQueue.clear()
 	}
 }

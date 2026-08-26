@@ -65,7 +65,7 @@ async function createMcp() {
 			getApp: vi.fn((appId: string) => ({id: appId})),
 		},
 		eventBus: {
-			on: vi.fn((_event: string, listener: (event: {type: 'delete'; path: string}) => Promise<void>) => {
+			on: vi.fn((_eventName: string, listener: (event: {type: 'delete'; path: string}) => Promise<void>) => {
 				fileListeners.push(listener)
 				return () => {
 					const index = fileListeners.indexOf(listener)
@@ -483,6 +483,16 @@ test('only Home deletion events remove file grants', async () => {
 	const getWriteLock = vi.spyOn(store, 'getWriteLock')
 
 	await fileListeners[0]({type: 'delete', path: nodePath.join(roots.Apps, 'plex', 'cache')})
+	expect(getWriteLock).not.toHaveBeenCalled()
+
+	const get = vi.spyOn(store, 'get')
+	get.mockClear()
+	await Promise.all(
+		Array.from({length: 100}, (_, index) =>
+			fileListeners[0]({type: 'delete', path: nodePath.join(roots.Home, 'Unrelated', String(index))}),
+		),
+	)
+	expect(get).toHaveBeenCalledOnce()
 	expect(getWriteLock).not.toHaveBeenCalled()
 
 	await fileListeners[0]({type: 'delete', path: nodePath.join(roots.Home, 'Granted')})

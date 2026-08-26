@@ -2,14 +2,22 @@ import type Umbreld from '../../index.js'
 
 import type {FileChangeEvent} from './watcher.js'
 import {OWNER_USER_ID} from '../user/constants.js'
+import AsyncBurstCache from '../utilities/async-burst-cache.js'
+
+const WATCHER_SNAPSHOT_TTL_MS = 1000
 
 export default class Favorites {
 	#umbreld: Umbreld
 	logger: Umbreld['logger']
 	#removeFileChangeListener?: () => void
+	#watcherFavorites: AsyncBurstCache<Awaited<ReturnType<Umbreld['user']['getAllAccountFavorites']>>>
 
 	constructor(umbreld: Umbreld) {
 		this.#umbreld = umbreld
+		this.#watcherFavorites = new AsyncBurstCache(
+			() => this.#umbreld.user.getAllAccountFavorites(),
+			WATCHER_SNAPSHOT_TTL_MS,
+		)
 		const {name} = this.constructor
 		this.logger = umbreld.logger.createChildLogger(`files:${name.toLocaleLowerCase()}`)
 	}
@@ -38,7 +46,7 @@ export default class Favorites {
 	async #handleFileChange(event: FileChangeEvent) {
 		if (event.type !== 'delete') return
 		const virtualDeletedPath = this.#umbreld.files.systemToVirtualPath(event.path)
-		const accounts = await this.#umbreld.user.getAllAccountFavorites()
+		const accounts = await this.#watcherFavorites.get()
 		for (const {userId, favorites: storedFavorites} of accounts) {
 			const favorites = this.#normalizeFavorites(storedFavorites ?? this.#defaultFavorites(userId))
 			const deletedFavorites = favorites.filter(
@@ -91,6 +99,7 @@ export default class Favorites {
 			if (favorites.includes(virtualPath)) return undefined
 			return [...favorites, virtualPath]
 		})
+		this.#watcherFavorites.clear()
 
 		return true
 	}
@@ -105,6 +114,7 @@ export default class Favorites {
 			deleted = newFavorites.length < favorites.length
 			return deleted ? newFavorites : undefined
 		})
+		this.#watcherFavorites.clear()
 		return deleted
 	}
 

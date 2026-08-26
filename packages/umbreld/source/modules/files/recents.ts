@@ -130,26 +130,24 @@ export default class Recents {
 
 	// Handle file change
 	async #handleFileChange(event: FileChangeEvent) {
+		// Reject events outside the owning account's Home before creating a
+		// single-worker queue entry. App data, Trash, and shared-account activity
+		// can arrive in very large bursts and never affect Recents.
+		const systemPath = event.path
+		const path = this.#umbreld.files.systemToVirtualPath(systemPath)
+		const userId = this.#umbreld.files.ownerOfPath(path)
+		const home = userId === OWNER_USER_ID ? '/Home' : `/Users/${userId}`
+		const trash = this.#umbreld.files.trashRootForUser(userId)
+		if (!path.startsWith(`${home}/`) || path === trash || path.startsWith(`${trash}/`)) return
+
+		// These checks are synchronous and do not depend on event ordering, so
+		// avoid queueing work that will be discarded later.
+		if (this.#umbreld.files.isHidden(nodePath.basename(path))) return
+		if (path.includes(`/${this.#umbreld.backups.backupDirectoryName}/`)) return
+
 		// Pipe through a queue to ensure we handle events in order
 		return this.#queue
 			.add(async () => {
-				// Calculate paths
-				const systemPath = event.path
-				const path = this.#umbreld.files.systemToVirtualPath(systemPath)
-				const userId = this.#umbreld.files.ownerOfPath(path)
-
-				// Track only the owning account's Home, never Trash or another
-				// account's shared activity.
-				const home = userId === OWNER_USER_ID ? '/Home' : `/Users/${userId}`
-				const trash = this.#umbreld.files.trashRootForUser(userId)
-				if (!path.startsWith(`${home}/`) || path === trash || path.startsWith(`${trash}/`)) return
-
-				// Ignore hidden files
-				if (this.#umbreld.files.isHidden(nodePath.basename(path))) return
-
-				// Ignore files in the backups directory
-				if (path.includes(`/${this.#umbreld.backups.backupDirectoryName}/`)) return
-
 				// Remove the path from the list if it exists
 				// This is to prevent duplicates when adding or to remove with a deletion
 				const currentRecentFiles = await this.#recentFilesFor(userId)

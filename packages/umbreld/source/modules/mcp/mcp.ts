@@ -9,6 +9,7 @@ import {assertSystemPathInsideBase, isPathInsideOrEqual, resolveRealPathForValid
 import type {FileChangeEvent} from '../files/watcher.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 import randomToken from '../utilities/random-token.js'
+import AsyncBurstCache from '../utilities/async-burst-cache.js'
 import createMcpEndpoint, {type McpEndpoint} from './server.js'
 import {MCP_PERMISSION_REMEDIATION} from './tools/shared.js'
 
@@ -72,6 +73,7 @@ const MAX_CLIENTS = 10
 // fresh app per call must not grow the map forever; past this the oldest
 // failure falls off
 const MAX_APP_OPERATION_FAILURES = 10
+const WATCHER_SNAPSHOT_TTL_MS = 1000
 
 function defaultPermissions(): McpPermissions {
 	return {
@@ -95,6 +97,7 @@ export default class Mcp {
 	#umbreld: Umbreld
 	#endpoint: McpEndpoint
 	#removeFileChangeListener?: () => void
+	#watcherPermissions: AsyncBurstCache<McpPermissions>
 	#appOperationFailures = new Map<string, AppOperationFailure>()
 	#appOperationTickets = new Map<string, symbol>()
 	// Activity is intentionally memory-only. Each credential has an independent
@@ -104,6 +107,7 @@ export default class Mcp {
 
 	constructor(umbreld: Umbreld) {
 		this.#umbreld = umbreld
+		this.#watcherPermissions = new AsyncBurstCache(() => this.getPermissions(), WATCHER_SNAPSHOT_TTL_MS)
 		this.logger = umbreld.logger.createChildLogger('mcp')
 		this.#endpoint = createMcpEndpoint(umbreld)
 	}
@@ -400,6 +404,7 @@ export default class Mcp {
 			})
 			updated = true
 		})
+		if (updated) this.#watcherPermissions.clear()
 		return updated
 	}
 
@@ -629,6 +634,8 @@ export default class Mcp {
 		if (event.type !== 'delete') return
 		const path = this.#umbreld.files.systemToVirtualPath(event.path)
 		if (path !== '/Home' && !path.startsWith('/Home/')) return
+		const {files} = await this.#watcherPermissions.get()
+		if (files === 'all' || !files.some((grant) => grant === path || grant.startsWith(`${path}/`))) return
 		await this.removeFileGrantsWithin(path)
 	}
 

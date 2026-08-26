@@ -4,6 +4,7 @@ import nodeFs from 'node:fs'
 import watcher from '@parcel/watcher'
 import fse from 'fs-extra'
 import {$} from 'execa'
+import PQueue from 'p-queue'
 
 import type Umbreld from '../../index.js'
 import {OWNER_USER_ID} from '../user/constants.js'
@@ -43,8 +44,11 @@ export default class Watcher {
 	subscriptions: Map<string, watcher.AsyncSubscription> = new Map()
 	pathsToWatch: Set<string>
 	#pendingSubscriptions = new Map<string, Promise<void>>()
+	#eventDispatchQueue = new PQueue({concurrency: 1})
 	#started = false
 	#healthCheckInterval?: ReturnType<typeof setInterval>
+	#healthCheckRunning = false
+	#healthCheckWaiter?: {sentinelPath: string; resolve: () => void}
 
 	constructor(umbreld: Umbreld, {paths}: {paths: string[]}) {
 		this.#umbreld = umbreld
@@ -57,6 +61,7 @@ export default class Watcher {
 	async start() {
 		this.logger.log('Starting files watcher')
 		this.#started = true
+		this.#eventDispatchQueue.start()
 
 		// Set system inotify limits
 		// https://facebook.github.io/watchman/docs/install#linux-inotify-limits
@@ -104,8 +109,22 @@ export default class Watcher {
 				const subscription = await watcher.subscribe(
 					systemPath,
 					(error, events) => {
+						if (!this.#started) return
 						if (error) return this.logger.error(`Failed to watch directory '${virtualPath}'`, error)
-						for (const event of events) this.#umbreld.eventBus.emit('files:watcher:change', event)
+
+						// Detect the sentinel at the Parcel callback boundary. A large earlier
+						// batch can legitimately keep the consumer queue busy for longer than
+						// the health-check timeout; that must not be mistaken for a dead native
+						// watcher and trigger an unnecessary Watchman resubscription/recrawl.
+						const healthCheckWaiter = this.#healthCheckWaiter
+						if (healthCheckWaiter && events.some((event) => event.path === healthCheckWaiter.sentinelPath)) {
+							this.#healthCheckWaiter = undefined
+							healthCheckWaiter.resolve()
+						}
+
+						void this.#eventDispatchQueue
+							.add(() => this.#umbreld.eventBus.emitFileChanges(events))
+							.catch((error) => this.logger.error(`Failed to dispatch file events for '${virtualPath}'`, error))
 					},
 					{backend: 'watchman'},
 				)
@@ -156,35 +175,35 @@ export default class Watcher {
 		}
 	}
 
-	// Write a sentinel file and verify the event arrives through the full pipeline
+	// Write a sentinel file and verify it reaches the Parcel callback. Consumer
+	// pressure is handled separately by the bounded dispatch queue.
 	async #healthCheck() {
-		const systemPath = await this.#umbreld.files.virtualToSystemPath(HEALTH_CHECK_PATH, OWNER_USER_ID)
-		const sentinelPath = nodePath.join(systemPath, SENTINEL_FILENAME)
+		if (!this.#started || this.#healthCheckRunning) return
+		this.#healthCheckRunning = true
+		let sentinelPath: string | undefined
+		let timeoutId: ReturnType<typeof setTimeout> | undefined
 
 		try {
+			const systemPath = await this.#umbreld.files.virtualToSystemPath(HEALTH_CHECK_PATH, OWNER_USER_ID)
+			const currentSentinelPath = nodePath.join(systemPath, SENTINEL_FILENAME)
+			sentinelPath = currentSentinelPath
+
 			// Listen for the sentinel event
 			const eventReceived = new Promise<void>((resolve) => {
-				let timeoutId: ReturnType<typeof setTimeout>
-				const removeListener = this.#umbreld.eventBus.on('files:watcher:change', (event: FileChangeEvent) => {
-					if (event.path === sentinelPath) {
-						clearTimeout(timeoutId)
-						removeListener()
-						resolve()
-					}
-				})
-
-				// Clean up the listener after the timeout regardless
-				timeoutId = setTimeout(() => removeListener(), HEALTH_CHECK_TIMEOUT_MS)
+				this.#healthCheckWaiter = {sentinelPath: currentSentinelPath, resolve}
 			})
 
 			// Write the sentinel file without following symlinks
-			await this.#writeSentinelFile(sentinelPath)
+			await this.#writeSentinelFile(currentSentinelPath)
 
 			// Race the event against the timeout
-			const timeout = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), HEALTH_CHECK_TIMEOUT_MS))
+			const timeout = new Promise<'timeout'>((resolve) => {
+				timeoutId = setTimeout(() => resolve('timeout'), HEALTH_CHECK_TIMEOUT_MS)
+			})
 			const result = await Promise.race([eventReceived.then(() => 'ok' as const), timeout])
 
 			if (result === 'timeout') {
+				if (!this.#started) return
 				this.logger.error('Health check failed: watcher did not deliver sentinel event within timeout. Recovering...')
 				await this.#teardownListeners()
 				await this.#setupListeners()
@@ -194,8 +213,11 @@ export default class Watcher {
 		} catch (error) {
 			this.logger.error('Health check encountered an error', error)
 		} finally {
+			if (timeoutId) clearTimeout(timeoutId)
+			if (sentinelPath && this.#healthCheckWaiter?.sentinelPath === sentinelPath) this.#healthCheckWaiter = undefined
+			this.#healthCheckRunning = false
 			// Clean up the sentinel file so it's not visible via Samba or SSH
-			await fse.remove(sentinelPath).catch(() => {})
+			if (sentinelPath) await fse.remove(sentinelPath).catch(() => {})
 		}
 	}
 
@@ -211,9 +233,14 @@ export default class Watcher {
 	// Stop watchers and health check
 	async stop() {
 		this.#started = false
+		this.#healthCheckWaiter?.resolve()
+		this.#healthCheckWaiter = undefined
+		this.#eventDispatchQueue.pause()
+		this.#eventDispatchQueue.clear()
 		if (this.#healthCheckInterval) clearInterval(this.#healthCheckInterval)
 		await Promise.all(this.#pendingSubscriptions.values())
 		await this.#teardownListeners()
+		this.#eventDispatchQueue.clear()
 
 		// @parcel/watcher spawns the Watchman daemon but never stops it (it's designed to persist), so
 		// it lingers in the umbrel.service cgroup and makes `systemctl stop umbrel` hang until
