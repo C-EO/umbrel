@@ -5,7 +5,7 @@ import {createTRPCProxyClient, httpBatchLink, createWSClient, wsLink, splitLink}
 import got from 'got'
 import {CookieJar} from 'tough-cookie'
 import {$} from 'execa'
-import getPort from 'get-port'
+import getAvailablePort from 'get-port'
 import pRetry from 'p-retry'
 import pWaitFor from 'p-wait-for'
 import {Client as SshClient} from 'ssh2'
@@ -16,6 +16,7 @@ import type {events} from '../event-bus/event-bus.js'
 
 import temporaryDirectory from '../utilities/temporary-directory.js'
 import runGitServer from './run-git-server.js'
+import {retryVmPortCollisions} from './vm-port-retry.js'
 
 // Use the data/ directory in the umbreld package root for test temp files
 // This avoids filling up RAM-based tmpfs when running many tests in parallel
@@ -27,7 +28,13 @@ const userCredentials = {
 	password: 'moneyprintergobrrr',
 }
 
-function createTestHelpers(port: number) {
+function createTestHelpers(port: number | (() => number)) {
+	const currentPort = typeof port === 'number' ? () => port : port
+	const withCurrentPort = (url: string | URL) => {
+		const currentUrl = new URL(url)
+		currentUrl.port = String(currentPort())
+		return currentUrl
+	}
 	let authToken = ''
 	const cookieJar = new CookieJar()
 	const setAuthToken = (token: string) => {
@@ -36,7 +43,7 @@ function createTestHelpers(port: number) {
 	const setBrowserSession = async (token: string, cookies: string[]) => {
 		authToken = token
 		await cookieJar.removeAllCookies()
-		for (const cookie of cookies) await cookieJar.setCookie(cookie, `http://127.0.0.1:${port}/`)
+		for (const cookie of cookies) await cookieJar.setCookie(cookie, `http://127.0.0.1:${currentPort()}/`)
 	}
 
 	// Node's fetch doesn't retry when a kept-alive connection is closed by the
@@ -44,33 +51,34 @@ function createTestHelpers(port: number) {
 	// the query after a startup poll), which intermittently fails tests with
 	// 'SocketError: other side closed'. Retry once — the dead socket is
 	// discarded and the retry opens a fresh connection.
-	const fetchWithRetry = (async (input: any, init?: any) => {
+	const fetchWithRetry = (async (input: string | URL, init?: RequestInit) => {
+		const url = withCurrentPort(input)
 		try {
-			return await fetch(input, init)
+			return await fetch(url, init)
 		} catch {
-			return fetch(input, init)
+			return fetch(url, init)
 		}
 	}) as typeof fetch
 
 	// Node's fetch does not retain cookies. Wrap it with the same cookie jar used
 	// by browserApi so tRPC and non-tRPC requests represent one browser session.
-	const fetchWithBrowserSession = (async (input: any, init?: any) => {
-		const url = input instanceof Request ? input.url : String(input)
-		const headers = new Headers(input instanceof Request ? input.headers : undefined)
+	const fetchWithBrowserSession = (async (input: string | URL, init?: RequestInit) => {
+		const url = withCurrentPort(input)
+		const headers = new Headers()
 		new Headers(init?.headers).forEach((value, name) => headers.set(name, value))
-		const cookie = await cookieJar.getCookieString(url)
+		const cookie = await cookieJar.getCookieString(url.toString())
 		if (cookie) headers.set('cookie', cookie)
 
-		const response = await fetchWithRetry(input, {...init, headers})
+		const response = await fetchWithRetry(url, {...init, headers})
 		const setCookies = (response.headers as typeof response.headers & {getSetCookie?: () => string[]}).getSetCookie?.()
-		for (const setCookie of setCookies ?? []) await cookieJar.setCookie(setCookie, url)
+		for (const setCookie of setCookies ?? []) await cookieJar.setCookie(setCookie, url.toString())
 		return response
 	}) as typeof fetch
 
 	const ticketClient = createTRPCProxyClient<AppRouter>({
 		links: [
 			httpBatchLink({
-				url: `http://127.0.0.1:${port}/trpc`,
+				url: `http://127.0.0.1:${currentPort()}/trpc`,
 				fetch: fetchWithBrowserSession,
 				headers: async () => ({Authorization: `Bearer ${authToken}`}),
 			}),
@@ -83,7 +91,7 @@ function createTestHelpers(port: number) {
 	const wsClient = createWSClient({
 		url: async () => {
 			const ticket = await ticketClient.user.createWebSocketTicket.mutate({target: 'trpc'})
-			return `ws://127.0.0.1:${port}/trpc?ticket=${ticket}`
+			return `ws://127.0.0.1:${currentPort()}/trpc?ticket=${ticket}`
 		},
 		retryDelayMs: () => 100,
 	})
@@ -94,7 +102,7 @@ function createTestHelpers(port: number) {
 				condition: (op) => op.type === 'subscription',
 				true: wsLink({client: wsClient}),
 				false: httpBatchLink({
-					url: `http://127.0.0.1:${port}/trpc`,
+					url: `http://127.0.0.1:${currentPort()}/trpc`,
 					fetch: fetchWithBrowserSession,
 					headers: async () => ({
 						Authorization: `Bearer ${authToken}`,
@@ -107,16 +115,23 @@ function createTestHelpers(port: number) {
 	const unauthenticatedClient = createTRPCProxyClient<AppRouter>({
 		links: [
 			httpBatchLink({
-				url: `http://127.0.0.1:${port}/trpc`,
+				url: `http://127.0.0.1:${currentPort()}/trpc`,
 				fetch: fetchWithRetry,
 			}),
 		],
 	})
 
 	const unauthenticatedApi = got.extend({
-		prefixUrl: `http://127.0.0.1:${port}/api`,
+		prefixUrl: `http://127.0.0.1:${currentPort()}/api`,
 		retry: {limit: 0},
 		responseType: 'json',
+		hooks: {
+			beforeRequest: [
+				(options) => {
+					if (options.url) options.url = withCurrentPort(options.url)
+				},
+			],
+		},
 	})
 	// Represents a browser navigation: cookies are retained, but no dashboard
 	// Authorization header is added. This is useful for testing URL-authenticated APIs.
@@ -212,7 +227,7 @@ function createTestHelpers(port: number) {
 			? createTRPCProxyClient<AppRouter>({
 					links: [
 						httpBatchLink({
-							url: `http://127.0.0.1:${port}/trpc`,
+							url: `http://127.0.0.1:${currentPort()}/trpc`,
 							fetch: fetchWithBrowserSession,
 							headers: {Authorization: `Bearer ${subscriptionAuthToken}`},
 						}),
@@ -223,7 +238,7 @@ function createTestHelpers(port: number) {
 			? createWSClient({
 					url: async () => {
 						const ticket = await scopedTicketClient.user.createWebSocketTicket.mutate({target: 'trpc'})
-						return `ws://127.0.0.1:${port}/trpc?ticket=${ticket}`
+						return `ws://127.0.0.1:${currentPort()}/trpc?ticket=${ticket}`
 					},
 					retryDelayMs: () => 100,
 				})
@@ -310,7 +325,7 @@ export default async function createTestUmbreld({
 		registerAndLogin,
 		waitForStartup,
 		subscribeToEvents,
-	} = createTestHelpers(umbreld.server.port!)
+	} = createTestHelpers(() => umbreld.server.port!)
 
 	async function cleanup() {
 		await umbreld.stop()
@@ -356,7 +371,7 @@ export async function createTestVm({
 	image?: string
 	memory?: number
 	cores?: number
-	forwardPorts?: Array<{hostPort: number; guestPort: number}>
+	forwardPorts?: Array<{hostPort?: number; guestPort: number}>
 	startupTimeout?: number
 	stateDirectoryName?: string
 } = {}) {
@@ -377,8 +392,34 @@ export async function createTestVm({
 	const stateDir = stateDirectoryName ? path.join(generatedStateDirectory, stateDirectoryName) : generatedStateDirectory
 	const env = {VM_STATE_DIR: stateDir}
 
-	const sshPort = await getPort()
-	const httpPort = await getPort()
+	let sshPort = 0
+	let httpPort = 0
+	const allocatedForwardPorts = forwardPorts.map(({hostPort, guestPort}) => ({
+		hostPort: hostPort ?? 0,
+		guestPort,
+		dynamic: hostPort === undefined,
+	}))
+
+	async function refreshDynamicPorts() {
+		const allocated = new Set(
+			allocatedForwardPorts.filter((forward) => !forward.dynamic).map((forward) => forward.hostPort),
+		)
+		const allocate = async () => {
+			let port: number
+			do port = await getAvailablePort({host: '127.0.0.1'})
+			while (allocated.has(port))
+			allocated.add(port)
+			return port
+		}
+
+		sshPort = await allocate()
+		httpPort = await allocate()
+		for (const forward of allocatedForwardPorts) {
+			if (forward.dynamic) forward.hostPort = await allocate()
+		}
+	}
+
+	await refreshDynamicPorts()
 
 	const {
 		client,
@@ -393,7 +434,7 @@ export async function createTestVm({
 		registerAndLogin,
 		waitForStartup,
 		subscribeToEvents,
-	} = createTestHelpers(httpPort)
+	} = createTestHelpers(() => httpPort)
 
 	let vmProcessPid: number | undefined
 
@@ -404,7 +445,7 @@ export async function createTestVm({
 	// for the VM to power itself off, for boots that are expected to complete
 	// and shut down on their own (e.g. the USB installer auto-flashing a
 	// device).
-	async function powerOn({
+	async function powerOnOnce({
 		cdrom,
 		bootNvmeSlot,
 		waitForShutdown = false,
@@ -420,7 +461,7 @@ export async function createTestVm({
 		const coreArgs = cores ? ['--cores', String(cores)] : []
 		const cdromArgs = cdrom ? ['--cdrom', cdrom] : []
 		const bootNvmeSlotArgs = bootNvmeSlot ? ['--boot-nvme-slot', String(bootNvmeSlot)] : []
-		const forwardPortArgs = forwardPorts.flatMap(({hostPort, guestPort}) => [
+		const forwardPortArgs = allocatedForwardPorts.flatMap(({hostPort, guestPort}) => [
 			'--forward-port',
 			`${hostPort}:${guestPort}`,
 		])
@@ -433,10 +474,22 @@ export async function createTestVm({
 		// Capture output and track if process exits
 		vmProcess.stdout?.on('data', (data: Buffer) => (vmOutput += data.toString()))
 		vmProcess.stderr?.on('data', (data: Buffer) => (vmOutput += data.toString()))
-		vmProcess.on('exit', (code) => {
-			vmExited = true
-			vmExitCode = code
-		})
+		// Observe the process promise rather than only attaching an exit listener:
+		// a port collision can make QEMU exit before listeners are registered.
+		// Waiting for execa to settle also ensures all QEMU output is captured.
+		const vmExit = vmProcess
+			.then(
+				(result) => result.exitCode,
+				(error: unknown) => {
+					const exitCode = (error as {exitCode?: unknown}).exitCode
+					return typeof exitCode === 'number' ? exitCode : null
+				},
+			)
+			.then((exitCode) => {
+				vmExited = true
+				vmExitCode = exitCode
+				return exitCode
+			})
 
 		// Unref so the process doesn't block Node from exiting
 		vmProcess.unref()
@@ -457,8 +510,9 @@ export async function createTestVm({
 		if (waitForShutdown) {
 			await withVmOutputOnTimeout(pWaitFor(() => vmExited, {interval: 1000, timeout: startupTimeout}))
 			vmProcessPid = undefined
-			if (vmExitCode !== 0) {
-				throw new Error(`VM process exited with code ${vmExitCode}:\n${vmOutput}`)
+			const exitCode = vmExitCode ?? (await vmExit)
+			if (exitCode !== 0) {
+				throw new Error(`VM process exited with code ${exitCode}:\n${vmOutput}`)
 			}
 			return
 		}
@@ -466,20 +520,37 @@ export async function createTestVm({
 		await withVmOutputOnTimeout(
 			pWaitFor(
 				async () => {
-					// Check if VM process died
-					if (vmExited) {
+					const outcome = await Promise.race([
+						vmExit.then(() => ({exited: true as const, ready: false})),
+						unauthenticatedClient.user.exists.query().then(
+							() => ({exited: false as const, ready: true}),
+							() => ({exited: false as const, ready: false}),
+						),
+					])
+					if (outcome.exited) {
+						vmProcessPid = undefined
 						throw new Error(`VM process exited unexpectedly:\n${vmOutput}`)
 					}
-					try {
-						await unauthenticatedClient.user.exists.query()
-						return true
-					} catch {
-						return false
-					}
+					return outcome.ready
 				},
 				{interval: 2000, timeout: startupTimeout},
 			),
 		)
+	}
+
+	async function powerOn(options: {cdrom?: string; bootNvmeSlot?: number; waitForShutdown?: boolean} = {}) {
+		await retryVmPortCollisions({
+			attempt: () => powerOnOnce(options),
+			refreshPorts: refreshDynamicPorts,
+			isDynamicPort: (port) =>
+				port === sshPort ||
+				port === httpPort ||
+				allocatedForwardPorts.some((forward) => forward.dynamic && forward.hostPort === port),
+			onRetry: ({port, retry, maxRetries}) =>
+				console.warn(
+					`QEMU host port ${port} was claimed before startup; retrying with new ports (${retry}/${maxRetries})`,
+				),
+		})
 	}
 
 	function isRunning() {
@@ -746,15 +817,26 @@ printf '\\n${authFailureMarker}\\n'
 		return stdout
 	}
 
+	function getHostPort(guestPort: number) {
+		const forward = allocatedForwardPorts.find((forward) => forward.guestPort === guestPort)
+		if (!forward) throw new Error(`Guest port ${guestPort} is not forwarded`)
+		return forward.hostPort
+	}
+
 	const vm = {
 		// Matches --data-directory in the OS image's umbrel.service
 		dataDirectory: '/home/umbrel/umbrel',
 		stateDir,
-		sshPort,
-		httpPort,
+		get sshPort() {
+			return sshPort
+		},
+		get httpPort() {
+			return httpPort
+		},
 		get pid() {
 			return vmProcessPid
 		},
+		getHostPort,
 		isRunning,
 		waitForShutdown,
 		powerOn,

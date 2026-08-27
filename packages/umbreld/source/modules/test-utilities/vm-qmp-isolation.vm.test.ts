@@ -1,3 +1,5 @@
+import {once} from 'node:events'
+import net from 'node:net'
 import path from 'node:path'
 
 import fse from 'fs-extra'
@@ -39,8 +41,18 @@ describe.sequential('VM QMP isolation', () => {
 		await second.vm.addUsbStorage({slot: 1})
 	})
 
-	test('boots both VMs concurrently', async () => {
-		await Promise.all([first.vm.powerOn(), second.vm.powerOn()])
+	test('retries a host-port collision while booting both VMs concurrently', async () => {
+		const blockedPort = first.vm.httpPort
+		const blocker = net.createServer((socket) => socket.destroy())
+		blocker.listen(blockedPort, '127.0.0.1')
+		await once(blocker, 'listening')
+
+		try {
+			await Promise.all([first.vm.powerOn(), second.vm.powerOn()])
+			expect(first.vm.httpPort).not.toBe(blockedPort)
+		} finally {
+			await new Promise<void>((resolve, reject) => blocker.close((error) => (error ? reject(error) : resolve())))
+		}
 	})
 
 	test('rejects adding a new USB disk to a running VM without changing its state', async () => {

@@ -5,7 +5,6 @@ import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from
 import {createTRPCProxyClient, createWSClient, wsLink} from '@trpc/client'
 import archiver from 'archiver'
 import {WebSocket} from 'ws'
-import getPort from 'get-port'
 import got from 'got'
 import {CookieJar} from 'tough-cookie'
 import pWaitFor from 'p-wait-for'
@@ -195,13 +194,13 @@ describe('Multi-user accounts', () => {
 	}
 
 	beforeAll(async () => {
-		appHostPort = await getPort({host: '127.0.0.1'})
 		umbreld = await createTestVm({
 			device: 'umbrel-home',
-			forwardPorts: [{hostPort: appHostPort, guestPort: 4000}],
+			forwardPorts: [{guestPort: 4000}],
 		})
 		gitServer = await runGitServer()
 		await umbreld.vm.powerOn()
+		appHostPort = umbreld.vm.getHostPort(4000)
 		await umbreld.signup()
 		ownerToken = (await createBrowserSession({password: ownerCredentials.password})).dashboardToken
 		await loginAs(ownerToken)

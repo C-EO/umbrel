@@ -22,7 +22,7 @@ const credentialPattern = /^umbrel_[0-9a-f]{32}_[0-9a-f]{64}$/
 
 describe.sequential('Browser authentication', () => {
 	let umbreld: TestVm
-	let origin = ''
+	const currentOrigin = () => `http://127.0.0.1:${umbreld.vm.httpPort}`
 	let failed = false
 	let primary: BrowserSession
 	let secondary: BrowserSession
@@ -32,7 +32,6 @@ describe.sequential('Browser authentication', () => {
 
 	beforeAll(async () => {
 		umbreld = await createTestVm({device: 'umbrel-home'})
-		origin = `http://127.0.0.1:${umbreld.vm.httpPort}`
 		await umbreld.vm.powerOn()
 		await umbreld.signup()
 	})
@@ -512,7 +511,7 @@ describe.sequential('Browser authentication', () => {
 			throwHttpErrors?: boolean
 		} = {},
 	): Promise<Response<any>> {
-		return got(`${origin}${path}`, {
+		return got(`${currentOrigin()}${path}`, {
 			method,
 			headers: {
 				...(authorization ? {authorization: `Bearer ${authorization}`} : {}),
@@ -543,7 +542,7 @@ describe.sequential('Browser authentication', () => {
 
 	async function openWebSocket(path: string) {
 		return new Promise<WebSocket>((resolve, reject) => {
-			const socket = new WebSocket(`${origin.replace('http:', 'ws:')}${path}`)
+			const socket = new WebSocket(`${currentOrigin().replace('http:', 'ws:')}${path}`)
 			const timeout = setTimeout(() => {
 				socket.terminate()
 				reject(new Error(`Timed out opening ${path}`))
@@ -562,7 +561,7 @@ describe.sequential('Browser authentication', () => {
 	async function expectWebSocketRejected(path: string) {
 		await expect(
 			new Promise<void>((resolve, reject) => {
-				const socket = new WebSocket(`${origin.replace('http:', 'ws:')}${path}`)
+				const socket = new WebSocket(`${currentOrigin().replace('http:', 'ws:')}${path}`)
 				const timeout = setTimeout(() => {
 					socket.terminate()
 					reject(new Error(`Unauthorized WebSocket remained open for ${path}`))

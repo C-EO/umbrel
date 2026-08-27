@@ -1,5 +1,4 @@
 import {expect, beforeAll, beforeEach, afterAll, afterEach, test} from 'vitest'
-import getPort from 'get-port'
 import got from 'got'
 
 import * as totp from '../utilities/totp.js'
@@ -13,12 +12,12 @@ let sessionToken = ''
 
 beforeAll(async () => {
 	// Forward the VM's HTTPS port so proxy cookie behavior can be tested over real TLS.
-	httpsPort = await getPort({host: '127.0.0.1'})
 	umbreld = await createTestVm({
 		device: 'umbrel-home',
-		forwardPorts: [{hostPort: httpsPort, guestPort: 443}],
+		forwardPorts: [{guestPort: 443}],
 	})
 	await umbreld.vm.powerOn()
+	httpsPort = umbreld.vm.getHostPort(443)
 })
 
 afterAll(async () => {

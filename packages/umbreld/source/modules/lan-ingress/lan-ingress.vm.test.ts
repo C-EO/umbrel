@@ -1,6 +1,5 @@
 // @vm-requires-playwright
 import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from 'vitest'
-import getPort from 'get-port'
 import got from 'got'
 import pRetry from 'p-retry'
 import type {Browser} from 'playwright'
@@ -30,21 +29,14 @@ describe.sequential('LAN ingress', () => {
 	beforeAll(async () => {
 		// Cover the fixed LAN ingress listeners plus each app routing shape.
 		const forwardedPorts = {
-			https: {hostPort: await getPort({host: '127.0.0.1'}), guestPort: 443},
-			auth: {hostPort: await getPort({host: '127.0.0.1'}), guestPort: 2000},
-			appProxy: {hostPort: await getPort({host: '127.0.0.1'}), guestPort: 9091},
-			authenticatedApp: {hostPort: await getPort({host: '127.0.0.1'}), guestPort: 9094},
-			bridgeApp: {hostPort: await getPort({host: '127.0.0.1'}), guestPort: 9092},
-			hostNetworkApp: {hostPort: await getPort({host: '127.0.0.1'}), guestPort: 9093},
-			recreatedApp: {hostPort: await getPort({host: '127.0.0.1'}), guestPort: 9095},
+			https: {guestPort: 443},
+			auth: {guestPort: 2000},
+			appProxy: {guestPort: 9091},
+			authenticatedApp: {guestPort: 9094},
+			bridgeApp: {guestPort: 9092},
+			hostNetworkApp: {guestPort: 9093},
+			recreatedApp: {guestPort: 9095},
 		}
-		httpsPort = forwardedPorts.https.hostPort
-		authPort = forwardedPorts.auth.hostPort
-		appProxyPort = forwardedPorts.appProxy.hostPort
-		authenticatedAppPort = forwardedPorts.authenticatedApp.hostPort
-		bridgeAppPort = forwardedPorts.bridgeApp.hostPort
-		hostNetworkAppPort = forwardedPorts.hostNetworkApp.hostPort
-		recreatedAppPort = forwardedPorts.recreatedApp.hostPort
 
 		umbreld = await createTestVm({
 			device: 'umbrel-home',
@@ -70,6 +62,13 @@ describe.sequential('LAN ingress', () => {
 
 	test('boots VM and registers user', async () => {
 		await umbreld.vm.powerOn()
+		httpsPort = umbreld.vm.getHostPort(443)
+		authPort = umbreld.vm.getHostPort(2000)
+		appProxyPort = umbreld.vm.getHostPort(9091)
+		authenticatedAppPort = umbreld.vm.getHostPort(9094)
+		bridgeAppPort = umbreld.vm.getHostPort(9092)
+		hostNetworkAppPort = umbreld.vm.getHostPort(9093)
+		recreatedAppPort = umbreld.vm.getHostPort(9095)
 		await umbreld.registerAndLogin()
 	})
 
