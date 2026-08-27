@@ -49,6 +49,10 @@ test.sequential('update() throws invalid error when no user is registered', asyn
 	await expect(umbreld.client.apps.update.mutate({appId: 'sparkles-hello-world'})).rejects.toThrow('Invalid token')
 })
 
+test.sequential('updates() throws invalid error when no user is registered', async () => {
+	await expect(umbreld.client.apps.updates.query()).rejects.toThrow('Invalid token')
+})
+
 test.sequential('trackOpen() throws invalid error when no user is registered', async () => {
 	await expect(umbreld.client.apps.trackOpen.mutate({appId: 'sparkles-hello-world'})).rejects.toThrow('Invalid token')
 })
@@ -117,6 +121,63 @@ test.sequential('state() becomes ready once install completes', async () => {
 		await setTimeout(1000)
 	} while (true)
 	await expect(lastState).toMatchObject({state: 'ready'})
+})
+
+test.sequential('updates() lists nothing when installed apps match the registry', async () => {
+	await expect(umbreld.client.apps.updates.query()).resolves.toStrictEqual([])
+})
+
+test.sequential('updates() lists an app whose installed version differs from the registry', async () => {
+	// Rewrite the installed manifest to an older version; the registry still
+	// serves the version the app was installed at
+	const manifestPath = path.join(umbreld.instance.dataDirectory, 'app-data', 'sparkles-hello-world', 'umbrel-app.yml')
+	const manifest = yaml.load(await fse.readFile(manifestPath, 'utf8')) as AppManifest
+	const registryVersion = manifest.version
+	manifest.version = '0.0.1'
+	await fse.writeFile(manifestPath, yaml.dump(manifest))
+
+	await expect(umbreld.client.apps.updates.query()).resolves.toStrictEqual([
+		{id: 'sparkles-hello-world', version: registryVersion},
+	])
+
+	// Restore the real version so later tests aren't affected
+	manifest.version = registryVersion
+	await fse.writeFile(manifestPath, yaml.dump(manifest))
+})
+
+test.sequential('updates() skips registry apps with non-string versions', async () => {
+	const appPath = await umbreld.instance.appStore.getAppTemplateFilePath('sparkles-hello-world')
+	const manifestPath = path.join(appPath, 'umbrel-app.yml')
+	const manifest = yaml.load(await fse.readFile(manifestPath, 'utf8')) as AppManifest
+	const registryVersion = manifest.version
+	manifest.version = 1.2 as unknown as string
+	await fse.writeFile(manifestPath, yaml.dump(manifest))
+
+	try {
+		await expect(umbreld.client.apps.updates.query()).resolves.toStrictEqual([])
+	} finally {
+		manifest.version = registryVersion
+		await fse.writeFile(manifestPath, yaml.dump(manifest))
+	}
+})
+
+test.sequential('updates() follows the same first-repository precedence as app updates', async () => {
+	const manifestPath = path.join(communityAppStoreGitServer.directory, 'sparkles-hello-world', 'umbrel-app.yml')
+	const manifest = yaml.load(await fse.readFile(manifestPath, 'utf8')) as AppManifest
+	manifest.version = '9.9.9'
+	await fse.writeFile(manifestPath, yaml.dump(manifest))
+	const git = $({cwd: communityAppStoreGitServer.directory})
+	await git`git add sparkles-hello-world/umbrel-app.yml`
+	await git`git commit -m ${'Change app version'}`
+
+	await umbreld.client.appStore.addRepository.mutate({url: communityAppStoreGitServer.url})
+	try {
+		// The installed app and first repository are both at 1.0.0. The second
+		// repository must not override the version that apps.update will install.
+		await expect(umbreld.client.apps.updates.query()).resolves.toStrictEqual([])
+	} finally {
+		await umbreld.client.appStore.removeRepository.mutate({url: communityAppStoreGitServer.url})
+	}
 })
 
 test.sequential('app auth dev proxy serves executable UI modules with scoped handoff CSP', async () => {

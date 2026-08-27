@@ -173,6 +173,18 @@ export default class AppStore {
 		return sanitizeRegistry(await this.registry(), this.#umbreld.version)
 	}
 
+	// Resolve duplicate app IDs using repository order. This is the canonical
+	// lookup used by installs, updates, and update-availability checks.
+	async resolvedApps() {
+		const resolvedApps = new Map<string, {app: RegistryApp; repository: RepositoryRegistry}>()
+		for (const repository of await this.registry()) {
+			for (const app of repository.apps) {
+				if (!resolvedApps.has(app.id)) resolvedApps.set(app.id, {app, repository})
+			}
+		}
+		return resolvedApps
+	}
+
 	// Repository URLs are management data and remain owner-only.
 	async listRepositories() {
 		return (await this.registry()).map(({url, meta}) => ({
@@ -233,22 +245,13 @@ export default class AppStore {
 		// Throw on invalid appId
 		if (!/^[a-zA-Z0-9-_]+$/.test(appId)) throw new Error(`Invalid app ID: ${appId}`)
 
-		const registry = await this.registry()
+		const resolvedApp = (await this.resolvedApps()).get(appId)
+		if (!resolvedApp) throw new Error(`App with ID ${appId} not found in any repository`)
 
-		// Find the app in the registry
-		for (const repo of registry) {
-			const app = repo.apps.find((app) => app.id === appId)
-			if (app) {
-				// Find the repository path
-				const repositories = await this.getRepositories()
-				const repoPath = repositories.find((repository) => repository.url === repo.url)!.path
+		const repositories = await this.getRepositories()
+		const repoPath = repositories.find((repository) => repository.url === resolvedApp.repository.url)?.path
+		if (!repoPath) throw new Error(`Repository path not found for ${resolvedApp.repository.url}`)
 
-				if (!repoPath) throw new Error(`Repository path not found for ${repo.url}`)
-
-				return `${repoPath}/${appId}`
-			}
-		}
-
-		throw new Error(`App with ID ${appId} not found in any repository`)
+		return `${repoPath}/${appId}`
 	}
 }

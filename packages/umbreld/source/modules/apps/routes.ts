@@ -247,6 +247,30 @@ export const apps = router({
 		)
 		.mutation(async ({ctx, input}) => ctx.apps.update(input.appId)),
 
+	// Installed apps with an update available in the app store. Lets clients check for
+	// updates without downloading the full registry and comparing versions themselves.
+	updates: privateProcedure.query(async ({ctx}) => {
+		const availableApps = await ctx.appStore.resolvedApps()
+
+		const updates = await Promise.all(
+			ctx.apps.instances.map(async (app) => {
+				try {
+					const {version} = await app.readManifest()
+					const availableVersion = availableApps.get(app.id)?.app.version
+					// Any differing version counts: update always syncs to the registry version
+					if (typeof availableVersion === 'string' && availableVersion !== version) {
+						return {id: app.id, version: availableVersion}
+					}
+				} catch (error) {
+					ctx.apps.logger.error(`Failed to read manifest while checking for updates to app ${app.id}`, error)
+				}
+				return null
+			}),
+		)
+
+		return updates.filter(Boolean) as Array<{id: string; version: string}>
+	}),
+
 	// Get logs for an app
 	logs: privateProcedure
 		.input(
