@@ -22,6 +22,7 @@ import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
 import {useIsMember} from '@/features/files/hooks/use-home-path'
 import {useIsTouchDevice} from '@/features/files/hooks/use-is-touch-device'
 import {useItemClick} from '@/features/files/hooks/use-item-click'
+import {useListDirectory} from '@/features/files/hooks/use-list-directory'
 import {useMemberShares} from '@/features/files/hooks/use-member-shares'
 import {useNavigate as useFilesNavigate} from '@/features/files/hooks/use-navigate'
 import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
@@ -81,14 +82,17 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 	const linkToDialog = useLinkToDialog()
 
 	const {
+		currentPath,
 		isBrowsingTrash,
 		isBrowsingRecents,
 		isBrowsingSearch,
 		isViewingExternalDrives,
-		isViewingNetworkDevices,
-		isViewingNetworkShares,
 		navigateToDirectory,
 	} = useFilesNavigate()
+	// Compressing and extracting both write into the current directory (the
+	// archive, or its contents), so both need it to be writable
+	const {listing} = useListDirectory(currentPath)
+	const canWriteHere = listing?.operations.includes('writable') ?? false
 
 	const {isPathShared, isAddingShare, isRemovingShare} = useShares()
 	const {memberShares, shareForPath} = useMemberShares()
@@ -156,11 +160,13 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 				canPerformFileOperation(item, 'writable')
 			const canTrash = canPerformFileOperation(item, 'trash')
 			const canPermanentlyDelete = canPerformFileOperation(item, 'delete')
-			const canExtract = selectedItems.every(
-				(itm) =>
-					canPerformFileOperation(itm, 'unarchive') &&
-					SUPPORTED_ARCHIVE_EXTRACT_EXTENSIONS.some((ext) => itm.name.toLowerCase().endsWith(ext)),
-			)
+			const canExtract =
+				canWriteHere &&
+				selectedItems.every(
+					(itm) =>
+						canPerformFileOperation(itm, 'unarchive') &&
+						SUPPORTED_ARCHIVE_EXTRACT_EXTENSIONS.some((ext) => itm.name.toLowerCase().endsWith(ext)),
+				)
 
 			const canShare =
 				!isMember &&
@@ -189,7 +195,14 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 				canPerformFileOperation(item, 'favorite') &&
 				!isDirectoryAnUmbrelBackup(item.name)
 			const canRemoveFavorite = hasOneSelectedItem && isPathFavorite(item.path) && !isRemovingFavorite
-			const canArchive = !(isViewingNetworkDevices || isViewingNetworkShares || isDirectoryAnUmbrelBackup(item.name))
+			// Compressing reads the items, and it isn't offered for anything the
+			// backend keeps read-only — an installed machine's runtime state, media
+			// mounted read-only, backups, network hosts — which it signals by
+			// withholding `writable` (protection from moving or deleting alone, as on
+			// /Home/Downloads or an app's folder, keeps `writable`)
+			const canArchive =
+				canWriteHere &&
+				selectedItems.every((itm) => canPerformFileOperation(itm, 'copy') && canPerformFileOperation(itm, 'writable'))
 
 			// Network eject logic
 			const isNetworkHost = isDirectoryANetworkDevice(item.path) // /Network/hostname

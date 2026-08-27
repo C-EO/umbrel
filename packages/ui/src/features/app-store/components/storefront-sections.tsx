@@ -62,7 +62,8 @@ export function StorefrontSectionView({
  * The spotlight section's banners in one row, like the apps.umbrel.com
  * banner carousel: the active banner snaps centered while its neighbors peek
  * in from the sheet edges, auto-rotating on a 5s timer with the countdown
- * filling the active dot. Dragging or picking a dot restarts the clock. A
+ * filling the active dot. The clock holds while dragging or hovering and
+ * restarts when the slide changes. A
  * banner whose artwork fails to load simply leaves the row — the artwork is
  * the whole banner, there is nothing else to show in its place.
  */
@@ -73,7 +74,7 @@ export function SpotlightCarousel({banners}: {banners: SpotlightBannerData[]}) {
 	const [focusWithin, setFocusWithin] = useState(false)
 	const shown = banners.filter((banner) => !failedAppIds.has(banner.app.id))
 	const {snapCount, activeIndex} = useCarouselSnaps(api)
-	const progress = useCarouselAutoAdvance(api, {enabled: shown.length > 1, paused: hovered || focusWithin})
+	const countdown = useCarouselAutoAdvance(api, {enabled: shown.length > 1, paused: hovered || focusWithin})
 
 	const onArtworkError = (appId: string) => setFailedAppIds((prev) => new Set(prev).add(appId))
 
@@ -109,7 +110,7 @@ export function SpotlightCarousel({banners}: {banners: SpotlightBannerData[]}) {
 					count={snapCount}
 					activeIndex={activeIndex}
 					onSelect={(index) => api?.scrollTo(index)}
-					progress={progress}
+					countdown={countdown}
 				/>
 				{/* Arrows wrap around the ends, like the apps.umbrel.com banners */}
 				<CarouselArrows

@@ -4,7 +4,7 @@ import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {USE_LIST_DIRECTORY_LOAD_ITEMS} from '@/features/files/constants'
 import {usePreferences} from '@/features/files/hooks/use-preferences'
 import {useFilesStore} from '@/features/files/store/use-files-store'
-import type {FileSystemItem} from '@/features/files/types'
+import type {FileSystemItem, ViewPreferences} from '@/features/files/types'
 import {sortFilesystemItems} from '@/features/files/utils/sort-filesystem-items'
 import {useGlobalFiles} from '@/providers/global-files'
 import {trpcReact} from '@/trpc/trpc'
@@ -12,6 +12,9 @@ import {trpcReact} from '@/trpc/trpc'
 interface UseListDirectoryOptions {
 	itemsOnScrollEnd?: number
 	initialItems?: number
+	/** Override the user's sort preference, e.g. for a preview that wants newest first */
+	sortBy?: ViewPreferences['sortBy']
+	sortOrder?: ViewPreferences['sortOrder']
 	enabled?: boolean
 }
 
@@ -21,14 +24,16 @@ export function useListDirectory(
 		itemsOnScrollEnd = USE_LIST_DIRECTORY_LOAD_ITEMS.ON_SCROLL_END,
 		initialItems = USE_LIST_DIRECTORY_LOAD_ITEMS.INITIAL,
 		enabled = true,
+		sortBy: sortByOverride,
+		sortOrder: sortOrderOverride,
 	}: UseListDirectoryOptions = {},
 ) {
 	const {preferences} = usePreferences()
 	const {uploadingItems} = useGlobalFiles()
 	const utils = trpcReact.useUtils()
 
-	const sortBy = preferences?.sortBy ?? 'name'
-	const sortOrder = preferences?.sortOrder ?? 'ascending'
+	const sortBy = sortByOverride ?? preferences?.sortBy ?? 'name'
+	const sortOrder = sortOrderOverride ?? preferences?.sortOrder ?? 'ascending'
 
 	// Extra paginated items beyond the first page. The first page comes
 	// directly from the query's `data.files` so we don't duplicate it in state.
@@ -146,7 +151,6 @@ export function useListDirectory(
 
 	// Items pending removal are filtered out for instant optimistic feedback.
 	const pendingPaths = useFilesStore((s) => s.pendingPaths)
-	const removePendingPaths = useFilesStore((s) => s.removePendingPaths)
 	// Items arriving via move/paste appear immediately before the server confirms.
 	const incomingItems = useFilesStore((s) => s.incomingItems)
 	const removeIncomingItems = useFilesStore((s) => s.removeIncomingItems)

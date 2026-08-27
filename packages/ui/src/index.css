@@ -462,6 +462,47 @@ html {
 	animation-delay: var(--store-reveal-delay, 0ms);
 }
 
+/* Carousel auto-advance: the active dot's fill slides in from the left over
+   the advance interval (duration and play state are set inline). Stepped per
+   pixel of the 40px pill rather than smooth, so the compositor produces a few
+   frames a second instead of sixty — every frame re-renders the store's
+   backdrop-filter surfaces. */
+@keyframes carousel-fill {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(0);
+	}
+}
+
+.umbrel-carousel-fill {
+	animation: carousel-fill steps(40) forwards;
+}
+
+/* Machines catalog intro: each monitor's idle bob and sway, with per-monitor
+   amplitude, period and phase set as custom properties. Runs on the
+   compositor; the promoted layer keeps the blurred glow inside from being
+   re-rasterised every frame. */
+@keyframes machine-float {
+	0%,
+	50%,
+	100% {
+		transform: translateY(0) rotate(0deg);
+	}
+	25% {
+		transform: translateY(calc(var(--float-amp) * -1)) rotate(0.9deg);
+	}
+	75% {
+		transform: translateY(calc(var(--float-amp) * 0.7)) rotate(-0.9deg);
+	}
+}
+
+.umbrel-machine-float {
+	animation: machine-float var(--float-duration) ease-in-out var(--float-delay) infinite;
+	will-change: transform;
+}
+
 /* Per-card variant: shorter and subtler, cheap enough to run on every card
    of a large grid at once */
 @keyframes umbrel-store-reveal-card {

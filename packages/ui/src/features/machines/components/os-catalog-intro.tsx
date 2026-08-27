@@ -1,5 +1,5 @@
 import {motion, useReducedMotion} from 'motion/react'
-import {useEffect, useState} from 'react'
+import React, {useEffect, useState} from 'react'
 
 import {Button} from '@/components/ui/button'
 import {machineIconSrc} from '@/features/machines/components/os-icon'
@@ -125,14 +125,18 @@ function WallMonitor({
 				className='group/crt block cursor-pointer focus:outline-hidden'
 				aria-label={entry.name}
 			>
-				<motion.div
-					animate={
-						floating ? {y: [0, -floatAmp, 0, floatAmp * 0.7, 0], rotate: [0, 0.9, 0, -0.9, 0]} : {y: 0, rotate: 0}
-					}
-					transition={
-						floating
-							? {duration: floatDuration, repeat: Infinity, ease: 'easeInOut', delay: floatDelay}
-							: {duration: 0.4, ease: 'easeOut'}
+				{/* The float is a CSS animation so it runs on the compositor: as motion
+				    keyframes it drove a JavaScript frame loop with a style recalc every
+				    frame under the overlay's blur. Dropping the class on release
+				    transitions back to rest from wherever the bob was. */}
+				<div
+					className={cn('transition-transform duration-[400ms] ease-out', floating && 'umbrel-machine-float')}
+					style={
+						{
+							'--float-amp': `${floatAmp}px`,
+							'--float-duration': `${floatDuration}s`,
+							'--float-delay': `${floatDelay}s`,
+						} as React.CSSProperties
 					}
 				>
 					{/* The layoutId hands this monitor's bounds to its catalog card's
@@ -180,7 +184,7 @@ function WallMonitor({
 							/>
 						))}
 					</motion.div>
-				</motion.div>
+				</div>
 			</motion.button>
 		</div>
 	)

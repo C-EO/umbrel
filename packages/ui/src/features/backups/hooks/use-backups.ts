@@ -139,12 +139,42 @@ export function useBackups(options?: {repositoriesEnabled?: boolean}) {
 
 // Convenience wrappers for queries
 
+/**
+ * Keeps the backup-progress cache current from the event bus. umbreld pushes
+ * the whole in-progress list on every change (a backup starting, each percent,
+ * completion), so nothing needs to poll while idle — and polling every second
+ * forever kept every page's query consumers re-rendering. Mount once for the
+ * desktop (FloatingIslandContainer), owner only: members can't listen to it.
+ */
+export function useBackupProgressLiveUpdates({enabled = true}: {enabled?: boolean} = {}) {
+	const utils = trpcReact.useUtils()
+
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'backups:backup-progress'},
+		{
+			enabled,
+			// Refetch on every (re)connect so a dropped websocket can't leave the
+			// progress UI frozen on a stale snapshot (onStarted fires on reconnect too)
+			onStarted: () => utils.backups.backupProgress.invalidate(),
+			onData: (data) =>
+				utils.backups.backupProgress.setData(undefined, data as RouterOutput['backups']['backupProgress']),
+			onError: (error) => console.error('backups:backup-progress subscription error', error),
+		},
+	)
+}
+
+// Events can be missed, so the event-driven queries still poll slowly while idle
+const IDLE_SAFETY_POLL_MS = 30_000
+
 export function useBackupProgress(refetchIntervalMs = 1000) {
 	const utils = trpcReact.useUtils()
 	const previousProgressRef = useRef<Array<{repositoryId: string; percent: number}>>([])
 
 	const query = trpcReact.backups.backupProgress.useQuery(undefined, {
-		refetchInterval: refetchIntervalMs,
+		// The event bus keeps this current (see useBackupProgressLiveUpdates), but
+		// events can be missed, so keep polling: every second while a backup is in
+		// flight, and a slow check while idle so a missed start still surfaces
+		refetchInterval: (query) => (query.state.data?.length ? refetchIntervalMs : IDLE_SAFETY_POLL_MS),
 	})
 
 	// Detect when backups complete and invalidate relevant queries

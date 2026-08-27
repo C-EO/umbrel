@@ -1,5 +1,5 @@
 import {VariantProps} from 'class-variance-authority'
-import {ButtonHTMLAttributes, CSSProperties, useEffect, useState} from 'react'
+import {ButtonHTMLAttributes, CSSProperties, useEffect, useLayoutEffect, useRef, useState} from 'react'
 import {arrayIncludes} from 'ts-extras'
 
 import {buttonVariants} from '@/components/ui/button'
@@ -23,14 +23,19 @@ type Props = {
 } & VariantProps<typeof buttonVariants> &
 	ButtonHTMLAttributes<HTMLButtonElement>
 
+const WIDTH_SLIDE_MS = 300
+
 /**
  * An app action button (Install / Open / Update…) whose background can fill
  * with live progress during a transition. Deliberately a plain, intrinsically
  * sized button: the label crossfades via CSS and progress is a custom property,
  * so grids can render many instances without layout measurement observers.
+ * When the label changes width with the state, the button slides between the
+ * two intrinsic widths (see useSlideWidthOnStateChange).
  */
 export function ProgressButton({variant, size, progress, state, children, className, style, ...buttonProps}: Props) {
 	const progressing = arrayIncludes(progressBarStates, state)
+	const ref = useSlideWidthOnStateChange(state)
 
 	// Stops flicker when progressing done
 	const [progressingDone, setProgressingDone] = useState(true)
@@ -53,6 +58,7 @@ export function ProgressButton({variant, size, progress, state, children, classN
 
 	return (
 		<button
+			ref={ref}
 			data-progressing={progressing}
 			className={cn(
 				buttonVariants({size, variant}),
@@ -77,6 +83,61 @@ export function ProgressButton({variant, size, progress, state, children, classN
 			</span>
 		</button>
 	)
+}
+
+/**
+ * Slides the button's width between its intrinsic widths when `state` changes
+ * the label ("Install 120 MB" → "Installing 40%" → "Open"). The label only
+ * changes with the state, so this measures once per change — a single layout
+ * read after the commit — and runs one Web Animation from the previously
+ * measured width to the new one; when it finishes the width is intrinsic
+ * again. No observer and no work between changes, so the catalog grids can
+ * render many of these.
+ */
+function useSlideWidthOnStateChange(state: AppStateOrLoading) {
+	const ref = useRef<HTMLButtonElement>(null)
+	const stateRef = useRef<AppStateOrLoading | null>(null)
+	const widthRef = useRef<number | null>(null)
+	const slideRef = useRef<Animation | null>(null)
+
+	useLayoutEffect(() => {
+		const el = ref.current
+		if (!el || typeof el.animate !== 'function') return
+		const stateChanged = stateRef.current !== state
+		stateRef.current = state
+
+		if (!stateChanged) {
+			// The label can change on its own too (the install size arriving, a
+			// language switch, fonts loading): keep the measurement fresh so the
+			// next slide starts from the right place, but never disturb a running one
+			if (!slideRef.current) widthRef.current = el.offsetWidth
+			return
+		}
+
+		// Start from wherever a still-running slide got to, then let the width
+		// go intrinsic to measure the new label
+		const from = slideRef.current ? el.getBoundingClientRect().width : widthRef.current
+		slideRef.current?.cancel()
+		slideRef.current = null
+		const to = el.offsetWidth
+		widthRef.current = to
+		// Nothing to slide from on first layout or while not laid out, and nothing to
+		// do when the label kept its width or the button fills its row (the phone form)
+		if (!from || !to || Math.abs(from - to) < 0.5) return
+
+		const slide = el.animate([{width: `${from}px`}, {width: `${to}px`}], {
+			duration: WIDTH_SLIDE_MS,
+			easing: 'cubic-bezier(0.29, 0.01, 0, 1)',
+		})
+		slide.onfinish = slide.oncancel = () => {
+			if (slideRef.current === slide) slideRef.current = null
+		}
+		slideRef.current = slide
+	})
+
+	useEffect(() => () => slideRef.current?.cancel(), [])
+
+	return ref
 }
 
 /** Loading and lifecycle transitions are never interactive, regardless of caller props. */

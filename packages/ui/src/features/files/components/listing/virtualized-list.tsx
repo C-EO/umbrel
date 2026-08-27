@@ -3,6 +3,7 @@ import {FixedSizeGrid, FixedSizeList, GridChildComponentProps, ListChildComponen
 import InfiniteLoader from 'react-window-infinite-loader'
 
 import {FileItem} from '@/features/files/components/listing/file-item'
+import {FileItemProvider} from '@/features/files/components/listing/file-item/file-item-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
 import {
@@ -524,8 +525,10 @@ export const VirtualizedList: React.FC<VirtualizedListProps> = ({
 			    matching what AutoSizer's internal wrapper did. */}
 			<div className='relative h-full w-full'>
 				<div className='absolute inset-0 overflow-visible'>
-					{listContent}
-					{gridContent}
+					<FileItemProvider>
+						{listContent}
+						{gridContent}
+					</FileItemProvider>
 				</div>
 			</div>
 		</div>

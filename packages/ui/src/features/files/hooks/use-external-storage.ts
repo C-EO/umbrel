@@ -42,7 +42,10 @@ export function useExternalStorage() {
 	// Query for external storage
 	const {data: disks, isLoading: isLoadingDisks} = trpcReact.files.externalDevices.useQuery(undefined, {
 		placeholderData: keepPreviousData,
-		refetchInterval: 5000, // Poll because the change event cannot fire after a device has already been physically removed
+		// The change event cannot fire after a device has already been physically
+		// removed, so poll while any device is present to notice it going away —
+		// and slowly while none is, in case a plug-in event was missed
+		refetchInterval: (query) => (query.state.data?.length ? 5000 : 30_000),
 		staleTime: 0, // Don't cache the data
 		enabled: !isMember,
 	})

@@ -10,7 +10,9 @@ import {useFilesOperations} from '@/features/files/hooks/use-files-operations'
 import {useTrashPath} from '@/features/files/hooks/use-home-path'
 import {useListDirectory} from '@/features/files/hooks/use-list-directory'
 import {useNavigate} from '@/features/files/hooks/use-navigate'
+import type {FileSystemItem} from '@/features/files/types'
 import {useIsMobile} from '@/hooks/use-is-mobile'
+import {cn} from '@/lib/utils'
 import {useConfirmation} from '@/providers/confirmation'
 
 export function SidebarTrash() {
@@ -19,14 +21,18 @@ export function SidebarTrash() {
 	const trashPath = useTrashPath()
 	const isTrash = currentPath === trashPath
 	const [isHovering, setIsHovering] = useState(false)
+	// The can shows what went in last: newest first is the closest the listing
+	// gets to "most recently trashed"
 	const {listing} = useListDirectory(trashPath, {
-		itemsOnScrollEnd: 3,
-		initialItems: 3,
+		itemsOnScrollEnd: PILE_SLOTS.length,
+		initialItems: PILE_SLOTS.length,
+		sortBy: 'modified',
+		sortOrder: 'descending',
 	})
-	const isTrashEmpty = listing?.items?.length === 0
+	const items = listing?.items ?? []
+	const isTrashEmpty = items.length === 0
 	const {emptyTrash} = useFilesOperations()
 	const confirm = useConfirmation()
-	const id = useId()
 	const isMobile = useIsMobile()
 
 	const handleEmptyTrash = async () => {
@@ -67,13 +73,21 @@ export function SidebarTrash() {
 				{(isReadyToDrop) => {
 					const isExpanded = (isReadyToDrop || (isHovering && !isTrash)) && !isMobile
 					return (
+						// overflow-hidden keeps the hover surface honest: the collapsed row
+						// positions the can with negative margins, and without the clip its
+						// layout box reached below the row, so a cursor just under it would
+						// expand the card, land outside the expanded content, collapse it,
+						// and repeat. Now the collapsed row is always inside the expanded card.
 						<motion.div
 							layout
-							className={`flex flex-col items-center ${
+							className={cn(
+								'flex flex-col items-center overflow-hidden',
 								isExpanded
 									? 'rounded-xl border border-white/6 bg-linear-to-b from-white/[0.04] to-white/[0.08] p-3'
-									: 'h-[35px] rounded-lg'
-							} ${isTrash && 'border-white/6 bg-linear-to-b !from-white/[0.04] !to-white/[0.08] shadow-button-highlight-soft-hpx'}`}
+									: 'h-[35px] rounded-lg',
+								isTrash &&
+									'border-white/6 bg-linear-to-b !from-white/[0.04] !to-white/[0.08] shadow-button-highlight-soft-hpx',
+							)}
 							initial={false}
 							onClick={() => {
 								if (isMobile) {
@@ -108,7 +122,7 @@ export function SidebarTrash() {
 									</span>
 								)}
 
-								{/* Trash SVG */}
+								{/* The can */}
 								<motion.div
 									layout='position'
 									className={`${isExpanded ? 'mt-4' : 'mt-[-18px] ml-[-16px]'} flex-shrink-0`}
@@ -117,153 +131,7 @@ export function SidebarTrash() {
 									}}
 									initial={false}
 								>
-									<svg className='mt-0 overflow-visible' width='70' height='74' viewBox='0 0 70 74' fill='none'>
-										<path
-											d='M69.4114 5.10535C69.4114 7.37914 53.8764 9.22241 34.713 9.22241C15.5496 9.22241 0.0146484 7.37914 0.0146484 5.10535C0.0146484 2.83155 15.5496 0.988281 34.713 0.988281C53.8764 0.988281 69.4114 2.83155 69.4114 5.10535Z'
-											fill={`url(#gradient-1-${id})`}
-											fillOpacity='0.4'
-										/>
-										<path
-											d='M69.4114 5.10535C69.4114 7.37914 53.8764 9.22241 34.713 9.22241C15.5496 9.22241 0.0146484 7.37914 0.0146484 5.10535C0.0146484 2.83155 15.5496 0.988281 34.713 0.988281C53.8764 0.988281 69.4114 2.83155 69.4114 5.10535Z'
-											fill='black'
-											fillOpacity='0.7'
-										/>
-										{/* Reflective edge on trash opening */}
-										<path
-											d='M69.4114 5.10535C69.4114 7.37914 53.8764 9.22241 34.713 9.22241C15.5496 9.22241 0.0146484 7.37914 0.0146484 5.10535C0.0146484 2.83155 15.5496 0.988281 34.713 0.988281C53.8764 0.988281 69.4114 2.83155 69.4114 5.10535Z'
-											fill='none'
-											stroke='white'
-											strokeOpacity='0.08'
-											strokeWidth='0.5'
-										/>
-										<g id={`files-${id}`}>
-											{listing?.items[2] && (
-												<g
-													transform-origin='50% 50%'
-													transform={
-														listing?.items[2].type === 'directory'
-															? `translate(16,-28) rotate(-70) scale(0.75)`
-															: 'translate(12,-22) rotate(18) scale(0.7)'
-													}
-												>
-													<FileItemIcon item={listing.items[2]} onlySVG />
-												</g>
-											)}
-											{listing?.items[1] && (
-												<g
-													transform-origin='50% 50%'
-													transform={
-														listing?.items[1].type === 'directory'
-															? `translate(10,-28) rotate(-80) scale(0.75)`
-															: 'translate(6,-18) rotate(10) scale(0.8)'
-													}
-												>
-													<FileItemIcon item={listing.items[1]} onlySVG />
-												</g>
-											)}
-											{listing?.items[0] && (
-												<g
-													transform-origin='50% 50%'
-													transform={
-														listing?.items[0].type === 'directory'
-															? `translate(2,-24) rotate(-90) scale(0.75)`
-															: 'translate(0,-10) rotate(-2)'
-													}
-												>
-													<FileItemIcon item={listing.items[0]} onlySVG />
-												</g>
-											)}
-										</g>
-										<g>
-											<path
-												d='M0.0146484 5.10535L2.58973 5.52427C23.8653 8.98642 45.5607 8.98642 66.8363 5.52426L69.4114 5.10535L58.0067 61.4707C56.4969 68.9328 49.9379 74.2976 42.3245 74.2976H27.1015C19.4881 74.2976 12.9292 68.9328 11.4193 61.4707L0.0146484 5.10535Z'
-												fill={`url(#gradient-2-${id})`}
-												fillOpacity='0.4'
-											/>
-											<path
-												d='M0.0146484 5.10535L2.58973 5.52427C23.8653 8.98642 45.5607 8.98642 66.8363 5.52426L69.4114 5.10535L58.0067 61.4707C56.4969 68.9328 49.9379 74.2976 42.3245 74.2976H27.1015C19.4881 74.2976 12.9292 68.9328 11.4193 61.4707L0.0146484 5.10535Z'
-												fill={`url(#gradient-3-${id})`}
-												fillOpacity='0.7'
-											/>
-											<path
-												d='M0.0146484 5.10535L2.58973 5.52427C23.8653 8.98642 45.5607 8.98642 66.8363 5.52426L69.4114 5.10535L58.0067 61.4707C56.4969 68.9328 49.9379 74.2976 42.3245 74.2976H27.1015C19.4881 74.2976 12.9292 68.9328 11.4193 61.4707L0.0146484 5.10535Z'
-												fill='black'
-												fillOpacity='0.2'
-											/>
-											{/* Reflective edge highlight (replaces glow SVG filter for Safari compatibility) */}
-											<path
-												d='M0.0146484 5.10535L2.58973 5.52427C23.8653 8.98642 45.5607 8.98642 66.8363 5.52426L69.4114 5.10535L58.0067 61.4707C56.4969 68.9328 49.9379 74.2976 42.3245 74.2976H27.1015C19.4881 74.2976 12.9292 68.9328 11.4193 61.4707L0.0146484 5.10535Z'
-												fill='none'
-												stroke='white'
-												strokeOpacity='0.08'
-												strokeWidth='0.5'
-											/>
-										</g>
-										<g style={{clipPath: `url(#clip-${id})`}}>
-											<use href={`#files-${id}`} filter={`url(#blur-${id})`} />
-										</g>
-										<clipPath id={`clip-${id}`}>
-											<path d='M0.0146484 5.10535L2.58973 5.52427C23.8653 8.98642 45.5607 8.98642 66.8363 5.52426L69.4114 5.10535L58.0067 61.4707C56.4969 68.9328 49.9379 74.2976 42.3245 74.2976H27.1015C19.4881 74.2976 12.9292 68.9328 11.4193 61.4707L0.0146484 5.10535Z' />
-										</clipPath>
-										<defs>
-											<filter id={`blur-${id}`} width='160%' height='200%' x='-30%'>
-												<feGaussianBlur in='SourceGraphic' stdDeviation='4' result='blur' />
-												<feColorMatrix type='saturate' in='blur' result='dimmed' values='0.4' />
-												<feComponentTransfer in='dimmed' result='output'>
-													<feFuncR type='linear' slope='0.2' intercept='0' />
-													<feFuncG type='linear' slope='0.2' intercept='0' />
-													<feFuncB type='linear' slope='0.2' intercept='0' />
-													<feFuncA type='linear' slope='1' intercept='0' />
-												</feComponentTransfer>
-											</filter>
-											<linearGradient
-												id={`gradient-1-${id}`}
-												x1='0.0146484'
-												y1='37.6429'
-												x2='69.4114'
-												y2='37.643'
-												gradientUnits='userSpaceOnUse'
-											>
-												<stop stopColor='#2D2D2D' />
-												<stop offset='0.487377' stopColor='#3F3F3F' />
-												<stop offset='1' stopColor='#272727' />
-											</linearGradient>
-											<linearGradient
-												id={`gradient-2-${id}`}
-												x1='-1.98535'
-												y1='39.7017'
-												x2='71.4114'
-												y2='39.7017'
-												gradientUnits='userSpaceOnUse'
-											>
-												<stop stopColor='#787878' />
-												<stop offset='0.330518' stopColor='#797979' />
-												<stop offset='1' stopColor='#262626' />
-											</linearGradient>
-											<linearGradient
-												id={`gradient-3-${id}`}
-												x1='34.713'
-												y1='5.10547'
-												x2='34.713'
-												y2='74.2978'
-												gradientUnits='userSpaceOnUse'
-											>
-												<stop stopOpacity='0' />
-												<stop offset='0.815' />
-											</linearGradient>
-											<linearGradient
-												id={`gradient-4-${id}`}
-												x1='34.713'
-												y1='5.10547'
-												x2='34.713'
-												y2='74.2978'
-												gradientUnits='userSpaceOnUse'
-											>
-												<stop stopColor='#959595' stopOpacity='0' />
-												<stop offset='1' stopColor='#A3A3A3' stopOpacity='0.06' />
-											</linearGradient>
-										</defs>
-									</svg>
+									<TrashCan items={items} />
 								</motion.div>
 							</motion.div>
 
@@ -300,5 +168,122 @@ export function SidebarTrash() {
 				}}
 			</Droppable>
 		</MotionConfig>
+	)
+}
+
+// ---
+
+// The can is a 70×74 stage drawn at 1:1, so its SVG paths double as CSS clip paths.
+const CAN_WIDTH = 70
+const CAN_HEIGHT = 74
+const RIM_PATH =
+	'M69.4114 5.10535C69.4114 7.37914 53.8764 9.22241 34.713 9.22241C15.5496 9.22241 0.0146484 7.37914 0.0146484 5.10535C0.0146484 2.83155 15.5496 0.988281 34.713 0.988281C53.8764 0.988281 69.4114 2.83155 69.4114 5.10535Z'
+const BODY_PATH =
+	'M0.0146484 5.10535L2.58973 5.52427C23.8653 8.98642 45.5607 8.98642 66.8363 5.52426L69.4114 5.10535L58.0067 61.4707C56.4969 68.9328 49.9379 74.2976 42.3245 74.2976H27.1015C19.4881 74.2976 12.9292 68.9328 11.4193 61.4707L0.0146484 5.10535Z'
+
+// Where the last few trashed items sit, front to back: a loose pile that
+// pokes out above the rim. The newest item takes the front slot.
+const PILE_SLOTS = [
+	{left: 12, top: -16, size: 46, rotate: -4},
+	{left: 4, top: -22, size: 44, rotate: -16},
+	{left: 26, top: -24, size: 42, rotate: 14},
+]
+
+/**
+ * The trash can with its contents. The items are ordinary file icons — folders,
+ * type icons, image thumbnails — laid on top of the opening so their tops poke
+ * out, then covered by the translucent body, and finally drawn once more on top
+ * of the body, blurred and dimmed and cut to its shape, as the silhouette seen
+ * through the can.
+ */
+function TrashCan({items}: {items: FileSystemItem[]}) {
+	const id = useId()
+
+	return (
+		<div className='relative' style={{width: CAN_WIDTH, height: CAN_HEIGHT}}>
+			{/* The opening */}
+			<svg className='absolute inset-0 overflow-visible' width={CAN_WIDTH} height={CAN_HEIGHT} fill='none'>
+				<path d={RIM_PATH} fill={`url(#trash-rim-${id})`} fillOpacity='0.4' />
+				<path d={RIM_PATH} fill='black' fillOpacity='0.7' />
+				<path d={RIM_PATH} fill='none' stroke='white' strokeOpacity='0.08' strokeWidth='0.5' />
+				<defs>
+					<linearGradient
+						id={`trash-rim-${id}`}
+						x1='0.0146484'
+						y1='37.6429'
+						x2='69.4114'
+						y2='37.643'
+						gradientUnits='userSpaceOnUse'
+					>
+						<stop stopColor='#2D2D2D' />
+						<stop offset='0.487377' stopColor='#3F3F3F' />
+						<stop offset='1' stopColor='#272727' />
+					</linearGradient>
+				</defs>
+			</svg>
+
+			<TrashPile items={items} />
+
+			{/* The body */}
+			<svg className='absolute inset-0 overflow-visible' width={CAN_WIDTH} height={CAN_HEIGHT} fill='none'>
+				<path d={BODY_PATH} fill={`url(#trash-body-${id})`} fillOpacity='0.4' />
+				<path d={BODY_PATH} fill={`url(#trash-shade-${id})`} fillOpacity='0.7' />
+				<path d={BODY_PATH} fill='black' fillOpacity='0.2' />
+				<path d={BODY_PATH} fill='none' stroke='white' strokeOpacity='0.08' strokeWidth='0.5' />
+				<defs>
+					<linearGradient
+						id={`trash-body-${id}`}
+						x1='-1.98535'
+						y1='39.7017'
+						x2='71.4114'
+						y2='39.7017'
+						gradientUnits='userSpaceOnUse'
+					>
+						<stop stopColor='#787878' />
+						<stop offset='0.330518' stopColor='#797979' />
+						<stop offset='1' stopColor='#262626' />
+					</linearGradient>
+					<linearGradient
+						id={`trash-shade-${id}`}
+						x1='34.713'
+						y1='5.10547'
+						x2='34.713'
+						y2='74.2978'
+						gradientUnits='userSpaceOnUse'
+					>
+						<stop stopOpacity='0' />
+						<stop offset='0.815' />
+					</linearGradient>
+				</defs>
+			</svg>
+
+			{/* The pile seen through the body */}
+			<TrashPile
+				items={items}
+				style={{clipPath: `path('${BODY_PATH}')`, filter: 'blur(4px) saturate(0.4) brightness(0.2)'}}
+			/>
+		</div>
+	)
+}
+
+function TrashPile({items, style}: {items: FileSystemItem[]; style?: React.CSSProperties}) {
+	// Assign slots newest-first, then draw back to front so the newest ends up on top
+	const pile = items
+		.slice(0, PILE_SLOTS.length)
+		.map((item, index) => ({item, slot: PILE_SLOTS[index]}))
+		.reverse()
+
+	return (
+		<div aria-hidden className='pointer-events-none absolute inset-0' style={style}>
+			{pile.map(({item, slot}) => (
+				<div
+					key={item.path}
+					className='absolute'
+					style={{left: slot.left, top: slot.top, width: slot.size, height: slot.size, rotate: `${slot.rotate}deg`}}
+				>
+					<FileItemIcon item={item} className='size-full object-contain' />
+				</div>
+			))}
+		</div>
 	)
 }

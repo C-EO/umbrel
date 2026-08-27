@@ -10,6 +10,7 @@ import {cn} from '@/lib/utils'
 import {DockSpacer} from '@/modules/desktop/dock'
 import {SheetFixedTarget} from '@/modules/sheet-top-fixed'
 import {SheetStickyHeaderProvider, SheetStickyHeaderTarget, useSheetStickyHeader} from '@/providers/sheet-sticky-header'
+import {usePauseWallpaperVideo} from '@/providers/wallpaper'
 import {useAfterDelayedClose} from '@/utils/dialog'
 
 import {getSheetScrollRestorationAction} from './sheet-scroll-restoration'
@@ -46,6 +47,10 @@ export function SheetLayout() {
 	useAfterDelayedClose(open, () => {
 		navigate('/')
 	})
+
+	// Only the wallpaper's margins show around the sheet. Keyed on `open` rather
+	// than mount so motion is back before the close animation reveals the desktop.
+	usePauseWallpaperVideo(open)
 
 	return (
 		<>

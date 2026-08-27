@@ -5,6 +5,7 @@ import * as React from 'react'
 import {TbChevronLeft, TbChevronRight} from 'react-icons/tb'
 
 import {Button} from '@/components/ui/button'
+import {useDocumentHidden} from '@/hooks/use-document-hidden'
 import {cn} from '@/lib/utils'
 
 type CarouselApi = UseEmblaCarouselType[1]
@@ -270,77 +271,72 @@ function useCarouselSnaps(api: CarouselApi) {
 	return {snapCount, activeIndex, canScrollPrev, canScrollNext}
 }
 
-/**
- * Advances the carousel on a timer and reports the countdown as 0–100 for the
- * active dot's fill. The countdown holds while the user is dragging, hovering,
- * focusing carousel content, or while the tab is hidden. It restarts whenever
- * the slide changes and is disabled entirely under reduced motion.
- */
-function useCarouselAutoAdvance(api: CarouselApi, {intervalMs = 5000, enabled = true, paused = false} = {}) {
-	const reducedMotion = useReducedMotion()
-	const [progress, setProgress] = React.useState(0)
-	const run = enabled && !reducedMotion
-
-	React.useEffect(() => {
-		if (!api || !run || paused) return
-
-		let elapsed = 0
-		let last = performance.now()
-		let held = false
-		setProgress(0)
-
-		const onPointerDown = () => (held = true)
-		const onPointerUp = () => (held = false)
-		const onSelect = () => {
-			elapsed = 0
-			setProgress(0)
-		}
-
-		// 10Hz is plenty: the dot's fill transition smooths between updates
-		const timer = window.setInterval(() => {
-			const now = performance.now()
-			const delta = now - last
-			last = now
-			if (held || document.hidden) return
-			elapsed += delta
-			if (elapsed >= intervalMs) {
-				elapsed = 0
-				if (api.canScrollNext()) api.scrollNext()
-				else api.scrollTo(0)
-			}
-			setProgress(Math.min(100, (elapsed / intervalMs) * 100))
-		}, 100)
-
-		api.on('pointerDown', onPointerDown)
-		api.on('pointerUp', onPointerUp)
-		api.on('select', onSelect)
-		return () => {
-			window.clearInterval(timer)
-			api.off('pointerDown', onPointerDown)
-			api.off('pointerUp', onPointerUp)
-			api.off('select', onSelect)
-		}
-	}, [api, run, intervalMs, paused])
-
-	return run ? progress : undefined
+/** Drives the active dot's countdown fill; the fill advances the carousel when it completes. */
+type CarouselCountdown = {
+	durationMs: number
+	/** Freezes the fill in place (dragging, hovering, focus within, hidden tab) */
+	held: boolean
+	onComplete: () => void
 }
 
 /**
- * Pill dot indicators: the active dot stretches into a pill and, when a
- * progress value is provided (auto-advance countdown, video position…), fills
- * up left to right; without one it renders solid.
+ * Auto-advances the carousel: the active dot's fill is a CSS animation lasting
+ * `intervalMs` and the carousel moves on when it ends, so nothing ticks in
+ * JavaScript. The countdown holds while the user is dragging, hovering,
+ * focusing carousel content, or while the tab is hidden, restarts whenever the
+ * slide changes, and is disabled entirely under reduced motion.
+ */
+function useCarouselAutoAdvance(
+	api: CarouselApi,
+	{intervalMs = 5000, enabled = true, paused = false} = {},
+): CarouselCountdown | undefined {
+	const reducedMotion = useReducedMotion()
+	const documentHidden = useDocumentHidden()
+	const [dragging, setDragging] = React.useState(false)
+	const run = !!api && enabled && !reducedMotion
+
+	React.useEffect(() => {
+		if (!api || !run) return
+		const onPointerDown = () => setDragging(true)
+		const onPointerUp = () => setDragging(false)
+		api.on('pointerDown', onPointerDown)
+		api.on('pointerUp', onPointerUp)
+		return () => {
+			api.off('pointerDown', onPointerDown)
+			api.off('pointerUp', onPointerUp)
+		}
+	}, [api, run])
+
+	const onComplete = React.useCallback(() => {
+		if (!api) return
+		if (api.canScrollNext()) api.scrollNext()
+		else api.scrollTo(0)
+	}, [api])
+
+	if (!run) return undefined
+	return {durationMs: intervalMs, held: paused || dragging || documentHidden, onComplete}
+}
+
+/**
+ * Pill dot indicators: the active dot stretches into a pill and fills up left
+ * to right — over an auto-advance countdown, or to a given progress (video
+ * position…); with neither it renders solid. Both fills move on the
+ * compositor only.
  */
 function CarouselDots({
 	count,
 	activeIndex,
 	onSelect,
+	countdown,
 	progress,
 	className,
 }: {
 	count: number
 	activeIndex: number
 	onSelect: (index: number) => void
-	/** 0–100 fill of the active dot; omit for a solid active dot */
+	/** Auto-advance countdown filling the active dot over its duration */
+	countdown?: CarouselCountdown
+	/** 0–100 fill of the active dot, when it tracks something other than a countdown */
 	progress?: number
 	className?: string
 }) {
@@ -366,9 +362,27 @@ function CarouselDots({
 							)}
 						>
 							{isActive && (
+								// The fill slides in from the left on the compositor; a fresh element per
+								// active slide restarts the countdown, and `animationend` advances
 								<div
-									className='absolute inset-y-0 left-0 rounded-full bg-white transition-all duration-300 ease-linear motion-reduce:transition-none'
-									style={{width: `${progress ?? 100}%`}}
+									className={cn(
+										'absolute inset-0 rounded-full bg-white',
+										countdown
+											? 'umbrel-carousel-fill'
+											: progress !== undefined &&
+													'transition-transform duration-300 ease-linear motion-reduce:transition-none',
+									)}
+									style={
+										countdown
+											? {
+													animationDuration: `${countdown.durationMs}ms`,
+													animationPlayState: countdown.held ? 'paused' : 'running',
+												}
+											: progress !== undefined
+												? {transform: `translateX(${Math.min(100, Math.max(0, progress)) - 100}%)`}
+												: undefined
+									}
+									onAnimationEnd={countdown?.onComplete}
 								/>
 							)}
 						</div>
@@ -420,5 +434,6 @@ export {
 	CarouselNext,
 	CarouselPrevious,
 	useCarouselAutoAdvance,
+	type CarouselCountdown,
 	useCarouselSnaps,
 }

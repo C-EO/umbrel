@@ -1,12 +1,10 @@
 import {useCallback, useEffect, useRef, useState} from 'react'
 
+import {useFileItemContext} from '@/features/files/components/listing/file-item/file-item-context'
 import {IconsViewFileItem} from '@/features/files/components/listing/file-item/icons-view-file-item'
 import {ListViewFileItem} from '@/features/files/components/listing/file-item/list-view-file-item'
 import {Draggable, Droppable} from '@/features/files/components/shared/drag-and-drop'
-import {useItemClick} from '@/features/files/hooks/use-item-click'
 import {MachineFolderMetadata} from '@/features/files/hooks/use-machine-folder'
-import {useNetworkStorage} from '@/features/files/hooks/use-network-storage'
-import {usePreferences} from '@/features/files/hooks/use-preferences'
 import {useIsFilesReadOnly} from '@/features/files/providers/files-capabilities-context'
 import {useFilesStore} from '@/features/files/store/use-files-store'
 import type {FileSystemItem} from '@/features/files/types'
@@ -33,7 +31,7 @@ export const FileItem = (props: FileItemProps) => (
 )
 
 const FileItemContent = ({item, items, machine}: FileItemProps & {machine: Machine | undefined}) => {
-	const {handleClick, handleDoubleClick} = useItemClick()
+	const {handleClick, handleDoubleClick, doesHostHaveMountedShares, view} = useFileItemContext()
 	const isItemSelected = useFilesStore((state) => state.isItemSelected)
 	const selectedItems = useFilesStore((state) => state.selectedItems)
 	const setSelectedItems = useFilesStore((state) => state.setSelectedItems)
@@ -55,12 +53,8 @@ const FileItemContent = ({item, items, machine}: FileItemProps & {machine: Machi
 	const setRenamingItemPath = useFilesStore((state) => state.setRenamingItemPath)
 	const isUploading = 'isUploading' in item && item.isUploading
 	const isSelected = isItemSelected(item)
-	const {preferences} = usePreferences()
 	const isReadOnly = useIsFilesReadOnly()
-	const view = preferences?.view
 	const setIsSelectingOnMobile = useFilesStore((state) => state.setIsSelectingOnMobile)
-
-	const {doesHostHaveMountedShares} = useNetworkStorage()
 
 	// If the item is a network device that isn't actually mounted then we disable and fade the text content but not the icon.
 	const isNetworkHost = isDirectoryANetworkDevice(item.path)

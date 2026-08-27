@@ -14,6 +14,7 @@ import {arrayIncludes} from 'ts-extras'
 
 import {FadeInImg} from '@/components/ui/fade-in-img'
 import {Wallpaper23VideoSources} from '@/components/wallpaper-23-video-sources'
+import {useDocumentHidden} from '@/hooks/use-document-hidden'
 import {cn} from '@/lib/utils'
 import {trpcReact} from '@/trpc/trpc'
 import {keyBy} from '@/utils/misc'
@@ -229,6 +230,27 @@ type WallpaperType = {
 
 const WallPaperContext = createContext<WallpaperType>(null as any)
 
+type WallpaperVideoPauseType = {
+	/** Whether the desktop's wallpaper video is held still, e.g. while a sheet covers the desktop. */
+	paused: boolean
+	setPaused: (paused: boolean) => void
+}
+
+// Separate from WallPaperContext so toggling it re-renders only the wallpaper
+// video and whoever holds it, not every useWallpaper() consumer.
+const WallpaperVideoPauseContext = createContext<WallpaperVideoPauseType | null>(null)
+
+function WallpaperVideoPauseProvider({children}: {children: ReactNode}) {
+	const [paused, setPaused] = useState(false)
+	return <WallpaperVideoPauseContext value={{paused, setPaused}}>{children}</WallpaperVideoPauseContext>
+}
+
+function useWallpaperVideoPause() {
+	const ctx = useContext(WallpaperVideoPauseContext)
+	if (!ctx) throw new Error('useWallpaperVideoPause must be used within WallpaperProvider')
+	return ctx
+}
+
 /*
 Scenarios:
 - First load, nothing in localStorage yet
@@ -310,7 +332,7 @@ export function WallpaperProvider({
 				staticWallpaperImgRef,
 			}}
 		>
-			{children}
+			<WallpaperVideoPauseProvider>{children}</WallpaperVideoPauseProvider>
 		</WallPaperContext>
 	)
 }
@@ -342,6 +364,23 @@ export const useWallpaper = () => {
 	return ctx
 }
 
+/**
+ * Holds the desktop's wallpaper video (wallpaper 23) still while `paused` is true.
+ * A sheet leaves only the wallpaper's margins visible, and decoding a video behind
+ * it costs ~35% of a CPU core wherever the browser lacks a hardware decoder for
+ * the chosen codec. The video resumes as soon as `paused` turns false or the
+ * caller unmounts.
+ */
+export function usePauseWallpaperVideo(paused: boolean) {
+	const {setPaused} = useWallpaperVideoPause()
+
+	useEffect(() => {
+		if (!paused) return
+		setPaused(true)
+		return () => setPaused(false)
+	}, [paused, setPaused])
+}
+
 export function Wallpaper({
 	className,
 	stayBlurred,
@@ -362,6 +401,7 @@ export function Wallpaper({
 		wallpaperImgRef,
 		staticWallpaperImgRef,
 	} = useWallpaper()
+	const {paused: videoPaused} = useWallpaperVideoPause()
 
 	if (!wallpaper || !wallpaper.id) return null
 
@@ -390,6 +430,7 @@ export function Wallpaper({
 						className={className}
 						wallpaperImgRef={isPreview ? undefined : wallpaperImgRef}
 						staticWallpaperImgRef={isPreview ? undefined : staticWallpaperImgRef}
+						paused={!isPreview && videoPaused}
 						onLoad={setWallpaperLoaded}
 						onLoadFailure={setWallpaperLoadFailed}
 						onAnimationEnd={setWallpaperFullyVisible}
@@ -497,21 +538,59 @@ function FullWallpaperImage({
 	)
 }
 
-function FullWallpaperVideo(props: FullWallpaperImageProps) {
-	const {wallpaper, isLoading, isPreview, className, wallpaperImgRef, staticWallpaperImgRef, onLoad, onAnimationEnd} =
-		props
+// Lets the sheet's 200ms enter animation land before the wallpaper's motion stops.
+const VIDEO_PAUSE_DELAY_MS = 250
+
+function FullWallpaperVideo(props: FullWallpaperImageProps & {paused: boolean}) {
+	const {
+		wallpaper,
+		isLoading,
+		isPreview,
+		className,
+		wallpaperImgRef,
+		staticWallpaperImgRef,
+		paused,
+		onLoad,
+		onAnimationEnd,
+	} = props
 	const loadNotifiedRef = useRef(false)
-	const notifyLoaded = useCallback(() => {
-		if (loadNotifiedRef.current) return
-		loadNotifiedRef.current = true
-		onLoad(wallpaper.url)
-	}, [onLoad, wallpaper.url])
+	const videoRef = useRef<HTMLVideoElement | null>(null)
 	const setVideoRef = useCallback(
 		(video: HTMLVideoElement | null) => {
+			videoRef.current = video
 			if (wallpaperImgRef) wallpaperImgRef.current = video
 		},
 		[wallpaperImgRef],
 	)
+
+	// Nothing sees the video while a sheet covers the desktop or the tab is in the
+	// background, so stop decoding it. Resuming is immediate: the frames are buffered.
+	const documentHidden = useDocumentHidden()
+	const shouldPause = paused || documentHidden
+	useEffect(() => {
+		const video = videoRef.current
+		if (!video) return
+		if (!shouldPause) {
+			// Rejects when a pause() lands before playback starts; nothing to handle
+			if (video.paused) video.play().catch(() => {})
+			return
+		}
+		const timeout = setTimeout(() => {
+			// A video that hasn't shown a frame yet is left to `handlePlaying`:
+			// pausing it now would cancel autoplay and strand the loaded signal
+			if (loadNotifiedRef.current) video.pause()
+		}, VIDEO_PAUSE_DELAY_MS)
+		return () => clearTimeout(timeout)
+	}, [shouldPause])
+	const handlePlaying = useCallback(() => {
+		if (!loadNotifiedRef.current) {
+			loadNotifiedRef.current = true
+			onLoad(wallpaper.url)
+		}
+		// Covers a first frame that arrived after the timer above, and playback the
+		// browser resumed on its own (e.g. iOS returning to the foreground)
+		if (shouldPause) videoRef.current?.pause()
+	}, [onLoad, shouldPause, wallpaper.url])
 	const setStaticImageRef = useCallback(
 		(image: HTMLImageElement | null) => {
 			if (staticWallpaperImgRef) staticWallpaperImgRef.current = image
@@ -556,7 +635,7 @@ function FullWallpaperVideo(props: FullWallpaperImageProps) {
 				style={{
 					animation: isLoading ? 'none' : 'animate-unblur 0.7s',
 				}}
-				onPlaying={notifyLoaded}
+				onPlaying={handlePlaying}
 				onAnimationEnd={onAnimationEnd}
 			>
 				<Wallpaper23VideoSources />

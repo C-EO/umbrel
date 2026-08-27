@@ -5,7 +5,7 @@ import {useNavigate} from 'react-router-dom'
 
 import {toast} from '@/components/ui/toast'
 import {BackupsIsland} from '@/features/backups/components/floating-island'
-import {useBackupProgress} from '@/features/backups/hooks/use-backups'
+import {useBackupProgress, useBackupProgressLiveUpdates} from '@/features/backups/hooks/use-backups'
 import {AudioIsland} from '@/features/files/components/floating-islands/audio-island'
 import {CloudIsland} from '@/features/files/components/floating-islands/cloud-island'
 import {FormattingIsland} from '@/features/files/components/floating-islands/formatting-island'
@@ -53,6 +53,7 @@ export function FloatingIslandContainer() {
 	// consumer instead of reconnecting from each surface that reads the cache.
 	const isOwner = trpcReact.user.get.useQuery().data?.role === 'owner'
 	useMachinesLiveUpdates({enabled: isOwner})
+	useBackupProgressLiveUpdates({enabled: isOwner})
 	const installingMachines = useInstallingMachines({enabled: isOwner})
 	// Announce completed installs and manual installers that are ready for setup
 	useMachineInstallToasts({enabled: isOwner})

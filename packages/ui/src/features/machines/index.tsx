@@ -10,6 +10,7 @@ import {layoutMorphTransition, MACHINES_CONFIGURE_PATH, MACHINES_PATH} from '@/f
 import {useMachines} from '@/features/machines/hooks/use-machines'
 import {cn} from '@/lib/utils'
 import {DockSpacer} from '@/modules/desktop/dock'
+import {usePauseWallpaperVideo} from '@/providers/wallpaper'
 import {dialogHeaderCircleButtonClass} from '@/utils/element-classes'
 import {t} from '@/utils/i18n'
 
@@ -66,6 +67,11 @@ export default function MachinesLayout() {
 		setClosing(true)
 		setTimeout(() => navigate('/'), 150)
 	}, [navigate])
+
+	// The overlay's live backdrop blur re-renders for every wallpaper video frame,
+	// so hold the video still while it's up. Keyed on `closing` so motion is back
+	// before the fade-out reveals the desktop.
+	usePauseWallpaperVideo(!closing)
 	const stopImplicitDismiss = (event: ReactMouseEvent<HTMLElement>) => event.stopPropagation()
 
 	// Escape closes the overlay via the same fade-out path as the close button.

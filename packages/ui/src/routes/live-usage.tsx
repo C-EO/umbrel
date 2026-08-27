@@ -487,8 +487,8 @@ function GpuVramFooter({device, detailed}: {device: GpuDevice; detailed?: boolea
 			{total !== null && (
 				<div className='h-1 overflow-hidden rounded-full bg-white/10'>
 					<div
-						className='h-full rounded-full bg-white/35 transition-[width] duration-700'
-						style={{width: `${Math.min(1, used / total) * 100}%`}}
+						className='h-full w-full rounded-full bg-white/35 transition-transform duration-700 ease-[steps(14)]'
+						style={{transform: `translateX(${(Math.min(1, used / total) - 1) * 100}%)`}}
 					/>
 				</div>
 			)}
@@ -760,7 +760,10 @@ function useSegments({
 }
 
 // `flat` crossfades to a single brand-colored fill of the overall usage, so
-// inactive cards read as a plain progress bar and active ones as the breakdown
+// inactive cards read as a plain progress bar and active ones as the breakdown.
+// Every bar is full-width and shaped with a transform or a clip-path: the polls
+// retune them every second, and a tweening `width`/`left` is a layout on every
+// frame. Only the geometry is stepped; the colour and opacity fades stay smooth.
 function CompositionBar({segments, flat, progress}: {segments: BarSegment[]; flat?: boolean; progress?: number}) {
 	// Prefer the overall usage fraction: it's known before the per-app
 	// breakdown arrives, so the flat bar never renders at 0% while waiting
@@ -769,22 +772,24 @@ function CompositionBar({segments, flat, progress}: {segments: BarSegment[]; fla
 		<div className='relative h-2 overflow-hidden rounded-full bg-white/10'>
 			<div
 				className={cn(
-					'absolute inset-y-0 left-0 rounded-full transition-[width,opacity] duration-700',
+					'absolute inset-0 rounded-full transition-[transform,opacity] duration-700 [transition-timing-function:steps(14),ease]',
 					!flat && 'opacity-0',
 				)}
-				style={{width: `${flatWidth * 100}%`, backgroundColor: 'hsl(var(--color-brand))'}}
+				style={{transform: `translateX(${(flatWidth - 1) * 100}%)`, backgroundColor: 'hsl(var(--color-brand))'}}
 			/>
 			{segments.map((segment) => (
 				<div
 					key={segment.id}
 					title={flat ? undefined : segment.label}
 					className={cn(
-						'absolute inset-y-0 rounded-[3px] transition-[left,width,background-color,opacity] duration-700',
+						'absolute inset-0 transition-[clip-path,background-color,opacity] duration-700 [transition-timing-function:steps(14),ease,ease]',
 						flat && 'opacity-0',
 					)}
 					style={{
-						left: `calc(${segment.start * 100}% + 1px)`,
-						width: `max(2px, calc(${segment.width * 100}% - 2px))`,
+						// The same box as a `left`/`width` segment — 1px in from each
+						// neighbour, at least 2px wide, 3px corners — cut from a full-width
+						// element, so retuning it never lays anything out
+						clipPath: `inset(0 min(calc(${(1 - segment.start - segment.width) * 100}% + 1px), calc(${(1 - segment.start) * 100}% - 3px)) 0 calc(${segment.start * 100}% + 1px) round 3px)`,
 						backgroundColor: segment.color,
 					}}
 				/>
@@ -1376,8 +1381,11 @@ function AppListRow({
 			{barShare !== undefined && (
 				<span className='h-1 w-14 shrink-0 overflow-hidden rounded-full bg-white/10 sm:w-24'>
 					<span
-						className='block h-full rounded-full transition-[width,background-color] duration-700'
-						style={{width: `${Math.max(0, Math.min(1, barShare)) * 100}%`, backgroundColor: barColor}}
+						className='block h-full w-full rounded-full transition-[transform,background-color] duration-700 [transition-timing-function:steps(14),ease]'
+						style={{
+							transform: `translateX(${(Math.max(0, Math.min(1, barShare)) - 1) * 100}%)`,
+							backgroundColor: barColor,
+						}}
 					/>
 				</span>
 			)}
