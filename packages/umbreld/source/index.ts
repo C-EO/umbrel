@@ -41,6 +41,7 @@ import {cleanupFactoryResetBackups} from './modules/system/factory-reset.js'
 type StoreSchema = {
 	version: string
 	previousVersion?: string
+	discoveryId?: string
 	apps: string[]
 	// Apps the owner has shared with member accounts. 'all' also covers
 	// members created in the future.

@@ -4,6 +4,7 @@ import {$} from 'execa'
 import type Umbreld from '../../index.js'
 // Used by getIdentity() until detectDevice is refactored into this module
 import {detectDevice} from '../system/system.js'
+import randomToken from '../utilities/random-token.js'
 
 type LsblkDevice = {
 	name: string
@@ -39,6 +40,24 @@ export default class Device {
 
 	async getIdentity() {
 		return detectDevice()
+	}
+
+	// Stable id that discovery clients use to recognize this Umbrel across hostname
+	// and IP changes. Generated on first use.
+	async getDiscoveryId(): Promise<string> {
+		// Fast path: only serialize first-time generation through the store write lock.
+		const existingId = await this.#umbreld.store.get('discoveryId')
+		if (existingId) return existingId
+
+		let id: string | undefined
+		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
+			id = await get('discoveryId')
+			if (!id) {
+				id = randomToken(128)
+				await set('discoveryId', id)
+			}
+		})
+		return id!
 	}
 
 	async getSpecs() {

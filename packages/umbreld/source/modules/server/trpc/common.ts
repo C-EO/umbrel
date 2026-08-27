@@ -23,4 +23,6 @@ export const httpOnlyPaths = [
 	'user.logout',
 	// system.status doesn't use cookies/headers, but the UI polls it across restarts to detect when umbreld is back online; we force HTTP to avoid WS reconnect handshake
 	'system.status',
+	// bootstraps local HTTPS trust and sets a no-store response header
+	'system.localHttpsIdentity',
 ] as const

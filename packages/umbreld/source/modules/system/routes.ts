@@ -113,6 +113,28 @@ export default router({
 		}
 	}),
 	status: publicProcedure.query(() => systemStatus),
+	// Public so discovery clients can identify a device before they can authenticate with it
+	discoveryInfo: publicProcedure.query(async ({ctx}) => {
+		const [id, {device}, onboarded] = await Promise.all([
+			ctx.umbreld.systemNg.device.getDiscoveryId(),
+			detectDevice(),
+			ctx.user.exists(),
+		])
+		return {id, device, version: ctx.umbreld.version, onboarded}
+	}),
+	// Public for first-use trust: native clients validate HTTPS with this CA before
+	// persisting it or sending credentials. The CA private key stays in LAN ingress.
+	localHttpsIdentity: publicProcedure.query(async ({ctx}) => {
+		if (!ctx.response) {
+			throw new TRPCError({code: 'METHOD_NOT_SUPPORTED', message: 'HTTP transport required'})
+		}
+		ctx.response.set('Cache-Control', 'no-store')
+		const [id, caCertificate] = await Promise.all([
+			ctx.umbreld.systemNg.device.getDiscoveryId(),
+			ctx.umbreld.lanIngress.getCaCertificate(),
+		])
+		return {id, caCertificate}
+	}),
 	updateStatus: privateProcedure.query(() => getUpdateStatus()),
 	uptime: privateProcedureWithMembers.query(() => os.uptime()),
 	checkUpdate: privateProcedure.query(async ({ctx}) => {

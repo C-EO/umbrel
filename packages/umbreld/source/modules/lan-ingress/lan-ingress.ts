@@ -212,7 +212,7 @@ export default class LanIngress {
 	}
 
 	async getCertificateStatus() {
-		const caCertificate = await fse.readFile(this.caCertificatePath, 'utf8').catch(() => '')
+		const caCertificate = await this.getCaCertificate().catch(() => '')
 		let caFingerprint = ''
 		let caExpiresAt = ''
 		if (caCertificate) {
@@ -234,6 +234,10 @@ export default class LanIngress {
 			caFingerprint,
 			serverSans,
 		}
+	}
+
+	async getCaCertificate() {
+		return fse.readFile(this.caCertificatePath, 'utf8')
 	}
 
 	// Queue a refresh of LAN ingress state; callers share the running refresh promise.
