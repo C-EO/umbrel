@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Aktuální",
   "files-cloud.chip-updating": "Aktualizace…",
   "files-cloud.chip-waiting": "Čekání…",
+  "files-cloud.coming-soon": "Již brzy",
   "files-cloud.connect": "Připojit",
   "files-cloud.connect-direct-note": "Soubory se přenášejí přímo z {{provider}} do tvého Umbrel, bez jakýchkoli prostředníků.",
   "files-cloud.connect-title": "Připojit {{provider}}",

@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Uppfært",
   "files-cloud.chip-updating": "Uppfæri…",
   "files-cloud.chip-waiting": "Bíð…",
+  "files-cloud.coming-soon": "Væntanlegt",
   "files-cloud.connect": "Tengja",
   "files-cloud.connect-direct-note": "Skrárnar þínar flytjast beint frá {{provider}} yfir á Umbrel þitt, án nokkurs milliliðar.",
   "files-cloud.connect-title": "Tengja {{provider}}",

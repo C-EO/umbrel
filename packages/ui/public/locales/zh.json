@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "已是最新",
   "files-cloud.chip-updating": "正在更新…",
   "files-cloud.chip-waiting": "正在等待…",
+  "files-cloud.coming-soon": "即将推出",
   "files-cloud.connect": "连接",
   "files-cloud.connect-direct-note": "你的文件会直接从 {{provider}} 传输到 Umbrel，中间不经过任何第三方。",
   "files-cloud.connect-title": "连接 {{provider}}",

@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Ajakohane",
   "files-cloud.chip-updating": "Uuendamine…",
   "files-cloud.chip-waiting": "Ootel…",
+  "files-cloud.coming-soon": "Peagi saadaval",
   "files-cloud.connect": "Ühenda",
   "files-cloud.connect-direct-note": "Sinu failid edastatakse otse teenusest {{provider}} sinu Umbreli, ilma vahendajateta.",
   "files-cloud.connect-title": "Ühenda {{provider}}",

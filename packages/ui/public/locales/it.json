@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Aggiornato",
   "files-cloud.chip-updating": "Aggiornamento…",
   "files-cloud.chip-waiting": "In attesa…",
+  "files-cloud.coming-soon": "Prossimamente",
   "files-cloud.connect": "Connetti",
   "files-cloud.connect-direct-note": "I tuoi file vengono trasferiti direttamente da {{provider}} al tuo Umbrel, senza intermediari.",
   "files-cloud.connect-title": "Connetti {{provider}}",

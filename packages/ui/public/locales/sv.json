@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Uppdaterad",
   "files-cloud.chip-updating": "Uppdaterar…",
   "files-cloud.chip-waiting": "Väntar…",
+  "files-cloud.coming-soon": "Kommer snart",
   "files-cloud.connect": "Anslut",
   "files-cloud.connect-direct-note": "Dina filer överförs direkt från {{provider}} till din Umbrel, utan något däremellan.",
   "files-cloud.connect-title": "Anslut {{provider}}",

@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Naprakész",
   "files-cloud.chip-updating": "Frissítés…",
   "files-cloud.chip-waiting": "Várakozás…",
+  "files-cloud.coming-soon": "Hamarosan",
   "files-cloud.connect": "Csatlakoztatás",
   "files-cloud.connect-direct-note": "A fájljaid közvetlenül a(z) {{provider}} szolgáltatásból kerülnek át az Umbrel eszközödre, köztes szolgáltatás nélkül.",
   "files-cloud.connect-title": "A(z) {{provider}} csatlakoztatása",

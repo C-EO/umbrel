@@ -1,7 +1,8 @@
 import {useTranslation} from 'react-i18next'
 
-import {AppGrid, AppStoreEmptyState} from '@/features/app-store/components/app-grid'
+import {AppStoreEmptyState} from '@/features/app-store/components/app-grid'
 import {SectionHeading} from '@/features/app-store/components/section-heading'
+import {VirtualAppGrid} from '@/features/app-store/components/virtual-app-grid'
 import {storeRevealClass, storeRevealDelay} from '@/features/app-store/constants'
 import {createAppStoreSearch} from '@/features/app-store/data/search'
 import {useAppStatusMap} from '@/features/app-store/hooks/use-app-status'
@@ -37,7 +38,7 @@ export function SearchResults({query}: {query: string}) {
 				/>
 			</div>
 			{results.length > 0 ? (
-				<AppGrid apps={results} statuses={statuses} revealDelayStart={60} />
+				<VirtualAppGrid apps={results} statuses={statuses} revealDelayStart={60} />
 			) : (
 				<div className={storeRevealClass} style={storeRevealDelay(60)}>
 					<AppStoreEmptyState

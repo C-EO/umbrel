@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Güncel",
   "files-cloud.chip-updating": "Güncelleniyor…",
   "files-cloud.chip-waiting": "Bekleniyor…",
+  "files-cloud.coming-soon": "Çok yakında",
   "files-cloud.connect": "Bağlan",
   "files-cloud.connect-direct-note": "Dosyalarınız arada hiçbir şey olmadan doğrudan {{provider}} üzerinden Umbrel'inize aktarılır.",
   "files-cloud.connect-title": "{{provider}} hesabına bağlan",

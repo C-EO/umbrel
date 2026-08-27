@@ -3,10 +3,10 @@ import {useTranslation} from 'react-i18next'
 import {Navigate} from 'react-router-dom'
 
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
-import {AppGrid} from '@/features/app-store/components/app-grid'
 import {SectionHeading} from '@/features/app-store/components/section-heading'
 import {SortControl, useSortParam} from '@/features/app-store/components/sort-control'
 import {StorefrontSectionView} from '@/features/app-store/components/storefront-sections'
+import {VirtualAppGrid} from '@/features/app-store/components/virtual-app-grid'
 import {categoryPath, storeRevealClass, storeRevealDelay} from '@/features/app-store/constants'
 import {getAvailableSorts, sortApps} from '@/features/app-store/data/catalog'
 import {useAppStatusMap} from '@/features/app-store/hooks/use-app-status'
@@ -60,7 +60,7 @@ function DiscoverContent() {
 						rightChildren={<SortControl availableSorts={availableSorts} />}
 					/>
 				</div>
-				<AppGrid apps={allApps} statuses={statuses} revealDelayStart={130} />
+				<VirtualAppGrid apps={allApps} statuses={statuses} revealDelayStart={130} />
 			</section>
 		</>
 	)

@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "최신 상태",
   "files-cloud.chip-updating": "업데이트 중…",
   "files-cloud.chip-waiting": "기다리는 중…",
+  "files-cloud.coming-soon": "곧 출시 예정",
   "files-cloud.connect": "연결",
   "files-cloud.connect-direct-note": "파일은 중간 경로 없이 {{provider}}에서 Umbrel로 직접 전송돼요.",
   "files-cloud.connect-title": "{{provider}} 연결",

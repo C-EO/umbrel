@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Ažurno",
   "files-cloud.chip-updating": "Ažuriranje…",
   "files-cloud.chip-waiting": "Čekanje…",
+  "files-cloud.coming-soon": "Uskoro",
   "files-cloud.connect": "Poveži",
   "files-cloud.connect-direct-note": "Tvoje se datoteke prenose izravno s usluge {{provider}} na tvoj Umbrel, bez posrednika.",
   "files-cloud.connect-title": "Poveži {{provider}}",

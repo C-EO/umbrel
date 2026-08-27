@@ -6,8 +6,8 @@ import {AppIcon} from '@/components/app-icon'
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
 import {FadeInImg} from '@/components/ui/fade-in-img'
 import {AppCardAction} from '@/features/app-store/components/app-card'
-import {AppGrid} from '@/features/app-store/components/app-grid'
 import {SortControl, useSortParam} from '@/features/app-store/components/sort-control'
+import {VirtualAppGrid} from '@/features/app-store/components/virtual-app-grid'
 import {
 	appPath,
 	categoryIcon,
@@ -114,7 +114,7 @@ function CategoryContent() {
 					</h3>
 					<SortControl availableSorts={availableSorts} />
 				</div>
-				<AppGrid apps={sortedApps} statuses={statuses} revealDelayStart={featuredApps.length > 0 ? 180 : 130} />
+				<VirtualAppGrid apps={sortedApps} statuses={statuses} revealDelayStart={featuredApps.length > 0 ? 180 : 130} />
 			</section>
 		</>
 	)

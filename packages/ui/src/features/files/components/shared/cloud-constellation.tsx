@@ -25,6 +25,7 @@ type SatelliteSlot = {ring: 'inner' | 'outer'; angle: number; size: number}
 // the constellation slots and the picker grid so the morph between them is 1:1.
 const TILE_ORDER = ['google-drive', 'dropbox', 'icloud', 'onedrive']
 const CONSTELLATION_IDS = new Set([...TILE_ORDER, ...CLOUD_WEBDAV_FLAVORS.map(({id}) => id)])
+const COMING_SOON_PROVIDER_IDS = new Set(['google-drive'])
 
 // Logos that are already full app-icon squares render edge to edge; everything
 // else sits inset on a white plate, so every satellite reads as an app icon.
@@ -298,6 +299,7 @@ export function CloudConstellation({
 		const entranceDelay = isPitch ? (mountedAsPitch ? 0.2 + index * 0.05 : 0) : mountedAsPitch ? 0 : index * 0.03
 		const orbit = slot ? orbitKeyframes(slot) : undefined
 		const orbiting = isPitch && !reducedMotion && orbit
+		const isComingSoon = COMING_SOON_PROVIDER_IDS.has(entry.id)
 		return (
 			// The view is part of the key: switching to the picker mounts a fresh,
 			// transform-free tile that flies in from the orbiting satellite's last
@@ -321,14 +323,21 @@ export function CloudConstellation({
 				type='button'
 				disabled={isPitch}
 				aria-hidden={isPitch}
-				onClick={() => onSelect?.({provider: entry.provider, ...(entry.flavor && {flavor: entry.flavor})})}
-				whileTap={isPitch ? undefined : {scale: 0.96}}
+				aria-disabled={!isPitch && isComingSoon}
+				onClick={() => {
+					if (isComingSoon) return
+					onSelect?.({provider: entry.provider, ...(entry.flavor && {flavor: entry.flavor})})
+				}}
+				whileTap={isPitch || isComingSoon ? undefined : {scale: 0.96}}
 				className={cn(
 					// The resting card is barely there; hover firms it up a notch, and
 					// the change lands instantly so the grid feels snappy under the cursor
 					!isPitch &&
 						!isFooter &&
-						'flex flex-col items-center gap-2 rounded-xl border border-white/5 bg-white/3 p-4 hover:border-white/10 hover:bg-white/6 focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6',
+						'flex flex-col items-center gap-2 rounded-xl border border-white/5 bg-white/3 p-4 focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6',
+					!isPitch &&
+						!isFooter &&
+						(isComingSoon ? 'cursor-not-allowed text-white/50' : 'hover:border-white/10 hover:bg-white/6'),
 					!isPitch &&
 						isFooter &&
 						'col-span-2 flex items-center justify-center gap-2 rounded-xl border border-white/5 bg-white/3 px-3 py-2.5 text-white/60 hover:border-white/10 hover:bg-white/6 hover:text-white focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6 focus-visible:text-white sm:col-span-3',
@@ -379,6 +388,11 @@ export function CloudConstellation({
 						>
 							{entry.displayName}
 						</motion.span>
+					)}
+					{!isPitch && isComingSoon && (
+						<span className='-mt-1 rounded-full bg-white/8 px-1.5 py-0.5 text-[9px] leading-none font-medium text-white/50'>
+							{t('files-cloud.coming-soon')}
+						</span>
 					)}
 				</motion.div>
 			</motion.button>

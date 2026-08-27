@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Up-to-date",
   "files-cloud.chip-updating": "Bijwerken…",
   "files-cloud.chip-waiting": "Wachten…",
+  "files-cloud.coming-soon": "Binnenkort beschikbaar",
   "files-cloud.connect": "Verbinden",
   "files-cloud.connect-direct-note": "Je bestanden worden rechtstreeks van {{provider}} naar je Umbrel overgezet, zonder tussenpartij.",
   "files-cloud.connect-title": "Verbinden met {{provider}}",

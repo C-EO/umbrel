@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Ενημερωμένο",
   "files-cloud.chip-updating": "Ενημέρωση…",
   "files-cloud.chip-waiting": "Αναμονή…",
+  "files-cloud.coming-soon": "Σύντομα διαθέσιμο",
   "files-cloud.connect": "Σύνδεση",
   "files-cloud.connect-direct-note": "Τα αρχεία σου μεταφέρονται απευθείας από το {{provider}} στο Umbrel σου, χωρίς κανέναν ενδιάμεσο.",
   "files-cloud.connect-title": "Σύνδεση στο {{provider}}",

@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "Actualizat",
   "files-cloud.chip-updating": "Se actualizează…",
   "files-cloud.chip-waiting": "Se așteaptă…",
+  "files-cloud.coming-soon": "În curând",
   "files-cloud.connect": "Conectează",
   "files-cloud.connect-direct-note": "Fișierele tale sunt transferate direct de la {{provider}} pe Umbrel, fără intermediari.",
   "files-cloud.connect-title": "Conectează {{provider}}",

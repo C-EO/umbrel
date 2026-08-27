@@ -44,9 +44,6 @@ export function AppCard({
 			onMouseEnter={() => preloadFirstFewGalleryImages(app)}
 			style={style}
 			className={cn(
-				// content-visibility lets the browser skip layout/paint (and reveal
-				// animations) for offscreen cards — the full catalog renders ~370
-				'[contain-intrinsic-size:auto_78px] [content-visibility:auto]',
 				'group relative flex w-full items-center gap-3 rounded-15 p-2.5 transition-colors duration-200 focus-within:bg-white/7 hover:bg-white/7',
 				className,
 			)}

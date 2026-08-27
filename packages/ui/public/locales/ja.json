@@ -582,6 +582,7 @@
   "files-cloud.chip-up-to-date": "最新",
   "files-cloud.chip-updating": "更新中…",
   "files-cloud.chip-waiting": "待機中…",
+  "files-cloud.coming-soon": "近日公開",
   "files-cloud.connect": "接続",
   "files-cloud.connect-direct-note": "ファイルは{{provider}}からUmbrelへ直接転送され、間に他のサービスは介在しません。",
   "files-cloud.connect-title": "{{provider}}に接続",
