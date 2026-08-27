@@ -18,10 +18,17 @@ const ONE_MINUTE = 60 * ONE_SECOND
 const ONE_HOUR = 60 * ONE_MINUTE
 const ONE_DAY = 24 * ONE_HOUR
 export const SESSION_DURATION = 7 * ONE_DAY
+export const NATIVE_ACCESS_DURATION = ONE_HOUR
 const WEBSOCKET_TICKET_DURATION = 30 * ONE_SECOND
 const APP_HANDOFF_DURATION = 30 * ONE_SECOND
 
-export type CredentialAudience = 'dashboard' | 'app-gateway' | 'browser-session' | 'http-api-token'
+export type CredentialAudience =
+	| 'dashboard'
+	| 'app-gateway'
+	| 'browser-session'
+	| 'http-api-token'
+	| 'native-access'
+	| 'native-device'
 export type HttpApiScope = 'file-download' | 'file-view' | 'file-thumbnail' | 'logs-download' | 'ca-download'
 export type WebSocketTarget = 'trpc' | 'terminal' | 'machines'
 
@@ -35,6 +42,7 @@ type Credential = {
 	id: string
 	audience: CredentialAudience
 	hash: string
+	expiresAt?: number
 }
 
 type Session = {
@@ -42,7 +50,7 @@ type Session = {
 	accountId: string
 	createdAt: number
 	lastSeenAt: number
-	expiresAt: number
+	expiresAt?: number
 	userAgent?: string
 	credentials: Credential[]
 }
@@ -85,6 +93,18 @@ type SessionIssuanceState = {
 export class SessionIssuanceInvalidatedError extends Error {
 	constructor() {
 		super('Login credentials changed, try again')
+	}
+}
+
+export class InvalidNativeDeviceCredentialError extends Error {
+	constructor() {
+		super('Invalid native device credential')
+	}
+}
+
+export class BrowserSessionRequiredError extends Error {
+	constructor() {
+		super('Browser session required')
 	}
 }
 
@@ -176,12 +196,13 @@ export default class Auth {
 		if (!(await this.#accountExists(accountId))) throw new Error('Account does not exist')
 
 		const now = Date.now()
+		const expiresAt = now + SESSION_DURATION
 		const session: Session = {
 			id: randomToken(128),
 			accountId,
 			createdAt: now,
 			lastSeenAt: now,
-			expiresAt: now + SESSION_DURATION,
+			expiresAt,
 			userAgent: normalizeUserAgent(userAgent),
 			credentials: [],
 		}
@@ -191,33 +212,112 @@ export default class Auth {
 		const httpApiToken = this.#createDerivedCredential(session.id, 'http-api-token')
 		session.credentials = [dashboard.record, appGateway.record, browserSession.record, httpApiToken.record]
 
-		let expiredSessionIds: string[] = []
-		await this.#store.getWriteLock(async ({set}) => {
-			if (expectedSessionIssuanceRevision !== undefined) {
-				const state = this.#sessionIssuanceState(accountId)
-				if (state.credentialChanges > 0 || state.revision !== expectedSessionIssuanceRevision) {
-					throw new SessionIssuanceInvalidatedError()
-				}
-			}
-
-			const activeSessions = this.#sessions.filter((candidate) => candidate.expiresAt > now)
-			expiredSessionIds = this.#sessions
-				.filter((candidate) => !activeSessions.includes(candidate))
-				.map((candidate) => candidate.id)
-			const sessions = [...activeSessions, session]
-			await set('sessions', sessions)
-			this.#sessions = sessions
-			this.#scheduleSessionExpiry(session)
-		})
-		for (const sessionId of expiredSessionIds) this.#removeSessionRuntimeState(sessionId)
+		await this.#storeNewSession(session, expectedSessionIssuanceRevision)
 
 		return {
 			principal: this.#principalForSession(session),
-			expiresAt: session.expiresAt,
+			expiresAt,
 			dashboardToken: dashboard.token,
 			appGatewayToken: appGateway.token,
 			browserSessionToken: browserSession.token,
 		}
+	}
+
+	async createNativeSession({
+		accountId = OWNER_ACCOUNT_ID,
+		userAgent,
+		expectedSessionIssuanceRevision,
+	}: {
+		accountId?: string
+		userAgent?: string
+		expectedSessionIssuanceRevision?: number
+	} = {}) {
+		if (!(await this.#accountExists(accountId))) throw new Error('Account does not exist')
+
+		const now = Date.now()
+		const accessExpiresAt = now + NATIVE_ACCESS_DURATION
+		// Native sessions stay active until explicit revocation so a device can
+		// reconnect after being idle without silently losing its session.
+		const session: Session = {
+			id: randomToken(128),
+			accountId,
+			createdAt: now,
+			lastSeenAt: now,
+			userAgent: normalizeUserAgent(userAgent),
+			credentials: [],
+		}
+		const access = this.#createCredential('native-access', accessExpiresAt)
+		const device = this.#createCredential('native-device')
+		session.credentials = [access.record, device.record]
+
+		await this.#storeNewSession(session, expectedSessionIssuanceRevision)
+
+		return {
+			principal: this.#principalForSession(session),
+			accessExpiresAt,
+			accessToken: access.token,
+			deviceToken: device.token,
+		}
+	}
+
+	// The device credential is accepted only here and never rotates, so an interrupted
+	// exchange can safely retry without invalidating the native session.
+	async refreshNativeAccess(deviceToken: string) {
+		let parsedCredential: ReturnType<typeof parseCredential>
+		try {
+			parsedCredential = parseCredential(deviceToken)
+		} catch {
+			throw new InvalidNativeDeviceCredentialError()
+		}
+		const {id, secret} = parsedCredential
+		const now = Date.now()
+		let refreshed:
+			| {
+					principal: Principal
+					accessExpiresAt: number
+					accessToken: string
+			  }
+			| undefined
+
+		await this.#store.getWriteLock(async ({set}) => {
+			const session = this.#sessions.find((candidate) =>
+				candidate.credentials.some((credential) => credential.id === id),
+			)
+			const credential = session?.credentials.find((candidate) => candidate.id === id)
+			const validSecret = credential && secretsMatch(hash(secret), credential.hash)
+
+			if (
+				!session ||
+				credential?.audience !== 'native-device' ||
+				!validSecret ||
+				!this.#isSessionActive(session, now) ||
+				!(await this.#accountExists(session.accountId))
+			) {
+				throw new InvalidNativeDeviceCredentialError()
+			}
+
+			const accessExpiresAt = now + NATIVE_ACCESS_DURATION
+			const access = this.#createCredential('native-access', accessExpiresAt)
+			const updatedSession: Session = {
+				...session,
+				lastSeenAt: now,
+				credentials: [
+					...session.credentials.filter((candidate) => candidate.audience !== 'native-access'),
+					access.record,
+				],
+			}
+			const sessions = this.#sessions.map((candidate) => (candidate.id === session.id ? updatedSession : candidate))
+			await set('sessions', sessions)
+			this.#sessions = sessions
+			refreshed = {
+				principal: this.#principalForSession(updatedSession),
+				accessExpiresAt,
+				accessToken: access.token,
+			}
+		})
+
+		if (!refreshed) throw new InvalidNativeDeviceCredentialError()
+		return refreshed
 	}
 
 	// Login captures this before checking the account's password and MFA. The
@@ -251,7 +351,8 @@ export default class Auth {
 
 		await this.#store.getWriteLock(async ({set}) => {
 			const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
-			if (!session || session.expiresAt <= now) throw new Error('Invalid session')
+			if (!session || !this.#isSessionActive(session, now)) throw new Error('Invalid session')
+			if (!this.#isBrowserSession(session)) throw new BrowserSessionRequiredError()
 			const sessions = this.#sessions.map((candidate) =>
 				candidate.id === principal.sessionId ? {...candidate, lastSeenAt: now, expiresAt} : candidate,
 			)
@@ -277,6 +378,14 @@ export default class Auth {
 		return dashboardPrincipal
 	}
 
+	async authenticateApiCredentials(token: string, browserSessionToken?: string) {
+		try {
+			return await this.authenticate(token, 'native-access')
+		} catch {
+			return this.authenticateDashboardCredentials(token, browserSessionToken)
+		}
+	}
+
 	async authenticate(token: string, audience: CredentialAudience): Promise<Principal> {
 		if (audience === 'dashboard' && this.#isSystemToken(token)) {
 			return {sessionId: 'system', accountId: OWNER_ACCOUNT_ID, actor: 'system'}
@@ -291,7 +400,8 @@ export default class Auth {
 			!session ||
 			!credential ||
 			credential.audience !== audience ||
-			session.expiresAt <= now ||
+			!this.#isSessionActive(session, now) ||
+			!this.#isCredentialActive(credential, now) ||
 			!secretsMatch(hash(secret), credential.hash) ||
 			!(await this.#accountExists(session.accountId))
 		) {
@@ -307,7 +417,7 @@ export default class Auth {
 		if (
 			!session ||
 			session.accountId !== principal.accountId ||
-			session.expiresAt <= Date.now() ||
+			!this.#isSessionActive(session) ||
 			!(await this.#accountExists(session.accountId))
 		) {
 			throw new Error('Invalid session')
@@ -413,6 +523,10 @@ export default class Auth {
 	}
 
 	issueWebSocketTicket(principal: Principal, target: WebSocketTarget) {
+		const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
+		// A WebSocket authenticated once can outlive a short-lived access token.
+		// Native clients use HTTP; add expiry-bound native sockets before enabling them.
+		if (session && this.#isNativeSession(session)) throw new BrowserSessionRequiredError()
 		this.#removeExpiredTickets()
 		const token = randomToken(256)
 		this.#webSocketTickets.set(hash(token), {principal, target, expiresAt: Date.now() + WEBSOCKET_TICKET_DURATION})
@@ -468,6 +582,7 @@ export default class Auth {
 
 		const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
 		if (!session) throw new Error('Invalid session')
+		if (!this.#isBrowserSession(session)) throw new BrowserSessionRequiredError()
 
 		return this.#derivedCredentialToken(session, 'http-api-token')
 	}
@@ -572,12 +687,12 @@ export default class Auth {
 		return nodePath.join(this.#directory, 'system-token')
 	}
 
-	#createCredential(audience: CredentialAudience) {
+	#createCredential(audience: CredentialAudience, expiresAt?: number) {
 		const id = randomToken(128)
 		const secret = randomToken(256)
 		return {
 			token: `umbrel_${id}_${secret}`,
-			record: {id, audience, hash: hash(secret)},
+			record: {id, audience, hash: hash(secret), ...(expiresAt === undefined ? {} : {expiresAt})},
 		}
 	}
 
@@ -617,7 +732,25 @@ export default class Auth {
 			return principal.sessionId === 'system' && principal.accountId === OWNER_ACCOUNT_ID
 		}
 		const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
-		return Boolean(session && session.accountId === principal.accountId && session.expiresAt > Date.now())
+		return Boolean(session && session.accountId === principal.accountId && this.#isSessionActive(session))
+	}
+
+	#isSessionActive(session: Session, now = Date.now()) {
+		if (session.expiresAt !== undefined) return session.expiresAt > now
+		return this.#isNativeSession(session)
+	}
+
+	#isCredentialActive(credential: Credential, now = Date.now()) {
+		if (credential.expiresAt !== undefined) return credential.expiresAt > now
+		return credential.audience !== 'native-access'
+	}
+
+	#isBrowserSession(session: Session) {
+		return session.credentials.some((credential) => credential.audience === 'browser-session')
+	}
+
+	#isNativeSession(session: Session) {
+		return session.credentials.some((credential) => credential.audience === 'native-device')
 	}
 
 	#isSystemToken(token: string) {
@@ -632,6 +765,28 @@ export default class Auth {
 			this.#sessionIssuanceStates.set(accountId, state)
 		}
 		return state
+	}
+
+	async #storeNewSession(session: Session, expectedSessionIssuanceRevision?: number) {
+		let expiredSessionIds: string[] = []
+		await this.#store.getWriteLock(async ({set}) => {
+			if (expectedSessionIssuanceRevision !== undefined) {
+				const state = this.#sessionIssuanceState(session.accountId)
+				if (state.credentialChanges > 0 || state.revision !== expectedSessionIssuanceRevision) {
+					throw new SessionIssuanceInvalidatedError()
+				}
+			}
+
+			const activeSessions = this.#sessions.filter((candidate) => this.#isSessionActive(candidate))
+			expiredSessionIds = this.#sessions
+				.filter((candidate) => !activeSessions.includes(candidate))
+				.map((candidate) => candidate.id)
+			const sessions = [...activeSessions, session]
+			await set('sessions', sessions)
+			this.#sessions = sessions
+			this.#scheduleSessionExpiry(session)
+		})
+		for (const sessionId of expiredSessionIds) this.#removeSessionRuntimeState(sessionId)
 	}
 
 	#invalidatePendingSessionIssuance(accountId: string) {
@@ -661,7 +816,7 @@ export default class Auth {
 
 		await this.#store.getWriteLock(async ({set}) => {
 			const now = Date.now()
-			const activeSessions = this.#sessions.filter((session) => session.expiresAt > now)
+			const activeSessions = this.#sessions.filter((session) => this.#isSessionActive(session, now))
 			if (
 				requiredPrincipal &&
 				!activeSessions.some(
@@ -694,6 +849,9 @@ export default class Auth {
 	#scheduleSessionExpiry(session: Pick<Session, 'id' | 'expiresAt'>) {
 		const existingTimeout = this.#sessionExpiryTimers.get(session.id)
 		if (existingTimeout) clearTimeout(existingTimeout)
+		this.#sessionExpiryTimers.delete(session.id)
+		const expiresAt = session.expiresAt
+		if (expiresAt === undefined) return
 
 		const timeout = setTimeout(
 			async () => {
@@ -701,7 +859,7 @@ export default class Auth {
 				this.#sessionExpiryTimers.delete(session.id)
 				// Re-check wall time in bounded intervals so an NTP/system-clock jump
 				// cannot leave an expired connection open until the original timer delay.
-				if (session.expiresAt > Date.now()) {
+				if (expiresAt > Date.now()) {
 					this.#scheduleSessionExpiry(session)
 					return
 				}
@@ -711,7 +869,7 @@ export default class Auth {
 					this.#umbreld.logger.error('Failed to expire authentication session', error)
 				})
 			},
-			Math.min(ONE_HOUR, Math.max(0, session.expiresAt - Date.now())),
+			Math.min(ONE_HOUR, Math.max(0, expiresAt - Date.now())),
 		)
 		timeout.unref()
 		this.#sessionExpiryTimers.set(session.id, timeout)

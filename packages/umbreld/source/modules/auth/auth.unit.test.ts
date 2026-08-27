@@ -3,11 +3,12 @@ import type {Socket} from 'node:net'
 
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 import type {WebSocket} from 'ws'
+import yaml from 'js-yaml'
 
 import type Umbreld from '../../index.js'
 import temporaryDirectory from '../utilities/temporary-directory.js'
 
-import Auth, {OWNER_ACCOUNT_ID, SESSION_DURATION} from './auth.js'
+import Auth, {NATIVE_ACCESS_DURATION, OWNER_ACCOUNT_ID, SESSION_DURATION} from './auth.js'
 
 class TestSocket extends EventEmitter {
 	terminated = false
@@ -101,6 +102,105 @@ describe('Auth', () => {
 		expect(stored).not.toContain(session.appGatewayToken)
 		expect(stored).not.toContain(session.browserSessionToken)
 		expect(stored).not.toContain(httpApiToken)
+	})
+
+	test('issues a stable native device credential and short-lived access credential', async () => {
+		vi.useFakeTimers()
+		vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+		const session = await auth.createNativeSession()
+
+		expect(session.accessExpiresAt).toBe(Date.now() + NATIVE_ACCESS_DURATION)
+		expect(session.deviceToken).toMatch(/^umbrel_[0-9a-f]{32}_[0-9a-f]{64}$/)
+		await expect(auth.authenticate(session.accessToken, 'native-access')).resolves.toEqual(session.principal)
+		await expect(auth.authenticate(session.deviceToken, 'native-access')).rejects.toThrow('Invalid credential')
+		await expect(auth.getHttpApiToken(session.principal)).rejects.toThrow('Browser session required')
+		const browser = await auth.createSession()
+		await expect(auth.refreshNativeAccess(browser.dashboardToken)).rejects.toThrow('Invalid native device credential')
+
+		const refreshed = await auth.refreshNativeAccess(session.deviceToken)
+		expect(refreshed.accessToken).not.toBe(session.accessToken)
+		await expect(auth.authenticate(session.accessToken, 'native-access')).rejects.toThrow('Invalid credential')
+		await expect(auth.authenticate(refreshed.accessToken, 'native-access')).resolves.toEqual(session.principal)
+
+		vi.advanceTimersByTime(NATIVE_ACCESS_DURATION)
+		await expect(auth.authenticate(refreshed.accessToken, 'native-access')).rejects.toThrow('Invalid credential')
+		await expect(auth.refreshNativeAccess(session.deviceToken)).resolves.toMatchObject({
+			principal: session.principal,
+		})
+	})
+
+	test('can safely retry the same device credential after a lost response and server restart', async () => {
+		const session = await auth.createNativeSession()
+		const lostResponse = await auth.refreshNativeAccess(session.deviceToken)
+		const retry = await auth.refreshNativeAccess(session.deviceToken)
+
+		expect(retry.accessToken).not.toBe(lostResponse.accessToken)
+		await expect(auth.authenticate(lostResponse.accessToken, 'native-access')).rejects.toThrow('Invalid credential')
+		await expect(auth.authenticate(retry.accessToken, 'native-access')).resolves.toEqual(session.principal)
+
+		await auth.stop()
+		auth = new Auth(umbreld)
+		await auth.start()
+
+		const afterRestart = await auth.refreshNativeAccess(session.deviceToken)
+		await expect(auth.authenticate(afterRestart.accessToken, 'native-access')).resolves.toEqual(session.principal)
+		const stored = await import('node:fs/promises').then((fs) =>
+			fs.readFile(`${dataDirectory}/secrets/auth/sessions.yaml`, 'utf8'),
+		)
+		expect(stored).not.toContain(session.deviceToken)
+		expect(stored).not.toContain(afterRestart.accessToken)
+	})
+
+	test('fails closed when persisted expiry metadata is missing', async () => {
+		const browser = await auth.createSession()
+		const native = await auth.createNativeSession()
+		await auth.stop()
+
+		const fs = await import('node:fs/promises')
+		const storePath = `${dataDirectory}/secrets/auth/sessions.yaml`
+		const store = yaml.load(await fs.readFile(storePath, 'utf8')) as {
+			sessions: Array<{
+				id: string
+				expiresAt?: number
+				credentials: Array<{audience: string; expiresAt?: number}>
+			}>
+		}
+		const browserSession = store.sessions.find((session) => session.id === browser.principal.sessionId)!
+		const nativeSession = store.sessions.find((session) => session.id === native.principal.sessionId)!
+		delete browserSession.expiresAt
+		delete nativeSession.credentials.find((credential) => credential.audience === 'native-access')!.expiresAt
+		await fs.writeFile(storePath, yaml.dump(store), 'utf8')
+
+		auth = new Auth(umbreld)
+		await auth.start()
+		await expect(auth.authenticate(browser.dashboardToken, 'dashboard')).rejects.toThrow('Invalid credential')
+		await expect(auth.authenticate(native.accessToken, 'native-access')).rejects.toThrow('Invalid credential')
+		await expect(auth.refreshNativeAccess(native.deviceToken)).resolves.toMatchObject({principal: native.principal})
+	})
+
+	test('does not let browser renewal expire a native device session', async () => {
+		vi.useFakeTimers()
+		vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+		const session = await auth.createNativeSession()
+
+		await expect(auth.renewSession(session.principal)).rejects.toThrow('Browser session required')
+		vi.advanceTimersByTime(SESSION_DURATION + 1)
+		await expect(auth.refreshNativeAccess(session.deviceToken)).resolves.toMatchObject({
+			principal: session.principal,
+		})
+	})
+
+	test('does not let short-lived native access bootstrap a session-long WebSocket', async () => {
+		const session = await auth.createNativeSession()
+		expect(() => auth.issueWebSocketTicket(session.principal, 'trpc')).toThrow('Browser session required')
+	})
+
+	test('revokes native access and device credentials together', async () => {
+		const native = await auth.createNativeSession()
+
+		await auth.revokeSession(native.principal.sessionId)
+		await expect(auth.authenticate(native.accessToken, 'native-access')).rejects.toThrow('Invalid credential')
+		await expect(auth.refreshNativeAccess(native.deviceToken)).rejects.toThrow('Invalid native device credential')
 	})
 
 	test('creates account-scoped member sessions and rejects deleted accounts', async () => {

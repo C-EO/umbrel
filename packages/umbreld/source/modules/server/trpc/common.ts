@@ -8,6 +8,9 @@ export type {AppRouter} from './index.js'
 export const httpOnlyPaths = [
 	// sets cookie
 	'user.login',
+	// native auth exchanges read request metadata and set no-store response headers
+	'user.loginNative',
+	'user.refreshNativeAccess',
 	// reads the Authorization header and browser-session cookie
 	'user.isLoggedIn',
 	// extends the session and its browser-session cookie

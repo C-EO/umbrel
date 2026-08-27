@@ -13,7 +13,7 @@ const authenticate = async (ctx: Context) => {
 	try {
 		const [scheme, token] = ctx.request?.headers.authorization?.split(' ') ?? []
 		if (scheme?.toLowerCase() !== 'bearer' || !token || !ctx.request) throw new Error('Missing token')
-		return await ctx.umbreld.auth.authenticateDashboardCredentials(token, browserSessionTokenFromRequest(ctx.request))
+		return await ctx.umbreld.auth.authenticateApiCredentials(token, browserSessionTokenFromRequest(ctx.request))
 	} catch (error) {
 		ctx.logger.error('Failed to verify token', error)
 		throw new TRPCError({code: 'UNAUTHORIZED', message: 'Invalid token'})

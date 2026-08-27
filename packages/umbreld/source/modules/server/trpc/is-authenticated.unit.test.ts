@@ -59,6 +59,13 @@ describe('tRPC HTTP authentication', () => {
 		).resolves.toEqual(session.principal)
 	})
 
+	test('accepts native access credentials without a browser credential', async () => {
+		const session = await auth.createNativeSession()
+		await expect(isAuthenticated({ctx: context(`Bearer ${session.accessToken}`), next})).resolves.toEqual(
+			session.principal,
+		)
+	})
+
 	test('rejects a dashboard token without its browser credential', async () => {
 		const session = await auth.createSession()
 		await expect(isAuthenticated({ctx: context(`Bearer ${session.dashboardToken}`), next})).rejects.toMatchObject({

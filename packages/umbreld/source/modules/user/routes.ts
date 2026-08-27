@@ -2,7 +2,12 @@ import {TRPCError} from '@trpc/server'
 import {z} from 'zod'
 
 import {appGatewayTokenFromRequest, clearAppGatewayCookies, setAppGatewayCookie} from '../auth/app-gateway-cookie.js'
-import {OWNER_ACCOUNT_ID, SessionIssuanceInvalidatedError} from '../auth/auth.js'
+import {
+	BrowserSessionRequiredError,
+	InvalidNativeDeviceCredentialError,
+	OWNER_ACCOUNT_ID,
+	SessionIssuanceInvalidatedError,
+} from '../auth/auth.js'
 import {
 	browserSessionTokenFromRequest,
 	clearBrowserSessionCookies,
@@ -35,7 +40,7 @@ async function resolveOptionalAccountId(ctx: Context): Promise<string> {
 		if (ctx.request) {
 			const [scheme, token] = ctx.request.headers.authorization?.split(' ') ?? []
 			if (scheme?.toLowerCase() === 'bearer' && token) {
-				const principal = await ctx.umbreld.auth.authenticateDashboardCredentials(
+				const principal = await ctx.umbreld.auth.authenticateApiCredentials(
 					token,
 					browserSessionTokenFromRequest(ctx.request),
 				)
@@ -104,6 +109,9 @@ export default router({
 			}),
 		)
 		.mutation(async ({ctx, input}) => {
+			if (!ctx.request || !ctx.response) {
+				throw new TRPCError({code: 'METHOD_NOT_SUPPORTED', message: 'HTTP transport required'})
+			}
 			const validation = await ctx.user.validateAccountLogin(input.userId, input.password, input.totpToken)
 			if (!validation.valid) {
 				throw new TRPCError({code: 'UNAUTHORIZED', message: loginErrorMessage(validation.reason)})
@@ -126,6 +134,66 @@ export default router({
 			return session.dashboardToken
 		}),
 
+	loginNative: publicProcedure
+		.input(
+			z.object({
+				userId: z.string().default(OWNER_USER_ID),
+				password: z.string(),
+				totpToken: z.string().optional(),
+			}),
+		)
+		.mutation(async ({ctx, input}) => {
+			if (!ctx.request || !ctx.response) {
+				throw new TRPCError({code: 'METHOD_NOT_SUPPORTED', message: 'HTTP transport required'})
+			}
+			const validation = await ctx.user.validateAccountLogin(input.userId, input.password, input.totpToken)
+			if (!validation.valid) {
+				throw new TRPCError({code: 'UNAUTHORIZED', message: loginErrorMessage(validation.reason)})
+			}
+
+			const session = await ctx.umbreld.auth
+				.createNativeSession({
+					accountId: input.userId,
+					userAgent: ctx.request!.get('user-agent'),
+					expectedSessionIssuanceRevision: validation.sessionIssuanceRevision,
+				})
+				.catch((error) => {
+					if (error instanceof SessionIssuanceInvalidatedError) {
+						throw new TRPCError({code: 'UNAUTHORIZED', message: error.message})
+					}
+					throw error
+				})
+			ctx.response!.set('Cache-Control', 'no-store')
+			return {
+				// Native clients persist this server-authenticated account id with the
+				// session. Device-local state must never be shared merely because two
+				// accounts connect to the same physical Umbrel.
+				accountId: session.principal.accountId,
+				accessToken: session.accessToken,
+				accessExpiresAt: session.accessExpiresAt,
+				deviceToken: session.deviceToken,
+			}
+		}),
+
+	// The device credential is accepted only by this exchange. It remains stable so
+	// a lost response can be retried without destroying the native session.
+	refreshNativeAccess: publicProcedure.input(z.object({deviceToken: z.string()})).mutation(async ({ctx, input}) => {
+		if (!ctx.request || !ctx.response) {
+			throw new TRPCError({code: 'METHOD_NOT_SUPPORTED', message: 'HTTP transport required'})
+		}
+		const session = await ctx.umbreld.auth.refreshNativeAccess(input.deviceToken).catch((error) => {
+			if (error instanceof InvalidNativeDeviceCredentialError) {
+				throw new TRPCError({code: 'UNAUTHORIZED', message: 'Invalid native session'})
+			}
+			throw error
+		})
+		ctx.response!.set('Cache-Control', 'no-store')
+		return {
+			accessToken: session.accessToken,
+			accessExpiresAt: session.accessExpiresAt,
+		}
+	}),
+
 	createUser: privateProcedure
 		.input(
 			z.object({
@@ -142,7 +210,7 @@ export default router({
 	isLoggedIn: publicProcedure.query(async ({ctx}) => {
 		try {
 			const token = ctx.request!.headers.authorization?.split(' ')[1]
-			await ctx.umbreld.auth.authenticateDashboardCredentials(token!, browserSessionTokenFromRequest(ctx.request!))
+			await ctx.umbreld.auth.authenticateApiCredentials(token!, browserSessionTokenFromRequest(ctx.request!))
 			return true
 		} catch {
 			return false
@@ -153,7 +221,12 @@ export default router({
 	renewToken: privateProcedureWithMembers.mutation(async ({ctx}) => {
 		const token = ctx.request!.headers.authorization?.split(' ')[1]
 		if (!token) throw new TRPCError({code: 'UNAUTHORIZED', message: 'Invalid token'})
-		const session = await ctx.umbreld.auth.renewSession(ctx.principal!)
+		const session = await ctx.umbreld.auth.renewSession(ctx.principal!).catch((error) => {
+			if (error instanceof BrowserSessionRequiredError) {
+				throw new TRPCError({code: 'FORBIDDEN', message: error.message})
+			}
+			throw error
+		})
 
 		const appGatewayToken = appGatewayTokenFromRequest(ctx.request!)
 		if (appGatewayToken) {
@@ -175,14 +248,26 @@ export default router({
 			if (input.target !== 'trpc' && ctx.principal!.accountId !== OWNER_ACCOUNT_ID) {
 				throw new TRPCError({code: 'FORBIDDEN', message: 'This action can only be performed by the owner'})
 			}
-			return ctx.umbreld.auth.issueWebSocketTicket(ctx.principal!, input.target)
+			try {
+				return ctx.umbreld.auth.issueWebSocketTicket(ctx.principal!, input.target)
+			} catch (error) {
+				if (error instanceof BrowserSessionRequiredError) {
+					throw new TRPCError({code: 'FORBIDDEN', message: error.message})
+				}
+				throw error
+			}
 		}),
 
 	getHttpApiToken: privateProcedureWithMembers.query(async ({ctx}) => {
 		if (!ctx.request || !ctx.response) {
 			throw new TRPCError({code: 'METHOD_NOT_SUPPORTED', message: 'HTTP transport required'})
 		}
-		const token = await ctx.umbreld.auth.getHttpApiToken(ctx.principal!)
+		const token = await ctx.umbreld.auth.getHttpApiToken(ctx.principal!).catch((error) => {
+			if (error instanceof BrowserSessionRequiredError) {
+				throw new TRPCError({code: 'FORBIDDEN', message: error.message})
+			}
+			throw error
+		})
 		ctx.response.set('Cache-Control', 'no-store')
 		return token
 	}),

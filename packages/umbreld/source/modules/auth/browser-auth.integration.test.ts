@@ -3,6 +3,7 @@ import {readFile} from 'node:fs/promises'
 import {afterEach, beforeEach, expect, test} from 'vitest'
 
 import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import * as totp from '../utilities/totp.js'
 
 let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
 let dashboardToken = ''
@@ -158,4 +159,86 @@ test('normal logout revokes only the browser session making the request', async 
 	})
 	expect(loggedOutRequest.statusCode).toBe(401)
 	await expect(umbreld.client.user.get.query()).resolves.toMatchObject({name: credentials.name})
+})
+
+test('native login refreshes and revokes access without weakening browser sessions', async () => {
+	type NativeSession = {
+		accountId: string
+		accessToken: string
+		accessExpiresAt: number
+		deviceToken: string
+	}
+	const login = await umbreld.unauthenticatedApi.post('../trpc/user.loginNative', {
+		json: credentials,
+		headers: {'user-agent': 'UmbrelNativeIntegration/1.0'},
+	})
+	const native = trpcResult<NativeSession>(login.body)
+	if (!native) throw new Error('Native login did not return credentials')
+	expect(login.headers['cache-control']).toBe('no-store')
+	expect(native.accountId).toBe('0')
+
+	const nativeUser = await umbreld.unauthenticatedApi.get('../trpc/user.get', {
+		headers: {Authorization: `Bearer ${native.accessToken}`},
+	})
+	expect(trpcResult<{name: string}>(nativeUser.body)).toMatchObject({name: credentials.name})
+	const browserRenewalWithNativeAccess = await umbreld.unauthenticatedApi.post('../trpc/user.renewToken', {
+		json: null,
+		headers: {Authorization: `Bearer ${native.accessToken}`},
+		throwHttpErrors: false,
+	})
+	expect(browserRenewalWithNativeAccess.statusCode).toBe(403)
+	const browserFileTokenWithNativeAccess = await umbreld.unauthenticatedApi.get('../trpc/user.getHttpApiToken', {
+		headers: {Authorization: `Bearer ${native.accessToken}`},
+		throwHttpErrors: false,
+	})
+	expect(browserFileTokenWithNativeAccess.statusCode).toBe(403)
+	const webSocketTicketWithNativeAccess = await umbreld.unauthenticatedApi.post('../trpc/user.createWebSocketTicket', {
+		json: {target: 'trpc'},
+		headers: {Authorization: `Bearer ${native.accessToken}`},
+		throwHttpErrors: false,
+	})
+	expect(webSocketTicketWithNativeAccess.statusCode).toBe(403)
+
+	const refresh = await umbreld.unauthenticatedApi.post('../trpc/user.refreshNativeAccess', {
+		json: {deviceToken: native.deviceToken},
+	})
+	const renewed = trpcResult<Pick<NativeSession, 'accessToken' | 'accessExpiresAt'>>(refresh.body)
+	if (!renewed) throw new Error('Native refresh did not return credentials')
+	expect(refresh.headers['cache-control']).toBe('no-store')
+	expect(renewed.accessToken).not.toBe(native.accessToken)
+	const refreshRetry = await umbreld.unauthenticatedApi.post('../trpc/user.refreshNativeAccess', {
+		json: {deviceToken: native.deviceToken},
+	})
+	const retried = trpcResult<Pick<NativeSession, 'accessToken' | 'accessExpiresAt'>>(refreshRetry.body)
+	if (!retried) throw new Error('Native refresh retry did not return credentials')
+	expect(retried.accessToken).not.toBe(renewed.accessToken)
+	const oldAccess = await umbreld.unauthenticatedApi.get('../trpc/user.get', {
+		headers: {Authorization: `Bearer ${native.accessToken}`},
+		throwHttpErrors: false,
+	})
+	expect(oldAccess.statusCode).toBe(401)
+
+	await umbreld.unauthenticatedApi.post('../trpc/user.logout', {
+		json: null,
+		headers: {Authorization: `Bearer ${retried.accessToken}`},
+	})
+	const revokedAccess = await umbreld.unauthenticatedApi.get('../trpc/user.get', {
+		headers: {Authorization: `Bearer ${retried.accessToken}`},
+		throwHttpErrors: false,
+	})
+	expect(revokedAccess.statusCode).toBe(401)
+	await expect(umbreld.client.user.get.query()).resolves.toMatchObject({name: credentials.name})
+})
+
+test('native login preserves the HTTP 401 and message used to request a 2FA code', async () => {
+	const totpUri = await umbreld.client.user.generateTotpUri.query()
+	await umbreld.client.user.enable2fa.mutate({totpUri, totpToken: totp.generateToken(totpUri)})
+
+	const response = await umbreld.unauthenticatedApi.post('../trpc/user.loginNative', {
+		json: {userId: '0', password: credentials.password},
+		throwHttpErrors: false,
+	})
+
+	expect(response.statusCode).toBe(401)
+	expect(response.body).toMatchObject({error: {message: 'Missing 2FA code'}})
 })
