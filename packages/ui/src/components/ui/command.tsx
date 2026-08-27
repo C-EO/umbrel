@@ -8,7 +8,6 @@ import {mergeRefs} from 'react-merge-refs'
 import {AppIcon} from '@/components/app-icon'
 import {useFadeScroller} from '@/components/fade-scroller'
 import {Dialog} from '@/components/ui/dialog'
-import {useIsMobile} from '@/hooks/use-is-mobile'
 import {cn} from '@/lib/utils'
 
 import {
@@ -49,6 +48,9 @@ const CommandDialog = ({children, ...props}: CommandDialogProps) => {
 			>
 				<Command
 					loop
+					// Rows are ranked in JS before they're rendered (see cmdk-search.ts), so
+					// cmdk must not re-score or reorder them
+					shouldFilter={false}
 					className='[&_[cmdk-group-heading]]:font-medium[&_[cmdk-group-heading]]:text-neutral-400 flex flex-col gap-3 md:gap-5 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0'
 				>
 					{children}
@@ -139,7 +141,6 @@ function CommandItem({
 	icon?: CommandItemIcon
 	ref?: React.Ref<React.ComponentRef<typeof CommandPrimitive.Item>>
 }) {
-	const isMobile = useIsMobile()
 	return (
 		<CommandPrimitive.Item
 			ref={ref}
@@ -151,19 +152,11 @@ function CommandItem({
 		>
 			{icon &&
 				(typeof icon === 'string' ? (
-					<AppIcon src={icon} size={isMobile ? 24 : 36} className='rounded-6 sm:rounded-8' />
+					<AppIcon src={icon} className='size-6 rounded-6 sm:rounded-8 lg:size-9' />
 				) : (
 					// When a custom React node is provided, we still want to constrain its
 					// dimensions so spacing stays consistent across command items.
-					<span
-						className='flex items-center justify-center'
-						style={{
-							width: isMobile ? '24px' : '36px',
-							height: isMobile ? '24px' : '36px',
-						}}
-					>
-						{icon}
-					</span>
+					<span className='flex size-6 shrink-0 items-center justify-center lg:size-9'>{icon}</span>
 				))}
 			{children}
 			<CommandShortcut className='mr-1 hidden group-aria-selected:block'>↵</CommandShortcut>

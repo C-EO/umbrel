@@ -20,9 +20,13 @@ export interface UseSearchFilesReturn {
 export function useSearchFiles({
 	query,
 	maxResults = USE_LIST_DIRECTORY_LOAD_ITEMS.INITIAL,
+	keepPreviousResults = false,
 }: {
 	query: string
 	maxResults?: number
+	// Keep showing the last results while the next query is in flight instead of
+	// clearing them, so a list doesn't flicker as the user types
+	keepPreviousResults?: boolean
 }): UseSearchFilesReturn {
 	const trimmedQuery = query.trim()
 	const [debouncedQuery, setDebouncedQuery] = useState(trimmedQuery)
@@ -44,6 +48,15 @@ export function useSearchFiles({
 			enabled: debouncedQuery.length > 0,
 			// keep the data in the cache for a minute
 			gcTime: 60 * 1000,
+			placeholderData: keepPreviousResults
+				? (previousResults, previousQuery) => {
+						// Only while the user keeps typing the same query: results for "photo"
+						// can stand in for "photos", but not for "invoice"
+						const previousInput = previousQuery?.queryKey[1] as {input?: {query?: string}} | undefined
+						const previousSearch = previousInput?.input?.query
+						return previousSearch && debouncedQuery.startsWith(previousSearch) ? previousResults : undefined
+					}
+				: undefined,
 		},
 	)
 

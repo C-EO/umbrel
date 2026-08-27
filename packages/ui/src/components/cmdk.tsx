@@ -1,25 +1,16 @@
 import {useCommandState} from 'cmdk'
-import {
-	ComponentPropsWithoutRef,
-	createContext,
-	SetStateAction,
-	useContext,
-	useEffect,
-	useLayoutEffect,
-	useRef,
-	useState,
-} from 'react'
+import {createContext, SetStateAction, useContext, useEffect, useLayoutEffect, useRef, useState} from 'react'
 import {ErrorBoundary} from 'react-error-boundary'
 import {useTranslation} from 'react-i18next'
 import {useNavigate} from 'react-router-dom'
 import {range} from 'remeda'
 
-// Pluggable search providers rendered inside the command palette
-import {cmdkSearchProviders} from '@/components/cmdk-providers'
+import {rankCmdkEntries, type CmdkEntry} from '@/components/cmdk-search'
 import {CommandDialog, CommandEmpty, CommandInput, CommandItem, CommandList} from '@/components/ui/command'
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
 import {Separator} from '@/components/ui/separator'
 import {LOADING_DASH} from '@/constants'
+import {FilesCmdkSearchProvider} from '@/features/files/cmdk-search-provider'
 import {
 	APPS_PATH as FILES_APPS_PATH,
 	MACHINES_PATH as FILES_MACHINES_PATH,
@@ -27,21 +18,25 @@ import {
 	TRASH_PATH as FILES_TRASH_PATH,
 } from '@/features/files/constants'
 import {getLastFilesPath} from '@/features/files/utils/last-files-path'
+import {useMachinesCmdkEntries} from '@/features/machines/cmdk-entries'
 import {useDebugInstallRandomApps} from '@/hooks/use-debug-install-random-apps'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useLaunchApp} from '@/hooks/use-launch-app'
 import {useShortcuts} from '@/hooks/use-shortcuts'
-import {cn} from '@/lib/utils'
 import {appStateToString} from '@/modules/app-store/app-state-strings'
 import {resolveShortcutUrl} from '@/modules/desktop/shortcut-dialog'
 import {resolveShortcutIcon, ShortcutIconImage} from '@/modules/desktop/shortcut-icon-image'
 import {systemAppsKeyed, useApps} from '@/providers/apps'
 import {useAvailableApps} from '@/providers/available-apps'
+import {useSettingsCmdkEntries} from '@/routes/settings/cmdk-entries'
 import {trpcReact} from '@/trpc/trpc'
+import {IS_DEV} from '@/utils/misc'
 
 import {AppIcon} from './app-icon'
 import {FadeScroller} from './fade-scroller'
-import {DebugOnlyBare} from './ui/debug-only'
+
+// Rows shown for a query. Files results render below these.
+const MAX_RESULTS = 25
 
 const CmdkOpenContext = createContext<{
 	open: boolean
@@ -93,240 +88,174 @@ export function CmdkMenu() {
 function CmdkContent() {
 	const {t} = useTranslation()
 	const {setOpen} = useCmdkOpen()
-	const navigate = useNavigate()
-	const userApps = useApps()
 	const scrollRef = useRef<HTMLDivElement>(null)
-
-	// The current search query from the command input. We pass this down to all
-	// external search providers so they can surface their own results.
-	const searchQuery = useCommandState((state) => state.search)
+	const query = useCommandState((state) => state.search).trim()
 
 	// cmdk only auto-scrolls when the selected value changes, which no-ops while
 	// typing keeps the same best match, so the list can stay stuck mid-scroll.
 	// Reset before paint on every query change so results always start from the top.
 	useLayoutEffect(() => {
 		scrollRef.current?.scrollTo({top: 0})
-	}, [searchQuery])
-	const userQ = trpcReact.user.get.useQuery()
-	const isMember = userQ.data?.role === 'member'
-	const launchApp = useLaunchApp()
-	const debugInstallRandomApps = useDebugInstallRandomApps()
-	const {shortcuts} = useShortcuts()
-	// We only show installed community apps here, effectively limiting available
-	// apps to those present in the official app store
-	const availableApps = useAvailableApps()
+	}, [query])
 
-	const isLoading = userQ.isLoading || availableApps.isLoading || userApps.isLoading
+	const entries = useCmdkEntries()
+	if (!entries) return null
 
-	if (availableApps.isLoading) return null
-	if (isLoading) return null
-	if (userQ.isLoading) return null
-	if (!userApps.userApps || !userApps.userAppsKeyed) return null
-
-	const readyApps = userApps.userApps.filter((app) => app.state === 'ready')
-	const unreadyApps = userApps.userApps.filter((app) => app.state !== 'ready')
-	// Apps not installed yet
-	const installableApps = availableApps.apps.filter((app) => !userApps.userAppsKeyed?.[app.id])
+	const results = query ? rankCmdkEntries(entries, query, MAX_RESULTS) : entries.filter((entry) => entry.default)
 
 	return (
 		<CommandList ref={scrollRef}>
 			<FrequentApps onLaunchApp={() => setOpen(false)} />
 			<CommandEmpty>{t('no-results-found')}</CommandEmpty>
-			<CommandItem
-				icon={systemAppsKeyed['UMBREL_app-store'].icon}
-				onSelect={() => {
-					navigate('/app-store?dialog=updates')
-					setOpen(false)
-				}}
-			>
-				{t('cmdk.update-all-apps')}
-			</CommandItem>
-			<CommandItem
-				icon={systemAppsKeyed['UMBREL_live-usage'].icon}
-				onSelect={() => {
-					navigate(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)
-					setOpen(false)
-				}}
-			>
-				{t('cmdk.live-usage')}
-			</CommandItem>
-			<CommandItem
-				icon={systemAppsKeyed['UMBREL_widgets'].icon}
-				onSelect={() => {
-					navigate('/edit-widgets')
-					setOpen(false)
-				}}
-			>
-				{t('cmdk.widgets')}
-			</CommandItem>
-			{!isMember && (
-				<>
-					<CommandItem
-						icon={systemAppsKeyed['UMBREL_machines'].icon}
-						value={systemAppsKeyed['UMBREL_machines'].name}
-						onSelect={() => {
-							navigate(systemAppsKeyed['UMBREL_machines'].systemAppTo)
-							setOpen(false)
-						}}
-					>
-						{systemAppsKeyed['UMBREL_machines'].name}
-					</CommandItem>
-				</>
-			)}
-			<SearchItem
-				icon={systemAppsKeyed['UMBREL_app-store'].icon}
-				value={systemAppsKeyed['UMBREL_app-store'].name}
-				onSelect={() => {
-					navigate(systemAppsKeyed['UMBREL_app-store'].systemAppTo)
-					setOpen(false)
-				}}
-			>
-				{systemAppsKeyed['UMBREL_app-store'].name}
-			</SearchItem>
-			<SearchItem
-				icon={systemAppsKeyed['UMBREL_files'].icon}
-				value={systemAppsKeyed['UMBREL_files'].name}
-				onSelect={() => {
-					// TODO: THIS IS A HACK
-					// We need a better approach to track the last visited path (possibly scroll position too?)
-					// inside every page. We do this right now for the File app because it's has the most
-					// UX-advantage (eg. user accidentally clicking close while they're in a deeply nested path)
-					const lastFilesPath = getLastFilesPath(userQ.data?.userId)
-
-					navigate(lastFilesPath || systemAppsKeyed['UMBREL_files'].systemAppTo)
-					setOpen(false)
-				}}
-			>
-				{systemAppsKeyed['UMBREL_files'].name}
-			</SearchItem>
-			<SearchItem
-				icon={systemAppsKeyed['UMBREL_files'].icon}
-				value={t('files-sidebar.recents')}
-				onSelect={() => {
-					navigate(`/files${FILES_RECENTS_PATH}`)
-					setOpen(false)
-				}}
-			>
-				{t('files-sidebar.recents')}
-			</SearchItem>
-			<SearchItem
-				icon={systemAppsKeyed['UMBREL_files'].icon}
-				value={t('files-sidebar.apps')}
-				onSelect={() => {
-					navigate(`/files${FILES_APPS_PATH}`)
-					setOpen(false)
-				}}
-			>
-				{t('files-sidebar.apps')}
-			</SearchItem>
-			{!isMember && (
-				<SearchItem
-					icon={systemAppsKeyed['UMBREL_files'].icon}
-					// Distinct from the Machines app item above: cmdk keys items by value
-					value={`${systemAppsKeyed['UMBREL_files'].name} ${t('machines')}`}
+			{results.map((entry) => (
+				<CommandItem
+					key={entry.id}
+					value={entry.id}
+					icon={entry.icon}
+					disabled={entry.disabled}
 					onSelect={() => {
-						navigate(`/files${FILES_MACHINES_PATH}`)
+						entry.onSelect?.()
 						setOpen(false)
 					}}
 				>
-					{t('machines')}
-				</SearchItem>
-			)}
-			<SearchItem
-				icon={systemAppsKeyed['UMBREL_files'].icon}
-				value={t('files-sidebar.trash')}
-				onSelect={() => {
-					navigate(`/files${FILES_TRASH_PATH}`)
-					setOpen(false)
-				}}
-			>
-				{t('files-sidebar.trash')}
-			</SearchItem>
-			<SearchItem
-				icon={systemAppsKeyed['UMBREL_settings'].icon}
-				value={systemAppsKeyed['UMBREL_settings'].name}
-				onSelect={() => {
-					navigate(systemAppsKeyed['UMBREL_settings'].systemAppTo)
-					setOpen(false)
-				}}
-			>
-				{systemAppsKeyed['UMBREL_settings'].name}
-			</SearchItem>
-			{readyApps.map((app) => (
-				<SearchItem
-					value={app.name}
-					icon={app.icon}
-					key={app.id}
-					onSelect={() => {
-						launchApp(app.id)
-						setOpen(false)
-					}}
-				>
-					{app.name}
-				</SearchItem>
-			))}
-			{shortcuts?.map((shortcut) => (
-				<SearchItem
-					value={shortcut.title}
-					icon={
-						<ShortcutIconImage
-							src={resolveShortcutIcon(shortcut)}
-							title={shortcut.title}
-							className='h-full w-full rounded-6 sm:rounded-8'
-						/>
-					}
-					key={shortcut.url}
-					onSelect={() => {
-						window.open(resolveShortcutUrl(shortcut), '_blank')?.focus()
-						setOpen(false)
-					}}
-				>
-					{shortcut.title}
-				</SearchItem>
-			))}
-			{unreadyApps.map((app) => (
-				<SearchItem
-					disabled
-					value={app.name}
-					icon={app.icon}
-					key={app.id}
-					onSelect={() => {
-						navigate(`/app-store/${app.id}`)
-						setOpen(false)
-					}}
-				>
+					{/* One flex item, so the subtitle sits a text space away rather than a flex gap */}
 					<span>
-						{app.name} <span className='opacity-50'> – {appStateToString(app.state, t)}</span>
+						{entry.title}
+						{entry.subtitle && <span className='opacity-50'> {entry.subtitle}</span>}
 					</span>
-				</SearchItem>
+				</CommandItem>
 			))}
-			{installableApps.map((app) => (
-				<SearchItem
-					value={app.name}
-					icon={app.icon}
-					key={app.id}
-					onSelect={() => {
-						navigate(`/app-store/${app.id}`)
-						setOpen(false)
-					}}
-				>
-					<span>
-						{app.name} <span className='opacity-50'>{t('generic-in')} App Store</span>
-					</span>
-				</SearchItem>
-			))}
-
-			{/* Pluggable search providers */}
-			{cmdkSearchProviders.map((Provider, idx) => (
-				<Provider key={idx} query={searchQuery} close={() => setOpen(false)} />
-			))}
-			<DebugOnlyBare>
-				<SearchItem value='Install a bunch of random apps' onSelect={debugInstallRandomApps}>
-					Install a bunch of random apps
-				</SearchItem>
-			</DebugOnlyBare>
+			<FilesCmdkSearchProvider query={query} close={() => setOpen(false)} />
 		</CommandList>
 	)
+}
+
+// Everything the palette can find, in priority order: when several entries
+// match a query equally well, the earlier one wins.
+function useCmdkEntries(): CmdkEntry[] | null {
+	const {t} = useTranslation()
+	const navigate = useNavigate()
+	const launchApp = useLaunchApp()
+	const debugInstallRandomApps = useDebugInstallRandomApps()
+	const userQ = trpcReact.user.get.useQuery()
+	const {userApps, userAppsKeyed, isLoading: isLoadingUserApps} = useApps()
+	// We only show installed community apps here, effectively limiting available
+	// apps to those present in the official app store
+	const availableApps = useAvailableApps()
+	const {shortcuts} = useShortcuts()
+	const settingsEntries = useSettingsCmdkEntries()
+	const machineEntries = useMachinesCmdkEntries()
+
+	if (userQ.isLoading || availableApps.isLoading || isLoadingUserApps || !userApps || !userAppsKeyed) return null
+
+	const isMember = userQ.data?.role === 'member'
+	const appStore = systemAppsKeyed['UMBREL_app-store']
+	const files = systemAppsKeyed['UMBREL_files']
+	const machines = systemAppsKeyed['UMBREL_machines']
+	const filesEntry = (id: string, title: string, path: string): CmdkEntry => ({
+		id: `files:${id}`,
+		title,
+		icon: files.icon,
+		onSelect: () => navigate(`/files${path}`),
+	})
+
+	const systemEntries: CmdkEntry[] = [
+		{
+			id: 'system:update-all-apps',
+			title: t('cmdk.update-all-apps'),
+			default: true,
+			icon: appStore.icon,
+			onSelect: () => navigate('/app-store?dialog=updates'),
+		},
+		{
+			id: 'system:live-usage',
+			title: t('cmdk.live-usage'),
+			default: true,
+			icon: systemAppsKeyed['UMBREL_live-usage'].icon,
+			onSelect: () => navigate(systemAppsKeyed['UMBREL_live-usage'].systemAppTo),
+		},
+		...(isMember
+			? []
+			: [
+					{
+						id: 'system:machines',
+						title: machines.name,
+						default: true,
+						icon: machines.icon,
+						onSelect: () => navigate(machines.systemAppTo),
+					},
+				]),
+		{id: 'system:app-store', title: appStore.name, icon: appStore.icon, onSelect: () => navigate(appStore.systemAppTo)},
+		{
+			id: 'system:files',
+			title: files.name,
+			icon: files.icon,
+			// TODO: THIS IS A HACK
+			// We need a better approach to track the last visited path (possibly scroll position too?)
+			// inside every page. We do this right now for the File app because it's has the most
+			// UX-advantage (eg. user accidentally clicking close while they're in a deeply nested path)
+			onSelect: () => navigate(getLastFilesPath(userQ.data?.userId) || files.systemAppTo),
+		},
+		filesEntry('recents', t('files-sidebar.recents'), FILES_RECENTS_PATH),
+		filesEntry('apps', t('files-sidebar.apps'), FILES_APPS_PATH),
+		...(isMember ? [] : [filesEntry('machines', t('machines'), FILES_MACHINES_PATH)]),
+		filesEntry('trash', t('files-sidebar.trash'), FILES_TRASH_PATH),
+		{
+			id: 'system:settings',
+			title: systemAppsKeyed['UMBREL_settings'].name,
+			icon: systemAppsKeyed['UMBREL_settings'].icon,
+			onSelect: () => navigate(systemAppsKeyed['UMBREL_settings'].systemAppTo),
+		},
+	]
+
+	const readyApps = userApps.filter((app) => app.state === 'ready')
+	const unreadyApps = userApps.filter((app) => app.state !== 'ready')
+	// Apps not installed yet
+	const installableApps = availableApps.apps.filter((app) => !userAppsKeyed[app.id])
+
+	return [
+		...systemEntries,
+		...settingsEntries,
+		...readyApps.map(
+			(app): CmdkEntry => ({id: `app:${app.id}`, title: app.name, icon: app.icon, onSelect: () => launchApp(app.id)}),
+		),
+		...(shortcuts ?? []).map(
+			(shortcut): CmdkEntry => ({
+				id: `shortcut:${shortcut.url}`,
+				title: shortcut.title,
+				icon: (
+					<ShortcutIconImage
+						src={resolveShortcutIcon(shortcut)}
+						title={shortcut.title}
+						className='h-full w-full rounded-6 sm:rounded-8'
+					/>
+				),
+				onSelect: () => window.open(resolveShortcutUrl(shortcut), '_blank')?.focus(),
+			}),
+		),
+		...machineEntries,
+		...unreadyApps.map(
+			(app): CmdkEntry => ({
+				id: `app:${app.id}`,
+				title: app.name,
+				subtitle: `– ${appStateToString(app.state, t)}`,
+				disabled: true,
+				icon: app.icon,
+			}),
+		),
+		...installableApps.map(
+			(app): CmdkEntry => ({
+				id: `store:${app.id}`,
+				title: app.name,
+				subtitle: `${t('generic-in')} App Store`,
+				icon: app.icon,
+				onSelect: () => navigate(`/app-store/${app.id}`),
+			}),
+		),
+		...(IS_DEV
+			? [{id: 'debug:install-random-apps', title: 'Install a bunch of random apps', onSelect: debugInstallRandomApps}]
+			: []),
+	]
 }
 
 function FrequentApps({onLaunchApp}: {onLaunchApp: () => void}) {
@@ -422,20 +351,5 @@ function FrequentApp({
 			<AppIcon src={icon} size={isMobile ? 48 : 64} className='rounded-10 lg:rounded-15' />
 			<div className='w-full truncate text-[10px] -tracking-2 text-white/75 md:text-13'>{name ?? appId}</div>
 		</button>
-	)
-}
-
-const SearchItem = (props: ComponentPropsWithoutRef<typeof CommandItem>) => {
-	const search = useCommandState((state) => state.search)
-	if (!search) return null
-
-	return (
-		<CommandItem
-			{...props}
-			className={cn(props.className, props.disabled && 'opacity-50')}
-			onSelect={(value) => {
-				props.onSelect?.(value)
-			}}
-		/>
 	)
 }

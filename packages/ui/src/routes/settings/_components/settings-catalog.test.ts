@@ -22,7 +22,7 @@ describe('settings catalog search', () => {
 		}
 
 		expect(getSettingsPage(catalog(), {query: 'https'}).items.map(({id}) => id)).toContain('advanced')
-		expect(getSettingsCommandItems(catalog(), 'https').map(({id}) => id)).toContain('https-access')
+		expect(getSettingsCommandItems(catalog()).map(({id}) => id)).toContain('https-access')
 	})
 
 	it('derives mounted categories from matching rows', () => {
@@ -38,31 +38,25 @@ describe('settings catalog search', () => {
 		const systemPage = getSettingsPage(ownerCatalog, {filter: 'system'})
 
 		expect(systemPage.items.map(({id}) => id)).toContain('mcp')
-		expect(getSettingsCommandItems(ownerCatalog, 'mcp').map(({id}) => id)).toContain('mcp')
+		expect(getSettingsCommandItems(ownerCatalog).map(({id}) => id)).toContain('mcp')
 
 		const memberCatalog = createSettingsCatalog(t, {deviceName: 'Umbrel Home', isMember: true})
 		expect(getSettingsPage(memberCatalog).items.map(({id}) => id)).not.toContain('mcp')
-		expect(getSettingsCommandItems(memberCatalog, 'mcp').map(({id}) => id)).not.toContain('mcp')
+		expect(getSettingsCommandItems(memberCatalog).map(({id}) => id)).not.toContain('mcp')
 	})
 
-	it('matches accentless and compact fuzzy queries', () => {
-		const localizedT = ((key: string) => {
-			if (key === 'network.hostname') return 'Nom d’hôte sécurisé'
-			if (key === 'change-password') return 'Change password'
-			return key
-		}) as TFunction
+	it('matches accentless queries against translated copy', () => {
+		const localizedT = ((key: string) => (key === 'network.hostname' ? 'Nom d’hôte sécurisé' : key)) as TFunction
 		const localizedCatalog = catalog(localizedT)
 
 		expect(getSettingsPage(localizedCatalog, {query: 'hote securise'}).items.map(({id}) => id)).toContain('advanced')
-		expect(getSettingsCommandItems(localizedCatalog, 'hote securise').map(({id}) => id)).toContain('network')
-		expect(getSettingsCommandItems(localizedCatalog, 'chpass').map(({id}) => id)).toContain('change-password')
 	})
 
 	it('resolves page command targets from the page destination when no override exists', () => {
-		const settingsCatalog = catalog()
-		const wallpaper = getSettingsCommandItems(settingsCatalog, 'wallpaper').find(({id}) => id === 'wallpaper')!
-		const support = getSettingsCommandItems(settingsCatalog, 'contact-support').find(({id}) => id === 'support')!
-		const backups = getSettingsCommandItems(settingsCatalog, 'back up your files').find(({id}) => id === 'backups')!
+		const commandItems = getSettingsCommandItems(catalog())
+		const wallpaper = commandItems.find(({id}) => id === 'wallpaper')!
+		const support = commandItems.find(({id}) => id === 'support')!
+		const backups = commandItems.find(({id}) => id === 'backups')!
 
 		expect(wallpaper.kind).toBe('page')
 		expect(support.kind).toBe('page')
@@ -73,7 +67,12 @@ describe('settings catalog search', () => {
 	})
 
 	it('keeps the established zero-query actions', () => {
-		expect(getDefaultSettingsCommandItems(catalog()).map(({id}) => id)).toEqual(['wallpaper', 'backups', 'restart'])
+		expect(getDefaultSettingsCommandItems(catalog()).map(({id}) => id)).toEqual([
+			'wallpaper',
+			'widgets',
+			'backups',
+			'restart',
+		])
 	})
 
 	it('places widgets directly below wallpaper for owners and members', () => {
@@ -96,8 +95,9 @@ describe('settings catalog search', () => {
 		})
 		const page = getSettingsPage(memberCatalog)
 		const pageIds = page.items.map(({id}) => id)
-		const commandIds = getSettingsCommandItems(memberCatalog, 'settings').map(({id}) => id)
-		const accountCommand = getSettingsCommandItems(memberCatalog, 'account').find(({id}) => id === 'account')!
+		const commandItems = getSettingsCommandItems(memberCatalog)
+		const commandIds = commandItems.map(({id}) => id)
+		const accountCommand = commandItems.find(({id}) => id === 'account')!
 
 		expect(page.items).not.toHaveLength(0)
 		expect(page.items.every(({category}) => category === 'account')).toBe(true)
@@ -110,11 +110,10 @@ describe('settings catalog search', () => {
 			type: 'navigate',
 			to: '/settings/account/change-name',
 		})
-		expect(getSettingsCommandItems(memberCatalog, 'avatar')).toEqual([])
 		expect(commandIds).not.toContain('advanced')
-		expect(getSettingsCommandItems(memberCatalog, 'restart')).toEqual([])
-		expect(getSettingsCommandItems(memberCatalog, 'change-password').map(({id}) => id)).toContain('change-password')
-		expect(getSettingsCommandItems(memberCatalog, 'settings.language').map(({id}) => id)).toContain('language')
+		expect(commandIds).not.toContain('restart')
+		expect(commandIds).toContain('change-password')
+		expect(commandIds).toContain('language')
 	})
 
 	it('filters by category without changing row categories', () => {

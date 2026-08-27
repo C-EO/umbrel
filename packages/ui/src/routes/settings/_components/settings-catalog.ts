@@ -16,6 +16,7 @@ import {
 } from 'react-icons/pi'
 import {TbSparkles} from 'react-icons/tb'
 
+import {normalizeSearchText} from '@/components/cmdk-search'
 import {links} from '@/constants/links'
 
 import {SETTINGS_CATEGORY_IDS, SettingsCategoryId, SettingsFilterId, suppliedSettingsIcons} from './settings-taxonomy'
@@ -143,7 +144,7 @@ export function createSettingsCatalog(
 			kind: 'page',
 			id: 'widgets',
 			category: 'account',
-			command: {},
+			command: {default: true},
 			icon: HiMiniRectangleStack,
 			title: t('cmdk.widgets'),
 			description: t('widgets.description'),
@@ -737,8 +738,8 @@ export function getSettingsPage(
 	}
 }
 
-export function getSettingsCommandItems(catalog: SettingsCatalogItem[], query: string): SettingsCommandCatalogItem[] {
-	return searchSettingsItems(catalog.filter(isSettingsCommandItem), query)
+export function getSettingsCommandItems(catalog: SettingsCatalogItem[]): SettingsCommandCatalogItem[] {
+	return catalog.filter(isSettingsCommandItem)
 }
 
 export function getDefaultSettingsCommandItems(catalog: SettingsCatalogItem[]): SettingsCommandCatalogItem[] {
@@ -754,31 +755,15 @@ export function getSettingsCommandTarget(item: SettingsCommandCatalogItem): Sett
 }
 
 export function searchSettingsItems<T extends SettingsCatalogItem>(items: T[], query: string): T[] {
-	const normalizedQuery = normalizeSettingsSearchText(query)
+	const normalizedQuery = normalizeSearchText(query)
 	if (!normalizedQuery) return items
 
 	const matches = new Set(
 		matchSorter(items, normalizedQuery, {
-			keys: [(item) => settingsItemSearchValues(item).map(normalizeSettingsSearchText)],
+			keys: [(item) => settingsItemSearchValues(item).map(normalizeSearchText)],
 		}),
 	)
 	return items.filter((item) => matches.has(item))
-}
-
-export function settingsItemSearchText(item: SettingsCatalogItem) {
-	return settingsItemSearchValues(item).join(' ')
-}
-
-export function settingsItemSearchAliases(item: SettingsCatalogItem) {
-	return [normalizeSettingsSearchText(settingsItemSearchText(item))]
-}
-
-export function normalizeSettingsSearchText(value: string) {
-	return value
-		.trim()
-		.toLowerCase()
-		.normalize('NFKD')
-		.replace(/[\u0300-\u036f]/g, '')
 }
 
 function settingsItemSearchValues(item: SettingsCatalogItem) {

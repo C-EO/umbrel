@@ -1,19 +1,22 @@
 // @vitest-environment jsdom
 
-import {Command as CommandPrimitive} from 'cmdk'
 import {act} from 'react'
 import {createRoot} from 'react-dom/client'
 import {MemoryRouter} from 'react-router-dom'
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {addDialogToLocation, SettingsCmdkSearchProvider, shouldReplaceSettingsNavigation} from './cmdk-search-provider'
+import {rankCmdkEntries, type CmdkEntry} from '@/components/cmdk-search'
 
-vi.mock('@/hooks/use-is-mobile', () => ({useIsMobile: () => false}))
+import {addDialogToLocation, shouldReplaceSettingsNavigation, useSettingsCmdkEntries} from './cmdk-entries'
+
+const translations: Record<string, string> = {
+	'network.hostname': 'Nom d’hôte sécurisé',
+	'change-password': 'Change password',
+}
+
 vi.mock('react-i18next', async (importOriginal) => ({
 	...(await importOriginal<typeof import('react-i18next')>()),
-	useTranslation: () => ({
-		t: (key: string) => (key === 'network.hostname' ? 'Nom d’hôte sécurisé' : key),
-	}),
+	useTranslation: () => ({t: (key: string) => translations[key] ?? key}),
 }))
 vi.mock('@/features/backups/hooks/use-backups', () => ({
 	useBackups: () => ({repositories: []}),
@@ -22,7 +25,7 @@ vi.mock('@/hooks/use-is-home-or-pro', () => ({
 	useIsHomeOrPro: () => ({deviceName: 'Umbrel Home'}),
 }))
 vi.mock('@/providers/apps', () => ({
-	systemAppsKeyed: {UMBREL_settings: {}},
+	systemAppsKeyed: {UMBREL_settings: {icon: 'settings.svg'}},
 }))
 vi.mock('@/trpc/trpc', () => ({
 	trpcReact: {user: {get: {useQuery: () => ({data: {role: 'owner'}, isLoading: false})}}},
@@ -33,15 +36,6 @@ let container: HTMLDivElement
 let root: ReturnType<typeof createRoot>
 
 beforeEach(() => {
-	vi.stubGlobal(
-		'ResizeObserver',
-		class {
-			observe() {}
-			unobserve() {}
-			disconnect() {}
-		},
-	)
-	Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {configurable: true, value: vi.fn()})
 	container = document.createElement('div')
 	document.body.appendChild(container)
 	root = createRoot(container)
@@ -50,40 +44,54 @@ beforeEach(() => {
 afterEach(() => {
 	act(() => root.unmount())
 	container.remove()
-	vi.unstubAllGlobals()
-	delete (HTMLElement.prototype as {scrollIntoView?: unknown}).scrollIntoView
 })
 
-function renderSettingsResults(query: string) {
+function Probe({onEntries}: {onEntries: (entries: CmdkEntry[]) => void}) {
+	onEntries(useSettingsCmdkEntries())
+	return null
+}
+
+function renderEntries() {
+	let entries: CmdkEntry[] = []
 	act(() =>
 		root.render(
 			<MemoryRouter future={{v7_startTransition: true, v7_relativeSplatPath: true}}>
-				<CommandPrimitive>
-					<CommandPrimitive.Input value={query} readOnly />
-					<CommandPrimitive.List>
-						<SettingsCmdkSearchProvider query={query} close={() => {}} />
-					</CommandPrimitive.List>
-				</CommandPrimitive>
+				<Probe onEntries={(rendered) => (entries = rendered)} />
 			</MemoryRouter>,
 		),
 	)
+	return entries
 }
 
-describe('Settings Command-K results', () => {
-	it('survives cmdk filtering when an accentless query matched translated copy', () => {
-		renderSettingsResults('hote securise')
+const ids = (entries: CmdkEntry[]) => entries.map(({id}) => id)
 
-		const renderedItem = container.querySelector('[cmdk-item]')
-		expect(renderedItem).not.toBeNull()
-		expect(renderedItem?.hasAttribute('hidden')).toBe(false)
-		expect(renderedItem?.textContent).toContain('advanced-settings')
+describe('Settings Command-K entries', () => {
+	it('gives every settings command a unique, short id', () => {
+		const entries = renderEntries()
+
+		expect(entries.length).toBeGreaterThan(20)
+		expect(new Set(ids(entries)).size).toBe(entries.length)
+		expect(ids(entries).every((id) => /^settings:[a-z0-9-]+$/.test(id))).toBe(true)
 	})
 
-	it('keeps staging-style fuzzy matches for compact queries', () => {
-		renderSettingsResults('chpass')
+	it('shows the established actions without a query', () => {
+		expect(ids(renderEntries().filter(({default: isDefault}) => isDefault))).toEqual([
+			'settings:wallpaper',
+			'settings:widgets',
+			'settings:backups',
+			'settings:restart',
+		])
+	})
 
-		const visibleResults = [...container.querySelectorAll<HTMLElement>('[cmdk-item]:not([hidden])')]
-		expect(visibleResults.some((item) => item.textContent?.includes('change-password'))).toBe(true)
+	it('is found by an accentless query against translated nested copy', () => {
+		const results = ids(rankCmdkEntries(renderEntries(), 'hote securise', 25))
+
+		expect(results).toContain('settings:advanced')
+		expect(results).toContain('settings:network')
+	})
+
+	it('is found by compact fuzzy queries', () => {
+		expect(ids(rankCmdkEntries(renderEntries(), 'chpass', 25))).toEqual(['settings:change-password'])
 	})
 
 	it('opens the global logout dialog without changing the current page', () => {
