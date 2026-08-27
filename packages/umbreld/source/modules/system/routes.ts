@@ -31,6 +31,7 @@ import {
 	clearStaticIp,
 	syncDns,
 } from './system.js'
+import {getTailscaleBrowserHostname} from './tailscale.js'
 
 import {
 	privateProcedure,
@@ -218,6 +219,9 @@ export default router({
 		scopeGpuUsageAppsForMember(ctx.umbreld, await getGpuUsage(ctx.umbreld), ctx.principal?.accountId ?? OWNER_USER_ID),
 	),
 	getIpAddresses: privateProcedureWithMembers.query(() => getIpAddresses()),
+	// Optional browser metadata. Native clients keep literal, identity-verified IPs for
+	// API and background traffic; the Tailscale hostname is only a friendlier browser destination.
+	getTailscaleBrowserHostname: privateProcedureWithMembers.query(({ctx}) => getTailscaleBrowserHostname(ctx.umbreld)),
 	getHostname: privateProcedure.query(() => getHostname()),
 	getNetworkInterfaces: privateProcedure.query(({ctx}) => getNetworkInterfaces(ctx.umbreld)),
 	setHostname: privateProcedure
