@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "應用程式選項",
   "live-usage.gpu-core": "核心",
-  "live-usage.gpu-driver": "{{driver}} 驅動程式",
   "live-usage.gpu-shared-memory": "共享記憶體",
   "live-usage.gpu-shared-with-system": "與系統記憶體共用 {{amount}}",
   "live-usage.not-using-gpu": "未使用 GPU",

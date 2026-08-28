@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Opcije aplikacije",
   "live-usage.gpu-core": "Jezgra",
-  "live-usage.gpu-driver": "Upravljački program {{driver}}",
   "live-usage.gpu-shared-memory": "Dijeljena memorija",
   "live-usage.gpu-shared-with-system": "{{amount}} dijeljeno sa sistemskom memorijom",
   "live-usage.not-using-gpu": "GPU se ne koristi",

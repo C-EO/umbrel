@@ -1044,7 +1044,6 @@
   "live-usage": "Utilizzo in Tempo Reale",
   "live-usage.app-options": "Opzioni app",
   "live-usage.gpu-core": "Core",
-  "live-usage.gpu-driver": "Driver {{driver}}",
   "live-usage.gpu-shared-memory": "Memoria condivisa",
   "live-usage.gpu-shared-with-system": "{{amount}} condivisi con la memoria di sistema",
   "live-usage.not-using-gpu": "GPU non in uso",

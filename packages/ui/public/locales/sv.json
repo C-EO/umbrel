@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Appalternativ",
   "live-usage.gpu-core": "Kärna",
-  "live-usage.gpu-driver": "{{driver}}-drivrutin",
   "live-usage.gpu-shared-memory": "Delat minne",
   "live-usage.gpu-shared-with-system": "{{amount}} delas med systemminnet",
   "live-usage.not-using-gpu": "Använder inte GPU",

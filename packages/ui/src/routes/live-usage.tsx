@@ -516,14 +516,9 @@ function GpuDeviceDetail({device}: {device: GpuDevice}) {
 	const {dedicated, shared, used, total} = gpuMemoryInfo(device)
 	return (
 		<div className='settings-edge-material rounded-24 p-5'>
-			<div className='flex min-w-0 items-center justify-between gap-3'>
-				<div className='flex min-w-0 items-center gap-2'>
-					<span className='truncate text-15 font-semibold -tracking-2 text-white/80'>{cleanGpuName(device.model)}</span>
-					<GpuVendorBadge vendor={device.vendor} />
-				</div>
-				<span className='shrink-0 text-12 -tracking-2 text-white/25'>
-					{t('live-usage.gpu-driver', {driver: device.driver})}
-				</span>
+			<div className='flex min-w-0 items-center gap-2'>
+				<span className='truncate text-15 font-semibold -tracking-2 text-white/80'>{cleanGpuName(device.model)}</span>
+				<GpuVendorBadge vendor={device.vendor} />
 			</div>
 			<div className='mt-4 grid gap-5 sm:grid-cols-2'>
 				<div className='relative overflow-hidden rounded-12'>

@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Valkostir forrits",
   "live-usage.gpu-core": "Kjarni",
-  "live-usage.gpu-driver": "{{driver}}-rekill",
   "live-usage.gpu-shared-memory": "Samnýtt minni",
   "live-usage.gpu-shared-with-system": "{{amount}} samnýtt með kerfisminni",
   "live-usage.not-using-gpu": "GPU er ekki í notkun",

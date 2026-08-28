@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Možnosti aplikace",
   "live-usage.gpu-core": "Jádro",
-  "live-usage.gpu-driver": "Ovladač {{driver}}",
   "live-usage.gpu-shared-memory": "Sdílená paměť",
   "live-usage.gpu-shared-with-system": "{{amount}} sdíleno se systémovou pamětí",
   "live-usage.not-using-gpu": "GPU se nepoužívá",

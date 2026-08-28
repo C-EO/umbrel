@@ -48,7 +48,6 @@ test('formats GPU utilization, memory, devices, and app attribution for Live Usa
 					id: '0000:c7:00.0',
 					vendor: 'AMD',
 					model: 'Strix Halo',
-					driver: 'amdgpu',
 					totalUsed: 42.2,
 					dedicatedMemory: {total: 1024 ** 3, used: 256 * 1024 ** 2},
 					sharedMemory: {used: 1.75 * 1024 ** 3},

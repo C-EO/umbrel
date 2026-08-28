@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "App-opties",
   "live-usage.gpu-core": "Kern",
-  "live-usage.gpu-driver": "{{driver}}-stuurprogramma",
   "live-usage.gpu-shared-memory": "Gedeeld geheugen",
   "live-usage.gpu-shared-with-system": "{{amount}} gedeeld met het systeemgeheugen",
   "live-usage.not-using-gpu": "GPU wordt niet gebruikt",

@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Možnosti aplikacije",
   "live-usage.gpu-core": "Jedro",
-  "live-usage.gpu-driver": "Gonilnik {{driver}}",
   "live-usage.gpu-shared-memory": "Pomnilnik v skupni rabi",
   "live-usage.gpu-shared-with-system": "{{amount}} v skupni rabi s sistemskim pomnilnikom",
   "live-usage.not-using-gpu": "GPU ni v uporabi",

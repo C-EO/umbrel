@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Opcje aplikacji",
   "live-usage.gpu-core": "Rdzeń",
-  "live-usage.gpu-driver": "Sterownik {{driver}}",
   "live-usage.gpu-shared-memory": "Pamięć współdzielona",
   "live-usage.gpu-shared-with-system": "{{amount}} współdzielone z pamięcią systemową",
   "live-usage.not-using-gpu": "GPU nie jest używane",

@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Επιλογές εφαρμογής",
   "live-usage.gpu-core": "Πυρήνας",
-  "live-usage.gpu-driver": "Πρόγραμμα οδήγησης {{driver}}",
   "live-usage.gpu-shared-memory": "Κοινόχρηστη μνήμη",
   "live-usage.gpu-shared-with-system": "{{amount}} σε κοινή χρήση με τη μνήμη συστήματος",
   "live-usage.not-using-gpu": "Δεν χρησιμοποιείται η GPU",

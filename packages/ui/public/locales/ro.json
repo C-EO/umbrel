@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Opțiuni aplicație",
   "live-usage.gpu-core": "Nucleu",
-  "live-usage.gpu-driver": "Driver {{driver}}",
   "live-usage.gpu-shared-memory": "Memorie partajată",
   "live-usage.gpu-shared-with-system": "{{amount}} partajată cu memoria sistemului",
   "live-usage.not-using-gpu": "GPU-ul nu este utilizat",

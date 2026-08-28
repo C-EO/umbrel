@@ -1044,7 +1044,6 @@
   "live-usage": "Élő használat",
   "live-usage.app-options": "Alkalmazásbeállítások",
   "live-usage.gpu-core": "Mag",
-  "live-usage.gpu-driver": "{{driver}} illesztőprogram",
   "live-usage.gpu-shared-memory": "Megosztott memória",
   "live-usage.gpu-shared-with-system": "{{amount}} megosztva a rendszermemóriával",
   "live-usage.not-using-gpu": "A GPU nincs használatban",

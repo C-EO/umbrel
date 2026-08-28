@@ -1044,7 +1044,6 @@
   "live-usage": "ライブ使用状況",
   "live-usage.app-options": "アプリのオプション",
   "live-usage.gpu-core": "コア",
-  "live-usage.gpu-driver": "{{driver}} ドライバ",
   "live-usage.gpu-shared-memory": "共有メモリ",
   "live-usage.gpu-shared-with-system": "システムメモリと {{amount}} を共有",
   "live-usage.not-using-gpu": "GPUを使用していません",

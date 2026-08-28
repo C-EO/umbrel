@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Appalternativer",
   "live-usage.gpu-core": "Kjerne",
-  "live-usage.gpu-driver": "{{driver}}-driver",
   "live-usage.gpu-shared-memory": "Delt minne",
   "live-usage.gpu-shared-with-system": "{{amount}} delt med systemminnet",
   "live-usage.not-using-gpu": "Bruker ikke GPU",

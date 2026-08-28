@@ -1044,7 +1044,6 @@
   "live-usage": "Живе використання",
   "live-usage.app-options": "Параметри програми",
   "live-usage.gpu-core": "Ядро",
-  "live-usage.gpu-driver": "Драйвер {{driver}}",
   "live-usage.gpu-shared-memory": "Спільна пам’ять",
   "live-usage.gpu-shared-with-system": "{{amount}} використовується спільно із системною пам’яттю",
   "live-usage.not-using-gpu": "GPU не використовується",

@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "Rakenduse valikud",
   "live-usage.gpu-core": "Tuum",
-  "live-usage.gpu-driver": "{{driver}} draiver",
   "live-usage.gpu-shared-memory": "Jagatud mälu",
   "live-usage.gpu-shared-with-system": "{{amount}} jagatud süsteemimäluga",
   "live-usage.not-using-gpu": "GPU-d ei kasutata",

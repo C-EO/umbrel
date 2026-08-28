@@ -1044,7 +1044,6 @@
   "live-usage": "Canlı Kullanım",
   "live-usage.app-options": "Uygulama seçenekleri",
   "live-usage.gpu-core": "Çekirdek",
-  "live-usage.gpu-driver": "{{driver}} sürücüsü",
   "live-usage.gpu-shared-memory": "Paylaşılan bellek",
   "live-usage.gpu-shared-with-system": "Sistem belleğiyle paylaşılan {{amount}}",
   "live-usage.not-using-gpu": "GPU kullanılmıyor",

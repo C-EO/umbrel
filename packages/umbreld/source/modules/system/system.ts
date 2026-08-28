@@ -358,7 +358,6 @@ export async function getGpuUsage(umbreld: Umbreld): Promise<{
 		id: string
 		vendor: string
 		model: string
-		driver: string
 		totalUsed: number | null
 		dedicatedMemory: {total: number | null; used: number} | null
 		sharedMemory: {used: number} | null

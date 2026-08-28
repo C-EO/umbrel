@@ -25,7 +25,6 @@ export type GpuDeviceUsage = {
 	id: string
 	vendor: string
 	model: string
-	driver: string
 	totalUsed: number | null
 	dedicatedMemory: MemoryUsage | null
 	sharedMemory: Omit<MemoryUsage, 'total'> | null
@@ -50,7 +49,6 @@ type DrmCycleSample = DrmEngineSample & {
 export type DrmClientSample = {
 	key: string
 	deviceId: string
-	driver: string
 	pids: number[]
 	engines: Record<string, DrmEngineSample>
 	cycles: Record<string, DrmCycleSample>
@@ -59,6 +57,9 @@ export type DrmClientSample = {
 }
 
 type DrmDevice = Omit<GpuDeviceUsage, 'totalUsed' | 'processes'> & {
+	// Kept internal to this module: the bound kernel driver decides whether an
+	// idle device reports 0% or nothing at all (see driverHasIdleUtilization).
+	driver: string
 	sysfsTotalUsed: number | null
 }
 
@@ -199,10 +200,9 @@ export function parseDrmFdinfo(contents: string, pid: number): DrmClientSample |
 		values.set(line.slice(0, separator).trim(), line.slice(separator + 1).trim())
 	}
 
-	const driver = values.get('drm-driver')
 	const clientId = values.get('drm-client-id')
 	const rawDeviceId = values.get('drm-pdev')
-	if (!driver || !clientId || !rawDeviceId) return null
+	if (!values.get('drm-driver') || !clientId || !rawDeviceId) return null
 	const deviceId = normalizePciAddress(rawDeviceId)
 
 	const capacities = new Map<string, number>()
@@ -253,7 +253,6 @@ export function parseDrmFdinfo(contents: string, pid: number): DrmClientSample |
 	return {
 		key: `${deviceId}:${clientId}`,
 		deviceId,
-		driver,
 		pids: [pid],
 		engines,
 		cycles,
@@ -408,7 +407,7 @@ async function sampleDrmDevices(devices: DrmDevice[]): Promise<GpuDeviceUsage[]>
 		}))
 
 		const driverHasIdleUtilization = device.driver === 'i915' || device.driver === 'xe'
-		const {sysfsTotalUsed, ...publicDevice} = device
+		const {sysfsTotalUsed, driver: _driver, ...publicDevice} = device
 		const dedicatedMemory =
 			device.dedicatedMemory || clientDedicatedMemory > 0
 				? {
@@ -449,7 +448,6 @@ export function parseNvidiaGpuCsv(output: string): NvidiaDevice[] {
 				id: normalizePciAddress(pciAddress),
 				vendor: 'NVIDIA Corporation',
 				model,
-				driver: 'nvidia',
 				totalUsed: utilization === 'N/A' ? null : clampPercent(Number(utilization)),
 				dedicatedMemory:
 					Number.isFinite(total) && Number.isFinite(used)

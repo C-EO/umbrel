@@ -1044,7 +1044,6 @@
   "live-usage": "Live Usage",
   "live-usage.app-options": "앱 옵션",
   "live-usage.gpu-core": "코어",
-  "live-usage.gpu-driver": "{{driver}} 드라이버",
   "live-usage.gpu-shared-memory": "공유 메모리",
   "live-usage.gpu-shared-with-system": "시스템 메모리와 {{amount}} 공유",
   "live-usage.not-using-gpu": "GPU 사용 안 함",

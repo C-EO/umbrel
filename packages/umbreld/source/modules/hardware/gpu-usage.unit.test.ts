@@ -56,7 +56,6 @@ describe('DRM client usage', () => {
 		expect(sample).toMatchObject({
 			key: '0000:00:02.0:7',
 			deviceId: '0000:00:02.0',
-			driver: 'i915',
 			pids: [123],
 			engines: {
 				render: {busy: 9_288_864_723, capacity: 1},
@@ -71,7 +70,6 @@ describe('DRM client usage', () => {
 		const client = (key: string, render: number, copy: number): DrmClientSample => ({
 			key,
 			deviceId: '0000:00:02.0',
-			driver: 'i915',
 			pids: [Number(key.at(-1))],
 			engines: {render: {busy: render, capacity: 1}, copy: {busy: copy, capacity: 1}},
 			cycles: {},
@@ -94,7 +92,6 @@ describe('DRM client usage', () => {
 		const sample = (busy: number, total: number): DrmClientSample => ({
 			key: 'xe-client',
 			deviceId: '0000:03:00.0',
-			driver: 'xe',
 			pids: [1],
 			engines: {},
 			cycles: {ccs: {busy, total, capacity: 4}},
@@ -137,25 +134,23 @@ describe('NVIDIA usage parsing', () => {
 	test('uses NVIDIA process telemetry without double-counting matching DRM clients', () => {
 		const drmProcess = {pids: [10], used: 25, dedicatedMemoryUsed: 256, sharedMemoryUsed: 0}
 		const nvidiaProcess = {pids: [10], used: 30, dedicatedMemoryUsed: 256, sharedMemoryUsed: 0}
-		const device = (driver: string, processes: (typeof drmProcess)[]) => ({
+		const device = (model: string, processes: (typeof drmProcess)[]) => ({
 			id: '0000:63:00.0',
-			vendor: driver,
-			model: 'RTX 3060',
-			driver,
+			vendor: 'NVIDIA Corporation',
+			model,
 			totalUsed: 30,
 			dedicatedMemory: {total: 1024, used: 256},
 			sharedMemory: null,
 			processes,
 		})
 
-		expect(mergeGpuDeviceUsage([device('nvidia-drm', [drmProcess])], [device('nvidia', [nvidiaProcess])])).toHaveLength(
-			1,
-		)
-		expect(
-			mergeGpuDeviceUsage([device('nvidia-drm', [drmProcess])], [device('nvidia', [nvidiaProcess])])[0],
-		).toMatchObject({driver: 'nvidia', processes: [nvidiaProcess]})
-		expect(
-			mergeGpuDeviceUsage([device('nvidia-drm', [drmProcess])], [device('nvidia', [])])[0].processes,
-		).toStrictEqual([drmProcess])
+		expect(mergeGpuDeviceUsage([device('drm', [drmProcess])], [device('RTX 3060', [nvidiaProcess])])).toHaveLength(1)
+		expect(mergeGpuDeviceUsage([device('drm', [drmProcess])], [device('RTX 3060', [nvidiaProcess])])[0]).toMatchObject({
+			model: 'RTX 3060',
+			processes: [nvidiaProcess],
+		})
+		expect(mergeGpuDeviceUsage([device('drm', [drmProcess])], [device('RTX 3060', [])])[0].processes).toStrictEqual([
+			drmProcess,
+		])
 	})
 })
