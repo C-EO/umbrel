@@ -24,9 +24,15 @@ import MachineConsoleSessions from './machine-console-sessions.js'
 import createMachineAudioWebSocketHandler from './machine-audio-socket.js'
 import createAppAuthRouter from './app-auth.js'
 import {authorizeHttpRequest} from '../auth/http-request.js'
+import {getSystemDiskUsage} from '../system/system.js'
+import UploadDiskPreflight from './upload-disk-preflight.js'
 
 import fileApi from '../files/api.js'
 import accountAvatarApi from '../user/avatar-api.js'
+
+// Keep known-size internal uploads from collectively consuming the platform's
+// last gigabyte. This matches the web UI's low-storage warning threshold.
+const uploadDiskReserve = 1_000_000_000
 
 export type ServerOptions = {umbreld: Umbreld}
 
@@ -58,6 +64,7 @@ const wrapHandlersWithAsyncHandler = (router: express.Router) => {
 class Server {
 	umbreld: Umbreld
 	logger: Umbreld['logger']
+	readonly uploadDiskPreflight: UploadDiskPreflight
 	port: number | undefined
 	app?: express.Express
 	server?: http.Server
@@ -67,6 +74,12 @@ class Server {
 		this.umbreld = umbreld
 		const {name} = this.constructor
 		this.logger = umbreld.logger.createChildLogger(name.toLowerCase())
+		// Every route writing to internal storage shares this coordinator so
+		// concurrent uploads reserve the same available bytes.
+		this.uploadDiskPreflight = new UploadDiskPreflight({
+			getAvailableBytes: async () => (await getSystemDiskUsage(this.umbreld)).available,
+			reserveBytes: uploadDiskReserve,
+		})
 	}
 
 	// Creates an isolated WebSocket server and mounts it at a specific path
@@ -228,7 +241,7 @@ class Server {
 		})
 
 		// Every file endpoint is mounted beneath an authentication-first subrouter.
-		this.app.use('/api/files', fileApi(this.umbreld))
+		this.app.use('/api/files', fileApi(this.umbreld, this.uploadDiskPreflight))
 		// Account avatars use raw request streams for writes and public,
 		// content-addressed reads for the pre-login account picker.
 		this.app.use('/api/accounts', accountAvatarApi(this.umbreld))

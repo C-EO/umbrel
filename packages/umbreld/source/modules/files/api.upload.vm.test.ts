@@ -1,4 +1,5 @@
 import {once} from 'node:events'
+import {Readable} from 'node:stream'
 
 import {expect, beforeAll, afterAll, test} from 'vitest'
 import pWaitFor from 'p-wait-for'
@@ -378,6 +379,27 @@ test('POST /api/files/upload handles disk full write errors correctly', {retry: 
 		// Remove the tmpfs mount
 		await umbreld.vm.sshAsRoot(`umount '${guestDirectory}' && rmdir '${guestDirectory}'`)
 	}
+})
+
+test('POST /api/files/upload rejects an upload that cannot fit with 507 before writing', async () => {
+	// A declared size no disk can hold triggers the preflight. The body is a
+	// stream so the client sends the declared Content-Length header as-is instead
+	// of computing one.
+	const error = await umbreld.api
+		.post('files/upload?path=/Home/preflight-should-fail.bin', {
+			body: Readable.from([Buffer.alloc(1024)]),
+			headers: {'content-length': String(500 * 1024 ** 4)},
+		})
+		.catch((error) => error)
+
+	expect(error).toBeInstanceOf(Error)
+	expect(error.response.statusCode).toBe(507)
+	expect(error.response.body).toMatchObject({error: '[not-enough-space]'})
+
+	// The rejection happened before any bytes were written: no destination file
+	// and no temporary file
+	await expect(guestPathExists(`${guestHome}/preflight-should-fail.bin`)).resolves.toBe(false)
+	await expect(guestUploadTemporaryFiles(guestHome, 'preflight-should-fail.bin')).resolves.toEqual([])
 })
 
 test('POST /api/files/upload with collision=error (default) throws 400 when file already exists', async () => {

@@ -11,6 +11,7 @@ import mime from 'mime-types'
 import type Umbreld from '../../index.js'
 import type {Principal} from '../auth/auth.js'
 import {authorizeDashboardRequest, authorizeHttpRequest} from '../auth/http-request.js'
+import type UploadDiskPreflight from '../server/upload-disk-preflight.js'
 
 // Only allow file types that are safe to preview inline from a same-origin user-controlled endpoint.
 const inlineViewMimeTypes = new Set([
@@ -160,7 +161,7 @@ export function downloadFiles(umbreld: Umbreld) {
 	}
 }
 
-export function uploadFile(umbreld: Umbreld) {
+export function uploadFile(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPreflight) {
 	return async (request: express.Request, response: express.Response) => {
 		// Note: We must set the `Connection: close` header on error to prevent the XHR upload logic
 		// from uploading the entire file before checking for errors in the response. cURL handles this
@@ -210,8 +211,6 @@ export function uploadFile(umbreld: Umbreld) {
 		}
 
 		// TODO: Implement resume support
-		// TODO: Check available disk space
-		// We need the frontend to provide the total size of the file
 
 		// Temporary file to store the uploaded data
 		// We do this to avoid ending up with partially uploaded files of the correct name.
@@ -228,11 +227,33 @@ export function uploadFile(umbreld: Umbreld) {
 			directory,
 			`.${fileName}.${randomBytes(16).toString('hex')}.umbrel-upload`,
 		)
-		// Ensure containing directories exist
-		await fse.ensureDir(directory)
+
+		// Reject before writing a byte when the upload can't fit. External and
+		// network destinations are separate mounts, while unknown-length requests
+		// retain the mid-write failure path. Admission is serialized and reserves
+		// each upload exactly once from a stable batch snapshot.
+		const contentLength = Number(request.headers['content-length'])
+		const destinationVirtualPath = umbreld.files.systemToVirtualPath(systemPath)
+		const preflighted =
+			umbreld.files.isInternalStorageVirtualPath(destinationVirtualPath) &&
+			Number.isFinite(contentLength) &&
+			contentLength >= 0
+		let admitted = true
+		if (preflighted) {
+			try {
+				admitted = await uploadDiskPreflight.admit(temporarySystemPath, contentLength)
+			} catch (error) {
+				response.setHeader('Connection', 'close')
+				throw error
+			}
+		}
+		if (!admitted) {
+			return response.status(507).json({error: '[not-enough-space]'})
+		}
 
 		let promoted = false
 		try {
+			await fse.ensureDir(directory)
 			let temporaryFile: Awaited<ReturnType<typeof open>> | undefined
 			try {
 				// Write the file
@@ -266,13 +287,23 @@ export function uploadFile(umbreld: Umbreld) {
 			// Return success
 			return response.status(200).json({path: umbreld.files.systemToVirtualPath(systemPath)})
 		} finally {
-			// Clean up the temporary file
-			if (!promoted) await fse.remove(temporarySystemPath).catch(() => {})
+			// Restore reserved capacity only after a failed upload's temporary
+			// file is confirmed gone.
+			let restoreCapacity = false
+			if (!promoted) {
+				try {
+					await fse.remove(temporarySystemPath)
+					restoreCapacity = true
+				} catch {
+					// Keep the reservation because the partial file may remain.
+				}
+			}
+			if (preflighted) await uploadDiskPreflight.release(temporarySystemPath, {restoreCapacity})
 		}
 	}
 }
 
-export default function api(umbreld: Umbreld) {
+export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPreflight) {
 	const api = express.Router()
 	api.use(requireFileApiAuth(umbreld))
 
@@ -342,6 +373,6 @@ export default function api(umbreld: Umbreld) {
 
 	// Uploads a file
 	// POST /api/files/upload?path=/Home/file.txt&collision=error|keep-both|replace
-	api.post('/upload', uploadFile(umbreld))
+	api.post('/upload', uploadFile(umbreld, uploadDiskPreflight))
 	return api
 }

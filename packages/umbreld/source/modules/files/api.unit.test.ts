@@ -8,6 +8,7 @@ import {afterAll, beforeAll, describe, expect, test} from 'vitest'
 
 import type Umbreld from '../../index.js'
 import {OWNER_ACCOUNT_ID} from '../auth/auth.js'
+import UploadDiskPreflight from '../server/upload-disk-preflight.js'
 import temporaryDirectory from '../utilities/temporary-directory.js'
 import fileApi from './api.js'
 
@@ -44,7 +45,13 @@ describe('file API authentication boundaries', () => {
 
 		const app = express()
 		app.use(cookieParser())
-		app.use('/api/files', fileApi(umbreld))
+		app.use(
+			'/api/files',
+			fileApi(
+				umbreld,
+				new UploadDiskPreflight({getAvailableBytes: async () => Number.MAX_SAFE_INTEGER, reserveBytes: 0}),
+			),
+		)
 		server = app.listen(0, '127.0.0.1')
 		await once(server, 'listening')
 		origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`

@@ -109,7 +109,7 @@ export default class Mcp {
 		this.#umbreld = umbreld
 		this.#watcherPermissions = new AsyncBurstCache(() => this.getPermissions(), WATCHER_SNAPSHOT_TTL_MS)
 		this.logger = umbreld.logger.createChildLogger('mcp')
-		this.#endpoint = createMcpEndpoint(umbreld)
+		this.#endpoint = createMcpEndpoint(umbreld, umbreld.server.uploadDiskPreflight)
 	}
 
 	async start() {

@@ -8,6 +8,7 @@ import {afterEach, expect, test, vi} from 'vitest'
 
 import type Umbreld from '../../index.js'
 import {normalizePath} from '../files/files.js'
+import UploadDiskPreflight from '../server/upload-disk-preflight.js'
 import FileStore from '../utilities/file-store.js'
 import Mcp, {type McpStoreSettings} from './mcp.js'
 
@@ -76,6 +77,12 @@ async function createMcp() {
 		files: {normalizeVirtualPath: normalizePath, systemToVirtualPath, virtualToSystemPath},
 		logger: {
 			createChildLogger: () => ({error: vi.fn(), log: vi.fn()}),
+		},
+		server: {
+			uploadDiskPreflight: new UploadDiskPreflight({
+				getAvailableBytes: async () => Number.MAX_SAFE_INTEGER,
+				reserveBytes: 0,
+			}),
 		},
 		store,
 	} as unknown as Umbreld

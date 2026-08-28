@@ -5,7 +5,7 @@ import {AiOutlineFileExclamation} from 'react-icons/ai'
 
 import {toast} from '@/components/ui/toast'
 import type {FileSystemItem} from '@/features/files/types'
-import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
+import {getFilesApiErrorMessage, getFilesErrorMessage} from '@/features/files/utils/error-messages'
 import {splitFileName} from '@/features/files/utils/format-filesystem-name'
 import {dashboardAuthHeaders} from '@/modules/auth/http-auth'
 import {useConfirmation} from '@/providers/confirmation'
@@ -362,7 +362,10 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 						updateItemState(tempId, {status: 'error', isUploading: false, progress: 0, speed: 0})
 						toast.error(
 							t('files-error.upload', {
-								message: `${item.name}: ${xhr.statusText || t('files-backend-error.upload-failed')}`,
+								message: `${item.name}: ${getFilesApiErrorMessage(
+									xhr.responseText,
+									xhr.statusText || t('files-backend-error.upload-failed'),
+								)}`,
 							}),
 							{area: 'files'},
 						)

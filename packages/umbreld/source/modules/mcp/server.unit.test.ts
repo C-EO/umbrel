@@ -10,6 +10,7 @@ import {afterAll, beforeAll, beforeEach, expect, test, vi} from 'vitest'
 
 import type Umbreld from '../../index.js'
 import {normalizePath} from '../files/files.js'
+import UploadDiskPreflight from '../server/upload-disk-preflight.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 import type {McpPermissions} from './mcp.js'
 import createMcpEndpoint from './server.js'
@@ -38,6 +39,7 @@ const umbreld = {
 		authorizeWritableDestinationSystemPath: vi.fn(async (systemPath: string) => systemPath),
 		getUniqueName: vi.fn(async (systemPath: string) => systemPath),
 		chownSystemPath: vi.fn(async () => {}),
+		isInternalStorageVirtualPath: vi.fn(() => true),
 		systemToVirtualPath: vi.fn(
 			(systemPath: string) => `/${nodePath.relative(uploadRoot, systemPath).split(nodePath.sep).join('/')}`,
 		),
@@ -58,7 +60,10 @@ const umbreld = {
 	},
 } as unknown as Umbreld
 
-const endpoint = createMcpEndpoint(umbreld)
+const endpoint = createMcpEndpoint(
+	umbreld,
+	new UploadDiskPreflight({getAvailableBytes: async () => Number.MAX_SAFE_INTEGER, reserveBytes: 0}),
+)
 const app = express()
 app.use('/mcp', endpoint.router)
 const httpServer = http.createServer(app)

@@ -8,6 +8,7 @@ import {toNodeHandler} from '@modelcontextprotocol/node'
 import type Umbreld from '../../index.js'
 import {OWNER_ACCOUNT_ID, type Principal} from '../auth/auth.js'
 import {downloadFiles, uploadFile} from '../files/api.js'
+import type UploadDiskPreflight from '../server/upload-disk-preflight.js'
 import {createInternalTrpcCaller} from '../server/trpc/index.js'
 import type {McpPermissions} from './mcp.js'
 import registerAppTools from './tools/apps.js'
@@ -192,7 +193,7 @@ function mcpFilesGuard(umbreld: Umbreld): RequestHandler {
 	}
 }
 
-export default function createMcpEndpoint(umbreld: Umbreld): McpEndpoint {
+export default function createMcpEndpoint(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPreflight): McpEndpoint {
 	const router = express.Router()
 	const handler = createMcpHandler((ctx) => createUmbrelMcpServer(umbreld, ctx.requestInfo), {
 		legacy: 'stateless',
@@ -221,7 +222,7 @@ export default function createMcpEndpoint(umbreld: Umbreld): McpEndpoint {
 
 	router.use(authorize)
 	router.get('/files/download', mcpFilesGuard(umbreld), downloadFiles(umbreld))
-	router.post('/files/upload', mcpFilesGuard(umbreld), uploadFile(umbreld))
+	router.post('/files/upload', mcpFilesGuard(umbreld), uploadFile(umbreld, uploadDiskPreflight))
 	// JSON-RPC bodies are parsed here rather than by the adapter so the agent's
 	// self-declared identity can be captured for the dashboard; the adapter
 	// accepts the pre-parsed body. File transfers above stream raw and stay

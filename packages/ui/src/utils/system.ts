@@ -7,7 +7,7 @@ export function trpcDiskToLocal(
 
 	const used = data?.totalUsed
 	const size = data?.size
-	const available = !size || !used ? undefined : size - used
+	const available = data?.available
 
 	return {
 		used,

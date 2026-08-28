@@ -79,12 +79,13 @@ export async function getSystemDiskUsage(
 export async function getDiskUsage(umbreld: Umbreld): Promise<{
 	size: number
 	totalUsed: number
+	available: number
 	system: number
 	files: number
 	apps: DiskUsage[]
 	machines: Array<{id: string; name: string; osId: string; used: number}>
 }> {
-	const {size, totalUsed} = await getSystemDiskUsage(umbreld)
+	const {size, totalUsed, available} = await getSystemDiskUsage(umbreld)
 
 	const [apps, machines] = await Promise.all([
 		Promise.all(
@@ -113,6 +114,7 @@ export async function getDiskUsage(umbreld: Umbreld): Promise<{
 	return {
 		size,
 		totalUsed,
+		available,
 		system: Math.max(minSystemUsage, totalUsed - (appsTotal + machinesTotal + filesTotalUsage)),
 		files: filesTotalUsage,
 		apps,

@@ -1498,6 +1498,18 @@ export default class Files {
 		return normalizePath(virtualPath)
 	}
 
+	// External and network paths write to their own mounted filesystems. Every
+	// other valid Files path consumes internal storage and must share the system
+	// disk upload reserve. Defaulting new base directories to internal keeps
+	// upload admission fail-safe as the Files namespace grows.
+	isInternalStorageVirtualPath(virtualPath: string) {
+		const normalizedPath = normalizePath(virtualPath)
+		this.virtualToSystemPathUnsafe(normalizedPath)
+
+		const [base] = normalizedPath.split('/').filter(Boolean)
+		return base !== 'External' && base !== 'Network'
+	}
+
 	// Map a virtual path onto the owner namespace so the same operation rules
 	// (protected/readonly/trash detection) apply to members. A member's home
 	// /Users/<slug> behaves like the owner's /Home and /Users/<slug>/Trash like

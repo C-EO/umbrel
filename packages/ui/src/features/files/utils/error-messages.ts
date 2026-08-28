@@ -75,3 +75,21 @@ export function getFilesErrorMessage(message: string): string {
 
 	return message
 }
+
+export function getFilesApiErrorMessage(responseText: string, fallback: string): string {
+	try {
+		const response: unknown = JSON.parse(responseText)
+		if (
+			typeof response === 'object' &&
+			response !== null &&
+			'error' in response &&
+			typeof response.error === 'string'
+		) {
+			return getFilesErrorMessage(response.error)
+		}
+	} catch {
+		// Non-JSON responses use the HTTP status fallback.
+	}
+
+	return fallback
+}
