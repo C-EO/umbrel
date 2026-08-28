@@ -744,6 +744,8 @@ export function getIpAddresses(): string[] {
 		/^services/,
 		// Virtual ethernet (pairs)
 		/^veth/,
+		// Machines NAT bridge
+		/^umbrel-vm$/,
 		// Tunnel/VPN interfaces (e.g. tailscale0 in kernel TUN mode) are deliberately
 		// included: their IPs land in the HTTPS certificate SANs, so users who install
 		// the Umbrel CA get valid HTTPS over VPN access too.
