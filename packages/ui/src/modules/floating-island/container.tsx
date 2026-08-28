@@ -107,17 +107,20 @@ export function FloatingIslandContainer() {
 
 	// Common animation props
 	const commonProps = {
+		className: 'pointer-events-auto',
 		initial: {opacity: 0, scale: 0, transformOrigin: 'bottom center'},
 		animate: {opacity: 1, scale: 1, transformOrigin: 'bottom center'},
 		exit: {opacity: 0, scale: 0, transformOrigin: 'bottom center'},
 		transition: {layout: spring, opacity: {duration: 0.2}, scale: {duration: 0.2}},
 	}
 
-	// Positioned above dock. Normally z-50 (same as dock, but behind immersive dialogs).
-	// When an ImmersiveDialog is open: z-60 + pointer-events-auto so island appears above dialog and is clickable.
+	// Positioned above dock. The full-width layout container must not intercept
+	// dialog controls beneath it; only the visible island wrappers are interactive.
+	// Normally z-50 (same as dock, but behind immersive dialogs). When an
+	// ImmersiveDialog is open, z-60 keeps the islands visible and clickable above it.
 	return (
 		<div
-			className={`fixed bottom-[76px] left-1/2 flex w-full -translate-x-1/2 transform-gpu flex-col items-center justify-center gap-1 will-change-transform md:bottom-[90px] md:flex-row md:items-baseline md:gap-2 ${isImmersiveDialogOpen ? 'pointer-events-auto z-[60]' : 'z-50'}`}
+			className={`pointer-events-none fixed bottom-[76px] left-1/2 flex w-full -translate-x-1/2 transform-gpu flex-col items-center justify-center gap-1 will-change-transform md:bottom-[90px] md:flex-row md:items-baseline md:gap-2 ${isImmersiveDialogOpen ? 'z-[60]' : 'z-50'}`}
 		>
 			<AnimatePresence>
 				{showUploading && (
