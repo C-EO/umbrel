@@ -112,6 +112,7 @@ function CmdkContent() {
 					key={entry.id}
 					value={entry.id}
 					icon={entry.icon}
+					iconVariant={entry.iconVariant}
 					disabled={entry.disabled}
 					onSelect={() => {
 						entry.onSelect?.()
@@ -217,7 +218,13 @@ function useCmdkEntries(): CmdkEntry[] | null {
 		...systemEntries,
 		...settingsEntries,
 		...readyApps.map(
-			(app): CmdkEntry => ({id: `app:${app.id}`, title: app.name, icon: app.icon, onSelect: () => launchApp(app.id)}),
+			(app): CmdkEntry => ({
+				id: `app:${app.id}`,
+				title: app.name,
+				icon: app.icon,
+				iconVariant: 'tile',
+				onSelect: () => launchApp(app.id),
+			}),
 		),
 		...(shortcuts ?? []).map(
 			(shortcut): CmdkEntry => ({
@@ -241,6 +248,7 @@ function useCmdkEntries(): CmdkEntry[] | null {
 				subtitle: `– ${appStateToString(app.state, t)}`,
 				disabled: true,
 				icon: app.icon,
+				iconVariant: 'tile',
 			}),
 		),
 		...installableApps.map(
@@ -249,6 +257,7 @@ function useCmdkEntries(): CmdkEntry[] | null {
 				title: app.name,
 				subtitle: `${t('generic-in')} App Store`,
 				icon: app.icon,
+				iconVariant: 'tile',
 				onSelect: () => navigate(`/app-store/${app.id}`),
 			}),
 		),

@@ -17,6 +17,8 @@ export type CmdkEntry = {
 	// Rendered but not selectable, e.g. an app that is still installing
 	disabled?: boolean
 	icon?: string | ReactNode
+	// Square app artwork opts into a framed tile; other artwork renders bare
+	iconVariant?: 'bare' | 'tile'
 	onSelect?: () => void
 }
 

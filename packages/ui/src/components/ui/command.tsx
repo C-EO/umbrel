@@ -135,10 +135,12 @@ function CommandItem({
 	className,
 	ref,
 	icon,
+	iconVariant = 'bare',
 	children,
 	...props
 }: React.ComponentPropsWithoutRef<typeof CommandPrimitive.Item> & {
 	icon?: CommandItemIcon
+	iconVariant?: 'bare' | 'tile'
 	ref?: React.Ref<React.ComponentRef<typeof CommandPrimitive.Item>>
 }) {
 	return (
@@ -152,7 +154,13 @@ function CommandItem({
 		>
 			{icon &&
 				(typeof icon === 'string' ? (
-					<AppIcon src={icon} className='size-6 rounded-6 sm:rounded-8 lg:size-9' />
+					<AppIcon
+						src={icon}
+						className={cn(
+							'size-6 lg:size-9',
+							iconVariant === 'tile' ? 'rounded-6 sm:rounded-8' : 'border-0 bg-transparent object-contain',
+						)}
+					/>
 				) : (
 					// When a custom React node is provided, we still want to constrain its
 					// dimensions so spacing stays consistent across command items.
