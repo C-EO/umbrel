@@ -23,6 +23,20 @@ export function Desktop() {
 	const userQ = trpcReact.user.get.useQuery()
 	const isMember = userQ.data?.role === 'member'
 
+	// Prefetch main dock route chunks on idle so they're instant on first click.
+	// These are static JS files — no auth required to fetch them. Lives here
+	// rather than in DesktopPage so the "install your first app" desktop, whose
+	// next click is almost always the App Store, gets warmed too.
+	useEffect(() => {
+		if ('requestIdleCallback' in window) {
+			const id = requestIdleCallback(prefetchRouteChunks)
+			return () => cancelIdleCallback(id)
+		}
+		// Fallback for Safari (no requestIdleCallback): use a short timeout
+		const id = setTimeout(prefetchRouteChunks, 200)
+		return () => clearTimeout(id)
+	}, [])
+
 	if (isLoading || userQ.isLoading) {
 		return null
 	}
@@ -48,25 +62,17 @@ function prefetchRouteChunks() {
 	import('@/features/app-store/components/discover')
 	import('@/features/app-store/components/app-page')
 	import('@/features/app-store/components/category')
-	import('@/routes/settings')
+	// The settings route itself is statically bundled; its content is the lazy chunk
+	import('@/routes/settings/_components/settings-content')
+	import('@/routes/settings/_components/settings-content-mobile')
 	import('@/features/files')
+	import('@/features/machines')
+	import('@/features/machines/components/machines-index')
 	import('@/routes/edit-widgets')
 }
 
 function DesktopPage() {
 	const {setOpen} = useCmdkOpen()
-
-	// Prefetch main dock route chunks on idle so they're instant on first click.
-	// These are static JS files — no auth required to fetch them.
-	useEffect(() => {
-		if ('requestIdleCallback' in window) {
-			const id = requestIdleCallback(prefetchRouteChunks)
-			return () => cancelIdleCallback(id)
-		}
-		// Fallback for Safari (no requestIdleCallback): use a short timeout
-		const id = setTimeout(prefetchRouteChunks, 200)
-		return () => clearTimeout(id)
-	}, [])
 
 	// Prevent scrolling on the desktop because it interferes with `AppGridGradientMasking` and causes tearing effect
 	useEffect(() => {

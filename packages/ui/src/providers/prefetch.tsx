@@ -6,10 +6,17 @@ import {USE_LIST_DIRECTORY_LOAD_ITEMS} from '@/features/files/constants'
 import {toFsPath} from '@/features/files/hooks/use-navigate'
 import {getLastFilesPath} from '@/features/files/utils/last-files-path'
 import {trpcReact} from '@/trpc/trpc'
+import {MS_PER_MINUTE} from '@/utils/date-time'
 
 import {getWallpaperAvifUrl, wallpapers} from './wallpaper'
 
 const prefetchStableMs = 500
+
+// Keep prefetched entries cached well past react-query's 5 minute default so
+// they're still warm when a sheet or dialog is first opened later in the
+// session. Scoped here rather than set globally so heavy transient payloads
+// like directory listings and logs aren't retained for an hour too.
+const prefetchGcTime = 60 * MS_PER_MINUTE
 
 export function Prefetcher() {
 	const utils = trpcReact.useUtils()
@@ -29,6 +36,7 @@ export function Prefetcher() {
 		const prefetchQueries = [
 			// Settings header
 			utils.systemNg.device.getIdentity,
+			utils.system.deviceName,
 			utils.system.version,
 			utils.system.getIpAddresses,
 			utils.system.uptime,
@@ -67,9 +75,15 @@ export function Prefetcher() {
 
 			// App Store
 			utils.appStore.registry,
+
+			// Cmd+K frequent apps
+			utils.apps.recentlyOpened,
+
+			// Machines OS catalog metadata
+			utils.machines.osImages,
 		]
 
-		Promise.allSettled(prefetchQueries.map((q) => q.prefetch()))
+		Promise.allSettled(prefetchQueries.map((q) => q.prefetch(undefined, {gcTime: prefetchGcTime})))
 
 		// Files directory listing: fetch the user (the last visited path is keyed
 		// by account id) and preferences first so the sort params in the query key
@@ -86,12 +100,15 @@ export function Prefetcher() {
 					!lastFilesRoute.startsWith('/files/Cloud') &&
 					lastFilesRoute !== '/files/Apps'
 				const filesListPath = isListablePath ? toFsPath(lastFilesRoute) : '/Home'
-				utils.files.list.prefetch({
-					path: filesListPath,
-					limit: USE_LIST_DIRECTORY_LOAD_ITEMS.INITIAL,
-					sortBy: preferences?.sortBy ?? 'name',
-					sortOrder: preferences?.sortOrder ?? 'ascending',
-				})
+				utils.files.list.prefetch(
+					{
+						path: filesListPath,
+						limit: USE_LIST_DIRECTORY_LOAD_ITEMS.INITIAL,
+						sortBy: preferences?.sortBy ?? 'name',
+						sortOrder: preferences?.sortOrder ?? 'ascending',
+					},
+					{gcTime: prefetchGcTime},
+				)
 			})
 			.catch(() => {})
 
