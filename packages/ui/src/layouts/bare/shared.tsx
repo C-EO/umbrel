@@ -9,10 +9,10 @@ export const UmbrelLogoLarge = () => (
 	<UmbrelLogo className='w-[100px] opacity-85' style={{viewTransitionName: 'umbrel-logo'}} />
 )
 
-export function Title({children}: {children: React.ReactNode}) {
+export function Title({children, className}: {children: React.ReactNode; className?: string}) {
 	return (
 		<h1
-			className='text-center text-[32px] leading-tight font-bold -tracking-2 opacity-85'
+			className={cn('text-center text-[24px] leading-tight font-bold -tracking-2 opacity-85 sm:text-[32px]', className)}
 			style={{
 				viewTransitionName: 'title',
 				textShadow: '0 0 8px rgba(255, 255, 255, 0.2), 0 0 16px rgba(255, 255, 255, 0.15)',
@@ -54,6 +54,7 @@ export const formGroupClass = tw`flex w-full max-w-sm flex-col gap-2.5`
 // shouldn't be taken too far.
 export function Layout({
 	title,
+	titleClassName,
 	subTitle,
 	subTitleMaxWidth,
 	subTitleClassName,
@@ -63,6 +64,7 @@ export function Layout({
 	showLogo = true,
 }: {
 	title: string
+	titleClassName?: string
 	subTitle: React.ReactNode
 	subTitleMaxWidth?: number
 	subTitleClassName?: string
@@ -72,14 +74,16 @@ export function Layout({
 	/** Hide logo when showing device image */
 	showLogo?: boolean
 }) {
+	// Entrance choreography (first arrival only): logo → title → content rise
+	// in one after another once the card has settled, then the footer follows.
 	const footerAnimationProps = animate
 		? ({
-				initial: {opacity: 0, x: -60, y: -40},
-				animate: {opacity: 1, x: 0, y: 0},
+				initial: {opacity: 0, y: 10},
+				animate: {opacity: 1, y: 0},
 				transition: {
-					duration: 2.5,
-					delay: 1.5,
-					ease: [0.16, 1, 0.3, 1],
+					duration: 1,
+					delay: 1.4,
+					ease: ENTRANCE_EASE,
 				},
 			} as const)
 		: ({} as const)
@@ -87,20 +91,46 @@ export function Layout({
 		<>
 			{/* TODO: probably want consumer to set the title */}
 			<div className='flex-1' />
-			<div className='flex w-full flex-col items-center gap-5'>
-				{showLogo && <UmbrelLogoLarge />}
-				<div className='flex flex-col items-center gap-1.5'>
-					<Title>{title}</Title>
+			{/* mt keeps a minimum gap from the card's top edge when the spacers collapse */}
+			<motion.div
+				className='mt-5 flex w-full flex-col items-center gap-5'
+				variants={entranceStagger}
+				initial={animate ? 'hidden' : false}
+				animate='show'
+			>
+				{showLogo && (
+					<motion.div variants={entranceItem}>
+						<UmbrelLogoLarge />
+					</motion.div>
+				)}
+				<motion.div variants={entranceItem} className='flex flex-col items-center gap-1.5'>
+					<Title className={titleClassName}>{title}</Title>
 					<SubTitle className={subTitleClassName} style={{maxWidth: subTitleMaxWidth}}>
 						{subTitle}
 					</SubTitle>
-				</div>
-				{children}
-			</div>
+				</motion.div>
+				<motion.div variants={entranceItem} className='flex w-full flex-col items-center gap-5'>
+					{children}
+				</motion.div>
+			</motion.div>
 			<div className='flex-1' />
-			<motion.div className={footerClass} {...footerAnimationProps}>
+			{/* mt keeps a minimum gap to the content above when the card is full and the
+			    flex-1 spacers collapse (e.g. the Pi drive choice screen on mobile) */}
+			<motion.div className={cn(footerClass, 'mt-5')} {...footerAnimationProps}>
 				{footer}
 			</motion.div>
 		</>
 	)
+}
+
+const ENTRANCE_EASE = [0.16, 1, 0.3, 1] as const
+
+const entranceStagger = {
+	hidden: {},
+	show: {transition: {delayChildren: 0.7, staggerChildren: 0.12}},
+}
+
+const entranceItem = {
+	hidden: {opacity: 0, y: 12},
+	show: {opacity: 1, y: 0, transition: {duration: 1.1, ease: ENTRANCE_EASE}},
 }

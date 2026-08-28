@@ -208,6 +208,9 @@ export default router({
 	diskUsage: privateProcedureWithMembers.query(async ({ctx}) =>
 		scopeUsageAppsForMember(ctx.umbreld, await getDiskUsage(ctx.umbreld), ctx.principal?.accountId ?? OWNER_USER_ID),
 	),
+	// Total physical memory. Public during onboarding so the SSD acceleration step can
+	// recommend a drive size (~32x RAM) before a user exists.
+	memorySize: publicProcedureWhenNoUserExists.query(async () => (await getSystemMemoryUsage()).size),
 	systemMemoryUsage: privateProcedureWithMembers.query(({ctx}) => getSystemMemoryUsage()),
 	memoryUsage: privateProcedureWithMembers.query(async ({ctx}) =>
 		scopeUsageAppsForMember(ctx.umbreld, await getMemoryUsage(ctx.umbreld), ctx.principal?.accountId ?? OWNER_USER_ID),

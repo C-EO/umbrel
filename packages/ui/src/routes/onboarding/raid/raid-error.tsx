@@ -1,8 +1,7 @@
 import {useTranslation} from 'react-i18next'
-import {TbAlertTriangleFilled} from 'react-icons/tb'
 
-import {Button} from '@/components/ui/button'
 import {toast} from '@/components/ui/toast'
+import {primaryButtonProps} from '@/layouts/bare/shared'
 import {trpcReact} from '@/trpc/trpc'
 
 type RaidErrorProps = {
@@ -31,23 +30,16 @@ export function RaidError({title, instructions, image}: RaidErrorProps) {
 		<div className={`flex flex-1 flex-col items-center justify-center ${image ? 'md:justify-between' : ''}`}>
 			{/* Content */}
 			<div className={`flex flex-col items-center gap-4 px-4 ${image ? 'md:pt-8' : ''}`}>
-				<TbAlertTriangleFilled className='size-[22px] text-[#F5A623]' />
 				<h1
-					className='-mt-1 text-[18px] font-bold text-white/85 md:text-[20px]'
+					className='text-[18px] font-bold text-white/85 md:text-[20px]'
 					style={{textShadow: '0 0 8px rgba(255, 255, 255, 0.2), 0 0 16px rgba(255, 255, 255, 0.15)'}}
 				>
 					{title}
 				</h1>
 				<p className='-mt-2 max-w-[300px] text-center text-[14px] text-white/70 md:text-[15px]'>{instructions}</p>
-				<Button
-					variant='destructive'
-					size='lg'
-					onClick={handleShutdown}
-					disabled={shutdownMut.isPending}
-					style={{boxShadow: '0px 2px 4px 0px #FFFFFF3D inset'}}
-				>
+				<button onClick={handleShutdown} disabled={shutdownMut.isPending} {...primaryButtonProps}>
 					{shutdownMut.isPending ? t('shut-down.shutting-down') : t('shut-down')}
-				</Button>
+				</button>
 			</div>
 
 			{/* Bottom image (optional, hidden on mobile) */}

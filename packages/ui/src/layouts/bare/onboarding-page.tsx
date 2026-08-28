@@ -6,14 +6,16 @@ import {OnboardingBackground} from '@/components/onboarding-background'
 export function OnboardingPage({children}: {children: React.ReactNode}) {
 	const location = useLocation()
 
+	// First arrival: the card settles in gently (fade + slight grow); the
+	// content inside then follows in sequence (see Layout's `animate`).
 	const shouldAnimate = location.pathname === '/onboarding'
 	const cardProps = shouldAnimate
 		? ({
-				initial: {opacity: 0, scale: 1.15},
+				initial: {opacity: 0, scale: 0.96},
 				animate: {opacity: 1, scale: 1},
 				transition: {
-					duration: 2.5,
-					delay: 1.5,
+					duration: 1.4,
+					delay: 0.5,
 					ease: [0.16, 1, 0.3, 1],
 				},
 			} as const)
@@ -22,13 +24,15 @@ export function OnboardingPage({children}: {children: React.ReactNode}) {
 	return (
 		<>
 			<OnboardingBackground />
-			<div className='relative flex min-h-dvh items-center justify-center p-0 md:p-5'>
+			{/* The p-5 gutter keeps the card floating at every size: it never goes
+			    full-bleed, holding a 20px inset (so max width/height is viewport - 40px) */}
+			<div className='relative flex min-h-svh items-center justify-center p-5'>
+				{/* System material (same recipe as modals/toasts): tinted backdrop blur,
+				    0.5px edge, inset shine, soft drop shadow. The modal radius is 24px. */}
 				<motion.div
-					className='flex min-h-dvh w-full max-w-none flex-col rounded-none bg-[#1E1E1E]/20 p-3 backdrop-blur-2xl md:max-h-[850px] md:min-h-[700px] md:max-w-[1000px] md:rounded-3xl md:bg-[#1E1E1E]/70 md:p-6'
-					style={{
-						boxShadow: '0px 24px 48px 0px #000000A3, inset 1px 1px 1px 0px #FFFFFF1F',
-						viewTransitionName: 'onboarding-card',
-					}}
+					className='umbrel-material flex min-h-[calc(100svh-40px)] w-full max-w-[1000px] flex-col rounded-3xl p-4 md:max-h-[850px] md:min-h-[700px] md:p-6'
+					// Heavier blur than the default 20px: this card is large and sits directly on the video
+					style={{viewTransitionName: 'onboarding-card', '--material-blur': '40px'} as React.CSSProperties}
 					{...cardProps}
 				>
 					{children}

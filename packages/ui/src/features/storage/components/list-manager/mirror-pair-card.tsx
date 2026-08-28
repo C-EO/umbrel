@@ -6,7 +6,7 @@ import {cn} from '@/lib/utils'
 
 import {getDeviceHealth, RaidDevice, RaidDeviceStatus, raidStatusLabels, StorageDevice} from '../../hooks/use-storage'
 import {formatStorageSize, hasRaidErrors} from '../../utils'
-import {DriveIcon} from './drive-visuals'
+import {HardDriveIcon} from './drive-visuals'
 
 // Badge rendered between the two halves of a pair card
 function PairBadge({variant}: {variant: 'protected' | 'broken' | 'add'}) {
@@ -56,7 +56,7 @@ export function PairDriveCell({
 					{t('storage-manager.inactive')}
 				</span>
 			)}
-			<DriveIcon led={led} />
+			<HardDriveIcon led={led} />
 			<div className='flex flex-col items-center gap-0.5 text-center'>
 				<span className='max-w-full truncate text-[15px] font-medium text-white'>{device.name}</span>
 				<span className='max-w-full truncate text-13 text-white/50'>
@@ -88,7 +88,7 @@ export function PairMissingCell({
 	const {t} = useTranslation()
 	return (
 		<div className='relative flex flex-1 flex-col items-center justify-center gap-2.5 px-10 py-6'>
-			<DriveIcon led='red' className='opacity-40' />
+			<HardDriveIcon led='red' className='opacity-40' />
 			<div className='flex flex-col items-center gap-0.5 text-center'>
 				<span className='max-w-full truncate text-[15px] font-medium text-white'>
 					{t('storage-manager.missing-drive')}

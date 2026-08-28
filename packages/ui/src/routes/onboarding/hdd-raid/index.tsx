@@ -2,16 +2,16 @@
 // (results -> FailSafe pairing -> optional SSD acceleration), rendered inside the design's
 // onboarding modal card. Registration and the reboot-spanning progress UI live in setup.tsx.
 
+import {LayoutGroup, motion, useReducedMotion} from 'motion/react'
 import {useEffect, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {IoShieldHalf} from 'react-icons/io5'
 import {
 	TbAlertCircleFilled,
-	TbAlertTriangle,
-	TbAlertTriangleFilled,
 	TbCircleCheckFilled,
 	TbDeviceFloppy,
-	TbInfoCircle,
+	TbLoader,
+	TbServer,
 	TbShield,
 	TbShieldOff,
 } from 'react-icons/tb'
@@ -27,15 +27,14 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import {Checkbox} from '@/components/ui/checkbox'
 import {Spinner} from '@/components/ui/loading'
-import {Switch} from '@/components/ui/switch'
-import ssdChip from '@/features/storage/assets/ssd-chip.svg'
-import {DriveIcon, SsdChip} from '@/features/storage/components/list-manager/drive-visuals'
+import {HardDriveIcon, SsdChip} from '@/features/storage/components/list-manager/drive-visuals'
+import {SsdCard} from '@/features/storage/components/ssd-card'
 import {primaryButtonProps, secondaryButtonClasss} from '@/layouts/bare/shared'
 import {cn} from '@/lib/utils'
 import {useGlobalSystemState} from '@/providers/global-system-state/index'
 import {AccountCredentials} from '@/routes/onboarding/create-account'
+import {RecommendedBadge} from '@/routes/onboarding/recommended-badge'
 import {trpcReact} from '@/trpc/trpc'
 import {sleep} from '@/utils/misc'
 
@@ -59,16 +58,27 @@ const formatSizeWithUnit = (bytes: number, referenceBytes: number) => {
 // Sub-components
 // ============================================================================
 
-// Drive rendering inside a FailSafe column cell
+// Shared timing for the mode-switch layout animation: a spring with barely-there
+// bounce so drives glide between pair and per-drive arrangements without feeling toy-like
+const layoutSpring = {type: 'spring', duration: 0.45, bounce: 0.15} as const
+
+// Drive rendering inside a FailSafe column cell. The layoutId lets the same physical
+// drive fly to its new column when the storage mode changes (a transform-only FLIP
+// animation, so it stays cheap), instead of teleporting.
 function ColumnDrive({device, subtitle}: {device: StorageDevice; subtitle: string}) {
+	const reduceMotion = useReducedMotion()
 	return (
-		<>
-			<DriveIcon led='green' />
+		<motion.div
+			layoutId={reduceMotion ? undefined : `hdd-${device.id ?? device.serial}`}
+			transition={layoutSpring}
+			className='flex w-full flex-col items-center gap-2.5'
+		>
+			<HardDriveIcon led='green' />
 			<div className='flex w-full flex-col items-center gap-0.5 text-center'>
 				<span className='max-w-full truncate text-[15px] font-medium text-white'>{device.name}</span>
 				<span className='max-w-full truncate text-13 text-white/40'>{subtitle}</span>
 			</div>
-		</>
+		</motion.div>
 	)
 }
 
@@ -106,109 +116,185 @@ function Column({
 	ratio?: 'even' | 'storage-heavy'
 	width?: 'normal' | 'narrow'
 }) {
+	// The whole column participates in the mode-switch layout animation: the column
+	// itself glides to its new position, the two halves resize as the ratio changes,
+	// and their content re-centers via position-only layout so text never stretches.
+	// Reduced motion disables the layout animation entirely - states just swap.
+	const reduceMotion = useReducedMotion()
+	const layoutBox = reduceMotion ? false : true
+	const layoutPosition = reduceMotion ? false : ('position' as const)
 	return (
-		<div className={cn('flex shrink-0 flex-col gap-2.5', width === 'narrow' ? 'w-[130px]' : 'w-[200px]')}>
-			<div className='flex h-[22px] items-center justify-center gap-1.5'>{header}</div>
-			<div
+		<motion.div
+			layout={layoutBox}
+			transition={layoutSpring}
+			className={cn('flex shrink-0 flex-col gap-2.5', width === 'narrow' ? 'w-[130px]' : 'w-[200px]')}
+		>
+			<motion.div
+				layout={layoutPosition}
+				transition={layoutSpring}
+				className='flex h-[22px] items-center justify-center gap-1.5'
+			>
+				{header}
+			</motion.div>
+			<motion.div
+				layout={layoutBox}
+				transition={layoutSpring}
 				className={cn(
 					'flex flex-1 flex-col overflow-hidden rounded-2xl border',
 					broken ? 'border-dashed border-[#FF3434]/60 bg-[#FF3434]/5' : 'border-white/6 bg-white/4',
 				)}
 			>
-				<div
+				<motion.div
+					layout={layoutBox}
+					transition={layoutSpring}
 					className={cn(
-						'flex flex-col items-center justify-center gap-2.5 px-4 py-6',
+						'flex flex-col items-center justify-center px-4 py-6',
 						ratio === 'storage-heavy' ? 'flex-[3]' : 'flex-1',
 					)}
 				>
-					{top}
-				</div>
-				<div
+					<motion.div
+						layout={layoutPosition}
+						transition={layoutSpring}
+						className='flex w-full flex-col items-center gap-2.5'
+					>
+						{top}
+					</motion.div>
+				</motion.div>
+				<motion.div
+					layout={layoutBox}
+					transition={layoutSpring}
 					className={cn('relative w-full', broken ? 'border-t border-dashed border-[#FF3434]/40' : 'h-px bg-white/8')}
 				>
 					{divider}
-				</div>
-				<div
+				</motion.div>
+				<motion.div
+					layout={layoutBox}
+					transition={layoutSpring}
 					className={cn(
-						'flex flex-col items-center justify-center gap-1.5 px-4 py-6 text-center',
+						'flex flex-col items-center justify-center px-4 py-6 text-center',
 						ratio === 'storage-heavy' ? 'flex-[2]' : 'flex-1',
 						broken && 'bg-[#3C1C1C]/30',
 					)}
 				>
-					{bottom}
-				</div>
-			</div>
-		</div>
+					<motion.div
+						layout={layoutPosition}
+						transition={layoutSpring}
+						className='flex w-full flex-col items-center gap-1.5 text-center'
+					>
+						{bottom}
+					</motion.div>
+				</motion.div>
+			</motion.div>
+		</motion.div>
 	)
 }
 
-// The larger chip render used on the acceleration screen (bleeds off the card edge
-// like the designs; the capacity badge stays a dynamic overlay)
-function BigSsdChip({sizeLabel, className}: {sizeLabel: string; className?: string}) {
-	return (
-		<div className={cn('relative flex h-[72px] w-[120px] shrink-0 items-center justify-center', className)}>
-			<img src={ssdChip} alt='' draggable={false} className='size-full object-fill' />
-			<span className='absolute rounded-[7px] border border-white/15 bg-[#232326] px-3 py-1 text-[15px] font-semibold whitespace-nowrap text-white'>
-				{sizeLabel}
-			</span>
-		</div>
-	)
-}
-
-// A row inside the acceleration pair card: SSD label, name, size · serial, chip on the right
-function SsdRow({device, label}: {device: StorageDevice; label: string}) {
-	return (
-		<div className='flex items-center justify-between gap-4 py-5 pl-6'>
-			<div className='flex min-w-0 flex-col gap-0.5'>
-				<span className='text-[11px] font-medium tracking-wide text-white/40'>{label}</span>
-				<span className='truncate text-[15px] font-medium text-white'>{device.name}</span>
-				<span className='truncate text-13 text-white/40'>
-					{formatSize(device.roundedSize)} · {device.serial}
-				</span>
-			</div>
-			<BigSsdChip sizeLabel={formatSize(device.roundedSize)} className='-mr-4' />
-		</div>
-	)
-}
-
-// Amber note about accelerator SSDs being permanent
+// Note about accelerator SSDs being permanent. Muted rather than amber, matching the
+// informational (not warning) treatment the Pro and SSD RAID screens use.
 function PermanentWarning({single}: {single?: boolean}) {
 	const {t} = useTranslation()
 	return (
-		<div className='mx-auto flex items-center gap-2 rounded-lg bg-[#F5A623]/15 px-4 py-2.5 text-[13px] text-[#F5A623]'>
-			<TbAlertTriangle className='size-4 shrink-0' />
+		<p className='mx-auto text-[13px] text-white/50'>
 			{single
 				? t('onboarding.hdd-raid.accelerate.permanent-warning-single')
 				: t('onboarding.hdd-raid.accelerate.permanent-warning')}
-		</div>
+		</p>
 	)
 }
 
-// Empty state when there are no (or not enough) SSDs: power off and add SSD(s)
-function NoSsdCard({pair}: {pair: boolean}) {
+// One selectable storage mode - the interactive twin of the storage manager's
+// read-only StorageModeDisplay cards, sharing its copy and visual language
+function ModeCard({
+	icon,
+	title,
+	description,
+	selected,
+	disabledReason,
+	badge,
+	onSelect,
+}: {
+	icon: React.ReactNode
+	title: string
+	description: string
+	selected: boolean
+	/** When set, the card is unavailable: it stays fully legible and this short reason shows in place of the checkmark */
+	disabledReason?: string
+	badge?: React.ReactNode
+	onSelect: () => void
+}) {
+	const disabled = disabledReason !== undefined
+	return (
+		<button
+			type='button'
+			onClick={onSelect}
+			disabled={disabled}
+			className={cn(
+				'flex flex-col gap-2 rounded-17 border px-4 py-3 text-left transition-colors',
+				selected ? 'border-brand bg-brand/15' : 'border-transparent',
+				!selected && !disabled && 'hover:bg-white/4',
+			)}
+		>
+			<div className='flex w-full items-center gap-2'>
+				<span className={selected ? 'text-white' : 'text-white/80'}>{icon}</span>
+				<span className={cn('text-15 font-semibold', selected ? 'text-white' : 'text-white/80')}>{title}</span>
+				<span className='ml-auto flex items-center gap-2'>
+					{badge}
+					{selected && <TbCircleCheckFilled className='size-5 text-brand' />}
+					{disabled && (
+						<span className='rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-medium whitespace-nowrap text-white/50'>
+							{disabledReason}
+						</span>
+					)}
+				</span>
+			</div>
+			<p className='text-13 leading-snug font-medium text-white/60'>{description}</p>
+		</button>
+	)
+}
+
+// Standard SSD capacities in GB. The accelerator guidance is ~32x the device's RAM,
+// mapped to the smallest standard drive that satisfies it and capped at 4TB:
+// 4GB RAM -> 128GB, 8GB -> 256GB ... 128GB+ -> 4TB.
+const ssdSizeBucketsGb = [128, 256, 512, 1024, 2048, 4096]
+function recommendedSsdSizeLabel(ramBytes: number) {
+	const nominalRamGb = Math.max(1, Math.round(ramBytes / 2 ** 30))
+	const sizeGb = ssdSizeBucketsGb.find((bucket) => bucket >= nominalRamGb * 32) ?? ssdSizeBucketsGb.at(-1)!
+	return sizeGb >= 1024 ? `${sizeGb / 1024}TB` : `${sizeGb}GB`
+}
+
+// Empty state when there are no (or not enough) SSDs: an invitation to add one, with
+// a recommended size derived from the device's RAM
+function NoSsdCard({pair, onPowerOff}: {pair: boolean; onPowerOff: () => void}) {
 	const {t} = useTranslation()
-	const circles = pair ? [1, 2] : [1]
+	const memorySizeQ = trpcReact.system.memorySize.useQuery()
+	// On the rare query failure, recommend from the middle of the RAM range instead of nothing
+	const sizeLabel = recommendedSsdSizeLabel(memorySizeQ.data ?? 16 * 2 ** 30)
+	if (memorySizeQ.isLoading) return null
 	return (
 		<div className='flex flex-col items-center gap-1.5 rounded-2xl bg-white/4 px-6 py-14 text-center'>
-			<div className='mb-3 flex'>
-				{circles.map((number, i) => (
-					<div
-						key={number}
-						className={cn(
-							'flex size-14 items-center justify-center rounded-full bg-white/8 text-[11px] font-medium text-white/70 ring-4 ring-black/20',
-							i > 0 && '-ml-2.5',
-						)}
-					>
-						{t('onboarding.hdd-raid.accelerate.ssd-label', {number})}
-					</div>
+			<div className='mb-3 flex gap-2'>
+				{(pair ? [1, 2] : [1]).map((number) => (
+					<SsdChip key={number} sizeLabel={sizeLabel} className='h-12 w-20' />
 				))}
 			</div>
-			<span className='text-[15px] font-medium text-white'>
+			<span className='max-w-[560px] text-[15px] font-medium text-white'>
 				{pair
-					? t('onboarding.hdd-raid.accelerate.none-title-pair')
-					: t('onboarding.hdd-raid.accelerate.none-title-single')}
+					? t('onboarding.hdd-raid.accelerate.none-title-pair', {size: sizeLabel})
+					: t('onboarding.hdd-raid.accelerate.none-title-single', {size: sizeLabel})}
 			</span>
-			<span className='text-[12px] text-white/40'>{t('onboarding.hdd-raid.accelerate.none-hint')}</span>
+			<span className='max-w-[560px] text-[12px] leading-relaxed text-white/40'>
+				{t('onboarding.hdd-raid.accelerate.none-hint')}
+			</span>
+			<span className='mt-2 max-w-[560px] text-[12px] leading-relaxed text-white/40'>
+				{t('onboarding.hdd-raid.accelerate.none-hint-later')}
+			</span>
+			<button
+				type='button'
+				onClick={onPowerOff}
+				className='mt-4 rounded-full bg-white/10 px-4 py-1.5 text-[13px] font-medium text-white/80 transition-colors hover:bg-white/15'
+			>
+				{t('onboarding.hdd-raid.accelerate.power-off')}
+			</button>
 		</div>
 	)
 }
@@ -277,17 +363,16 @@ export default function HddRaidOnboarding() {
 			? [acceleratorPair[0].id!, acceleratorPair[1].id!]
 			: []
 		: (ssdChoice ?? (largestSsd ? [largestSsd.id!] : []))
-	const acceleratorBytes = failSafeEnabled
-		? (acceleratorPair?.[0].roundedSize ?? 0)
-		: (ssds.find((device) => device.id === selectedSsdIds[0])?.roundedSize ?? 0)
 	const hasSelection = selectedSsdIds.length > 0
 
 	if (!credentials) return null
 
 	if (isDetecting || recoverableInstallQ.isLoading) {
 		return (
-			<div className='flex flex-1 items-center justify-center'>
-				<Spinner size='6' />
+			<div className='flex flex-1 flex-col items-center justify-center gap-4'>
+				{/* Same spinner as the Files listing loading state */}
+				<TbLoader className='white h-6 w-6 animate-spin opacity-50 shadow-xs' />
+				<span className='text-[15px] text-white/85'>{t('onboarding.hdd-raid.scanning')}</span>
 			</div>
 		)
 	}
@@ -318,40 +403,24 @@ export default function HddRaidOnboarding() {
 			raidDevices,
 			raidType: failSafeEnabled ? 'failsafe' : 'storage',
 			acceleratorDevices,
-			stats: {
-				driveCount: raidDevices.length,
-				storageBytes: availableBytes,
-				failsafeBytes,
-				acceleratorBytes: acceleratorDevices ? acceleratorBytes : 0,
-			},
 		}
 		setPendingConfig(config)
 	}
 
-	const devicesToErase = pendingConfig
-		? devices.filter(
-				(device) =>
-					!!device.id &&
-					[...pendingConfig.raidDevices, ...(pendingConfig.acceleratorDevices ?? [])].includes(device.id),
-			)
-		: []
-
 	const eraseConfirmationDialog = (
 		<AlertDialog open={!!pendingConfig} onOpenChange={(open) => !open && setPendingConfig(null)}>
 			<AlertDialogContent>
-				<AlertDialogHeader icon={TbAlertTriangleFilled}>
+				<AlertDialogHeader>
 					<AlertDialogTitle>{t('onboarding.raid.recovery.set-up-new-dialog.title')}</AlertDialogTitle>
-					<AlertDialogDescription>{t('storage-manager.add-drives-erase-warning')}</AlertDialogDescription>
-					<div className='umbrel-stable-gutter grid max-h-[320px] gap-2 overflow-y-auto pt-2 sm:grid-cols-2'>
-						{devicesToErase.map((device) => (
-							<FoundDeviceCard key={device.id} device={device} />
-						))}
-					</div>
+					<AlertDialogDescription>
+						{(pendingConfig?.raidDevices.length ?? 0) + (pendingConfig?.acceleratorDevices?.length ?? 0) > 1
+							? t('storage-manager.add-drives-erase-warning')
+							: t('storage-manager.add-drive-erase-warning')}
+					</AlertDialogDescription>
 				</AlertDialogHeader>
 				<AlertDialogFooter>
 					<AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
 					<AlertDialogAction
-						variant='destructive'
 						onClick={() => {
 							if (!pendingConfig) return
 							navigate('/onboarding/hdd-raid/setup', {state: {credentials, config: pendingConfig}})
@@ -387,14 +456,20 @@ export default function HddRaidOnboarding() {
 	// --- Step: detected storage results ---
 
 	if (step === 'results') {
+		const hasDetectedDrives = hdds.length > 0 || ssds.length > 0
 		return (
 			<ModalShell
 				footer={
 					<>
-						<span className='text-[17px] font-semibold text-white/85'>
-							{t('onboarding.hdd-raid.total-detected')}{' '}
-							<span className='text-brand'>{formatSize(totalDetectedBytes)}</span>
-						</span>
+						{/* Empty span keeps the justify-between footer's actions on the right */}
+						{hasDetectedDrives ? (
+							<span className='text-[17px] font-semibold text-white/85'>
+								{t('onboarding.hdd-raid.total-detected')}{' '}
+								<span className='text-brand'>{formatSize(totalDetectedBytes)}</span>
+							</span>
+						) : (
+							<span />
+						)}
 						<div className='flex flex-wrap items-center gap-3'>
 							<button className={secondaryButtonClasss} disabled={isRescanning} onClick={handleScanAgain}>
 								<span className='flex items-center gap-1.5'>
@@ -409,7 +484,10 @@ export default function HddRaidOnboarding() {
 					</>
 				}
 			>
-				<StepHeader title={t('onboarding.raid.storage')} subTitle={t('onboarding.hdd-raid.devices-found')} />
+				<StepHeader
+					title={t('onboarding.raid.storage')}
+					subTitle={hasDetectedDrives ? t('onboarding.hdd-raid.devices-found') : undefined}
+				/>
 				{hdds.length === 0 && ssds.length === 0 ? (
 					<div className='flex flex-col items-center gap-1 rounded-2xl bg-white/4 px-6 py-14 text-center'>
 						<span className='text-[15px] font-medium text-white'>{t('onboarding.hdd-raid.no-drives')}</span>
@@ -446,132 +524,133 @@ export default function HddRaidOnboarding() {
 					</>
 				}
 			>
-				<StepHeader
-					title={t('onboarding.raid.failsafe')}
-					titleExtra={<TbInfoCircle className='size-[18px] text-white/40' />}
-					subTitle={t('onboarding.hdd-raid.failsafe.subtitle')}
-				/>
+				<StepHeader title={t('onboarding.hdd-raid.mode.title')} subTitle={t('onboarding.hdd-raid.mode.subtitle')} />
 
-				{/* Toggle card */}
-				<div className='flex items-center justify-between gap-3 rounded-xl bg-white/5 px-4 py-3.5'>
-					<div className='flex items-center gap-3'>
-						<Switch checked={failSafeEnabled} onCheckedChange={setFailSafeChoice} disabled={!canEnableFailSafe} />
-						<span className='text-[15px] text-white/85'>{t('onboarding.raid.failsafe.enable')}</span>
-					</div>
-					{failSafeRecommended && (
-						<div className='flex items-center gap-1 rounded-full border border-brand/50 bg-brand/10 px-2.5 py-0.5'>
-							<IoShieldHalf className='size-3.5 text-brand' />
-							<span className='text-[12px] text-brand'>{t('onboarding.raid.recommended')}</span>
-						</div>
-					)}
+				{/* Mode choice - same cards as the storage manager's mode display, made selectable */}
+				<div className='grid gap-2 rounded-24 bg-white/5 p-2 md:grid-cols-2'>
+					<ModeCard
+						icon={<TbServer className='size-5' />}
+						title={t('storage-manager.mode.full-storage')}
+						description={t('storage-manager.mode.full-storage.description-drive')}
+						selected={!failSafeEnabled}
+						onSelect={() => setFailSafeChoice(false)}
+					/>
+					<ModeCard
+						icon={<IoShieldHalf className='size-5' />}
+						title={t('storage-manager.mode.failsafe')}
+						description={t('storage-manager.mode.failsafe.description-drive')}
+						selected={failSafeEnabled}
+						disabledReason={canEnableFailSafe ? undefined : t('onboarding.hdd-raid.mode.failsafe-unavailable')}
+						badge={failSafeRecommended ? <RecommendedBadge small className='hidden md:flex' /> : undefined}
+						onSelect={() => setFailSafeChoice(true)}
+					/>
 				</div>
 
-				<p className='text-13 text-white/50'>
-					{canEnableFailSafe
-						? t('onboarding.hdd-raid.failsafe.description')
-						: t('onboarding.hdd-raid.failsafe.cant-enable')}
-				</p>
-
-				{/* Columns: legend + one column per pair (on) or per drive (off) */}
+				{/* Columns: legend + one column per pair (on) or per drive (off). LayoutGroup
+				    coordinates the drive cards flying between arrangements on mode change. */}
 				<div className='overflow-x-auto pb-1'>
-					<div className='mx-auto flex w-max min-w-full justify-center gap-3 md:min-h-[400px]'>
-						{/* Legend column */}
-						<Column
-							width='narrow'
-							ratio={ratio}
-							top={
-								<>
-									<TbDeviceFloppy className='size-5 text-white/80' />
-									<span className='text-[15px] font-medium text-white/85'>{t('onboarding.raid.storage-label')}</span>
-								</>
-							}
-							bottom={
-								<>
-									<TbShield className='size-5 text-white/80' />
-									<span className='text-[15px] font-medium text-white/85'>{t('onboarding.raid.failsafe')}</span>
-								</>
-							}
-						/>
+					<LayoutGroup>
+						<div className='mx-auto flex w-max min-w-full justify-center gap-3 md:min-h-[400px]'>
+							{/* Legend column */}
+							<Column
+								width='narrow'
+								ratio={ratio}
+								top={
+									<>
+										<TbDeviceFloppy className='size-5 text-white/80' />
+										<span className='text-center text-[15px] font-medium text-white/85'>
+											{t('onboarding.hdd-raid.failsafe.usable-storage')}
+										</span>
+										<span className='text-13 text-white/40'>{formatSize(availableBytes)}</span>
+									</>
+								}
+								bottom={
+									<>
+										<TbShield className='size-5 text-white/80' />
+										<span className='text-[15px] font-medium text-white/85'>{t('onboarding.raid.failsafe')}</span>
+										<span className='text-13 text-white/40'>{formatSizeWithUnit(failsafeBytes, availableBytes)}</span>
+									</>
+								}
+							/>
 
-						{failSafeEnabled ? (
-							<>
-								{pairs.map(([top, bottom]) => (
-									<Column
-										key={top.id}
-										header={
-											<>
-												<TbCircleCheckFilled className='size-4 text-brand' />
-												<span className='text-[15px] font-semibold text-white/90'>{formatSize(top.roundedSize)}</span>
-											</>
-										}
-										top={<ColumnDrive device={top} subtitle={top.serial} />}
-										bottom={<ColumnDrive device={bottom} subtitle={bottom.serial} />}
-										divider={
-											<DividerPill tone='brand'>
-												<IoShieldHalf className='size-3' />
-												{t('onboarding.hdd-raid.failsafe.pair-pill')}
-											</DividerPill>
-										}
-									/>
-								))}
-								{unpaired.map((device) => (
+							{failSafeEnabled ? (
+								<>
+									{pairs.map(([top, bottom]) => (
+										<Column
+											key={top.id}
+											header={
+												<>
+													<TbCircleCheckFilled className='size-4 text-brand' />
+													<span className='text-[15px] font-semibold text-white/90'>{formatSize(top.roundedSize)}</span>
+												</>
+											}
+											top={<ColumnDrive device={top} subtitle={top.serial} />}
+											bottom={<ColumnDrive device={bottom} subtitle={bottom.serial} />}
+											divider={
+												<DividerPill tone='brand'>
+													<IoShieldHalf className='size-3' />
+													{t('onboarding.hdd-raid.failsafe.pair-pill')}
+												</DividerPill>
+											}
+										/>
+									))}
+									{unpaired.map((device) => (
+										<Column
+											key={device.id}
+											broken
+											header={
+												<>
+													<TbAlertCircleFilled className='size-4 text-[#FF3434]' />
+													<span className='text-[15px] font-semibold text-white/90'>
+														{formatSize(device.roundedSize)}
+													</span>
+												</>
+											}
+											top={<ColumnDrive device={device} subtitle={device.serial} />}
+											bottom={
+												<>
+													<span className='text-[15px] font-medium text-white'>
+														{t('storage-manager.pair-placeholder', {size: formatSize(device.roundedSize)})}
+													</span>
+													<span className='text-[12px] leading-snug text-white/40'>
+														{t('onboarding.hdd-raid.failsafe.above-inactive')}
+													</span>
+												</>
+											}
+											divider={
+												<DividerPill tone='red'>
+													<TbShieldOff className='size-3' />
+													{t('onboarding.hdd-raid.failsafe.no-pair-available')}
+												</DividerPill>
+											}
+										/>
+									))}
+								</>
+							) : (
+								hdds.map((device) => (
 									<Column
 										key={device.id}
-										broken
-										header={
-											<>
-												<TbAlertCircleFilled className='size-4 text-[#FF3434]' />
-												<span className='text-[15px] font-semibold text-white/90'>
-													{formatSize(device.roundedSize)}
-												</span>
-											</>
+										ratio='storage-heavy'
+										top={
+											<ColumnDrive device={device} subtitle={`${formatSize(device.roundedSize)} · ${device.serial}`} />
 										}
-										top={<ColumnDrive device={device} subtitle={device.serial} />}
-										bottom={
-											<>
-												<span className='text-[15px] font-medium text-white'>
-													{t('storage-manager.pair-placeholder', {size: formatSize(device.roundedSize)})}
-												</span>
-												<span className='text-[12px] leading-snug text-white/40'>
-													{t('onboarding.hdd-raid.failsafe.above-inactive')}
-												</span>
-											</>
-										}
+										bottom={<span className='text-[15px] text-white/40'>{t('onboarding.hdd-raid.failsafe.none')}</span>}
 										divider={
-											<DividerPill tone='red'>
-												<TbShieldOff className='size-3' />
-												{t('onboarding.hdd-raid.failsafe.no-pair-available')}
-											</DividerPill>
+											<span className='absolute top-1/2 left-1/2 z-10 flex size-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-[#39393B]'>
+												<TbShieldOff className='size-3.5 text-white/60' />
+											</span>
 										}
 									/>
-								))}
-							</>
-						) : (
-							hdds.map((device) => (
-								<Column
-									key={device.id}
-									ratio='storage-heavy'
-									top={
-										<ColumnDrive device={device} subtitle={`${formatSize(device.roundedSize)} · ${device.serial}`} />
-									}
-									bottom={<span className='text-[15px] text-white/40'>{t('onboarding.hdd-raid.failsafe.none')}</span>}
-									divider={
-										<span className='absolute top-1/2 left-1/2 z-10 flex size-7 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-[#39393B]'>
-											<TbShieldOff className='size-3.5 text-white/60' />
-										</span>
-									}
-								/>
-							))
-						)}
-					</div>
+								))
+							)}
+						</div>
+					</LayoutGroup>
 				</div>
 			</ModalShell>
 		)
 	}
 
 	// --- Step: SSD acceleration (optional) ---
-
-	const canContinueWithAccelerator = failSafeEnabled ? !!acceleratorPair : hasSelection
 
 	return (
 		<ModalShell
@@ -593,18 +672,16 @@ export default function HddRaidOnboarding() {
 									</button>
 								</>
 							) : (
-								<>
-									<button className={secondaryButtonClasss} onClick={() => handleFinish(false)}>
-										{t('onboarding.hdd-raid.accelerate.skip-continue')}
-									</button>
-									<button {...primaryButtonProps} onClick={() => shutdown()}>
-										{t('onboarding.hdd-raid.accelerate.power-off')}
-									</button>
-								</>
+								// FailSafe accelerators come in pairs, hence the plural
+								<button {...primaryButtonProps} onClick={() => handleFinish(false)}>
+									{t('onboarding.hdd-raid.accelerate.continue-without-ssds')}
+								</button>
 							)
 						) : (
 							<button {...primaryButtonProps} onClick={() => handleFinish(hasSelection)}>
-								{t('onboarding.hdd-raid.finish')}
+								{ssds.length === 0
+									? t('onboarding.hdd-raid.accelerate.continue-without-ssd')
+									: t('onboarding.hdd-raid.finish')}
 							</button>
 						)}
 					</div>
@@ -613,11 +690,7 @@ export default function HddRaidOnboarding() {
 		>
 			<StepHeader
 				title={t('onboarding.hdd-raid.accelerate.title')}
-				titleExtra={
-					<span className='text-[18px] font-semibold text-white/40'>
-						· {t('onboarding.hdd-raid.accelerate.optional')}
-					</span>
-				}
+				titleExtra={<span className='text-white/40'>({t('onboarding.hdd-raid.accelerate.optional')})</span>}
 				subTitle={
 					failSafeEnabled
 						? t('onboarding.hdd-raid.accelerate.description')
@@ -629,81 +702,78 @@ export default function HddRaidOnboarding() {
 			{failSafeEnabled ? (
 				// FailSafe: the accelerator must be a mirrored pair of same-size SSDs
 				acceleratorPair ? (
-					<>
-						<p className='text-center text-[14px] text-white/85'>{t('onboarding.hdd-raid.accelerate.select-pair')}</p>
-						<div className='mx-auto w-full max-w-[600px] overflow-hidden rounded-2xl bg-white/5'>
-							<SsdRow device={acceleratorPair[0]} label={t('onboarding.hdd-raid.accelerate.ssd-label', {number: 1})} />
-							<div className='relative h-px w-full bg-white/8'>
-								<DividerPill tone='brand'>
-									<IoShieldHalf className='size-3' />
-									{t('onboarding.hdd-raid.accelerate.selected-pair')}
-								</DividerPill>
-							</div>
-							<SsdRow device={acceleratorPair[1]} label={t('onboarding.hdd-raid.accelerate.ssd-label', {number: 2})} />
+					// Vertically centered in the step's free space
+					<div className='flex flex-1 flex-col justify-center gap-4'>
+						{/* The same SSD cards as the SSD RAID flow */}
+						<div className='mx-auto flex w-full max-w-[400px] flex-col gap-2.5 rounded-2xl border border-white/10 bg-white/5 p-2.5'>
+							{acceleratorPair.map((device) => (
+								<SsdCard
+									key={device.id}
+									size={formatSize(device.roundedSize)}
+									model={`${device.name} · ${device.serial}`}
+								/>
+							))}
 						</div>
 						<PermanentWarning />
-					</>
+					</div>
 				) : ssds.length > 0 ? (
-					<>
-						<p className='text-center text-[14px] text-white/85'>{t('onboarding.hdd-raid.accelerate.select-pair')}</p>
-						<div className='mx-auto w-full max-w-[600px] overflow-hidden rounded-2xl border border-dashed border-[#FF3434]/60 bg-[#FF3434]/5'>
-							<SsdRow device={largestSsd} label={t('onboarding.hdd-raid.accelerate.ssd-label', {number: 1})} />
-							<div className='relative w-full border-t border-dashed border-[#FF3434]/40'>
-								<DividerPill tone='red'>
-									<TbShieldOff className='size-3' />
-									{t('onboarding.hdd-raid.accelerate.no-pair-title')}
-								</DividerPill>
-							</div>
-							<div className='flex flex-col items-center gap-1.5 bg-[#3C1C1C]/30 px-6 py-10 text-center'>
-								<span className='text-[15px] font-medium text-white'>
-									{t('onboarding.hdd-raid.accelerate.add-matching-ssd')}
-								</span>
-								<span className='text-[12px] leading-relaxed text-white/40'>
-									{t('onboarding.hdd-raid.accelerate.no-pair-note-mirrored')}
-									<br />
-									{t('onboarding.hdd-raid.accelerate.no-pair-note-larger')}
-								</span>
-							</div>
+					<div className='mx-auto w-full max-w-[400px] rounded-2xl border border-dashed border-[#FF3434]/60 bg-[#FF3434]/5 p-2.5'>
+						<SsdCard
+							size={formatSize(largestSsd.roundedSize)}
+							model={`${largestSsd.name} · ${largestSsd.serial}`}
+							variant='neutral'
+						/>
+						<div className='relative my-2.5 w-full border-t border-dashed border-[#FF3434]/40'>
+							<DividerPill tone='red'>
+								<TbShieldOff className='size-3' />
+								{t('onboarding.hdd-raid.accelerate.no-pair-title')}
+							</DividerPill>
 						</div>
-					</>
+						<div className='flex flex-col items-center gap-1.5 rounded-xl bg-[#3C1C1C]/30 px-6 py-10 text-center'>
+							<span className='text-[15px] font-medium text-white'>
+								{t('onboarding.hdd-raid.accelerate.add-matching-ssd')}
+							</span>
+							<span className='text-[12px] leading-relaxed text-white/40'>
+								{t('onboarding.hdd-raid.accelerate.no-pair-note-mirrored')}
+								<br />
+								{t('onboarding.hdd-raid.accelerate.no-pair-note-larger')}
+							</span>
+						</div>
+					</div>
 				) : (
-					<>
-						<NoSsdCard pair />
-						<PermanentWarning />
-					</>
+					<NoSsdCard pair onPowerOff={() => shutdown()} />
 				)
 			) : // Full Storage: a single SSD accelerates the pool
 			ssds.length > 0 ? (
-				<>
+				// Vertically centered in the step's free space
+				<div className='flex flex-1 flex-col justify-center gap-4'>
 					<p className='text-center text-[14px] text-white/85'>{t('onboarding.hdd-raid.accelerate.select-single')}</p>
+					{/* Selection via the SSD RAID flow's cards: the brand plate tint marks the chosen SSD */}
 					{ssds.map((device) => {
 						const selected = selectedSsdIds.includes(device.id!)
 						return (
-							<label
+							<button
 								key={device.id}
+								type='button'
+								onClick={() => setSsdChoice(selected ? [] : [device.id!])}
 								className={cn(
-									'mx-auto flex w-full max-w-[360px] cursor-pointer items-center gap-3 overflow-hidden rounded-2xl border bg-white/5 py-3.5 pl-4 transition-colors',
-									selected ? 'border-white/30' : 'border-white/10 hover:border-white/20',
+									'mx-auto w-full max-w-[400px] rounded-xl text-left transition-opacity',
+									!selected && 'opacity-80 hover:opacity-100',
 								)}
 							>
-								<Checkbox checked={selected} onCheckedChange={() => setSsdChoice(selected ? [] : [device.id!])} />
-								<div className='min-w-0 flex-1'>
-									<div className='truncate text-[15px] font-medium text-white'>{device.name}</div>
-									<div className='truncate text-13 text-white/40'>
-										{formatSize(device.roundedSize)} · {device.serial}
-									</div>
-								</div>
-								<BigSsdChip sizeLabel={formatSize(device.roundedSize)} className='-mr-6 h-[56px] w-[94px]' />
-							</label>
+								<SsdCard
+									size={formatSize(device.roundedSize)}
+									model={`${device.name} · ${device.serial}`}
+									variant={selected ? 'storage' : 'neutral'}
+									trailing={selected ? <TbCircleCheckFilled className='mr-1.5 size-6 text-brand' /> : undefined}
+								/>
+							</button>
 						)
 					})}
 					{hasSelection && <PermanentWarning single />}
-				</>
+				</div>
 			) : (
-				<>
-					<NoSsdCard pair={false} />
-					<PermanentWarning single />
-				</>
+				<NoSsdCard pair={false} onPowerOff={() => shutdown()} />
 			)}
 			{eraseConfirmationDialog}
 		</ModalShell>

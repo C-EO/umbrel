@@ -8,50 +8,16 @@ import {Trans, useTranslation} from 'react-i18next'
 import {TbAlertTriangleFilled} from 'react-icons/tb'
 import {Link, useLocation, useNavigate} from 'react-router-dom'
 
-import {Spinner} from '@/components/ui/loading'
 import {links} from '@/constants/links'
-import {primaryButtonProps} from '@/layouts/bare/shared'
+import {footerLinkClass, Layout, primaryButtonProps, secondaryButtonClasss} from '@/layouts/bare/shared'
 import {useAuth} from '@/modules/auth/use-auth'
+import {Progress} from '@/modules/bare/progress'
 import {useGlobalSystemState} from '@/providers/global-system-state/index'
 import {AccountCredentials} from '@/routes/onboarding/create-account'
 import {trpcReact} from '@/trpc/trpc'
 import {linkClass} from '@/utils/element-classes'
 
-import {formatSize} from '../raid/use-raid-setup'
-import {ModalShell, StepHeader} from './components'
 import {HddRaidSetupConfig} from './use-hdd-raid-onboarding'
-
-// The stat tiles shown on the "Your setup" and launch screens
-function SetupStats({
-	stats,
-	failSafe,
-	storageLabel,
-}: {
-	stats: HddRaidSetupConfig['stats']
-	failSafe: boolean
-	storageLabel: string
-}) {
-	const {t} = useTranslation()
-	const tiles: {value: string; label: string}[] = [
-		{value: String(stats.driveCount), label: t('onboarding.hdd-raid.setup.hard-drives-added')},
-		{value: formatSize(stats.storageBytes), label: storageLabel},
-	]
-	if (failSafe)
-		tiles.push({value: formatSize(stats.failsafeBytes), label: t('onboarding.hdd-raid.setup.space-for-failsafe')})
-	if (stats.acceleratorBytes > 0)
-		tiles.push({value: formatSize(stats.acceleratorBytes), label: t('onboarding.hdd-raid.setup.ssd-for-acceleration')})
-
-	return (
-		<div className='grid w-full grid-cols-2 gap-3 md:grid-cols-4'>
-			{tiles.map((tile) => (
-				<div key={tile.label} className='flex flex-col gap-1 rounded-xl bg-white/5 p-4'>
-					<span className='text-[20px] font-semibold text-white/90'>{tile.value}</span>
-					<span className='text-[12px] text-white/40'>{tile.label}</span>
-				</div>
-			))}
-		</div>
-	)
-}
 
 export default function HddRaidSetup() {
 	const {t} = useTranslation()
@@ -122,7 +88,6 @@ export default function HddRaidSetup() {
 		if (startedRef.current) return
 		startedRef.current = true
 		register()
-		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [])
 
 	if (!credentials || !config) return null
@@ -130,7 +95,10 @@ export default function HddRaidSetup() {
 	// --- Error state ---
 	if (phase === 'error') {
 		const canRetry = !!registerMut.error // Only pre-reboot errors can be retried
-		const errorMessage = registerMut.error?.message || raidStatusQ.error?.message
+		const errorMessage =
+			registerMut.error?.message ||
+			raidStatusQ.error?.message ||
+			'The HDD pool could not be mounted after the device restarted.'
 		return (
 			<div className='flex flex-1 flex-col items-center justify-center gap-4'>
 				<TbAlertTriangleFilled className='size-[22px] text-[#F5A623]' />
@@ -159,11 +127,7 @@ export default function HddRaidSetup() {
 							{t('onboarding.raid.try-again')}
 						</button>
 					)}
-					<button
-						onClick={() => shutdown()}
-						className='flex h-[42px] min-w-[112px] items-center justify-center rounded-full bg-destructive2 px-4 text-14 font-medium text-white ring-destructive2/40 transition-all duration-300 hover:bg-destructive2-lighter focus:outline-hidden focus-visible:ring-3 active:scale-100 active:bg-destructive2 disabled:pointer-events-none disabled:opacity-50'
-						style={{boxShadow: '0px 2px 4px 0px rgba(255, 255, 255, 0.25) inset'}}
-					>
+					<button onClick={() => shutdown()} className={secondaryButtonClasss}>
 						{t('shut-down')}
 					</button>
 				</div>
@@ -172,63 +136,65 @@ export default function HddRaidSetup() {
 	}
 
 	// --- Launch state ---
+	// Same success page as the Pro and SSD RAID flows: hero title, ToS note, one compact
+	// stats line, and the launch button
 	if (phase === 'complete') {
 		const firstName = credentials.name?.split(' ')[0] || ''
 		return (
-			<ModalShell>
-				<div className='flex flex-1 flex-col items-center justify-center gap-4 py-8 text-center'>
-					<h1 className='text-[28px] font-bold text-white/90 md:text-[32px]'>
-						{t('onboarding.account-created.youre-all-set-name', {name: firstName})}
-					</h1>
-					<p className='max-w-[420px] text-[14px] leading-relaxed text-white/40'>
-						<Trans
-							t={t}
-							i18nKey='onboarding.account-created.by-clicking-button-you-agree'
-							components={{
-								linked: <Link to={links.legal.tos} className={linkClass} target='_blank' />,
-							}}
-						/>
-					</p>
-					<div className='mt-4 w-full max-w-[760px]'>
-						<SetupStats
-							stats={config.stats}
-							failSafe={config.raidType === 'failsafe'}
-							storageLabel={t('onboarding.raid.available-storage')}
-						/>
-					</div>
-					<button
-						onClick={() => {
-							setIsLaunching(true)
-							loginMut.mutate({password: credentials.password, totpToken: ''})
+			<Layout
+				title={t('onboarding.account-created.youre-all-set-name', {name: firstName})}
+				subTitle={
+					<Trans
+						t={t}
+						i18nKey='onboarding.account-created.by-clicking-button-you-agree'
+						components={{
+							linked: <Link to={links.legal.tos} className={linkClass} target='_blank' />,
 						}}
-						disabled={isLaunching}
-						className={`mt-4 ${primaryButtonProps.className}`}
-						style={primaryButtonProps.style}
-					>
-						{isLaunching ? t('onboarding.raid.launching') : t('onboarding.launch-umbrelos')}
-					</button>
-				</div>
-			</ModalShell>
+					/>
+				}
+				subTitleMaxWidth={630}
+				subTitleClassName='text-white/50'
+				showLogo={false}
+				footer={
+					<div className='flex flex-col items-center gap-3'>
+						<Link to={links.support} target='_blank' className={footerLinkClass}>
+							{t('onboarding.contact-support')}
+						</Link>
+					</div>
+				}
+			>
+				<button
+					onClick={() => {
+						setIsLaunching(true)
+						loginMut.mutate({password: credentials.password, totpToken: ''})
+					}}
+					disabled={isLaunching}
+					className={`mt-4 ${primaryButtonProps.className}`}
+					style={primaryButtonProps.style}
+				>
+					{isLaunching ? t('onboarding.raid.launching') : t('onboarding.launch-umbrelos')}
+				</button>
+			</Layout>
 		)
 	}
 
 	// --- Progress state ---
+	// The same configuring cover the Pro and SSD RAID flows show while the pool builds
 	return (
-		<ModalShell>
-			<StepHeader title={t('onboarding.hdd-raid.setup.title')} />
-			<div className='border-t border-white/8' />
-			<SetupStats
-				stats={config.stats}
-				failSafe={config.raidType === 'failsafe'}
-				storageLabel={t('onboarding.hdd-raid.setup.space-for-storage')}
-			/>
-			<div className='flex flex-1 flex-col items-center justify-center gap-4'>
-				<div className='flex items-center gap-2.5 text-[17px] font-medium text-white/85'>
-					<Spinner size='5' />
-					{t('onboarding.raid.configuring.title')}
+		<Layout
+			title={t('onboarding.raid.configuring.title')}
+			subTitle={t('onboarding.raid.configuring.subtitle')}
+			subTitleMaxWidth={400}
+			showLogo={false}
+			footer={
+				<div className='w-full max-w-sm'>
+					<p className='text-center text-sm text-white/60'>{t('onboarding.raid.configuring.warning')}</p>
 				</div>
-				<p className='max-w-[400px] text-center text-sm text-white/50'>{t('onboarding.raid.configuring.warning')}</p>
+			}
+		>
+			<div className='mt-4 w-full max-w-sm'>
+				<Progress />
 			</div>
-		</ModalShell>
+		</Layout>
 	)
 }

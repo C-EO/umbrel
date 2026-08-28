@@ -1,17 +1,9 @@
-import {useState} from 'react'
+import {AnimatePresence, motion} from 'motion/react'
+import {useEffect, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {useNavigate} from 'react-router-dom'
+import {FaLock} from 'react-icons/fa6'
+import {useLocation, useNavigate} from 'react-router-dom'
 
-import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogDescription,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import {AnimatedInputError, Input, PasswordInput} from '@/components/ui/input'
 import {useDeviceInfo} from '@/hooks/use-device-info'
 import {useLanguage} from '@/hooks/use-language'
@@ -26,6 +18,8 @@ import {getGenericRaidOnboardingPath} from './storage-selection'
 // through the RAID setup pages. Actual user.register call happens in setup.tsx
 // after RAID configuration. location.state survives page refresh but is lost on
 // direct URL navigation or new tab.
+const MIN_PASSWORD_LENGTH = 6
+
 export type AccountCredentials = {
 	name: string
 	password: string
@@ -45,12 +39,23 @@ export default function CreateAccount() {
 	const [confirmPassword, setConfirmPassword] = useState('')
 	const [localError, setLocalError] = useState('')
 	const [isNavigating, setIsNavigating] = useState(false)
-	const [showExternalDriveConfirmation, setShowExternalDriveConfirmation] = useState(false)
 
 	const isPro = deviceInfo?.umbrelHostEnvironment === 'umbrel-pro'
 	const isRaspberryPi = deviceInfo?.umbrelHostEnvironment === 'raspberry-pi'
 	const isGeneric = deviceInfo?.umbrelHostEnvironment === 'unknown'
-	const externalDevicesQ = trpcReact.files.externalDevices.useQuery(undefined, {enabled: isRaspberryPi})
+
+	// A Raspberry Pi with an external drive attached chooses where its data lives
+	// in the external-drive step first. Arriving from that step (SD card chosen)
+	// sets this flag; landing here any other way redirects to the step.
+	const location = useLocation()
+	const externalDriveAcknowledged = !!location.state?.externalDriveAcknowledged
+	const checkExternalDrives = isRaspberryPi && !externalDriveAcknowledged
+	const externalDevicesQ = trpcReact.files.externalDevices.useQuery(undefined, {enabled: checkExternalDrives})
+	useEffect(() => {
+		if (checkExternalDrives && externalDevicesQ.data?.length) {
+			navigate('/onboarding/external-drive', {replace: true})
+		}
+	}, [checkExternalDrives, externalDevicesQ.data, navigate])
 	// Generic devices with internal data drives get the matching RAID onboarding flow
 	const internalStorageQ = trpcReact.hardware.internalStorage.getDevices.useQuery(undefined, {enabled: isGeneric})
 
@@ -110,16 +115,8 @@ export default function CreateAccount() {
 			return
 		}
 
-		if (password.length < 6) {
-			setLocalError(t('change-password.failed.min-length', {characters: 6}))
-			return
-		}
-
-		const externalDevices = isRaspberryPi
-			? (externalDevicesQ.data ?? (await externalDevicesQ.refetch()).data)
-			: undefined
-		if (externalDevices?.length) {
-			setShowExternalDriveConfirmation(true)
+		if (password.length < MIN_PASSWORD_LENGTH) {
+			setLocalError(t('change-password.failed.min-length', {characters: MIN_PASSWORD_LENGTH}))
 			return
 		}
 
@@ -128,6 +125,8 @@ export default function CreateAccount() {
 
 	const remoteFormError = !registerMut.error?.data?.zodError && registerMut.error?.message
 	const formError = localError || remoteFormError
+	// Only worth warning about a password once there's a valid, confirmed one
+	const isPasswordConfirmed = password.length >= MIN_PASSWORD_LENGTH && confirmPassword === password
 	const isLoading = isDeviceInfoLoading || registerMut.isPending || loginMut.isPending || isNavigating
 
 	return (
@@ -159,6 +158,31 @@ export default function CreateAccount() {
 						/>
 					</div>
 
+					{/* There is no password reset, so the warning sits with the fields rather than in the
+						subtitle, and only once there's a password worth backing up. It sits outside the form
+						group so it can run wider than the inputs and stay on one line. */}
+					<AnimatePresence initial={false}>
+						{isPasswordConfirmed && (
+							<motion.div
+								className='-mt-1.5 w-full overflow-hidden'
+								initial={{height: 0, opacity: 0}}
+								animate={{height: 'auto', opacity: 1}}
+								exit={{height: 0, opacity: 0}}
+								transition={{duration: 0.35, ease: [0.16, 1, 0.3, 1]}}
+							>
+								{/* A light sweeps left to right across the text once as it arrives. The lock is inline
+									rather than a flex item so it hugs the first word when the text wraps on narrow
+									screens, and `align` centres it on the cap height. */}
+								<p className='px-4 py-1 text-center text-12 leading-4 font-medium -tracking-3 text-balance'>
+									<FaLock className='mr-1.5 inline-block size-[11px] align-[-0.1em] text-white/40' />
+									<span className='animate-text-shine bg-[linear-gradient(90deg,rgba(255,255,255,0.45)_0%,rgba(255,255,255,0.45)_40%,rgba(255,255,255,1)_50%,rgba(255,255,255,0.45)_60%,rgba(255,255,255,0.45)_100%)] bg-[length:300%_100%] bg-clip-text bg-no-repeat text-transparent'>
+										{t('onboarding.create-account.password-note')}
+									</span>
+								</p>
+							</motion.div>
+						)}
+					</AnimatePresence>
+
 					<div className='-my-2.5'>
 						<AnimatedInputError>{formError}</AnimatedInputError>
 					</div>
@@ -167,24 +191,6 @@ export default function CreateAccount() {
 					</button>
 				</fieldset>
 			</form>
-
-			<AlertDialog open={showExternalDriveConfirmation} onOpenChange={setShowExternalDriveConfirmation}>
-				<AlertDialogContent>
-					<AlertDialogHeader>
-						<AlertDialogTitle>{t('onboarding.create-account.external-drive.title')}</AlertDialogTitle>
-						<AlertDialogDescription className='space-y-3'>
-							<span className='block'>{t('onboarding.create-account.external-drive.description')}</span>
-							<span className='block'>{t('onboarding.create-account.external-drive.main-storage')}</span>
-						</AlertDialogDescription>
-					</AlertDialogHeader>
-					<AlertDialogFooter>
-						<AlertDialogCancel>{t('onboarding.create-account.external-drive.go-back')}</AlertDialogCancel>
-						<AlertDialogAction onClick={completeAccountSetup}>
-							{t('onboarding.create-account.external-drive.continue')}
-						</AlertDialogAction>
-					</AlertDialogFooter>
-				</AlertDialogContent>
-			</AlertDialog>
 		</Layout>
 	)
 }

@@ -1,9 +1,9 @@
 import {motion} from 'motion/react'
 import {useEffect, useState} from 'react'
 import {useTranslation} from 'react-i18next'
+import {TbLoader} from 'react-icons/tb'
 import {useLocation, useNavigate} from 'react-router-dom'
 
-import {Spinner} from '@/components/ui/loading'
 import {AccountCredentials} from '@/routes/onboarding/create-account'
 import {trpcReact} from '@/trpc/trpc'
 
@@ -115,7 +115,8 @@ export default function Raid({variant = 'pro'}: {variant?: RaidOnboardingVariant
 	if (isGeneric) {
 		return (
 			<div className='flex flex-1 flex-col items-center justify-center gap-4'>
-				<Spinner size='6' />
+				{/* Same spinner as the Files listing loading state */}
+				<TbLoader className='white h-6 w-6 animate-spin opacity-50 shadow-xs' />
 				<span className='text-[15px] text-white/85'>{t('onboarding.ssd-raid.scanning')}</span>
 			</div>
 		)

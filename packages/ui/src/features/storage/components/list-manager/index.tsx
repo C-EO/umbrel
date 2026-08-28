@@ -293,6 +293,7 @@ export function ListStorageManager() {
 								id={poolDevice.id}
 								status={poolDevice.status}
 								action={memberAction({id: poolDevice.id, status: poolDevice.status})}
+								isHdd={isHddPool}
 							/>
 						)
 					}

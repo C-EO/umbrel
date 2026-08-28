@@ -63,9 +63,10 @@ export function StorefrontSectionView({
  * banner carousel: the active banner snaps centered while its neighbors peek
  * in from the sheet edges, auto-rotating on a 5s timer with the countdown
  * filling the active dot. The clock holds while dragging or hovering and
- * restarts when the slide changes. A
- * banner whose artwork fails to load simply leaves the row — the artwork is
- * the whole banner, there is nothing else to show in its place.
+ * restarts when the slide changes. The slide narrows again past 1440px, where
+ * the sheet stops growing, so the banner doesn't run away with the whole row on
+ * a wide display. A banner whose artwork fails to load simply leaves the row —
+ * the artwork is the whole banner, there is nothing else to show in its place.
  */
 export function SpotlightCarousel({banners}: {banners: SpotlightBannerData[]}) {
 	const [api, setApi] = useState<CarouselApi>()
@@ -99,7 +100,10 @@ export function SpotlightCarousel({banners}: {banners: SpotlightBannerData[]}) {
 			>
 				<CarouselContent containerClassName='px-3 md:px-[40px] xl:px-[70px]' className='-ml-3 md:-ml-4'>
 					{shown.map((banner) => (
-						<CarouselItem key={banner.app.id} className='basis-[86%] pl-3 md:basis-[78%] md:pl-4'>
+						<CarouselItem
+							key={banner.app.id}
+							className='basis-[86%] pl-3 md:basis-[78%] md:pl-4 min-[1440px]:basis-[70%]'
+						>
 							<SpotlightBanner banner={banner} onArtworkError={onArtworkError} />
 						</CarouselItem>
 					))}

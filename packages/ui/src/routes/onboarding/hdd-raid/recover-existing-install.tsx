@@ -1,6 +1,6 @@
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {TbAlertTriangleFilled, TbCircleCheckFilled, TbDatabase} from 'react-icons/tb'
+import {TbAlertTriangleFilled} from 'react-icons/tb'
 
 import {
 	AlertDialog,
@@ -12,8 +12,8 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import {Spinner} from '@/components/ui/loading'
-import {primaryButtonProps, secondaryButtonClasss} from '@/layouts/bare/shared'
+import {Layout, primaryButtonProps, secondaryButtonClasss} from '@/layouts/bare/shared'
+import {Progress} from '@/modules/bare/progress'
 
 import {StorageDevice} from '../raid/use-raid-setup'
 import {useRecoverExistingInstall} from '../raid/use-recover-existing-install'
@@ -40,7 +40,7 @@ export function HddRecoverExistingInstall({
 					<AlertDialogDescription>{t('onboarding.raid.recovery.set-up-new-dialog.description')}</AlertDialogDescription>
 				</AlertDialogHeader>
 				<AlertDialogFooter>
-					<AlertDialogAction variant='destructive' onClick={onSetUpAsNew}>
+					<AlertDialogAction onClick={onSetUpAsNew}>
 						{t('onboarding.raid.recovery.set-up-new-dialog.confirm')}
 					</AlertDialogAction>
 					<AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
@@ -49,21 +49,25 @@ export function HddRecoverExistingInstall({
 		</AlertDialog>
 	)
 
-	// Restore in progress: the device reboots and the hook redirects to `/` when it's back
+	// Restore in progress: the device reboots and the hook redirects to `/` when it's back.
+	// Same restoring cover as the SSD RAID recovery flow.
 	if (restoreRequested && !restoreFailed) {
 		return (
-			<ModalShell>
-				<StepHeader
-					title={t('onboarding.raid.recovery.restoring.title')}
-					subTitle={t('onboarding.raid.recovery.restoring.subtitle')}
-				/>
-				<div className='flex flex-1 flex-col items-center justify-center gap-4'>
-					<Spinner size='6' />
-					<p className='max-w-[400px] text-center text-sm text-white/50'>
-						{t('onboarding.raid.recovery.restoring.warning')}
-					</p>
+			<Layout
+				title={t('onboarding.raid.recovery.restoring.title')}
+				subTitle={t('onboarding.raid.recovery.restoring.subtitle')}
+				subTitleMaxWidth={430}
+				showLogo={false}
+				footer={
+					<div className='w-full max-w-sm'>
+						<p className='text-center text-sm text-white/60'>{t('onboarding.raid.recovery.restoring.warning')}</p>
+					</div>
+				}
+			>
+				<div className='mt-4 w-full max-w-sm'>
+					<Progress />
 				</div>
-			</ModalShell>
+			</Layout>
 		)
 	}
 
@@ -72,7 +76,12 @@ export function HddRecoverExistingInstall({
 			<ModalShell>
 				<div className='flex flex-1 flex-col items-center justify-center gap-4 px-4'>
 					<TbAlertTriangleFilled className='size-[22px] text-[#F5A623]' />
-					<h1 className='text-[20px] font-bold text-white/90'>{t('onboarding.raid.recovery.failed.title')}</h1>
+					<h1
+						className='text-[20px] font-bold text-white/85'
+						style={{textShadow: '0 0 8px rgba(255, 255, 255, 0.2), 0 0 16px rgba(255, 255, 255, 0.15)'}}
+					>
+						{t('onboarding.raid.recovery.failed.title')}
+					</h1>
 					<p className='max-w-[360px] text-center text-[15px] text-white/70'>
 						{errorMessage ?? t('onboarding.raid.recovery.failed.description')}
 					</p>
@@ -97,9 +106,8 @@ export function HddRecoverExistingInstall({
 		<ModalShell
 			footer={
 				<>
-					<span className='text-[15px] font-semibold text-brand'>
-						{t('onboarding.raid.recovery.found.storage-detected')}
-					</span>
+					{/* Empty span keeps the justify-between footer's actions on the right */}
+					<span />
 					<div className='flex flex-wrap items-center gap-3'>
 						<button onClick={() => setShowSetUpAsNewDialog(true)} className={secondaryButtonClasss}>
 							{t('onboarding.raid.recovery.set-up-new')}
@@ -113,22 +121,8 @@ export function HddRecoverExistingInstall({
 		>
 			<StepHeader
 				title={t('onboarding.raid.recovery.found.title')}
-				subTitle={t('onboarding.raid.recovery.found.subtitle')}
+				subTitle={t('onboarding.raid.recovery.found.subtitle-drive')}
 			/>
-
-			{/* Existing install summary */}
-			<div className='flex max-w-[560px] items-start gap-3 rounded-xl bg-white/5 p-4'>
-				<div className='relative mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-brand/15'>
-					<TbDatabase className='size-5 text-brand' />
-					<TbCircleCheckFilled className='absolute -right-0.5 -bottom-0.5 size-3.5 text-brand' />
-				</div>
-				<div className='flex flex-col gap-1'>
-					<p className='text-[15px] font-medium text-white/85'>{t('onboarding.raid.recovery.found.install-title')}</p>
-					<p className='text-[13px] leading-relaxed text-white/50'>
-						{t('onboarding.raid.recovery.found.install-description')}
-					</p>
-				</div>
-			</div>
 
 			{/* Detected drives */}
 			<div className='grid gap-3 md:grid-cols-2'>
@@ -136,10 +130,6 @@ export function HddRecoverExistingInstall({
 					<FoundDeviceCard key={device.id} device={device} />
 				))}
 			</div>
-
-			<p className='max-w-[560px] text-[13px] leading-relaxed text-white/50'>
-				{t('onboarding.raid.recovery.found.sign-in-note')}
-			</p>
 
 			{setUpAsNewDialog}
 		</ModalShell>

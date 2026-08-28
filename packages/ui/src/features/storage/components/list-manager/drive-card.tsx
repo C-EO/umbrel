@@ -5,7 +5,7 @@ import {cn} from '@/lib/utils'
 
 import {getDeviceHealth, RaidDevice, RaidDeviceStatus, raidStatusLabels, StorageDevice} from '../../hooks/use-storage'
 import {formatStorageSize, hasRaidErrors} from '../../utils'
-import {DriveIcon, DriveLed, SsdChip} from './drive-visuals'
+import {DriveIcon, DriveLed, HardDriveIcon, SsdChip} from './drive-visuals'
 
 // Resolve the LED color for a drive from its RAID membership and health
 function getDriveLed({
@@ -112,7 +112,7 @@ export function DriveCard({
 				onClick && 'cursor-pointer hover:bg-white/10',
 			)}
 		>
-			<DriveIcon led={led} />
+			{device.type === 'hdd' ? <HardDriveIcon led={led} /> : <DriveIcon led={led} />}
 			<div className='min-w-0 flex-1'>
 				<div className='truncate text-[15px] font-medium text-white'>{device.name}</div>
 				<div className='truncate text-13 text-white/50'>
@@ -141,7 +141,7 @@ export function SystemDriveCard({device, onClick}: {device: StorageDevice; onCli
 			{device.type === 'ssd' ? (
 				<SsdChip sizeLabel={formatStorageSize(device.size)} />
 			) : (
-				<DriveIcon led={hasWarning ? 'red' : 'green'} />
+				<HardDriveIcon led={hasWarning ? 'red' : 'green'} />
 			)}
 			<div className='min-w-0 flex-1'>
 				<div className='truncate text-[15px] font-medium text-white'>{device.name}</div>
@@ -162,15 +162,18 @@ export function MissingDriveCard({
 	id,
 	status,
 	action,
+	isHdd = false,
 }: {
 	id: string
 	status?: RaidDeviceStatus
 	action?: React.ReactNode
+	/** The missing device is gone, so the pool's drive type decides the artwork */
+	isHdd?: boolean
 }) {
 	const {t} = useTranslation()
 	return (
 		<div className='flex w-full items-center gap-4 rounded-12 border border-[#FF3434]/40 bg-[#FF3434]/10 p-4 text-left'>
-			<DriveIcon led='red' className='opacity-40' />
+			{isHdd ? <HardDriveIcon led='red' className='opacity-40' /> : <DriveIcon led='red' className='opacity-40' />}
 			<div className='min-w-0 flex-1'>
 				<div className='truncate text-[15px] font-medium text-white'>{t('storage-manager.missing-drive')}</div>
 				<div className='truncate text-13 text-white/50'>{id}</div>

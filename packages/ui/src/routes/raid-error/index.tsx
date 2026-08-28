@@ -1,6 +1,7 @@
 import {useState} from 'react'
 import {Trans, useTranslation} from 'react-i18next'
-import {TbActivityHeartbeat, TbAlertTriangle, TbAlertTriangleFilled, TbCircleCheckFilled} from 'react-icons/tb'
+import {TbAlertTriangle, TbAlertTriangleFilled, TbCircleCheckFilled} from 'react-icons/tb'
+import {TiInfoLarge} from 'react-icons/ti'
 import {Navigate} from 'react-router-dom'
 
 import {
@@ -191,9 +192,9 @@ export default function RaidErrorScreen() {
 											</p>
 										)}
 									</div>
-									{/* Health pill */}
-									<div className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] px-3 py-0.5'>
-										<TbActivityHeartbeat className='size-4 text-white/60' />
+									{/* Round info button, matching the onboarding SSD tray */}
+									<div className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] p-1'>
+										<TiInfoLarge className='size-4 text-white/60' />
 										{drive.hasHealthWarning && (
 											<span className='absolute -top-0.5 -right-0.5'>
 												<span className='absolute inset-0 size-2.5 rounded-full bg-[#F5A623]' />

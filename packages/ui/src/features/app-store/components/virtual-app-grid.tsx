@@ -39,7 +39,7 @@ type Geometry = {columns: number; rowHeight: number; gap: number}
 // after that render — so the initial height must already be right or the
 // restore gets clamped. Within a session the geometry only changes with the
 // viewport, so the previous grid's answer is the best available guess.
-let lastGeometry: Geometry = {columns: 1, rowHeight: 76, gap: 4}
+let lastGeometry: Geometry = {columns: 1, rowHeight: 76, gap: 6}
 
 // The mounted rows, and the first of them actually inside the viewport (the
 // ones before it are overscan) — where the entrance stagger counts from

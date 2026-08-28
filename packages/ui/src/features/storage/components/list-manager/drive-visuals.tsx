@@ -1,4 +1,6 @@
 import externalStorageIcon from '@/features/files/assets/external-storage-icon.png'
+import hardDrive from '@/features/storage/assets/hard-drive.webp'
+import sdCard from '@/features/storage/assets/sd-card.svg'
 import ssdChip from '@/features/storage/assets/ssd-chip.svg'
 import {cn} from '@/lib/utils'
 
@@ -29,8 +31,32 @@ export function DriveIcon({led = 'none', className}: {led?: DriveLed; className?
 	)
 }
 
-// The SSD chip vector exported from the Figma designs (body plus edge connector pins,
-// 100x60). The capacity badge is overlaid so the label stays dynamic.
+// The internal 3.5" hard drive render. Like DriveIcon, the healthy state is the asset
+// as-is (green LED baked in at 85%/85.4%); failed/degraded states cover the LED with a
+// red or amber glow.
+export function HardDriveIcon({led = 'none', className}: {led?: DriveLed; className?: string}) {
+	return (
+		<div className={cn('relative h-11 w-12 shrink-0', className)}>
+			<img src={hardDrive} alt='' draggable={false} className='size-full object-contain' />
+			{(led === 'red' || led === 'amber') && (
+				<span
+					className={cn(
+						'absolute size-[11%] rounded-full',
+						led === 'red'
+							? 'bg-[#FF3434] shadow-[0_0_6px_1px_rgba(255,52,52,0.8)]'
+							: 'bg-[#F5A623] shadow-[0_0_6px_1px_rgba(245,166,35,0.8)]',
+					)}
+					style={{left: '85%', top: '86%', transform: 'translate(-50%, -50%)'}}
+				/>
+			)}
+		</div>
+	)
+}
+
+// The SSD chip vector (board plus edge connector pins, 100x60). Redrawn from the Figma
+// export, which baked in a square-cornered frame background that clipped the board flat
+// at the left; this keeps its palette and pin layout but is a rounded silhouette on
+// transparency. The capacity badge is overlaid so the label stays dynamic.
 export function SsdChip({sizeLabel, className, led = 'none'}: {sizeLabel: string; className?: string; led?: DriveLed}) {
 	return (
 		<div className={cn('relative flex h-9 w-[60px] shrink-0 items-center justify-center', className)}>
@@ -50,4 +76,11 @@ export function SsdChip({sizeLabel, className, led = 'none'}: {sizeLabel: string
 			)}
 		</div>
 	)
+}
+
+// The SD card vector, drawn in the same material language as the SSD chip (body gradient,
+// edge contacts, hairline outline). Portrait 3:4 like a real card, so it keeps its own
+// footprint rather than the chip's.
+export function SdCard({className}: {className?: string}) {
+	return <img src={sdCard} alt='' draggable={false} className={cn('h-12 w-9 shrink-0', className)} />
 }

@@ -1,6 +1,6 @@
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {TbAlertTriangleFilled, TbCircleCheckFilled, TbDatabase} from 'react-icons/tb'
+import {TbAlertTriangleFilled} from 'react-icons/tb'
 
 import {
 	AlertDialog,
@@ -54,12 +54,12 @@ export function RecoverExistingInstall({devices, variant = 'pro', onSetUpAsNew}:
 	const setUpAsNewDialog = (
 		<AlertDialog open={showSetUpAsNewDialog} onOpenChange={setShowSetUpAsNewDialog}>
 			<AlertDialogContent>
-				<AlertDialogHeader icon={TbAlertTriangleFilled}>
+				<AlertDialogHeader>
 					<AlertDialogTitle>{t('onboarding.raid.recovery.set-up-new-dialog.title')}</AlertDialogTitle>
 					<AlertDialogDescription>{t('onboarding.raid.recovery.set-up-new-dialog.description')}</AlertDialogDescription>
 				</AlertDialogHeader>
 				<AlertDialogFooter>
-					<AlertDialogAction variant='destructive' onClick={onSetUpAsNew}>
+					<AlertDialogAction onClick={onSetUpAsNew}>
 						{t('onboarding.raid.recovery.set-up-new-dialog.confirm')}
 					</AlertDialogAction>
 					<AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
@@ -145,23 +145,6 @@ export function RecoverExistingInstall({devices, variant = 'pro', onSetUpAsNew}:
 					</p>
 				</div>
 
-				<div className='flex max-w-[500px] items-start gap-3 rounded-xl bg-white/5 p-4'>
-					<div className='relative mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-full bg-brand/15'>
-						<TbDatabase className='size-5 text-brand' />
-						<TbCircleCheckFilled className='absolute -right-0.5 -bottom-0.5 size-3.5 text-brand' />
-					</div>
-					<div className='flex flex-col gap-1'>
-						<p className='text-[15px] font-medium text-white/85'>{t('onboarding.raid.recovery.found.install-title')}</p>
-						<p className='text-[13px] leading-relaxed text-white/50'>
-							{t('onboarding.raid.recovery.found.install-description')}
-						</p>
-					</div>
-				</div>
-
-				<p className='max-w-[500px] text-[13px] leading-relaxed text-white/50'>
-					{t('onboarding.raid.recovery.found.sign-in-note')}
-				</p>
-
 				<div className='flex flex-col gap-3 sm:flex-row'>
 					<button
 						onClick={handleRestore}
@@ -179,12 +162,17 @@ export function RecoverExistingInstall({devices, variant = 'pro', onSetUpAsNew}:
 			<div
 				className={`hidden min-w-0 flex-1 flex-col justify-center md:flex ${isGeneric ? 'items-center' : 'items-end md:-mr-6'}`}
 			>
+				{/* The bottom fade suits the Pro chassis photo; the generic enclosure is a bounded card */}
 				<div
 					className={isGeneric ? 'w-full' : 'w-[95%]'}
-					style={{
-						maskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
-						WebkitMaskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
-					}}
+					style={
+						isGeneric
+							? undefined
+							: {
+									maskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
+									WebkitMaskImage: 'linear-gradient(to bottom, black 80%, transparent 100%)',
+								}
+					}
 				>
 					{isGeneric ? (
 						<GenericSsdTray
@@ -204,13 +192,6 @@ export function RecoverExistingInstall({devices, variant = 'pro', onSetUpAsNew}:
 						/>
 					)}
 				</div>
-				<p
-					className={`flex justify-center text-[18px] font-semibold text-brand ${
-						isGeneric ? 'mt-2 w-full' : '-mt-20 w-[95%] translate-x-4'
-					}`}
-				>
-					{t('onboarding.raid.recovery.found.storage-detected')}
-				</p>
 			</div>
 
 			{setUpAsNewDialog}

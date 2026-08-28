@@ -39,6 +39,7 @@ const EditWidgetsPage = React.lazy(() => import('./routes/edit-widgets'))
 const Login = React.lazy(() => import('./routes/login'))
 const OnboardingStart = React.lazy(() => import('./routes/onboarding'))
 const CreateAccount = React.lazy(() => import('./routes/onboarding/create-account'))
+const ExternalDriveChoice = React.lazy(() => import('./routes/onboarding/external-drive'))
 const AccountCreated = React.lazy(() => import('./routes/onboarding/account-created'))
 const Raid = React.lazy(() => import('./routes/onboarding/raid'))
 const RaidSetup = React.lazy(() => import('./routes/onboarding/raid/setup'))
@@ -176,6 +177,8 @@ export const router = createBrowserRouter([
 		ErrorBoundary: ErrorBoundaryPageFallback,
 	},
 
+	...(import.meta.env.DEV ? [] : []),
+
 	// onboarding: branded first-time setup experience
 	// Pro/Home: Video background, Other devices: Static wallpaper
 	{
@@ -208,6 +211,15 @@ export const router = createBrowserRouter([
 				element: (
 					<EnsureUserDoesntExist>
 						<CreateAccount />
+					</EnsureUserDoesntExist>
+				),
+			},
+			// Raspberry Pi with an external drive attached: choose where data lives
+			{
+				path: 'external-drive',
+				element: (
+					<EnsureUserDoesntExist>
+						<ExternalDriveChoice />
 					</EnsureUserDoesntExist>
 				),
 			},

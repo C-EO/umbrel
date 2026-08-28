@@ -1,6 +1,8 @@
 import {useTranslation} from 'react-i18next'
 import {IoShieldHalf} from 'react-icons/io5'
-import {TbActivityHeartbeat} from 'react-icons/tb'
+import {TiInfoLarge} from 'react-icons/ti'
+
+import {SsdCard} from '@/features/storage/components/ssd-card'
 
 import {FAILSAFE_COLOR} from './use-raid-setup'
 
@@ -141,7 +143,8 @@ export function SsdTray({slots, failsafeSlot = -1, onHealthClick}: SsdTrayProps)
 							className='absolute flex items-center justify-center'
 							style={{
 								left: `${17.5 + i * 19}%`,
-								top: '56%',
+								// Not lower: it crowds the mounting screw at the SSD's foot
+								top: '53%',
 								width: '18%',
 							}}
 						>
@@ -149,14 +152,9 @@ export function SsdTray({slots, failsafeSlot = -1, onHealthClick}: SsdTrayProps)
 								type='button'
 								onClick={() => onHealthClick?.(i)}
 								className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] transition-colors hover:bg-white/[0.12]'
-								style={{
-									paddingLeft: 'clamp(8px, 3cqi, 14px)',
-									paddingRight: 'clamp(8px, 3cqi, 14px)',
-									paddingTop: 'clamp(1px, 0.5cqi, 3px)',
-									paddingBottom: 'clamp(1px, 0.5cqi, 3px)',
-								}}
+								style={{padding: 'clamp(2px, 0.8cqi, 4px)'}}
 							>
-								<TbActivityHeartbeat
+								<TiInfoLarge
 									className='text-white/60'
 									style={{width: 'clamp(12px, 4cqi, 20px)', height: 'clamp(12px, 4cqi, 20px)'}}
 								/>
@@ -187,77 +185,27 @@ export function SsdTray({slots, failsafeSlot = -1, onHealthClick}: SsdTrayProps)
 }
 
 /**
- * Renders the same SSD artwork and status treatment as the Umbrel Pro tray,
- * without assuming a chassis or fixed slot layout.
+ * Generic hardware "bay": the drives stacked inside a plain rounded enclosure,
+ * since we can't show a chassis we know nothing about. Each drive is the same
+ * illustration the SSD health dialog uses; storage drives are tinted with the
+ * brand color and the FailSafe drive white.
  */
 export function GenericSsdTray({slots, failsafeSlot = -1, onHealthClick}: SsdTrayProps) {
 	return (
-		<div className='w-full overflow-x-auto pb-3'>
-			<div className='flex w-max min-w-full items-start justify-center gap-5 px-5'>
-				{slots.map((slot, index) => {
-					if (!slot) return null
-
-					const isFailsafe = index === failsafeSlot
-
-					return (
-						<div key={index} className='flex w-[112px] shrink-0 flex-col items-center gap-2'>
-							<div className='relative aspect-[279/670] w-full'>
-								<img
-									src='/assets/onboarding/ssd.webp'
-									alt={slot.label ?? 'SSD'}
-									draggable={false}
-									className='absolute inset-0 size-full'
-								/>
-
-								<div
-									className='absolute flex flex-col items-center justify-between rounded-lg py-4'
-									style={{
-										left: '8%',
-										top: '7%',
-										width: '61%',
-										height: '83%',
-										border: isFailsafe ? `1px solid ${FAILSAFE_COLOR}` : '1px solid hsl(var(--color-brand))',
-										backgroundColor: isFailsafe ? 'rgba(0, 132, 255, 0.1)' : 'hsl(var(--color-brand) / 0.1)',
-									}}
-								>
-									<span
-										className='mt-8 font-bold'
-										style={{
-											fontSize: '20px',
-											writingMode: 'vertical-rl',
-											transform: 'rotate(180deg)',
-											background: 'linear-gradient(180deg, #FFFFFF 0%, #999999 100%)',
-											WebkitBackgroundClip: 'text',
-											backgroundClip: 'text',
-											WebkitTextFillColor: 'transparent',
-										}}
-									>
-										{slot.size}
-									</span>
-
-									<div className='flex flex-col items-center gap-3'>
-										{isFailsafe && <IoShieldHalf className='size-5' style={{color: FAILSAFE_COLOR}} />}
-										<button
-											type='button'
-											onClick={() => onHealthClick?.(index)}
-											className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] px-3 py-0.5 transition-colors hover:bg-white/[0.12]'
-										>
-											<TbActivityHeartbeat className='size-4 text-white/60' />
-											{slot.hasWarning && (
-												<span className='absolute -top-0.5 -right-0.5 size-2.5'>
-													<span className='absolute inset-0 rounded-full bg-[#F5A623]' />
-													<span className='absolute inset-0 animate-ping rounded-full bg-[#F5A623] opacity-75' />
-												</span>
-											)}
-										</button>
-									</div>
-								</div>
-							</div>
-							<span className='w-full truncate text-center text-13 font-medium text-white/50'>{slot.label}</span>
-						</div>
-					)
-				})}
-			</div>
+		<div className='mx-auto flex w-full max-w-[400px] flex-col gap-2.5 rounded-2xl border border-white/10 bg-white/5 p-2.5'>
+			{slots.map((slot, index) => {
+				if (!slot) return null
+				return (
+					<SsdCard
+						key={index}
+						size={slot.size}
+						model={slot.label}
+						variant={index === failsafeSlot ? 'failsafe' : 'storage'}
+						hasWarning={slot.hasWarning}
+						onInfoClick={onHealthClick ? () => onHealthClick(index) : undefined}
+					/>
+				)
+			})}
 		</div>
 	)
 }

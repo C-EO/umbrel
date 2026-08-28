@@ -1,18 +1,11 @@
 import type {StorageDevice} from '../raid/use-raid-setup'
 
 // Config handed from the pre-reboot setup steps to /onboarding/hdd-raid/setup via
-// location.state. Stats are precomputed because devices can't be queried while the
-// device reboots mid-setup.
+// location.state.
 export type HddRaidSetupConfig = {
 	raidDevices: string[]
 	raidType: 'storage' | 'failsafe'
 	acceleratorDevices?: string[]
-	stats: {
-		driveCount: number
-		storageBytes: number
-		failsafeBytes: number
-		acceleratorBytes: number
-	}
 }
 
 // Split eligible (non-system, identifiable) devices into data-drive and accelerator

@@ -50,7 +50,8 @@ export function RestoreLocationDropdown({onSelect, isExternalStorageSupported = 
 						<ChevronDown className='size-3' />
 					</Button>
 				</DropdownMenuTrigger>
-				<DropdownMenuContent align='end' className='min-w-[320px]'>
+				{/* p-1 overrides the dropdown's default p-2.5 for the tighter context-menu look */}
+				<DropdownMenuContent align='end' className='min-w-[320px] p-1'>
 					<DropdownMenuItem className='block' onSelect={() => onSelect('/Network')}>
 						<div className='flex w-full flex-col items-start'>
 							<div className='text-sm font-medium'>{t('backups-restore.browse-nas-title')}</div>
