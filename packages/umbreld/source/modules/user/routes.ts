@@ -18,8 +18,8 @@ import type {Context} from '../server/trpc/context.js'
 import {privateProcedure, privateProcedureWithMembers, publicProcedure, router} from '../server/trpc/trpc.js'
 import {accountAvatarUrl, serializeAccountAvatar} from './avatar-api.js'
 import {OWNER_USER_ID} from './constants.js'
-import {getDefaultWallpaper} from './default-wallpaper.js'
 import type {AccountLoginValidation} from './user.js'
+import {isWallpaperId, resolveWallpaperAppearance} from './wallpapers.js'
 
 const loginErrorMessage = (reason: Extract<AccountLoginValidation, {valid: false}>['reason']) => {
 	if (reason === 'missing-totp') return 'Missing 2FA code'
@@ -93,10 +93,9 @@ export default router({
 	// Public so the login and app-auth account pickers can render before auth.
 	listAccounts: publicProcedure.query(async ({ctx}) => {
 		if (!(await ctx.user.exists())) return []
-		const defaultWallpaper = await getDefaultWallpaper()
 		return (await ctx.user.listAccounts()).map((account) => ({
 			...serializeAccountAvatar(account),
-			wallpaper: account.wallpaper ?? defaultWallpaper,
+			wallpaper: resolveWallpaperAppearance(account.wallpaper),
 		}))
 	}),
 
@@ -397,21 +396,20 @@ export default router({
 				...(member.avatarHash ? {avatarUrl: accountAvatarUrl(accountId, member.avatarHash)} : {}),
 				role: 'member' as const,
 				homePath: `/Users/${accountId}`,
-				wallpaper: member.wallpaper ?? (await getDefaultWallpaper()),
+				wallpaper: resolveWallpaperAppearance(member.wallpaper),
 				language: member.language,
 				temperatureUnit: member.temperatureUnit,
 			}
 		}
 
 		const user = await ctx.user.get()
-		if (user.wallpaper === undefined) user.wallpaper = await getDefaultWallpaper()
 		return {
 			userId: accountId,
 			name: user.name,
 			...(user.avatarHash ? {avatarUrl: accountAvatarUrl(accountId, user.avatarHash)} : {}),
 			role: 'owner' as const,
 			homePath: '/Home',
-			wallpaper: user.wallpaper,
+			wallpaper: resolveWallpaperAppearance(user.wallpaper),
 			language: user.language ?? 'en',
 			temperatureUnit: user.temperatureUnit,
 		}
@@ -422,7 +420,7 @@ export default router({
 			z
 				.object({
 					name: z.string().optional(),
-					wallpaper: z.string().optional(),
+					wallpaper: z.string().refine(isWallpaperId, 'Unknown wallpaper').optional(),
 					language: z.string().optional(),
 					temperatureUnit: z.string().optional(),
 				})
@@ -441,12 +439,11 @@ export default router({
 		const accountId = await resolveOptionalAccountId(ctx)
 		if (accountId !== OWNER_USER_ID) {
 			const member = await ctx.user.getMember(accountId)
-			if (member?.wallpaper) return member.wallpaper
+			return resolveWallpaperAppearance(member?.wallpaper)
 		} else {
 			const user = await ctx.user.get()
-			if (user?.wallpaper) return user.wallpaper
+			return resolveWallpaperAppearance(user?.wallpaper)
 		}
-		return getDefaultWallpaper()
 	}),
 
 	language: publicProcedure.query(async ({ctx}) => {

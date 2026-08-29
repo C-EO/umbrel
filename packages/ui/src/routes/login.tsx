@@ -71,7 +71,7 @@ export default function Login() {
 	// Each account can carry its own wallpaper. Hover previews stay active on
 	// both the picker and password form, and remain pinned while the lens is free.
 	const selectedWallpaper = activeAccount?.wallpaper
-		? wallpapersKeyed[activeAccount.wallpaper as WallpaperId]
+		? wallpapersKeyed[activeAccount.wallpaper.id as WallpaperId]
 		: undefined
 	const [settledWallpaper, setSettledWallpaper] = useState(selectedWallpaper)
 	useEffect(() => {

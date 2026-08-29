@@ -67,6 +67,7 @@ describe('app auth account avatars', () => {
 		expect(response.body).toEqual([
 			expect.objectContaining({
 				userId: '0',
+				wallpaper: {id: '16', brandColorHsl: '265 100% 42%'},
 				avatarUrl: `/v1/account/avatar/0/${hash}.webp`,
 			}),
 		])
@@ -79,5 +80,10 @@ describe('app auth account avatars', () => {
 		expect(response.headers['cache-control']).toBe('private, max-age=31536000, immutable')
 		expect(response.headers.etag).toBe(`"${hash}"`)
 		expect(response.headers['x-content-type-options']).toBe('nosniff')
+	})
+
+	test('returns the account wallpaper appearance', async () => {
+		const response = await got(`${origin}/v1/account/wallpaper`, {responseType: 'json'})
+		expect(response.body).toEqual({id: '16', brandColorHsl: '265 100% 42%'})
 	})
 })

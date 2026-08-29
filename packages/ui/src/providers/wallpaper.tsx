@@ -20,152 +20,33 @@ import {trpcReact} from '@/trpc/trpc'
 import {keyBy} from '@/utils/misc'
 import {tw} from '@/utils/tw'
 
-type WallpaperBase = {
-	id: string | undefined
-	url: string
-	brandColorHsl: string
-}
-
-export const wallpapers = [
-	{
-		id: '1',
-		url: '/assets/wallpapers/1.jpg',
-		brandColorHsl: '259 100% 59%',
-	},
-	{
-		id: '2',
-		url: '/assets/wallpapers/2.jpg',
-		brandColorHsl: '6 56% 54%',
-	},
-	{
-		id: '3',
-		url: '/assets/wallpapers/3.jpg',
-		brandColorHsl: '22 88% 40%',
-	},
-	{
-		id: '4',
-		url: '/assets/wallpapers/4.jpg',
-		brandColorHsl: '198 100% 31%',
-	},
-	{
-		id: '5',
-		url: '/assets/wallpapers/5.jpg',
-		brandColorHsl: '202 100% 33%',
-	},
-	{
-		id: '6',
-		url: '/assets/wallpapers/6.jpg',
-		brandColorHsl: '160 100% 27%',
-	},
-	{
-		id: '7',
-		url: '/assets/wallpapers/7.jpg',
-		brandColorHsl: '79 100% 25%',
-	},
-	{
-		id: '8',
-		url: '/assets/wallpapers/8.jpg',
-		brandColorHsl: '185 100% 29%',
-	},
-	{
-		id: '9',
-		url: '/assets/wallpapers/9.jpg',
-		brandColorHsl: '359 64% 62%',
-	},
-	{
-		id: '10',
-		url: '/assets/wallpapers/10.jpg',
-		brandColorHsl: '18 75% 52%',
-	},
-	{
-		id: '11',
-		url: '/assets/wallpapers/11.jpg',
-		brandColorHsl: '185 100% 29%',
-	},
-	{
-		id: '12',
-		url: '/assets/wallpapers/12.jpg',
-		brandColorHsl: '332 84% 47%',
-	},
-	{
-		id: '13',
-		url: '/assets/wallpapers/13.jpg',
-		brandColorHsl: '194 81% 39%',
-	},
-	{
-		id: '14',
-		url: '/assets/wallpapers/14.jpg',
-		brandColorHsl: '328 87% 49%',
-	},
-	{
-		id: '15',
-		url: '/assets/wallpapers/15.jpg',
-		brandColorHsl: '32 100% 36%',
-	},
-	{
-		id: '16',
-		url: '/assets/wallpapers/16.jpg',
-		brandColorHsl: '265 100% 42%',
-	},
-	{
-		id: '17',
-		url: '/assets/wallpapers/17.jpg',
-		brandColorHsl: '184 100% 25%',
-	},
-	{
-		id: '18',
-		url: '/assets/wallpapers/18.jpg',
-		brandColorHsl: '259 100% 59%',
-	},
-	{
-		id: '19',
-		url: '/assets/wallpapers/19.jpg',
-		brandColorHsl: '204 100% 41%',
-	},
-	{
-		id: '20',
-		url: '/assets/wallpapers/20.jpg',
-		brandColorHsl: '259 100% 59%',
-	},
-	{
-		id: '21',
-		url: '/assets/wallpapers/21.jpg',
-		brandColorHsl: '12 78% 50%',
-	},
-	{
-		id: '22',
-		url: '/assets/wallpapers/22.jpg',
-		brandColorHsl: '92 52% 41%',
-	},
-	{
-		id: '23',
-		url: '/assets/wallpapers/23.jpg',
-		brandColorHsl: '24 90% 50%',
-	},
-	{
-		id: '24',
-		url: '/assets/wallpapers/24.jpg',
-		brandColorHsl: '209 85% 42%',
-	},
-	{
-		id: '25',
-		url: '/assets/wallpapers/25.jpg',
-		brandColorHsl: '174 75% 32%',
-	},
-	{
-		id: '26',
-		url: '/assets/wallpapers/26.jpg',
-		brandColorHsl: '14 96% 52%',
-	},
-] as const satisfies readonly WallpaperBase[]
+import {wallpapers as wallpaperDefinitions, type WallpaperId} from '../../../umbreld/source/modules/user/wallpapers'
 
 export type WallpaperAvifTier = 'large' | 'medium' | 'small' | 'thumbnails'
 
-export function getWallpaperAvifUrl(wallpaper: WallpaperBase, tier: WallpaperAvifTier) {
+export function getWallpaperJpgUrl(id: WallpaperId) {
+	return `/assets/wallpapers/${id}.jpg`
+}
+
+export const wallpapers = wallpaperDefinitions.map((wallpaper) => ({
+	...wallpaper,
+	url: getWallpaperJpgUrl(wallpaper.id),
+}))
+export type Wallpaper = (typeof wallpapers)[number]
+export const wallpaperIds = wallpapers.map((wallpaper) => wallpaper.id)
+export const wallpapersKeyed = keyBy(wallpapers, 'id')
+
+export function getWallpaperAvifUrl(wallpaper: Wallpaper | typeof nullWallpaper, tier: WallpaperAvifTier) {
 	return `/assets/wallpapers/generated-avif/${tier}/${wallpaper.id}.avif`
 }
 
-export function WallpaperAvifSource({wallpaper, tier}: {wallpaper: WallpaperBase; tier: WallpaperAvifTier}) {
+export function WallpaperAvifSource({
+	wallpaper,
+	tier,
+}: {
+	wallpaper: Wallpaper | typeof nullWallpaper
+	tier: WallpaperAvifTier
+}) {
 	// While the remote wallpaper is still resolving we hold `nullWallpaper`, whose id is
 	// undefined. A <source> is picked on `type` support alone — never on whether the file
 	// loads — so emitting `.../undefined.avif` would commit an AVIF-capable browser to a
@@ -179,7 +60,7 @@ const wallpaperAvifLargeWidths: Partial<Record<string, number>> = {
 	'14': 1920,
 }
 
-export function getWallpaperAvifSrcSet(wallpaper: WallpaperBase) {
+export function getWallpaperAvifSrcSet(wallpaper: Wallpaper | typeof nullWallpaper) {
 	const largeWidth = (wallpaper.id && wallpaperAvifLargeWidths[wallpaper.id]) || 2880
 	return [
 		`${getWallpaperAvifUrl(wallpaper, 'medium')} 1440w`,
@@ -189,7 +70,7 @@ export function getWallpaperAvifSrcSet(wallpaper: WallpaperBase) {
 
 const wallpaperSizes = '100vw'
 
-function FullWallpaperAvifSources({wallpaper}: {wallpaper: WallpaperBase}) {
+function FullWallpaperAvifSources({wallpaper}: {wallpaper: Wallpaper | typeof nullWallpaper}) {
 	return (
 		<>
 			{/* object-cover scales landscape wallpapers by viewport height in portrait, so always use the largest tier there. */}
@@ -199,10 +80,7 @@ function FullWallpaperAvifSources({wallpaper}: {wallpaper: WallpaperBase}) {
 	)
 }
 
-export type Wallpaper = (typeof wallpapers)[number]
-export type WallpaperId = (typeof wallpapers)[number]['id']
-export const wallpapersKeyed = keyBy(wallpapers, 'id')
-export const wallpaperIds = wallpapers.map((w) => w.id)
+export {type WallpaperId}
 
 // ---
 
@@ -210,7 +88,7 @@ const nullWallpaper = {
 	id: undefined,
 	url: '',
 	brandColorHsl: '0 0% 50%',
-} as const satisfies WallpaperBase
+} as const
 
 type WallpaperType = {
 	wallpaper: Wallpaper | typeof nullWallpaper
@@ -649,7 +527,7 @@ function useRemoteWallpaper(onSuccess?: (id: WallpaperId) => void) {
 	const userQ = trpcReact.user.wallpaper.useQuery(undefined, {
 		retry: false,
 	})
-	const wallpaperQId = userQ.data
+	const wallpaperQId = userQ.data?.id
 
 	// Handle the onSuccess side effect
 	useEffect(() => {

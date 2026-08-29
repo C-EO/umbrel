@@ -10,7 +10,7 @@ import {appGatewayTokenFromRequest, clearAppGatewayCookies, setAppGatewayCookie}
 import {SessionIssuanceInvalidatedError} from '../auth/auth.js'
 import {serializeAccountAvatar, serveAccountAvatar} from '../user/avatar-api.js'
 import {OWNER_USER_ID} from '../user/constants.js'
-import {getDefaultWallpaper} from '../user/default-wallpaper.js'
+import {resolveWallpaperAppearance} from '../user/wallpapers.js'
 
 type AppAuthRequest = {
 	appId: string
@@ -140,11 +140,10 @@ export default function createAppAuthRouter(umbreld: Umbreld) {
 
 	router.get('/v1/account/accounts', async (_request, response) => {
 		if (!(await umbreld.user.exists())) return response.json([])
-		const defaultWallpaper = await getDefaultWallpaper()
 		response.json(
 			(await umbreld.user.listAccounts()).map((account) => ({
 				...serializeAccountAvatar(account, 'app-auth'),
-				wallpaper: account.wallpaper ?? defaultWallpaper,
+				wallpaper: resolveWallpaperAppearance(account.wallpaper),
 			})),
 		)
 	})
@@ -205,7 +204,7 @@ export default function createAppAuthRouter(umbreld: Umbreld) {
 
 	router.get('/v1/account/wallpaper', async (_request, response) => {
 		const user = await umbreld.user.get()
-		response.send(user?.wallpaper ?? (await getDefaultWallpaper()))
+		response.json(resolveWallpaperAppearance(user?.wallpaper))
 	})
 
 	router.get('/v1/apps', async (request, response) => {

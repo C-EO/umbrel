@@ -83,7 +83,7 @@ export default function LoginWithUmbrel() {
 	const params = useQueryParams<{app: string; path: string; host: string}>()
 	const app = useApp(params.object.app)
 	const fallbackWallpaperId = useWallpaperId()
-	const activeWallpaperId = activeAccount?.wallpaper
+	const activeWallpaperId = activeAccount?.wallpaper?.id
 	const wallpaperId =
 		activeWallpaperId && arrayIncludes(wallpaperIds, activeWallpaperId) ? activeWallpaperId : fallbackWallpaperId
 	useWallpaperCssVars(wallpaperId)
@@ -426,8 +426,8 @@ function useWallpaperId() {
 	useEffect(() => {
 		fetch('/v1/account/wallpaper')
 			.then(async (res) => {
-				// `unknown` because `any` is too loose
-				const id = (await res.text()) as unknown
+				const appearance = (await res.json()) as {id?: unknown}
+				const id = appearance.id
 				const knownId = arrayIncludes(wallpaperIds, id) ? id : appAuthFallbackWallpaperId
 				setWallpaper(knownId)
 			})

@@ -4,6 +4,7 @@ import got from 'got'
 import * as totp from '../utilities/totp.js'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
+import {resolveWallpaperAppearance} from './wallpapers.js'
 
 let umbreld: Awaited<ReturnType<typeof createTestVm>>
 let httpsPort = 0
@@ -353,11 +354,20 @@ test.sequential("set() sets the user's language", async () => {
 })
 
 test.sequential("set() sets the user's wallpaper", async () => {
-	await expect(umbreld.client.user.set.mutate({wallpaper: '1.jpg'})).resolves.toBe(true)
-	await expect(umbreld.client.user.get.query()).resolves.toMatchObject({wallpaper: '1.jpg'})
+	await expect(umbreld.client.user.set.mutate({wallpaper: '1'})).resolves.toBe(true)
+	await expect(umbreld.client.user.get.query()).resolves.toMatchObject({
+		wallpaper: resolveWallpaperAppearance('1'),
+	})
 
-	await expect(umbreld.client.user.set.mutate({wallpaper: '2.jpg'})).resolves.toBe(true)
-	await expect(umbreld.client.user.get.query()).resolves.toMatchObject({wallpaper: '2.jpg'})
+	await expect(umbreld.client.user.set.mutate({wallpaper: '2'})).resolves.toBe(true)
+	await expect(umbreld.client.user.get.query()).resolves.toMatchObject({
+		wallpaper: resolveWallpaperAppearance('2'),
+	})
+
+	await expect(umbreld.client.user.set.mutate({wallpaper: 'unknown'})).rejects.toThrow('Unknown wallpaper')
+	await expect(umbreld.client.user.get.query()).resolves.toMatchObject({
+		wallpaper: resolveWallpaperAppearance('2'),
+	})
 })
 
 test.sequential('set() throws on unknown property', async () => {

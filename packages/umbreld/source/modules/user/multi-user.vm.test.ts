@@ -14,6 +14,7 @@ import runGitServer from '../test-utilities/run-git-server.js'
 import type {AppRouter} from '../server/trpc/common.js'
 import type {events} from '../event-bus/event-bus.js'
 import * as totp from '../utilities/totp.js'
+import {resolveWallpaperAppearance} from './wallpapers.js'
 
 type BrowserSession = {
 	dashboardToken: string
@@ -150,7 +151,7 @@ describe('Multi-user accounts', () => {
 	let umbreld: Awaited<ReturnType<typeof createTestVm>>
 	let gitServer: Awaited<ReturnType<typeof runGitServer>>
 	let failed = false
-	const expectedDefaultWallpaper = '23'
+	const expectedDefaultWallpaper = resolveWallpaperAppearance('23')
 
 	const ownerCredentials = {
 		name: 'satoshi',
@@ -640,11 +641,13 @@ describe('Multi-user accounts', () => {
 		// Member sets their own wallpaper
 		await loginAs(memberToken)
 		await umbreld.client.user.set.mutate({wallpaper: '3'})
-		await expect(umbreld.client.user.get.query()).resolves.toMatchObject({wallpaper: '3'})
+		await expect(umbreld.client.user.get.query()).resolves.toMatchObject({
+			wallpaper: resolveWallpaperAppearance('3'),
+		})
 		await expect(umbreld.client.user.listAccounts.query()).resolves.toContainEqual({
 			userId: memberUserId,
 			name: memberCredentials.name,
-			wallpaper: '3',
+			wallpaper: resolveWallpaperAppearance('3'),
 			language: 'de',
 		})
 
