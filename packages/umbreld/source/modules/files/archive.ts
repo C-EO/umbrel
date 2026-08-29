@@ -130,6 +130,10 @@ export default class Archive {
 			if (!complete) await fse.remove(zipPath).catch(() => {})
 		}
 
+		void this.#umbreld.files.fileIndex
+			.reconcilePath(zipPath)
+			.catch((error) => this.logger.error(`Failed to index archive '${zipPath}'`, error))
+
 		// Return virtual path of the zip archive
 		return this.#umbreld.files.systemToVirtualPath(zipPath)
 	}
@@ -169,6 +173,9 @@ export default class Archive {
 		// Unarchive
 		// TODO: Add progress reporting
 		await $`unar -force-overwrite -no-directory -output-directory ${targetDirectory} ${systemPath}`
+		void this.#umbreld.files.fileIndex
+			.reconcilePath(targetDirectory)
+			.catch((error) => this.logger.error(`Failed to index extracted archive '${targetDirectory}'`, error))
 
 		// Return virtual path of the unarchived files
 		return this.#umbreld.files.systemToVirtualPath(targetDirectory)

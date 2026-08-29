@@ -284,6 +284,9 @@ export function uploadFile(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPref
 			// We do nothing on fail because this isn't supported on all filesystems.
 			// e.g this is expected to throw on external exFAT drives.
 			await umbreld.files.chownSystemPath(systemPath).catch(() => {})
+			void umbreld.files.fileIndex
+				.movePath(temporarySystemPath, systemPath)
+				.catch((error) => umbreld.files.logger.error(`Failed to index uploaded file '${systemPath}'`, error))
 			// Return success
 			return response.status(200).json({path: umbreld.files.systemToVirtualPath(systemPath)})
 		} finally {

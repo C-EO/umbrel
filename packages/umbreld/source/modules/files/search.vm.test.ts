@@ -1,4 +1,5 @@
 import {expect, beforeAll, afterAll, describe, test} from 'vitest'
+import pRetry from 'p-retry'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
@@ -19,7 +20,7 @@ afterAll(async () => {
 
 // Create a file through the files API
 async function uploadFile(path: string, content: string) {
-	await umbreld.api.post(`files/upload?path=${path}`, {body: content})
+	await umbreld.api.post(`files/upload?path=${encodeURIComponent(path)}`, {body: content})
 }
 
 describe('files.search()', () => {
@@ -55,22 +56,73 @@ describe('files.search()', () => {
 		expect(results.some((file) => file.name === 'unrelated.txt')).toBe(false)
 	})
 
-	test('fuzzy matches against filename', async () => {
+	test('matches separators and spelling mistakes against filenames', async () => {
 		// Create a unique directory with a file to search for
 		await umbreld.client.files.createDirectory.mutate({path: '/Home/search-fuzzy-test'})
 		await uploadFile('/Home/search-fuzzy-test/bitcoin.pdf', '')
 
-		// Perform the search
-		const results = await umbreld.client.files.search.query({query: 'bit corn'})
+		// Both a separator mismatch and a transposition should find the file.
+		for (const query of ['bit corn', 'bitocin']) {
+			const results = await umbreld.client.files.search.query({query})
+			expect(results).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						name: 'bitcoin.pdf',
+						path: '/Home/search-fuzzy-test/bitcoin.pdf',
+					}),
+				]),
+			)
+		}
+	})
 
-		// Expect the specific file to be returned
-		expect(results).toEqual(
-			expect.arrayContaining([
-				expect.objectContaining({
-					name: 'bitcoin.pdf',
-					path: '/Home/search-fuzzy-test/bitcoin.pdf',
-				}),
-			]),
+	test('normalizes Unicode filenames without breaking non-Latin case folding', async () => {
+		await umbreld.client.files.createDirectory.mutate({path: '/Home/search-unicode-test'})
+		const decomposedCafe = 'café-codex.txt'.normalize('NFD')
+		const decomposedKorean = '한글-codex.txt'.normalize('NFD')
+		await Promise.all([
+			uploadFile(`/Home/search-unicode-test/${decomposedCafe}`, ''),
+			uploadFile(`/Home/search-unicode-test/${decomposedKorean}`, ''),
+			uploadFile('/Home/search-unicode-test/İstanbul-codex.txt', ''),
+			uploadFile('/Home/search-unicode-test/ᎠᎡᎢ-codex.txt', ''),
+		])
+
+		for (const [query, expectedName] of [
+			['café-codex', decomposedCafe],
+			['한글-codex.txt', decomposedKorean],
+			['İSTAN', 'İstanbul-codex.txt'],
+			['ᎠᎡᎢ', 'ᎠᎡᎢ-codex.txt'],
+		] as const) {
+			await pRetry(
+				async () => {
+					const results = await umbreld.client.files.search.query({query})
+					expect(results.map(({name}) => name)).toContain(expectedName)
+				},
+				{retries: 20, minTimeout: 100, maxTimeout: 500},
+			)
+		}
+	})
+
+	test('finds an exact two-character filename without scanning all entries', async () => {
+		await uploadFile('/Home/xy', '')
+
+		await pRetry(
+			async () => {
+				const results = await umbreld.client.files.search.query({query: 'xy'})
+				expect(results.map(({name}) => name)).toContain('xy')
+			},
+			{retries: 20, minTimeout: 100, maxTimeout: 500},
+		)
+	})
+
+	test('ranks candidates globally across strict and typo-tolerant phases', async () => {
+		await Promise.all([uploadFile('/Home/abcxef', ''), uploadFile('/Home/abcdcdef', '')])
+
+		await pRetry(
+			async () => {
+				const results = await umbreld.client.files.search.query({query: 'abcdef', maxResults: 1})
+				expect(results).toMatchObject([{name: 'abcxef'}])
+			},
+			{retries: 20, minTimeout: 100, maxTimeout: 500},
 		)
 	})
 
@@ -78,11 +130,11 @@ describe('files.search()', () => {
 		await umbreld.client.files.createDirectory.mutate({path: '/Home/search-limit-test'})
 
 		// Create more than 10 files that will all match the query
-		const fileCreationPromises = []
 		for (let i = 0; i < 20; i++) {
-			fileCreationPromises.push(uploadFile(`/Home/search-limit-test/alpha-${i}.txt`, String(i)))
+			// QEMU's userspace HTTP forward is not a useful part of this assertion
+			// and becomes unreliable when opening 20 upload connections at once.
+			await uploadFile(`/Home/search-limit-test/alpha-${i}.txt`, String(i))
 		}
-		await Promise.all(fileCreationPromises)
 
 		const results = await umbreld.client.files.search.query({query: 'alpha', maxResults: 5})
 
@@ -109,5 +161,12 @@ describe('files.search()', () => {
 		await expect(
 			umbreld.client.files.search.query({query: 'completely-nonexistent-query', maxResults: maxAllowedValue + 1}),
 		).rejects.toThrow('too_big')
+	})
+
+	test('rejects malformed search input', async () => {
+		await expect(umbreld.client.files.search.query({query: 'abc\0def'})).rejects.toThrow(
+			'Search query cannot contain NUL',
+		)
+		await expect(umbreld.client.files.search.query({query: 'anything', maxResults: 250.5})).rejects.toThrow()
 	})
 })

@@ -39,7 +39,9 @@ const umbreld = {
 		authorizeWritableDestinationSystemPath: vi.fn(async (systemPath: string) => systemPath),
 		getUniqueName: vi.fn(async (systemPath: string) => systemPath),
 		chownSystemPath: vi.fn(async () => {}),
+		fileIndex: {movePath: vi.fn(async () => {})},
 		isInternalStorageVirtualPath: vi.fn(() => true),
+		logger,
 		systemToVirtualPath: vi.fn(
 			(systemPath: string) => `/${nodePath.relative(uploadRoot, systemPath).split(nodePath.sep).join('/')}`,
 		),

@@ -1724,14 +1724,28 @@ mkdir -p '${umbreld.vm.dataDirectory}/network/future-nas/media'
 		await umbreld.client.files.createDirectory.mutate({path: `/Users/${memberUserId}/needle-member`})
 
 		// Member search only returns their own files
-		const memberResults = await umbreld.client.files.search.query({query: 'needle'})
+		let memberResults = await umbreld.client.files.search.query({query: 'needle'})
+		await pWaitFor(
+			async () => {
+				memberResults = await umbreld.client.files.search.query({query: 'needle'})
+				return memberResults.some((file) => file.path === `/Users/${memberUserId}/needle-member`)
+			},
+			{interval: 100, timeout: 30_000},
+		)
 		const memberPaths = memberResults.map((file) => file.path)
 		expect(memberPaths).toContain(`/Users/${memberUserId}/needle-member`)
 		expect(memberPaths.every((path) => path.startsWith(`/Users/${memberUserId}`))).toBe(true)
 
 		// Owner search doesn't return member files
 		await loginAs(ownerToken)
-		const ownerResults = await umbreld.client.files.search.query({query: 'needle'})
+		let ownerResults = await umbreld.client.files.search.query({query: 'needle'})
+		await pWaitFor(
+			async () => {
+				ownerResults = await umbreld.client.files.search.query({query: 'needle'})
+				return ownerResults.some((file) => file.path === '/Home/needle-owner')
+			},
+			{interval: 100, timeout: 30_000},
+		)
 		const ownerPaths = ownerResults.map((file) => file.path)
 		expect(ownerPaths).toContain('/Home/needle-owner')
 		expect(ownerPaths.every((path) => path.startsWith('/Home'))).toBe(true)

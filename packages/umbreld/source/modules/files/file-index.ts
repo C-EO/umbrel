@@ -1,0 +1,440 @@
+import nodePath from 'node:path'
+import {Worker, type WorkerOptions} from 'node:worker_threads'
+
+import {
+	DEFAULT_WATCHER_BULK_THRESHOLD,
+	type FileIndexLogger,
+	type FileIndexRoot,
+	type IndexedEntry,
+	type SearchCandidate,
+	type WatcherChange,
+} from './file-index-engine.js'
+import {
+	deserializeError,
+	type FileIndexNotificationMethod,
+	type FileIndexRequestMethod,
+	type FileIndexWorkerData,
+	type FileIndexWorkerInboundMessage,
+	type FileIndexWorkerOutboundMessage,
+} from './file-index-worker-protocol.js'
+
+const DEFAULT_WORKER_RESTART_DELAY_MS = 1000
+const MAX_WORKER_RESTART_DELAY_MS = 60_000
+// Opening the worker can include a transactional schema migration over every
+// indexed entry. Keep startup bounded, but allow large existing indexes enough
+// time to migrate on slower disks (1.1 million entries takes ~25 seconds).
+const DEFAULT_WORKER_BOOT_TIMEOUT_MS = 10 * 60_000
+const DEFAULT_WORKER_SHUTDOWN_TIMEOUT_MS = 30_000
+
+type WorkerFactory = (url: URL, options: WorkerOptions) => Worker
+
+export type FileIndexOptions = {
+	dataDirectory: string
+	logger: FileIndexLogger
+	hiddenFiles: string[]
+	hiddenExtensions: string[]
+	reconciliationIntervalMs?: number
+	recoveryRetryMs?: number
+	watcherBulkThreshold?: number
+	batchSize?: number
+}
+
+export type FileIndexRuntime = {
+	createWorker?: WorkerFactory
+	workerRestartDelayMs?: number
+	workerBootTimeoutMs?: number
+	workerShutdownTimeoutMs?: number
+}
+
+type PendingRequest = {
+	generation: number
+	resolve: (result: unknown) => void
+	reject: (error: unknown) => void
+}
+
+type ReadyWaiter = {
+	generation: number
+	resolve: () => void
+	reject: (error: unknown) => void
+}
+
+export default class FileIndex {
+	readonly logger: FileIndexLogger
+	readonly databasePath: string
+
+	#workerData: FileIndexWorkerData
+	#createWorker: WorkerFactory
+	#workerRestartDelayMs: number
+	#workerBootTimeoutMs: number
+	#workerShutdownTimeoutMs: number
+	#watcherBulkThreshold: number
+	#worker?: Worker
+	#workerGeneration = 0
+	#workerThreadId?: number
+	#readyWaiter?: ReadyWaiter
+	#launch?: Promise<void>
+	#restartTimer?: ReturnType<typeof setTimeout>
+	#restartAttempts = 0
+	#nextRequestId = 1
+	#pendingRequests = new Map<number, PendingRequest>()
+	#roots = new Map<string, FileIndexRoot>()
+	#available = false
+	#started = false
+	#stopping = false
+	#backgroundReconciliationStarted = false
+
+	constructor(
+		{
+			dataDirectory,
+			logger,
+			hiddenFiles,
+			hiddenExtensions,
+			reconciliationIntervalMs,
+			recoveryRetryMs,
+			watcherBulkThreshold = DEFAULT_WATCHER_BULK_THRESHOLD,
+			batchSize,
+		}: FileIndexOptions,
+		{
+			createWorker = (url, options) => new Worker(url, options),
+			workerRestartDelayMs = DEFAULT_WORKER_RESTART_DELAY_MS,
+			workerBootTimeoutMs = DEFAULT_WORKER_BOOT_TIMEOUT_MS,
+			workerShutdownTimeoutMs = DEFAULT_WORKER_SHUTDOWN_TIMEOUT_MS,
+		}: FileIndexRuntime = {},
+	) {
+		this.logger = logger
+		this.databasePath = nodePath.join(dataDirectory, 'file-index', 'index.sqlite3')
+		this.#workerData = {
+			dataDirectory,
+			hiddenFiles: [...hiddenFiles],
+			hiddenExtensions: [...hiddenExtensions],
+			reconciliationIntervalMs,
+			recoveryRetryMs,
+			watcherBulkThreshold,
+			batchSize,
+		}
+		this.#createWorker = createWorker
+		this.#workerRestartDelayMs = workerRestartDelayMs
+		this.#workerBootTimeoutMs = workerBootTimeoutMs
+		this.#workerShutdownTimeoutMs = workerShutdownTimeoutMs
+		this.#watcherBulkThreshold = watcherBulkThreshold
+	}
+
+	get available() {
+		return this.#available
+	}
+
+	get workerThreadId() {
+		return this.#workerThreadId
+	}
+
+	async start() {
+		if (this.#started) return this.#launch
+		this.#started = true
+		this.#stopping = false
+		await this.#launchWorker()
+	}
+
+	async #launchWorker() {
+		if (this.#launch) return this.#launch
+		const launch = this.#bootWorker().catch((error) => {
+			if (!this.#stopping) {
+				this.logger.error('Failed to start file index worker', error)
+				this.#scheduleRestart()
+			}
+		})
+		this.#launch = launch
+		try {
+			await launch
+		} finally {
+			if (this.#launch === launch) this.#launch = undefined
+		}
+	}
+
+	async #bootWorker() {
+		if (!this.#started || this.#stopping || this.#worker) return
+		const generation = ++this.#workerGeneration
+		const worker = this.#createWorker(new URL('./file-index-worker-bootstrap.js', import.meta.url), {
+			workerData: this.#workerData,
+			execArgv: [],
+			name: 'file-index',
+		})
+		this.#worker = worker
+		worker.on('message', (message: FileIndexWorkerOutboundMessage) => this.#handleMessage(worker, generation, message))
+		worker.on('error', (error) => {
+			if (this.#worker === worker && !this.#stopping) this.logger.error('File index worker error', error)
+		})
+		worker.once('exit', (code) => this.#handleExit(worker, generation, code))
+
+		try {
+			await withTimeout(
+				(async () => {
+					await new Promise<void>((resolve, reject) => {
+						this.#readyWaiter = {generation, resolve, reject}
+					})
+					await this.#requestFor(worker, generation, 'setRoots', [[...this.#roots.values()]])
+					await this.#requestFor(worker, generation, 'start', [])
+				})(),
+				this.#workerBootTimeoutMs,
+				'File index worker startup timed out',
+			)
+			if (this.#backgroundReconciliationStarted) {
+				this.#notifyFor(worker, generation, 'startBackgroundReconciliation', [])
+			}
+			this.#restartAttempts = 0
+			this.logger.log(`Started file index worker thread ${this.#workerThreadId}`)
+		} catch (error) {
+			if (this.#detachWorker(worker, generation, error)) {
+				await worker.terminate().catch(() => {})
+			}
+			throw error
+		}
+	}
+
+	#handleMessage(worker: Worker, generation: number, message: FileIndexWorkerOutboundMessage) {
+		if (this.#worker !== worker || this.#workerGeneration !== generation) return
+		switch (message.type) {
+			case 'ready':
+				this.#workerThreadId = message.threadId
+				if (this.#readyWaiter?.generation === generation) {
+					this.#readyWaiter.resolve()
+					this.#readyWaiter = undefined
+				}
+				return
+			case 'availability':
+				this.#available = message.available
+				return
+			case 'response': {
+				const pending = this.#pendingRequests.get(message.id)
+				if (!pending || pending.generation !== generation) return
+				this.#pendingRequests.delete(message.id)
+				if ('error' in message) pending.reject(deserializeError(message.error))
+				else pending.resolve(message.result)
+				return
+			}
+			case 'log': {
+				const error = message.error ? deserializeError(message.error) : undefined
+				if (message.level === 'error') this.logger.error(message.message ?? '', error)
+				else if (message.level === 'verbose') this.logger.verbose(message.message ?? '')
+				else this.logger.log(message.message)
+			}
+		}
+	}
+
+	#handleExit(worker: Worker, generation: number, code: number) {
+		const error = new Error(`File index worker exited with code ${code}`)
+		if (!this.#detachWorker(worker, generation, error)) return
+		if (!this.#stopping) {
+			this.logger.error('File index worker stopped unexpectedly', error)
+			this.#scheduleRestart()
+		}
+	}
+
+	#detachWorker(worker: Worker, generation: number, error: unknown) {
+		if (this.#worker !== worker || this.#workerGeneration !== generation) return false
+		this.#worker = undefined
+		this.#workerThreadId = undefined
+		this.#available = false
+		if (this.#readyWaiter?.generation === generation) {
+			this.#readyWaiter.reject(error)
+			this.#readyWaiter = undefined
+		}
+		for (const [id, pending] of this.#pendingRequests) {
+			if (pending.generation !== generation) continue
+			this.#pendingRequests.delete(id)
+			pending.reject(error)
+		}
+		return true
+	}
+
+	#scheduleRestart() {
+		if (!this.#started || this.#stopping || this.#worker || this.#restartTimer) return
+		const delay = Math.min(this.#workerRestartDelayMs * 2 ** this.#restartAttempts, MAX_WORKER_RESTART_DELAY_MS)
+		this.#restartAttempts++
+		this.#restartTimer = setTimeout(() => {
+			this.#restartTimer = undefined
+			void this.#launchWorker()
+		}, delay)
+	}
+
+	#request<T>(method: FileIndexRequestMethod, args: unknown[]): Promise<T> {
+		const worker = this.#worker
+		if (!worker) return Promise.reject(new Error('File index worker is unavailable'))
+		return this.#requestFor(worker, this.#workerGeneration, method, args) as Promise<T>
+	}
+
+	#requestFor(worker: Worker, generation: number, method: FileIndexRequestMethod, args: unknown[]) {
+		if (this.#worker !== worker || this.#workerGeneration !== generation) {
+			return Promise.reject(new Error('File index worker is unavailable'))
+		}
+		const id = this.#nextRequestId++
+		const message: FileIndexWorkerInboundMessage = {type: 'request', id, method, args}
+		return new Promise<unknown>((resolve, reject) => {
+			this.#pendingRequests.set(id, {generation, resolve, reject})
+			try {
+				worker.postMessage(message)
+			} catch (error) {
+				this.#pendingRequests.delete(id)
+				reject(error)
+			}
+		})
+	}
+
+	#notify(method: FileIndexNotificationMethod, args: unknown[]) {
+		const worker = this.#worker
+		if (worker) this.#notifyFor(worker, this.#workerGeneration, method, args)
+	}
+
+	#notifyFor(worker: Worker, generation: number, method: FileIndexNotificationMethod, args: unknown[]) {
+		if (this.#worker !== worker || this.#workerGeneration !== generation) return
+		const message: FileIndexWorkerInboundMessage = {type: 'notification', method, args}
+		try {
+			worker.postMessage(message)
+		} catch (error) {
+			this.logger.error(`Failed to notify file index worker about '${method}'`, error)
+		}
+	}
+
+	async setRoots(roots: FileIndexRoot[]) {
+		this.#roots = new Map(roots.map((root) => [root.virtualPath, {...root}]))
+		if (this.#worker && this.#workerThreadId !== undefined) await this.#request('setRoots', [[...this.#roots.values()]])
+	}
+
+	async addRoot(root: FileIndexRoot) {
+		this.#roots.set(root.virtualPath, {...root})
+		if (this.#worker && this.#workerThreadId !== undefined) await this.#request('addRoot', [root])
+	}
+
+	async removeRoot(virtualPath: string) {
+		this.#roots.delete(virtualPath)
+		if (this.#worker && this.#workerThreadId !== undefined) await this.#request('removeRoot', [virtualPath])
+	}
+
+	startBackgroundReconciliation() {
+		this.#backgroundReconciliationStarted = true
+		this.#notify('startBackgroundReconciliation', [])
+	}
+
+	scheduleFullReconciliation(reason: string) {
+		this.#notify('scheduleFullReconciliation', [reason])
+	}
+
+	async reconcileAll(reason: string) {
+		if (!this.#worker) return
+		await this.#request('reconcileAll', [reason])
+	}
+
+	async reconcileRoot(virtualPath: string, reason: string) {
+		if (!this.#worker) return
+		await this.#request('reconcileRoot', [virtualPath, reason])
+	}
+
+	noteWatcherChanges(virtualPath: string, events: readonly WatcherChange[]) {
+		if (!this.#started || !this.#worker || events.length === 0) return
+		if (events.length >= this.#watcherBulkThreshold) {
+			this.#notify('noteWatcherBurst', [virtualPath])
+			return
+		}
+		this.#notify('noteWatcherChanges', [virtualPath, events])
+	}
+
+	async reconcilePath(systemPath: string) {
+		if (!this.#worker) return
+		await this.#request('reconcilePath', [systemPath])
+	}
+
+	async removePath(systemPath: string) {
+		if (!this.#worker) return
+		await this.#request('removePath', [systemPath])
+	}
+
+	async movePath(sourceSystemPath: string, destinationSystemPath: string) {
+		if (!this.#worker) return
+		await this.#request('movePath', [sourceSystemPath, destinationSystemPath])
+	}
+
+	async getEntryByVirtualPath(virtualPath: string) {
+		if (!this.#worker) return undefined
+		return this.#request<IndexedEntry | undefined>('getEntryByVirtualPath', [virtualPath])
+	}
+
+	async getEntryBySystemPath(systemPath: string) {
+		if (!this.#worker) return undefined
+		return this.#request<IndexedEntry | undefined>('getEntryBySystemPath', [systemPath])
+	}
+
+	async searchCandidates(virtualRoot: string, query: string, maxResults: number) {
+		return this.#request<SearchCandidate[]>('searchCandidates', [virtualRoot, query, maxResults])
+	}
+
+	async status() {
+		if (!this.#worker) {
+			return {available: false, schemaVersion: 0, entryCount: 0, roots: [], workerThreadId: undefined}
+		}
+		const status = await this.#request<{
+			available: boolean
+			schemaVersion: number
+			entryCount: number
+			roots: Array<{
+				virtualPath: string
+				state: 'warming' | 'ready' | 'degraded'
+				scanGeneration: number
+				lastSuccessfulScanAt?: number
+				lastError?: string
+			}>
+		}>('status', [])
+		return {...status, workerThreadId: this.#workerThreadId}
+	}
+
+	async stop() {
+		if (!this.#started) return
+		this.#stopping = true
+		this.#started = false
+		this.#available = false
+		if (this.#restartTimer) clearTimeout(this.#restartTimer)
+		this.#restartTimer = undefined
+		const launch = this.#launch
+		if (launch) {
+			const worker = this.#worker
+			if (worker) {
+				const generation = this.#workerGeneration
+				this.#detachWorker(worker, generation, new Error('File index worker stopped during startup'))
+				await worker.terminate().catch(() => {})
+			}
+			await launch
+		}
+		const worker = this.#worker
+		if (worker) {
+			const generation = this.#workerGeneration
+			await withTimeout(
+				this.#requestFor(worker, generation, 'stop', []),
+				this.#workerShutdownTimeoutMs,
+				'File index worker shutdown timed out',
+			).catch((error) => {
+				this.logger.error('Failed to stop file index worker cleanly', error)
+			})
+			await worker.terminate().catch((error) => {
+				this.logger.error('Failed to terminate file index worker', error)
+			})
+			this.#detachWorker(worker, generation, new Error('File index worker stopped'))
+		}
+		this.#worker = undefined
+		this.#workerThreadId = undefined
+		this.#backgroundReconciliationStarted = false
+	}
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+	let timeout: ReturnType<typeof setTimeout> | undefined
+	try {
+		return await Promise.race([
+			promise,
+			new Promise<never>((_, reject) => {
+				timeout = setTimeout(() => reject(new Error(message)), timeoutMs)
+			}),
+		])
+	} finally {
+		if (timeout) clearTimeout(timeout)
+	}
+}
+
+export type {FileIndexRoot, IndexedEntry, SearchCandidate} from './file-index-engine.js'

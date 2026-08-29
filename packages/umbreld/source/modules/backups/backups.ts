@@ -644,6 +644,7 @@ export default class Backups {
 		// Ignore non critical directories that can be rebuilt and cause a lot of churn
 		ignoreFileContents.push('app-stores')
 		ignoreFileContents.push(this.#umbreld.files.thumbnails.thumbnailDirectory)
+		ignoreFileContents.push('file-index')
 
 		// Ignore kopia's own cache and logs otherwise backups include the backup cache
 		ignoreFileContents.push('kopia')

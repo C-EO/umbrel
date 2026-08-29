@@ -420,8 +420,8 @@ export default router({
 	search: privateProcedureWithMembers
 		.input(
 			z.object({
-				query: z.string(),
-				maxResults: z.number().positive().max(1000).default(250).optional(),
+				query: z.string().refine((query) => !query.includes('\0'), 'Search query cannot contain NUL'),
+				maxResults: z.number().int().positive().max(1000).default(250).optional(),
 			}),
 		)
 		.query(async ({ctx, input}) =>

@@ -47,6 +47,7 @@ test('watcher health does not fail behind a busy consumer queue', async () => {
 
 	const neverSettles = new Promise<void>(() => {})
 	const emitFileChanges = vi.fn(() => neverSettles)
+	const onChangeBatch = vi.fn()
 	const logger = {error: vi.fn(), log: vi.fn(), verbose: vi.fn()}
 	const umbreld = {
 		eventBus: {emitFileChanges},
@@ -56,7 +57,7 @@ test('watcher health does not fail behind a busy consumer queue', async () => {
 		},
 		logger: {createChildLogger: () => logger},
 	} as unknown as Umbreld
-	const filesWatcher = new Watcher(umbreld, {paths: ['/Home']})
+	const filesWatcher = new Watcher(umbreld, {paths: ['/Home'], onChangeBatch})
 
 	await filesWatcher.start()
 	const sentinelPath = nodePath.join(home, '.umbrel-watcher-health-check')
@@ -65,11 +66,16 @@ test('watcher health does not fail behind a busy consumer queue', async () => {
 	// Occupy the single dispatch queue worker indefinitely, then deliver the
 	// sentinel in a later native callback. Health checks should observe the raw
 	// callback rather than waiting behind consumer work.
-	callbacks[0](null, [{type: 'create', path: nodePath.join(home, 'busy-file')}])
+	const busyEvents: FileChangeEvent[] = [{type: 'create', path: nodePath.join(home, 'busy-file')}]
+	callbacks[0](null, busyEvents)
 	await vi.waitFor(() => expect(emitFileChanges).toHaveBeenCalledOnce())
 	callbacks[0](null, [{type: 'create', path: sentinelPath}])
 
 	await vi.waitFor(() => expect(logger.verbose).toHaveBeenCalledWith('Health check passed'))
+	expect(onChangeBatch).toHaveBeenNthCalledWith(1, '/Home', busyEvents)
+	// Internal batch consumers stay behind the same serialized callback boundary
+	// as public delivery. Only health detection bypasses that queue.
+	expect(onChangeBatch).toHaveBeenCalledOnce()
 	expect(mocks.subscribe).toHaveBeenCalledOnce()
 	expect(logger.error).not.toHaveBeenCalledWith(expect.stringContaining('Health check failed'))
 

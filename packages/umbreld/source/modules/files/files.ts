@@ -47,6 +47,7 @@ import CloudManager, {
 	type SharedDestinationDeleteCandidate,
 } from './cloud.js'
 import {CLOUD_DESTINATION_MISSING_ERROR, isOsJunkBasename, type DestinationRef} from './cloud-types.js'
+import FileIndex, {type FileIndexRoot} from './file-index.js'
 
 import type Umbreld from '../../index.js'
 import {OWNER_USER_ID} from '../user/constants.js'
@@ -129,6 +130,7 @@ export default class Files {
 	hiddenFiles = ['.DS_Store', '.directory', '.umbrel-watcher-health-check']
 	hiddenExtensions = ['.umbrel-upload']
 	operationsInProgress: OperationsInProgress = []
+	fileIndex: FileIndex
 	watcher: Watcher
 	recents: Recents
 	favorites: Favorites
@@ -156,7 +158,17 @@ export default class Files {
 			['/Network', `${umbreld.dataDirectory}/network`],
 		])
 
-		this.watcher = new Watcher(umbreld, {paths: ['/Home', '/Trash', '/Apps', '/Machines']})
+		this.fileIndex = new FileIndex({
+			dataDirectory: umbreld.dataDirectory,
+			logger: umbreld.logger.createChildLogger('files:file-index'),
+			hiddenFiles: this.hiddenFiles,
+			hiddenExtensions: this.hiddenExtensions,
+		})
+		this.watcher = new Watcher(umbreld, {
+			paths: this.#staticIndexRoots().map(({virtualPath}) => virtualPath),
+			onChangeBatch: (virtualPath, events) => this.fileIndex.noteWatcherChanges(virtualPath, events),
+			onRestart: () => this.fileIndex.scheduleFullReconciliation('watcher-restarted'),
+		})
 		this.recents = new Recents(umbreld)
 		this.favorites = new Favorites(umbreld)
 		this.archive = new Archive(umbreld)
@@ -197,14 +209,16 @@ export default class Files {
 		// Do any required one time setup tasks.
 		await this.firstRun()
 
-		// Member homes and trash live outside the owner's base directories, so
-		// register each active account's roots before starting the watcher.
-		for (const member of await this.#umbreld.user.listMembers()) {
-			await this.#addMemberWatchPaths(member.id)
-		}
+		// FileIndex and Watcher share one root model so their scopes cannot drift.
+		const memberRoots = (await this.#umbreld.user.listMembers()).flatMap(({id}) => this.#memberIndexRoots(id))
+		await this.fileIndex.setRoots([...this.#staticIndexRoots(), ...memberRoots])
+		for (const {virtualPath} of memberRoots) await this.watcher.addPath(virtualPath)
+
+		await this.fileIndex.start()
 
 		// Start submodules
 		await this.watcher.start().catch((error) => this.logger.error(`Failed to start watcher`, error))
+		this.fileIndex.startBackgroundReconciliation()
 		await this.samba.start().catch((error) => this.logger.error(`Failed to start samba`, error))
 		await this.memberShares.start().catch((error) => this.logger.error(`Failed to start member shares`, error))
 		await this.externalStorage.start().catch((error) => this.logger.error(`Failed to start external storage`, error))
@@ -245,6 +259,7 @@ export default class Files {
 		await this.memberShares.stop().catch((error) => this.logger.error(`Failed to stop member shares`, error))
 		await this.samba.stop().catch((error) => this.logger.error(`Failed to stop samba`, error))
 		await this.watcher.stop().catch((error) => this.logger.error(`Failed to stop watcher`, error))
+		await this.fileIndex.stop().catch((error) => this.logger.error(`Failed to stop file index`, error))
 	}
 
 	// The trash metadata directory for a given user
@@ -270,24 +285,76 @@ export default class Files {
 			await fse.ensureDir(directory)
 			await this.chownSystemPath(directory).catch(() => {})
 		}
-		await this.#addMemberWatchPaths(slug)
+		for (const root of this.#memberIndexRoots(slug)) {
+			await this.watcher.addPath(root.virtualPath)
+			await this.fileIndex
+				.addRoot(root)
+				.catch((error) => this.logger.error(`Failed to index member root '${root.virtualPath}'`, error))
+		}
 	}
 
 	// Delete a member's entire directory tree (called on user deletion)
 	async deleteMemberDirectories(slug: string) {
 		if (slug === OWNER_USER_ID) throw new Error('Refusing to delete member directories for the owner')
-		await this.#removeMemberWatchPaths(slug)
+		for (const {virtualPath} of this.#memberIndexRoots(slug)) {
+			await this.watcher.removePath(virtualPath)
+			await this.fileIndex
+				.removeRoot(virtualPath)
+				.catch((error) => this.logger.error(`Failed to remove member root '${virtualPath}' from the index`, error))
+		}
 		await fse.remove(`${this.#umbreld.dataDirectory}/members/${slug}`)
 	}
 
-	async #addMemberWatchPaths(slug: string) {
-		await this.watcher.addPath(`/Users/${slug}`)
-		await this.watcher.addPath(`/Users/${slug}/Trash`)
+	#staticIndexRoots(): FileIndexRoot[] {
+		return [
+			{
+				virtualPath: '/Home',
+				systemPath: this.getBaseDirectory('/Home'),
+				ownerId: OWNER_USER_ID,
+				kind: 'home',
+				searchEnabled: true,
+			},
+			{
+				virtualPath: '/Trash',
+				systemPath: this.getBaseDirectory('/Trash'),
+				ownerId: OWNER_USER_ID,
+				kind: 'trash',
+				searchEnabled: false,
+			},
+			{
+				virtualPath: '/Apps',
+				systemPath: this.getBaseDirectory('/Apps'),
+				ownerId: OWNER_USER_ID,
+				kind: 'apps',
+				searchEnabled: false,
+			},
+			{
+				virtualPath: '/Machines',
+				systemPath: this.getBaseDirectory('/Machines'),
+				ownerId: OWNER_USER_ID,
+				kind: 'machines',
+				searchEnabled: false,
+			},
+		]
 	}
 
-	async #removeMemberWatchPaths(slug: string) {
-		await this.watcher.removePath(`/Users/${slug}`)
-		await this.watcher.removePath(`/Users/${slug}/Trash`)
+	#memberIndexRoots(slug: string): FileIndexRoot[] {
+		return [
+			{
+				virtualPath: `/Users/${slug}`,
+				systemPath: this.#memberHomeDirectory(slug),
+				ownerId: slug,
+				kind: 'home',
+				searchEnabled: true,
+			},
+			{
+				virtualPath: `/Users/${slug}/Trash`,
+				systemPath: this.#memberTrashDirectory(slug),
+				ownerId: slug,
+				kind: 'trash',
+				searchEnabled: false,
+			},
+		]
 	}
 
 	// Typesafe wrapper to get the system path of an owner base directory
@@ -445,6 +512,7 @@ export default class Files {
 	// exact call created it.
 	async createDirectory(virtualPath: string, userId: string = OWNER_USER_ID) {
 		virtualPath = normalizePath(virtualPath)
+		if (isMemberTrashRoot(virtualPath)) throw new Error('[operation-not-allowed]')
 		const path = await this.virtualToSystemPath(virtualPath, userId)
 		if ((await fse.lstat(path).catch(() => undefined))?.isDirectory()) return {created: false as const}
 		if (this.isCloudPathOverlap(virtualPath)) throw new Error('[cloud-read-only]')
@@ -473,6 +541,7 @@ export default class Files {
 		await this.chownSystemPath(path).catch(() => {})
 
 		const {dev: device, ino: inode, birthtimeMs} = await fse.lstat(path)
+		this.#updateFileIndex(`create '${path}'`, () => this.fileIndex.reconcilePath(path))
 		return {created: true as const, identity: {device, inode, birthtimeMs}}
 	}
 
@@ -503,6 +572,7 @@ export default class Files {
 				return false
 			}
 			await fse.rmdir(path)
+			this.#updateFileIndex(`remove '${path}'`, () => this.fileIndex.removePath(path))
 			return true
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code
@@ -821,6 +891,17 @@ export default class Files {
 
 		// Perform the copy operation
 		await this.#copyWithProgress(sourceSystemPath, destinationSystemPath, {userId})
+		// A replacement may leave stale descendants from the old destination.
+		// Clear them only after the filesystem copy so index scheduling cannot
+		// delay the actual operation.
+		if (collision === 'replace') {
+			this.#updateFileIndex(`clear replaced destination '${destinationSystemPath}'`, () =>
+				this.fileIndex.removePath(destinationSystemPath),
+			)
+		}
+		this.#updateFileIndex(`copy to '${destinationSystemPath}'`, () =>
+			this.fileIndex.reconcilePath(destinationSystemPath),
+		)
 
 		// Return the virtual path of the new copy
 		return this.systemToVirtualPath(destinationSystemPath)
@@ -930,7 +1011,9 @@ export default class Files {
 			replace: collision === 'replace',
 		})
 
-		if (collision === 'replace') await fse.remove(destinationSystemPath)
+		if (collision === 'replace') {
+			await fse.remove(destinationSystemPath)
+		}
 
 		// Toggle move operation based on for cross fs moves.
 		// Also allow overriding this so we can test both variants in the test suite.
@@ -946,6 +1029,14 @@ export default class Files {
 		}
 		await this.memberShares.removeWithin(sourceVirtualPath)
 		await this.#umbreld.mcp.removeFileGrantsWithin(sourceVirtualPath)
+		if (collision === 'replace') {
+			this.#updateFileIndex(`clear replaced destination '${destinationSystemPath}'`, () =>
+				this.fileIndex.removePath(destinationSystemPath),
+			)
+		}
+		this.#updateFileIndex(`move '${sourceSystemPath}' to '${destinationSystemPath}'`, () =>
+			this.fileIndex.movePath(sourceSystemPath, destinationSystemPath),
+		)
 
 		// Return the virtual path of the new location
 		return this.systemToVirtualPath(destinationSystemPath)
@@ -980,6 +1071,9 @@ export default class Files {
 		await move(sourceSystemPath, targetSystemPath)
 		await this.memberShares.removeWithin(sourceVirtualPath)
 		await this.#umbreld.mcp.removeFileGrantsWithin(sourceVirtualPath)
+		this.#updateFileIndex(`rename '${sourceSystemPath}' to '${targetSystemPath}'`, () =>
+			this.fileIndex.movePath(sourceSystemPath, targetSystemPath),
+		)
 
 		// Convert the target system path back into a virtual path and return it.
 		return this.systemToVirtualPath(targetSystemPath)
@@ -1021,7 +1115,6 @@ export default class Files {
 				shouldRetry: (error) => error.message === '[destination-already-exists]',
 			},
 		)
-
 		// Write the meta data for the trashed file or directory
 		// TODO: Migrate this to SQLite
 		const trashMetaDirectory = this.trashMetaDirectoryForUser(userId)
@@ -1031,6 +1124,9 @@ export default class Files {
 
 		await this.memberShares.removeWithin(virtualPath)
 		await this.#umbreld.mcp.removeFileGrantsWithin(virtualPath)
+		this.#updateFileIndex(`trash '${systemPath}' as '${uniqueTrashSystemPath}'`, () =>
+			this.fileIndex.movePath(systemPath, uniqueTrashSystemPath),
+		)
 
 		// Return the virtual path of the trashed file or directory
 		return this.systemToVirtualPath(uniqueTrashSystemPath)
@@ -1081,8 +1177,21 @@ export default class Files {
 		// Move the file or directory to the new location
 		await move(trashSystemPath, targetSystemPath, moveOptions)
 
-		// Delete the meta data if we're recovering a root file or directory
+		// Delete the meta data if we're recovering a root file or directory.
+		// This is part of the real trash operation, so finish it before waiting
+		// for the derived index to catch up.
 		if (!isChild) await fse.remove(trashMetaSystemPath)
+
+		// An overwrite may replace a directory subtree. Clear its old derived
+		// rows after the filesystem move, then index the authoritative result.
+		if (collision === 'replace') {
+			this.#updateFileIndex(`clear replaced destination '${targetSystemPath}'`, () =>
+				this.fileIndex.removePath(targetSystemPath),
+			)
+		}
+		this.#updateFileIndex(`restore '${trashSystemPath}' to '${targetSystemPath}'`, () =>
+			this.fileIndex.movePath(trashSystemPath, targetSystemPath),
+		)
 
 		// Return the virtual path of the restored file or directory
 		return this.systemToVirtualPath(targetSystemPath)
@@ -1113,6 +1222,9 @@ export default class Files {
 				})
 			}
 		}
+		this.#updateFileIndex(`reconcile emptied trash '${trashDirectory}'`, () =>
+			this.fileIndex.reconcilePath(trashDirectory),
+		)
 
 		return success
 	}
@@ -1167,10 +1279,19 @@ export default class Files {
 			}
 			await this.memberShares.removeWithin(virtualPath)
 			await this.#umbreld.mcp.removeFileGrantsWithin(virtualPath)
+			this.#updateFileIndex(`delete '${systemPath}'`, () => this.fileIndex.removePath(systemPath))
 			return true
 		} catch (error) {
 			this.logger.error(`Failed to delete '${systemPath}'`, error)
 			return false
+		}
+	}
+
+	#updateFileIndex(description: string, update: () => Promise<void>) {
+		try {
+			void update().catch((error) => this.logger.error(`Failed to update file index after ${description}`, error))
+		} catch (error) {
+			this.logger.error(`Failed to update file index after ${description}`, error)
 		}
 	}
 
@@ -1410,6 +1531,12 @@ export default class Files {
 	) {
 		const virtualPath = this.systemToVirtualPath(systemPath)
 		const authorizedSystemPath = await this.virtualToSystemPath(virtualPath, userId)
+		// Computed destinations must round-trip to the same physical path. In
+		// particular, members reserve /Users/<slug>/Trash for their separate
+		// physical trash root, so a home child named Trash is not addressable.
+		if (nodePath.resolve(authorizedSystemPath) !== nodePath.resolve(systemPath)) {
+			throw new Error('[operation-not-allowed]')
+		}
 		if (!this.cloud.allowsRewindRestore(rewindRestoreToken, virtualPath, rewindRestoreTarget)) {
 			await this.assertCloudMutablePath(virtualPath, userId)
 		}
@@ -1693,6 +1820,11 @@ export function normalizePath(path: string) {
 	// Trim trailing slash, except for the root directory
 	if (normalized === '/') return normalized
 	return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized
+}
+
+function isMemberTrashRoot(virtualPath: string) {
+	const segments = virtualPath.split('/').filter(Boolean)
+	return segments.length === 3 && segments[0] === 'Users' && isValidSlug(segments[1]) && segments[2] === 'Trash'
 }
 
 // Unlike fs-extra's pathExists(), lstat sees dangling symlinks. A dangling

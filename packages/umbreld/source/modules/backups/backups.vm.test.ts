@@ -216,6 +216,7 @@ NODE
 		expect(files).not.toContain('external')
 		expect(files).not.toContain('network')
 		expect(files).not.toContain('thumbnails')
+		expect(files).not.toContain('file-index')
 		expect(files).not.toContain('kopia')
 
 		await expect(umbreld.client.backups.getRepositories.query()).resolves.toEqual(

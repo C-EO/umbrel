@@ -11,6 +11,12 @@ import {OWNER_USER_ID} from '../user/constants.js'
 
 export type FileChangeEvent = watcher.Event
 
+type WatcherOptions = {
+	paths: string[]
+	onChangeBatch?: (virtualPath: string, events: FileChangeEvent[]) => void
+	onRestart?: () => void
+}
+
 // @parcel/watcher uses a native C++ backend that reads inotify events on a dedicated thread
 // and bridges them to JavaScript via NAPI ThreadSafeFunction. We've observed in production that
 // this pipeline can silently break: the inotify file descriptor and kernel watches remain alive,
@@ -47,14 +53,18 @@ export default class Watcher {
 	#eventDispatchQueue = new PQueue({concurrency: 1})
 	#started = false
 	#healthCheckInterval?: ReturnType<typeof setInterval>
+	#onChangeBatch?: WatcherOptions['onChangeBatch']
+	#onRestart?: () => void
 	#healthCheckRunning = false
 	#healthCheckWaiter?: {sentinelPath: string; resolve: () => void}
 
-	constructor(umbreld: Umbreld, {paths}: {paths: string[]}) {
+	constructor(umbreld: Umbreld, {paths, onChangeBatch, onRestart}: WatcherOptions) {
 		this.#umbreld = umbreld
 		const {name} = this.constructor
 		this.logger = umbreld.logger.createChildLogger(`files:${name.toLocaleLowerCase()}`)
 		this.pathsToWatch = new Set(paths)
+		this.#onChangeBatch = onChangeBatch
+		this.#onRestart = onRestart
 	}
 
 	// Setup inotify settings and start watchers
@@ -123,7 +133,17 @@ export default class Watcher {
 						}
 
 						void this.#eventDispatchQueue
-							.add(() => this.#umbreld.eventBus.emitFileChanges(events))
+							.add(async () => {
+								// Parcel has already debounced and coalesced this callback. Preserve
+								// that native batch while keeping its internal consumer behind the
+								// same serialized callback boundary as public event delivery.
+								try {
+									this.#onChangeBatch?.(virtualPath, events)
+								} catch (error) {
+									this.logger.error(`Failed to handle file event batch for '${virtualPath}'`, error)
+								}
+								await this.#umbreld.eventBus.emitFileChanges(events)
+							})
 							.catch((error) => this.logger.error(`Failed to dispatch file events for '${virtualPath}'`, error))
 					},
 					{backend: 'watchman'},
@@ -207,6 +227,7 @@ export default class Watcher {
 				this.logger.error('Health check failed: watcher did not deliver sentinel event within timeout. Recovering...')
 				await this.#teardownListeners()
 				await this.#setupListeners()
+				this.#onRestart?.()
 			} else {
 				this.logger.verbose('Health check passed')
 			}
