@@ -31,10 +31,14 @@ type FailedRaidDevice = {
 type ReplaceFailedDriveDialogProps = {
 	open: boolean
 	onOpenChange: (open: boolean) => void
+	/** Pool mode - Full Storage pools have no redundancy, so the FailSafe copy would lie */
+	raidType?: 'storage' | 'failsafe'
 	/** The new physical device to use as replacement */
 	newDevice: StorageDevice | null
 	/** The failed RAID device to replace */
 	failedDevice: FailedRaidDevice | null
+	/** Umbrel Pro slot of the failed device - names it in the title when known */
+	failedSlot?: number | null
 	/** Minimum rounded size in the current RAID array (for size validation) */
 	minRoundedDriveSize: number
 	replaceDeviceAsync: (params: {oldDevice: string; newDevice: string}) => Promise<boolean>
@@ -43,8 +47,10 @@ type ReplaceFailedDriveDialogProps = {
 export function ReplaceFailedDriveDialog({
 	open,
 	onOpenChange,
+	raidType,
 	newDevice,
 	failedDevice,
+	failedSlot = null,
 	minRoundedDriveSize,
 	replaceDeviceAsync,
 }: ReplaceFailedDriveDialogProps) {
@@ -63,6 +69,12 @@ export function ReplaceFailedDriveDialog({
 
 	const {hasWarning} = getDeviceHealth(newDevice)
 	const isHdd = newDevice.type === 'hdd'
+	// A failed member whose own disk is still attached (wiped/corrupted labels) can be
+	// replaced with itself - an in-place repair, so the copy shouldn't promise a new drive
+	// or suggest removing the one that was just resilvered
+	const isSelfReplacement = newDevice.id === failedDevice.id
+	// Full Storage pools have no redundancy, so the FailSafe-protection copy would be a lie
+	const isStoragePool = raidType === 'storage'
 
 	const handleReplace = () => {
 		if (!newDevice?.id || !failedDevice?.id) return
@@ -92,13 +104,26 @@ export function ReplaceFailedDriveDialog({
 			<DialogScrollableContent>
 				<div className='flex flex-col gap-5 p-5'>
 					<DialogHeader>
+						{/* "SSD" slot labels are not translated - they match the physical device markings */}
 						<DialogTitle>
-							{isHdd ? t('storage-manager.replace-failed.title-drive') : t('storage-manager.replace-failed.title')}
+							{failedSlot
+								? `${t('storage-manager.replace')} SSD ${failedSlot}`
+								: isHdd
+									? t('storage-manager.replace-failed.title-drive')
+									: t('storage-manager.replace-failed.title')}
 						</DialogTitle>
 						<DialogDescription>
-							{isHdd
-								? t('storage-manager.replace-failed.description-drive')
-								: t('storage-manager.replace-failed.description')}
+							{isSelfReplacement
+								? isHdd
+									? t('storage-manager.replace-failed.description-self-drive')
+									: t('storage-manager.replace-failed.description-self')
+								: isStoragePool
+									? isHdd
+										? t('storage-manager.replace-failed.description-storage-drive')
+										: t('storage-manager.replace-failed.description-storage')
+									: isHdd
+										? t('storage-manager.replace-failed.description-drive')
+										: t('storage-manager.replace-failed.description')}
 						</DialogDescription>
 					</DialogHeader>
 
@@ -107,12 +132,20 @@ export function ReplaceFailedDriveDialog({
 						<TbAlertTriangle className='mt-0.5 size-5 shrink-0 text-destructive2' />
 						<div className='flex flex-col gap-1'>
 							<span className='text-13 font-semibold text-destructive2'>
-								{t('storage-manager.replace-failed.degraded')}
+								{isStoragePool
+									? isHdd
+										? t('storage-manager.replace-failed.degraded-storage-drive')
+										: t('storage-manager.replace-failed.degraded-storage')
+									: t('storage-manager.replace-failed.degraded')}
 							</span>
 							<span className='text-12 text-white/60'>
-								{isHdd
-									? t('storage-manager.replace-failed.degraded-description-drive')
-									: t('storage-manager.replace-failed.degraded-description')}
+								{isStoragePool
+									? isHdd
+										? t('storage-manager.replace-failed.degraded-storage-description-drive')
+										: t('storage-manager.replace-failed.degraded-storage-description')
+									: isHdd
+										? t('storage-manager.replace-failed.degraded-description-drive')
+										: t('storage-manager.replace-failed.degraded-description')}
 							</span>
 						</div>
 					</div>
@@ -176,11 +209,25 @@ export function ReplaceFailedDriveDialog({
 							</span>
 							<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
 								{[
-									isHdd
-										? t('storage-manager.replace-failed.step-rebuild-drive')
-										: t('storage-manager.replace-failed.step-rebuild'),
+									isSelfReplacement
+										? isHdd
+											? t('storage-manager.replace-failed.step-rebuild-self-drive')
+											: t('storage-manager.replace-failed.step-rebuild-self')
+										: isHdd
+											? t('storage-manager.replace-failed.step-rebuild-drive')
+											: t('storage-manager.replace-failed.step-rebuild'),
 									t('storage-manager.replace-failed.step-time'),
-									t('storage-manager.replace-failed.step-protected'),
+									isStoragePool
+										? t('storage-manager.replace-failed.step-protected-storage')
+										: t('storage-manager.replace-failed.step-protected'),
+									// In-place repairs keep the same disk - there is nothing to remove
+									...(isSelfReplacement
+										? []
+										: [
+												isHdd
+													? t('storage-manager.replace-failed.step-remove-drive')
+													: t('storage-manager.replace-failed.step-remove'),
+											]),
 								].map((step, index) => (
 									<div key={index} className='flex items-center gap-3 p-3 text-12 font-medium -tracking-3'>
 										<span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold'>

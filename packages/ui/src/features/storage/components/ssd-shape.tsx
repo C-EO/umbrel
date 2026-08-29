@@ -1,14 +1,8 @@
 import {useEffect, useId, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 // TODO: Consider changing TbBattery1 (low life) and TbHeartBroken (unhealthy) icons to something more intuitive
-import {
-	TbActivityHeartbeat,
-	TbAlertTriangle,
-	TbAlertTriangleFilled,
-	TbBattery1,
-	TbFlame,
-	TbHeartBroken,
-} from 'react-icons/tb'
+import {TbAlertTriangle, TbAlertTriangleFilled, TbBattery1, TbFlame, TbHeartBroken} from 'react-icons/tb'
+import {TiInfoLarge} from 'react-icons/ti'
 
 import {cn} from '@/lib/utils'
 import {formatTemperature} from '@/utils/temperature'
@@ -23,6 +17,10 @@ type SsdShapeProps = {
 	raidType?: 'storage' | 'failsafe'
 	temperatureUnit: 'c' | 'f'
 	isReadyToAdd?: boolean
+	/** Overrides the "New SSD detected" caption, e.g. "Ready to replace SSD 2" */
+	readyToAddLabel?: string
+	/** Renders the device name inside the shape, faded, below the size (slotless trays) */
+	verticalName?: string
 	/** RAID device info - undefined if device is not in RAID */
 	raidDevice?: RaidDevice
 }
@@ -34,6 +32,8 @@ export function SsdShape({
 	raidType,
 	temperatureUnit,
 	isReadyToAdd = false,
+	readyToAddLabel,
+	verticalName,
 	raidDevice,
 }: SsdShapeProps) {
 	const {t} = useTranslation()
@@ -125,6 +125,10 @@ export function SsdShape({
 	const viewBoxY = -fingerHeight
 	const totalHeight = height + fingerHeight
 
+	// Fixed teal for freshly detected SSDs: sits between green and blue so it stands out
+	// against the wallpaper-driven brand color no matter which way the theme leans.
+	const readyToAddRgb = '45, 212, 191'
+
 	// Unique IDs are needed when an arbitrary number of SSD shapes share the page.
 	const visualId = useId()
 	const gradientId = `${visualId}-ssd-gradient`
@@ -145,8 +149,8 @@ export function SsdShape({
 					<linearGradient id={gradientId} x1='0%' y1='0%' x2='0%' y2='100%'>
 						{isReadyToAdd ? (
 							<>
-								<stop offset='0%' stopColor='rgba(255, 255, 255, 0.15)' />
-								<stop offset='100%' stopColor='rgba(255, 255, 255, 0.05)' />
+								<stop offset='0%' stopColor={`rgba(${readyToAddRgb}, 0)`} />
+								<stop offset='100%' stopColor={`rgba(${readyToAddRgb}, 0.1)`} />
 							</>
 						) : hasCriticalWarning ? (
 							<>
@@ -215,14 +219,14 @@ export function SsdShape({
 					right: 10,
 					bottom: 30,
 					borderColor: isReadyToAdd
-						? 'rgba(255, 255, 255, 0.2)'
+						? `rgb(${readyToAddRgb})`
 						: hasCriticalWarning
 							? '#E22C2C'
 							: hasAmberWarning
 								? '#F5A623'
 								: 'hsl(var(--color-brand))',
 					background: isReadyToAdd
-						? 'linear-gradient(180deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.08) 100%)'
+						? `linear-gradient(177.39deg, rgba(${readyToAddRgb}, 0.48) 0.11%, rgba(${readyToAddRgb}, 0.12) 99.89%)`
 						: hasCriticalWarning
 							? 'linear-gradient(180deg, rgba(255, 255, 255, 0.37) 0%, rgba(255, 255, 255, 0.12) 100%)'
 							: hasAmberWarning
@@ -230,8 +234,26 @@ export function SsdShape({
 								: 'linear-gradient(177.39deg, hsl(var(--color-brand) / 0.48) 0.11%, hsl(var(--color-brand) / 0.12) 99.89%)',
 				}}
 			>
-				{/* SSD Size - we show usable size, with actual size crossed out if wasted */}
-				<div className='relative mt-4' style={{transform: 'rotate(-90deg)'}}>
+				{/* SSD Size - one vertical line reading bottom-to-top: the usable size on top,
+				    with the crossed-out actual size (wasted space) or the new-SSD callout
+				    continuing below it. writing-mode gives the line a real vertical layout box,
+				    so the extra text can't overflow the shape the way a rotate() transform would. */}
+				<div className='mt-1 flex items-center gap-4' style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)'}}>
+					{hasWastedSpace && (
+						<span className='font-bold text-white/40 line-through' style={{fontSize: '25px'}}>
+							{formatStorageSize(device.size)}
+						</span>
+					)}
+					{isReadyToAdd && (
+						<span className='text-[12px] font-semibold whitespace-nowrap text-white/50'>
+							{readyToAddLabel ?? t('storage-manager.new-ssd-detected')}
+						</span>
+					)}
+					{verticalName && !isReadyToAdd && (
+						<span className='max-h-[160px] overflow-hidden text-[12px] font-semibold text-ellipsis whitespace-nowrap text-white/35'>
+							{verticalName}
+						</span>
+					)}
 					<span
 						className='font-bold text-white'
 						style={{
@@ -241,21 +263,6 @@ export function SsdShape({
 					>
 						{formatStorageSize(usableSize)}
 					</span>
-					{/* Crossed-out actual size - positioned below*/}
-					{hasWastedSpace && (
-						<span
-							className='absolute font-bold text-white/40 line-through'
-							style={{
-								fontSize: '25px',
-								right: '100%',
-								top: '50%',
-								transform: 'translateY(-50%)',
-								marginRight: '16px',
-							}}
-						>
-							{formatStorageSize(device.size)}
-						</span>
-					)}
 				</div>
 
 				{/* Warning indicators + Health pulse pill grouped together at bottom */}
@@ -358,9 +365,9 @@ export function SsdShape({
 					<button
 						type='button'
 						onClick={onHealthClick}
-						className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] px-4 py-1 transition-colors hover:bg-white/[0.12]'
+						className='relative flex items-center justify-center rounded-full border border-white/[0.16] bg-white/[0.08] p-1.5 transition-colors hover:bg-white/[0.12]'
 					>
-						<TbActivityHeartbeat className='size-4 text-white' />
+						<TiInfoLarge className='size-4 text-white' />
 						{/* Warning dot - upper right of pill */}
 						{hasAnyWarning && (
 							<span

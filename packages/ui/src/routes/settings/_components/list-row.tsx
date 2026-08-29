@@ -15,6 +15,27 @@ function RowIcon({icon, className}: {icon: SettingsRowIcon; className: string}) 
 	return <Icon className={className} />
 }
 
+export function SettingsListIcon({
+	icon,
+	className,
+	iconClassName,
+}: {
+	icon: SettingsRowIcon
+	className?: string
+	iconClassName?: string
+}) {
+	return (
+		<span
+			className={cn(
+				'settings-list-icon flex size-[30px] shrink-0 items-center justify-center rounded-8 border border-white/25',
+				className,
+			)}
+		>
+			<RowIcon icon={icon} className={cn('size-[15px] text-white', iconClassName)} />
+		</span>
+	)
+}
+
 export function ListRow({
 	title,
 	description,
@@ -57,11 +78,7 @@ export function ListRow({
 			onClick={onClick}
 		>
 			<span className='flex min-w-0 flex-1 items-center gap-2.5'>
-				{icon && (
-					<span className='settings-list-icon flex size-[30px] shrink-0 items-center justify-center rounded-8 border border-white/25'>
-						<RowIcon icon={icon} className='size-[15px] text-white' />
-					</span>
-				)}
+				{icon && <SettingsListIcon icon={icon} />}
 				<span className='flex min-w-0 flex-1 flex-col gap-1'>
 					<span className='text-14 leading-none font-medium -tracking-2 text-white/90'>{title}</span>
 					<span className='text-12 leading-tight -tracking-2 text-white/40'>{description}</span>
@@ -101,9 +118,7 @@ export function ListRowMobile({
 			)}
 			onClick={disabled ? undefined : onClick}
 		>
-			<span className='settings-list-icon flex size-[30px] shrink-0 items-center justify-center rounded-8 border border-white/25'>
-				<RowIcon icon={icon} className='size-[15px] text-white' />
-			</span>
+			<SettingsListIcon icon={icon} />
 			<span className='flex min-w-0 flex-1 flex-col gap-1'>
 				<span className='text-14 leading-none font-medium -tracking-2 text-white/90'>{title}</span>
 				<span className='truncate text-12 leading-tight -tracking-2 text-white/40'>{description}</span>

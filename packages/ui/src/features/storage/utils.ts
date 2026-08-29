@@ -109,3 +109,13 @@ export function planFailsafeTransition({
 
 	return {pairs, acceleratorNewDevice, acceleratorRequiredSize, satisfied}
 }
+
+// Standard SSD capacities in GB. The accelerator guidance is ~32x the device's RAM,
+// mapped to the smallest standard drive that satisfies it and capped at 4TB:
+// 4GB RAM -> 128GB, 8GB -> 256GB ... 128GB+ -> 4TB.
+const ssdSizeBucketsGb = [128, 256, 512, 1024, 2048, 4096]
+export function recommendedSsdSizeLabel(ramBytes: number) {
+	const nominalRamGb = Math.max(1, Math.round(ramBytes / 2 ** 30))
+	const sizeGb = ssdSizeBucketsGb.find((bucket) => bucket >= nominalRamGb * 32) ?? ssdSizeBucketsGb.at(-1)!
+	return sizeGb >= 1024 ? `${sizeGb / 1024}TB` : `${sizeGb}GB`
+}

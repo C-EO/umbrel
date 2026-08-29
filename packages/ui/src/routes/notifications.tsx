@@ -23,6 +23,8 @@ import {useHomePath} from '@/features/files/hooks/use-home-path'
 import {cloudAccountBrand} from '@/features/files/utils/cloud'
 import {useNotifications} from '@/hooks/use-notifications'
 import {cn} from '@/lib/utils'
+import {SettingsListIcon} from '@/routes/settings/_components/list-row'
+import {suppliedSettingsIcons} from '@/routes/settings/_components/settings-taxonomy'
 import {thunderboltAccessoryImage} from '@/routes/settings/thunderbolt'
 import {shouldShowWhatsNew} from '@/routes/whats-new'
 import {trpcReact} from '@/trpc/trpc'
@@ -280,16 +282,25 @@ export function Notifications() {
 				navigate('/settings/storage')
 			}
 			return {
-				title: t('storage-manager.scrub.error-title'),
-				icon: <RiErrorWarningFill className='size-16 text-[#FF3434]' />,
+				title: t('notifications.raid.issue.title'),
+				icon: (
+					<div className='relative'>
+						<SettingsListIcon
+							icon={suppliedSettingsIcons.storageManager}
+							className='size-16 rounded-20 [--settings-row-tone:var(--color-brand)]'
+							iconClassName='size-9'
+						/>
+						<RiErrorWarningFill className='absolute -top-2 -right-2 size-8 text-[#FF3434] drop-shadow-[0_2px_3px_rgba(0,0,0,0.55)]' />
+					</div>
+				),
 				description: t('notifications.raid.issue.description'),
 				action: (
 					<>
 						<Button variant='default' size='dialog' onClick={() => clearNotification(notification)} tabIndex={-1}>
-							{t('ok')}
+							{t('notifications.dismiss')}
 						</Button>
 						<AlertDialogAction variant='primary' onClick={onGoToStorageManager} tabIndex={0}>
-							{t('notifications.view')}
+							{t('notifications.raid.issue.action')}
 						</AlertDialogAction>
 					</>
 				),

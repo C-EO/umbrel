@@ -5,7 +5,7 @@ import {cn} from '@/lib/utils'
 
 import {getDeviceHealth, RaidDevice, RaidDeviceStatus, raidStatusLabels, StorageDevice} from '../../hooks/use-storage'
 import {formatStorageSize, hasRaidErrors} from '../../utils'
-import {DriveIcon, DriveLed, HardDriveIcon, SsdChip} from './drive-visuals'
+import {DriveLed, HardDriveIcon, SsdChip} from './drive-visuals'
 
 // Resolve the LED color for a drive from its RAID membership and health
 function getDriveLed({
@@ -23,6 +23,17 @@ function getDriveLed({
 	if ((raidStatus && raidStatus !== 'ONLINE') || hasHealthWarning) return 'red'
 	if (hasErrors) return 'amber'
 	return 'green'
+}
+
+// Teal status pill for a freshly detected drive that's queued up to replace a failed
+// pool member - the actual Replace action lives on the failed drive's row
+export function ReadyToReplacePill() {
+	const {t} = useTranslation()
+	return (
+		<span className='rounded-full bg-[#1CBFAB]/15 px-2.5 py-0.5 text-[12px] font-medium text-[#2DD4BF]'>
+			{t('storage-manager.ready-to-replace')}
+		</span>
+	)
 }
 
 // Pill shown on drives that are attached but not part of the pool
@@ -64,7 +75,8 @@ export function DriveActionButton({
 			}}
 			className={cn(
 				'flex shrink-0 items-center gap-1 rounded-full px-3 py-1 text-[12px] font-medium transition-colors disabled:opacity-50',
-				variant === 'primary' && 'animate-pulse border border-white/20 bg-white/15 text-white hover:bg-white/20',
+				// Teal matches the freshly detected drive this action belongs to (see SsdShape)
+				variant === 'primary' && 'animate-pulse bg-[#1CBFAB] text-white hover:bg-[#1CBFAB]/90',
 				variant === 'destructive' && 'bg-[#FF3434] text-white hover:bg-[#FF3434]/90',
 				variant === 'default' && 'border border-white/[0.08] bg-white/[0.06] text-white/80 hover:bg-white/10',
 			)}
@@ -112,7 +124,11 @@ export function DriveCard({
 				onClick && 'cursor-pointer hover:bg-white/10',
 			)}
 		>
-			{device.type === 'hdd' ? <HardDriveIcon led={led} /> : <DriveIcon led={led} />}
+			{device.type === 'hdd' ? (
+				<HardDriveIcon led={led} />
+			) : (
+				<SsdChip sizeLabel={formatStorageSize(device.size)} led={led} />
+			)}
 			<div className='min-w-0 flex-1'>
 				<div className='truncate text-[15px] font-medium text-white'>{device.name}</div>
 				<div className='truncate text-13 text-white/50'>
@@ -173,7 +189,11 @@ export function MissingDriveCard({
 	const {t} = useTranslation()
 	return (
 		<div className='flex w-full items-center gap-4 rounded-12 border border-[#FF3434]/40 bg-[#FF3434]/10 p-4 text-left'>
-			{isHdd ? <HardDriveIcon led='red' className='opacity-40' /> : <DriveIcon led='red' className='opacity-40' />}
+			{isHdd ? (
+				<HardDriveIcon led='red' className='opacity-40' />
+			) : (
+				<SsdChip sizeLabel='—' led='red' className='opacity-40' />
+			)}
 			<div className='min-w-0 flex-1'>
 				<div className='truncate text-[15px] font-medium text-white'>{t('storage-manager.missing-drive')}</div>
 				<div className='truncate text-13 text-white/50'>{id}</div>

@@ -117,7 +117,7 @@ export function AddAcceleratorDialog({open, onOpenChange, devices, addAccelerato
 
 					<DialogFooter>
 						<Button variant='primary' onClick={handleAdd} disabled={isOperationInProgress}>
-							{isPair ? t('storage-manager.ssd-acceleration.add-ssds') : t('storage-manager.add-accelerator.add-ssd')}
+							{t('storage-manager.ssd-acceleration.enable')}
 						</Button>
 						<Button variant='default' onClick={() => onOpenChange(false)}>
 							{t('cancel')}

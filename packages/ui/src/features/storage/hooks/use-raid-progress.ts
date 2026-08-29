@@ -105,9 +105,14 @@ export function useRaidProgress(): RaidProgress | null {
 		{
 			onData(data) {
 				const status = data as FailsafeTransitionStatus
-				// On error: show toast and clear immediately
+				// On error: show toast and clear immediately. The hook is mounted by many
+				// consumers at once (island + every storage dialog), so a stable id keeps
+				// one event from stacking a toast per instance.
 				if (status.state === 'error') {
-					toast.error(status.error || t('storage-manager.failsafe-transition-failed'), {area: 'settings'})
+					toast.error(status.error || t('storage-manager.failsafe-transition-failed'), {
+						area: 'settings',
+						id: 'raid-failsafe-transition-error',
+					})
 					setFailsafeTransition(null)
 					return
 				}

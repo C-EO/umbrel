@@ -20,8 +20,8 @@ import {cn} from '@/lib/utils'
 
 import {StorageDevice} from '../../hooks/use-storage'
 import {formatStorageSize} from '../../utils'
-import {InstallTipsCollapsible} from './install-tips-collapsible'
 import {OperationInProgressBanner} from './operation-in-progress-banner'
+import {ProInstallInstructions} from './pro-install-instructions'
 import {ShutdownConfirmationDialog} from './shutdown-confirmation-dialog'
 
 type SwapDialogProps = {
@@ -32,6 +32,10 @@ type SwapDialogProps = {
 	slot?: number | null
 	/** Device id of the device being swapped - used on devices without physical slots */
 	oldDeviceId?: string | null
+	/** Whether the device being swapped has failed (pool degraded) - adjusts title and banner */
+	oldDeviceFailed?: boolean
+	/** Wording hint for a swapped member whose physical device is missing (no type to read) */
+	missingDeviceType?: 'ssd' | 'hdd'
 	isUmbrelPro: boolean
 	raidDriveCount: number
 	availableDevices: StorageDevice[]
@@ -45,6 +49,8 @@ export function SwapDialog({
 	raidType,
 	slot = null,
 	oldDeviceId = null,
+	oldDeviceFailed = false,
+	missingDeviceType,
 	isUmbrelPro,
 	raidDriveCount,
 	availableDevices,
@@ -58,7 +64,6 @@ export function SwapDialog({
 	const activeOperation = useActiveRaidOperation()
 	const isOperationInProgress = !!activeOperation
 
-	const [showInstallTips, setShowInstallTips] = useState(false)
 	const [selectedReplacementId, setSelectedReplacementId] = useState<string | null>(null)
 	const [showShutdownConfirmation, setShowShutdownConfirmation] = useState(false)
 
@@ -79,7 +84,7 @@ export function SwapDialog({
 	// choice follows the swapped device's type (HDD pools say drive, accelerator SSDs and
 	// SSD pools keep SSD wording).
 	// dv('storage-manager.swap.foo') resolves to 'storage-manager.swap.foo-drive' when generic.
-	const isGenericDrive = !slot && oldDevice?.type !== 'ssd'
+	const isGenericDrive = !slot && (oldDevice ? oldDevice.type !== 'ssd' : missingDeviceType !== 'ssd')
 	const dv = (key: string) => t(isGenericDrive ? `${key}-drive` : key)
 	// "SSD" slot labels are not translated - they match the physical device markings
 	const swappedLabel = slot ? `SSD ${slot}` : isGenericDrive ? t('storage-manager.swap.drive-label') : 'SSD'
@@ -111,14 +116,15 @@ export function SwapDialog({
 		if (open) {
 			setSelectedReplacementId(validReplacementDevices.length === 1 ? (validReplacementDevices[0].id ?? null) : null)
 		} else {
-			setShowInstallTips(false)
 			setShowShutdownConfirmation(false)
 			setSelectedReplacementId(null)
 		}
 	}, [open])
 
-	// Storage mode with free slot AND available devices - we show replacement selection
-	if (isStorageMode && hasFreeSlot && hasAvailableDevices) {
+	// Storage mode with free slot AND available devices - we show replacement selection.
+	// Requires an attached old device: without it there is no size validation and the
+	// confirm could never enable, so missing members fall through to the instructions.
+	if (isStorageMode && hasFreeSlot && hasAvailableDevices && oldDevice) {
 		const selectedDevice = validReplacementDevices.find((d) => d.id === selectedReplacementId)
 
 		const handleReplace = () => {
@@ -245,7 +251,6 @@ export function SwapDialog({
 									</div>
 								))}
 							</div>
-							{canHotSwap && <p className='text-12 text-white/40'>{t('storage-manager.swap.hot-swap-note')}</p>}
 						</div>
 
 						{isOperationInProgress && <OperationInProgressBanner variant='wait' />}
@@ -268,16 +273,19 @@ export function SwapDialog({
 		)
 	}
 
-	// Storage mode with free slot but NO available devices - we show "add a drive first" instructions
+	// Storage mode with free slot but NO available devices - we show "add a drive first" instructions.
+	// Umbrel Pro gets the installation photo with prose instead of a step list.
 	if (isStorageMode && hasFreeSlot) {
 		// Hot-swappable bays skip the shutdown/power-on steps in favor of a note
 		const steps = canHotSwap
-			? [dv('storage-manager.swap.step-insert-new-ssd'), t('storage-manager.swap.step-return-to-swap')]
+			? [
+					dv('storage-manager.swap.step-power-off-if-needed'),
+					dv('storage-manager.swap.step-insert-new-ssd'),
+					t('storage-manager.swap.step-return-to-swap'),
+				]
 			: [
 					t('storage-manager.swap.step-shut-down', {deviceName}),
-					...(isUmbrelPro ? [t('storage-manager.swap.step-remove-bottom-cover')] : []),
 					dv('storage-manager.swap.step-insert-new-ssd'),
-					...(isUmbrelPro ? [t('storage-manager.swap.step-replace-bottom-cover')] : []),
 					t('storage-manager.swap.step-power-on', {deviceName}),
 					t('storage-manager.swap.step-return-to-swap'),
 				]
@@ -289,48 +297,63 @@ export function SwapDialog({
 						<div className='flex flex-col gap-5 p-5'>
 							<DialogHeader>
 								<DialogTitle>
-									{t('storage-manager.swap')} {swappedLabel}
+									{oldDeviceFailed ? t('storage-manager.replace') : t('storage-manager.swap')} {swappedLabel}
 								</DialogTitle>
 								<DialogDescription>{t('storage-manager.swap.description-full-storage')}</DialogDescription>
 							</DialogHeader>
 
-							{/* Info banner */}
-							<div className='flex items-start gap-3 rounded-12 bg-brand/10 p-3'>
-								<TbInfoCircle className='mt-0.5 size-5 shrink-0 text-brand' />
-								<div className='flex flex-col gap-1'>
-									<span className='text-13 font-semibold text-brand'>
-										{t('storage-manager.swap.safe-swap-available')}
-									</span>
-									<span className='text-12 text-white/60'>{dv('storage-manager.swap.safe-swap-description')}</span>
-								</div>
-							</div>
-
-							{/* Steps */}
-							<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
-								{steps.map((step, index) => (
-									<div key={index} className='flex items-center gap-3 p-3 text-12 font-medium -tracking-3'>
-										<span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold'>
-											{index + 1}
+							{oldDeviceFailed ? (
+								/* The member has failed (or is missing entirely) - no safe-swap promises */
+								<div className='flex items-start gap-3 rounded-12 bg-destructive2/10 p-3'>
+									<TbAlertTriangle className='mt-0.5 size-5 shrink-0 text-destructive2' />
+									<div className='flex flex-col gap-1'>
+										<span className='text-13 font-semibold text-destructive2'>
+											{isGenericDrive
+												? t('storage-manager.replace-failed.degraded-storage-drive')
+												: t('storage-manager.replace-failed.degraded-storage')}
 										</span>
-										<span>{step}</span>
+										<span className='text-12 text-white/60'>
+											{dv('storage-manager.swap.failed-description-storage')}
+										</span>
 									</div>
-								))}
-							</div>
+								</div>
+							) : (
+								/* Info banner */
+								<div className='flex items-start gap-3 rounded-12 bg-brand/10 p-3'>
+									<TbInfoCircle className='mt-0.5 size-5 shrink-0 text-brand' />
+									<div className='flex flex-col gap-1'>
+										<span className='text-13 font-semibold text-brand'>
+											{t('storage-manager.swap.safe-swap-available')}
+										</span>
+										<span className='text-12 text-white/60'>{dv('storage-manager.swap.safe-swap-description')}</span>
+									</div>
+								</div>
+							)}
 
-							{canHotSwap && <p className='text-12 text-white/40'>{t('storage-manager.swap.hot-swap-note')}</p>}
-
-							{/* Collapsible installation tips - Umbrel Pro only */}
-							{isUmbrelPro && (
-								<InstallTipsCollapsible
-									isOpen={showInstallTips}
-									onToggle={() => setShowInstallTips(!showInstallTips)}
+							{isUmbrelPro ? (
+								<ProInstallInstructions
+									paragraphs={[
+										t('storage-manager.swap.pro-instructions-insert-1'),
+										t('storage-manager.swap.pro-instructions-insert-2'),
+									]}
 								/>
+							) : (
+								<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
+									{steps.map((step, index) => (
+										<div key={index} className='flex items-center gap-3 p-3 text-12 font-medium -tracking-3'>
+											<span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold'>
+												{index + 1}
+											</span>
+											<span>{step}</span>
+										</div>
+									))}
+								</div>
 							)}
 
 							{isOperationInProgress && <OperationInProgressBanner variant='shutdown-safe' />}
 
 							<DialogFooter>
-								<Button variant='destructive' onClick={() => setShowShutdownConfirmation(true)}>
+								<Button variant='primary' onClick={() => setShowShutdownConfirmation(true)}>
 									{t('shut-down')}
 								</Button>
 								<Button variant='default' onClick={() => onOpenChange(false)}>
@@ -423,17 +446,17 @@ export function SwapDialog({
 		)
 	}
 
-	// FailSafe mode. Hot-swappable bays skip the shutdown/power-on steps in favor of a note.
+	// FailSafe mode. Umbrel Pro gets the installation photo with prose instead of a step
+	// list; hot-swappable bays skip the shutdown/power-on steps in favor of a note.
 	const steps = canHotSwap
 		? [
+				dv('storage-manager.swap.step-power-off-if-needed'),
 				t('storage-manager.swap.step-swap-ssd', {ssd: swappedLabelDefinite}),
 				dv('storage-manager.swap.step-return-to-storage-manager'),
 			]
 		: [
 				t('storage-manager.swap.step-shut-down', {deviceName}),
-				...(isUmbrelPro ? [t('storage-manager.swap.step-remove-bottom-cover')] : []),
 				t('storage-manager.swap.step-swap-ssd', {ssd: swappedLabelDefinite}),
-				...(isUmbrelPro ? [t('storage-manager.swap.step-replace-bottom-cover')] : []),
 				t('storage-manager.swap.step-power-on', {deviceName}),
 				dv('storage-manager.swap.step-return-to-storage-manager'),
 			]
@@ -445,43 +468,57 @@ export function SwapDialog({
 					<div className='flex flex-col gap-5 p-5'>
 						<DialogHeader>
 							<DialogTitle>
-								{t('storage-manager.swap')} {swappedLabel}
+								{oldDeviceFailed ? t('storage-manager.replace') : t('storage-manager.swap')} {swappedLabel}
 							</DialogTitle>
 							<DialogDescription>{t('storage-manager.swap.description-failsafe')}</DialogDescription>
 						</DialogHeader>
 
-						{/* Safe banner */}
-						<div className='flex items-start gap-3 rounded-12 bg-brand/10 p-3'>
-							<IoShieldHalf className='mt-0.5 size-5 shrink-0 text-brand' />
-							<div className='flex flex-col gap-1'>
-								<span className='text-13 font-semibold text-brand'>{t('storage-manager.swap.data-protected')}</span>
-								<span className='text-12 text-white/60'>{dv('storage-manager.swap.data-protected-description')}</span>
-							</div>
-						</div>
-
-						{/* Steps */}
-						<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
-							{steps.map((step, index) => (
-								<div key={index} className='flex items-center gap-3 p-3 text-12 font-medium -tracking-3'>
-									<span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold'>
-										{index + 1}
+						{oldDeviceFailed ? (
+							/* The drive has failed - be honest that protection is reduced until it's swapped */
+							<div className='flex items-start gap-3 rounded-12 bg-destructive2/10 p-3'>
+								<TbAlertTriangle className='mt-0.5 size-5 shrink-0 text-destructive2' />
+								<div className='flex flex-col gap-1'>
+									<span className='text-13 font-semibold text-destructive2'>
+										{t('storage-manager.replace-failed.degraded')}
 									</span>
-									<span>{step}</span>
+									<span className='text-12 text-white/60'>{dv('storage-manager.swap.failed-description')}</span>
 								</div>
-							))}
-						</div>
+							</div>
+						) : (
+							/* Proactive swap of a healthy drive - FailSafe keeps the data safe throughout */
+							<div className='flex items-start gap-3 rounded-12 bg-brand/10 p-3'>
+								<IoShieldHalf className='mt-0.5 size-5 shrink-0 text-brand' />
+								<div className='flex flex-col gap-1'>
+									<span className='text-13 font-semibold text-brand'>{t('storage-manager.swap.data-protected')}</span>
+									<span className='text-12 text-white/60'>{dv('storage-manager.swap.data-protected-description')}</span>
+								</div>
+							</div>
+						)}
 
-						{canHotSwap && <p className='text-12 text-white/40'>{t('storage-manager.swap.hot-swap-note')}</p>}
-
-						{/* Collapsible installation tips - Umbrel Pro only */}
-						{isUmbrelPro && (
-							<InstallTipsCollapsible isOpen={showInstallTips} onToggle={() => setShowInstallTips(!showInstallTips)} />
+						{isUmbrelPro ? (
+							<ProInstallInstructions
+								paragraphs={[
+									t('storage-manager.swap.pro-instructions-swap-1', {ssd: swappedLabelDefinite}),
+									t('storage-manager.swap.pro-instructions-swap-2'),
+								]}
+							/>
+						) : (
+							<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
+								{steps.map((step, index) => (
+									<div key={index} className='flex items-center gap-3 p-3 text-12 font-medium -tracking-3'>
+										<span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold'>
+											{index + 1}
+										</span>
+										<span>{step}</span>
+									</div>
+								))}
+							</div>
 						)}
 
 						{isOperationInProgress && <OperationInProgressBanner variant='shutdown-safe' />}
 
 						<DialogFooter>
-							<Button variant='destructive' onClick={() => setShowShutdownConfirmation(true)}>
+							<Button variant='primary' onClick={() => setShowShutdownConfirmation(true)}>
 								{t('shut-down')}
 							</Button>
 							<Button variant='default' onClick={() => onOpenChange(false)}>

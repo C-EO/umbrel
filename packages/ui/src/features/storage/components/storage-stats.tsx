@@ -16,6 +16,8 @@ export function StorageStats({
 	failsafeOverheadBytes,
 	wastedBytes,
 	inactiveBytes = 0,
+	totalLabel,
+	availableLabel,
 }: {
 	isLoading: boolean
 	totalCapacityBytes: number
@@ -24,6 +26,10 @@ export function StorageStats({
 	wastedBytes: number
 	/** Total size of attached drives that aren't part of the pool (list-based manager only) */
 	inactiveBytes?: number
+	/** Overrides the "Total capacity added" label (e.g. plain "Total capacity" on single-drive devices) */
+	totalLabel?: string
+	/** Overrides the "Available storage" label (e.g. "Free space" on single-drive devices) */
+	availableLabel?: string
 }) {
 	const {t} = useTranslation()
 	return (
@@ -33,7 +39,9 @@ export function StorageStats({
 				<div className={cn('text-[16px] font-semibold text-white', isLoading && 'animate-pulse text-white/30')}>
 					{isLoading ? '—' : formatStorageSize(totalCapacityBytes)}
 				</div>
-				<div className='text-[13px] font-semibold text-white/50'>{t('storage-manager.total-capacity-added')}</div>
+				<div className='text-[13px] font-semibold text-white/50'>
+					{totalLabel ?? t('storage-manager.total-capacity-added')}
+				</div>
 			</div>
 
 			<StorageDivider />
@@ -45,7 +53,9 @@ export function StorageStats({
 				</div>
 				<div className='flex items-center justify-center gap-1.5'>
 					<span className='size-2 rounded-full bg-brand' />
-					<span className='text-[13px] font-semibold text-white/50'>{t('storage-manager.available-storage')}</span>
+					<span className='text-[13px] font-semibold text-white/50'>
+						{availableLabel ?? t('storage-manager.available-storage')}
+					</span>
 				</div>
 			</div>
 

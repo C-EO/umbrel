@@ -47,12 +47,12 @@ export function PairDriveCell({
 		<div
 			onClick={onClick}
 			className={cn(
-				'relative flex flex-1 flex-col items-center justify-center gap-2.5 px-10 py-6',
+				'relative flex min-w-0 flex-1 flex-col items-center justify-center gap-2.5 px-4 py-5 sm:px-10 sm:py-6',
 				onClick && 'cursor-pointer transition-colors hover:bg-white/5',
 			)}
 		>
 			{inactive && (
-				<span className='absolute top-2 left-2 rounded-[6px] bg-[#FF3434]/15 px-2 py-0.5 text-[11px] font-medium text-[#FF3434]'>
+				<span className='absolute top-2 left-2 rounded-full bg-white/10 px-2 py-0.5 text-[11px] font-medium text-white/60'>
 					{t('storage-manager.inactive')}
 				</span>
 			)}
@@ -87,7 +87,7 @@ export function PairMissingCell({
 }) {
 	const {t} = useTranslation()
 	return (
-		<div className='relative flex flex-1 flex-col items-center justify-center gap-2.5 px-10 py-6'>
+		<div className='relative flex min-w-0 flex-1 flex-col items-center justify-center gap-2.5 px-4 py-5 sm:px-10 sm:py-6'>
 			<HardDriveIcon led='red' className='opacity-40' />
 			<div className='flex flex-col items-center gap-0.5 text-center'>
 				<span className='max-w-full truncate text-[15px] font-medium text-white'>
@@ -111,7 +111,7 @@ export function PairMissingCell({
 // One half of a pair card prompting the user to attach a partner drive
 export function PairPlaceholderCell({title, description}: {title: string; description: string}) {
 	return (
-		<div className='flex flex-1 flex-col items-center justify-center gap-2.5 px-10 py-6 text-center'>
+		<div className='flex min-w-0 flex-1 flex-col items-center justify-center gap-2.5 px-4 py-5 text-center sm:px-10 sm:py-6'>
 			<div className='flex size-8 items-center justify-center rounded-full bg-white/10'>
 				<TbPlus className='size-4 text-white/80' strokeWidth={2.5} />
 			</div>
@@ -144,9 +144,9 @@ export function PairCard({
 				broken ? 'border border-dashed border-[#FF3434]/50 bg-[#FF3434]/5' : 'bg-white/5',
 			)}
 		>
-			<div className={cn('flex flex-1', broken && 'rounded-l-12 bg-[#3C1C1C]/40')}>{left}</div>
+			<div className={cn('flex min-w-0 flex-1', broken && 'rounded-l-12 bg-[#3C1C1C]/40')}>{left}</div>
 			<div className={cn('w-px self-stretch', broken ? 'bg-[#FF3434]/30' : 'bg-white/10')} />
-			<div className='flex flex-1'>{right}</div>
+			<div className='flex min-w-0 flex-1'>{right}</div>
 			{isNamedBadge ? <PairBadge variant={badge as 'protected' | 'broken' | 'add'} /> : badge}
 		</div>
 	)

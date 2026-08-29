@@ -1,19 +1,34 @@
 // Animated icons for RAID progress in floating island.
 //
-// DataStreamIcon: SSD-shaped icon with flickering squares (for expanded view)
-// DataStreamIconMini: Circular grid of flickering squares (for minimized view)
+// DataStreamIcon: drive-shaped icon for the expanded view - an M.2 SSD with flickering
+// NAND cells, or a 3.5" hard drive with a spinning platter for HDD pools.
+// DataStreamIconMini: circular activity icon for the minimized view - a flickering cell
+// grid, or a spinning platter for HDD pools.
+//
+// Both take a `variant` matching getPoolDeviceType()'s classification of the active pool.
 
 import {useEffect, useState} from 'react'
 
-// --- DataStreamIcon ---
-// SSD-shaped icon with flickering squares and M.2 connector bars.
+export type DriveVariant = 'ssd' | 'hdd'
 
 interface DataStreamIconProps {
 	size?: number
 	isActive?: boolean
+	variant?: DriveVariant
 }
 
-export function DataStreamIcon({size = 32, isActive = true}: DataStreamIconProps) {
+export function DataStreamIcon({variant = 'ssd', ...props}: DataStreamIconProps) {
+	return variant === 'hdd' ? <HddDataStreamIcon {...props} /> : <SsdDataStreamIcon {...props} />
+}
+
+export function DataStreamIconMini({variant = 'ssd', ...props}: DataStreamIconProps) {
+	return variant === 'hdd' ? <HddDataStreamIconMini {...props} /> : <SsdDataStreamIconMini {...props} />
+}
+
+// --- SSD (expanded) ---
+// SSD-shaped icon with flickering squares and M.2 connector bars.
+
+function SsdDataStreamIcon({size = 32, isActive = true}: Omit<DataStreamIconProps, 'variant'>) {
 	const [activeCells, setActiveCells] = useState<Set<number>>(new Set())
 
 	const gridCols = 5
@@ -150,15 +165,111 @@ export function DataStreamIcon({size = 32, isActive = true}: DataStreamIconProps
 	)
 }
 
-// --- DataStreamIconMini ---
-// Circular grid of flickering squares for minimized island view.
+// --- HDD (expanded) ---
+// 3.5" drive seen from above: grooved platter with a spinning data sheen, a seeking
+// actuator arm, and a flickering activity LED. Drawn in the same brand-glow material
+// language as the SSD variant.
 
-interface DataStreamIconMiniProps {
-	size?: number
-	isActive?: boolean
+function HddDataStreamIcon({size = 32, isActive = true}: Omit<DataStreamIconProps, 'variant'>) {
+	const [armAngle, setArmAngle] = useState(-30)
+	const [ledOn, setLedOn] = useState(false)
+
+	useEffect(() => {
+		if (!isActive) {
+			setLedOn(false)
+			return
+		}
+
+		// One interval drives both the seek jitter and the LED flicker
+		const interval = setInterval(() => {
+			setArmAngle(-18 - Math.random() * 26)
+			setLedOn(Math.random() > 0.45)
+		}, 260)
+
+		return () => clearInterval(interval)
+	}, [isActive])
+
+	const width = size * 1.9
+	const height = size * 2.4
+	const platterSize = width - 8
+	const platterTop = 5
+	const armLength = platterSize * 0.62
+
+	return (
+		<div className='relative' style={{width, height}}>
+			{/* Drive body */}
+			<div className='absolute inset-0 bg-white/10' style={{borderRadius: 4}} />
+
+			{/* Platter with grooves and spinning data sheen */}
+			<div
+				className='absolute overflow-hidden rounded-full'
+				style={{
+					left: (width - platterSize) / 2,
+					top: platterTop,
+					width: platterSize,
+					height: platterSize,
+					background:
+						'repeating-radial-gradient(circle at center, rgba(255,255,255,0.14) 0px, rgba(255,255,255,0.04) 2px, rgba(255,255,255,0.10) 4px)',
+				}}
+			>
+				<div
+					className='absolute inset-0 animate-spin'
+					style={{
+						background:
+							'conic-gradient(from 0deg, transparent 0deg, hsl(var(--color-brand) / 0.6) 60deg, transparent 130deg)',
+						animationDuration: '1.1s',
+						animationPlayState: isActive ? 'running' : 'paused',
+						opacity: isActive ? 1 : 0.25,
+						transition: 'opacity 300ms',
+					}}
+				/>
+			</div>
+
+			{/* Spindle */}
+			<div
+				className='absolute rounded-full bg-white/50'
+				style={{left: width / 2 - 2, top: platterTop + platterSize / 2 - 2, width: 4, height: 4}}
+			/>
+
+			{/* Actuator arm with read head, pivoting from the bottom-right corner */}
+			<div
+				className='absolute rounded-full bg-white/45 transition-transform duration-200'
+				style={{
+					width: 2.5,
+					height: armLength,
+					left: width - 8,
+					bottom: 5,
+					transformOrigin: '50% 100%',
+					transform: `rotate(${armAngle}deg)`,
+				}}
+			>
+				<div
+					className='absolute -top-0.5 left-1/2 size-1.5 -translate-x-1/2 rounded-full bg-brand'
+					style={{boxShadow: '0 0 4px hsl(var(--color-brand))'}}
+				/>
+			</div>
+			<div className='absolute rounded-full bg-white/30' style={{width: 4, height: 4, left: width - 8.75, bottom: 4}} />
+
+			{/* Activity LED */}
+			<div
+				className='absolute rounded-full transition-all duration-75'
+				style={{
+					width: 3,
+					height: 3,
+					left: 5,
+					bottom: 4,
+					backgroundColor: ledOn ? 'hsl(var(--color-brand))' : 'hsl(var(--color-brand) / 0.25)',
+					boxShadow: ledOn ? '0 0 4px hsl(var(--color-brand)), 0 0 6px hsl(var(--color-brand) / 0.5)' : 'none',
+				}}
+			/>
+		</div>
+	)
 }
 
-export function DataStreamIconMini({size = 20, isActive = true}: DataStreamIconMiniProps) {
+// --- SSD (minimized) ---
+// Circular grid of flickering squares for minimized island view.
+
+function SsdDataStreamIconMini({size = 20, isActive = true}: Omit<DataStreamIconProps, 'variant'>) {
 	const [activeCells, setActiveCells] = useState<Set<number>>(new Set())
 
 	const gridSize = 5
@@ -242,6 +353,46 @@ export function DataStreamIconMini({size = 20, isActive = true}: DataStreamIconM
 				/>
 			)}
 			<div className='absolute inset-0'>{cells}</div>
+		</div>
+	)
+}
+
+// --- HDD (minimized) ---
+// Spinning grooved platter for minimized island view.
+
+function HddDataStreamIconMini({size = 20, isActive = true}: Omit<DataStreamIconProps, 'variant'>) {
+	return (
+		<div className='relative' style={{width: size, height: size}}>
+			{isActive && (
+				<div
+					className='absolute inset-0 rounded-full'
+					style={{
+						background: 'radial-gradient(circle, hsl(var(--color-brand) / 0.2) 0%, transparent 70%)',
+					}}
+				/>
+			)}
+			<div
+				className='absolute overflow-hidden rounded-full'
+				style={{
+					inset: 1,
+					border: '1px solid rgba(255,255,255,0.25)',
+					background:
+						'repeating-radial-gradient(circle at center, rgba(255,255,255,0.16) 0px, rgba(255,255,255,0.05) 1.5px, rgba(255,255,255,0.12) 3px)',
+				}}
+			>
+				<div
+					className='absolute inset-0 animate-spin'
+					style={{
+						background:
+							'conic-gradient(from 0deg, transparent 0deg, hsl(var(--color-brand) / 0.7) 70deg, transparent 150deg)',
+						animationDuration: '1s',
+						animationPlayState: isActive ? 'running' : 'paused',
+						opacity: isActive ? 1 : 0.25,
+						transition: 'opacity 300ms',
+					}}
+				/>
+			</div>
+			<div className='absolute top-1/2 left-1/2 size-1 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/60' />
 		</div>
 	)
 }

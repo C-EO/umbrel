@@ -48,8 +48,12 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 
 	if (smartUnhealthy) {
 		warnings.push({
-			message: t('storage-manager.health.warning-unhealthy-message'),
-			advice: t('storage-manager.health.warning-unhealthy-advice'),
+			message: isSsd
+				? t('storage-manager.health.warning-unhealthy-message')
+				: t('storage-manager.health.warning-unhealthy-message-drive'),
+			advice: isSsd
+				? t('storage-manager.health.warning-unhealthy-advice')
+				: t('storage-manager.health.warning-unhealthy-advice-drive'),
 		})
 	}
 
@@ -60,19 +64,25 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 		})
 	}
 
+	// Temperature warnings are SSD-only (see getDeviceHealth), but the airflow advice
+	// mentioning the magnetic bottom cover only makes sense on Umbrel Pro (slotNumber set)
+	const tempAdvice =
+		slotNumber !== undefined
+			? t('storage-manager.health.warning-temp-advice')
+			: t('storage-manager.health.warning-temp-advice-generic')
 	if (tempCritical) {
 		warnings.push({
 			message: t('storage-manager.health.warning-temp-critical', {
 				temperature: formatTemperature(device.temperature, temperatureUnit),
 			}),
-			advice: t('storage-manager.health.warning-temp-advice'),
+			advice: tempAdvice,
 		})
 	} else if (tempWarning) {
 		warnings.push({
 			message: t('storage-manager.health.warning-temp-overheating', {
 				temperature: formatTemperature(device.temperature, temperatureUnit),
 			}),
-			advice: t('storage-manager.health.warning-temp-advice'),
+			advice: tempAdvice,
 		})
 	}
 
@@ -93,7 +103,9 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 					<DialogHeader>
 						<div className='flex items-center gap-2'>
 							<TbActivityHeartbeat className='size-5' />
-							<DialogTitle>{t('storage-manager.health.title')}</DialogTitle>
+							<DialogTitle>
+								{isSsd ? t('storage-manager.health.title') : t('storage-manager.health.title-drive')}
+							</DialogTitle>
 						</div>
 					</DialogHeader>
 
@@ -143,7 +155,11 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 								</span>
 							</div>
 							<div className='text-sm'>
-								<p className='font-medium text-white/90'>{t('storage-manager.health.raid-failed-advice')}</p>
+								<p className='font-medium text-white/90'>
+									{isSsd
+										? t('storage-manager.health.raid-failed-advice')
+										: t('storage-manager.health.raid-failed-advice-drive')}
+								</p>
 							</div>
 						</div>
 					)}
@@ -188,10 +204,11 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 						</div>
 					</div>
 
-					{/* Wear Section */}
+					{/* Wear Section - "Wear" is an SSD concept; HDDs get a plain "Health" header
+					    since only the SMART status row renders for them */}
 					<div className='space-y-2'>
 						<span className='text-xs font-medium tracking-wider text-white/40 uppercase'>
-							{t('storage-manager.health.wear')}
+							{isSsd ? t('storage-manager.health.wear') : t('storage-manager.health.health')}
 						</span>
 						<div className={listClass}>
 							<div className={listItemClass}>

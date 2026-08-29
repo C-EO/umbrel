@@ -12,8 +12,8 @@ import {
 } from '@/components/ui/dialog'
 import {useActiveRaidOperation} from '@/features/storage/hooks/use-active-raid-operation'
 
-import {InstallTipsCollapsible} from './install-tips-collapsible'
 import {OperationInProgressBanner} from './operation-in-progress-banner'
+import {ProInstallInstructions} from './pro-install-instructions'
 import {ShutdownConfirmationDialog} from './shutdown-confirmation-dialog'
 
 type InstallSsdDialogProps = {
@@ -26,7 +26,6 @@ type InstallSsdDialogProps = {
 
 export function InstallSsdDialog({open, onOpenChange, isUmbrelPro, isHdd = false}: InstallSsdDialogProps) {
 	const {t} = useTranslation()
-	const [showInstallTips, setShowInstallTips] = useState(false)
 	const [showShutdownConfirmation, setShowShutdownConfirmation] = useState(false)
 
 	// Check if a RAID operation is already in progress
@@ -37,24 +36,25 @@ export function InstallSsdDialog({open, onOpenChange, isUmbrelPro, isHdd = false
 	useEffect(() => {
 		if (!open) {
 			setShowShutdownConfirmation(false)
-			setShowInstallTips(false)
 		}
 	}, [open])
 
 	// dv('storage-manager.install-ssd.foo') resolves to '...foo-drive' for HDD pools
 	const dv = (key: string) => t(isHdd ? `${key}-drive` : key)
 
-	const deviceName = isUmbrelPro ? 'Umbrel Pro' : 'device'
 	// HDDs sit in drive bays which are hot-swappable on most NAS hardware, so the shutdown
-	// steps become an "only if your bays aren't hot-swappable" note
+	// step becomes a conditional "power off if your bays aren't hot-swappable" first step.
+	// Umbrel Pro renders prose under its installation photo instead of a step list.
 	const steps = isHdd
-		? [dv('storage-manager.install-ssd.step-insert'), dv('storage-manager.install-ssd.step-return')]
-		: [
-				t('storage-manager.install-ssd.step-shut-down', {deviceName}),
-				...(isUmbrelPro ? [t('storage-manager.install-ssd.step-remove-bottom-cover')] : []),
+		? [
+				dv('storage-manager.swap.step-power-off-if-needed'),
 				dv('storage-manager.install-ssd.step-insert'),
-				...(isUmbrelPro ? [t('storage-manager.install-ssd.step-replace-bottom-cover')] : []),
-				t('storage-manager.install-ssd.step-power-on', {deviceName}),
+				dv('storage-manager.install-ssd.step-return'),
+			]
+		: [
+				t('storage-manager.install-ssd.step-shut-down', {deviceName: 'device'}),
+				dv('storage-manager.install-ssd.step-insert'),
+				t('storage-manager.install-ssd.step-power-on', {deviceName: 'device'}),
 				dv('storage-manager.install-ssd.step-return'),
 			]
 
@@ -68,29 +68,30 @@ export function InstallSsdDialog({open, onOpenChange, isUmbrelPro, isHdd = false
 							<DialogDescription>{dv('storage-manager.install-ssd.description')}</DialogDescription>
 						</DialogHeader>
 
-						{/* Instruction steps */}
-						<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
-							{steps.map((step, index) => (
-								<div key={index} className='flex items-center gap-3 p-3 text-12 font-medium -tracking-3'>
-									<span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold'>
-										{index + 1}
-									</span>
-									<span>{step}</span>
-								</div>
-							))}
-						</div>
-
-						{isHdd && <p className='text-12 text-white/40'>{t('storage-manager.swap.hot-swap-note')}</p>}
-
-						{/* Collapsible installation tips - Umbrel Pro only */}
-						{isUmbrelPro && (
-							<InstallTipsCollapsible isOpen={showInstallTips} onToggle={() => setShowInstallTips(!showInstallTips)} />
+						{isUmbrelPro ? (
+							<ProInstallInstructions
+								paragraphs={[
+									t('storage-manager.install-ssd.pro-instructions-1'),
+									t('storage-manager.install-ssd.pro-instructions-2'),
+								]}
+							/>
+						) : (
+							<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/6'>
+								{steps.map((step, index) => (
+									<div key={index} className='flex items-center gap-3 p-3 text-12 font-medium -tracking-3'>
+										<span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold'>
+											{index + 1}
+										</span>
+										<span>{step}</span>
+									</div>
+								))}
+							</div>
 						)}
 
 						{isOperationInProgress && <OperationInProgressBanner variant='shutdown-safe' />}
 
 						<DialogFooter>
-							<Button variant='destructive' onClick={() => setShowShutdownConfirmation(true)}>
+							<Button variant='primary' onClick={() => setShowShutdownConfirmation(true)}>
 								{t('shut-down')}
 							</Button>
 							<Button variant='default' onClick={() => onOpenChange(false)}>

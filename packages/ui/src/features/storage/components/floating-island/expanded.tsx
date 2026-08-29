@@ -1,12 +1,16 @@
 import {motion} from 'motion/react'
 import {useTranslation} from 'react-i18next'
 
-import {type RaidProgress} from '@/features/storage/hooks/use-raid-progress'
+import {DataStreamIcon, type DriveVariant} from './data-stream-icon'
+import {raidOperationLabels, type IslandRaidProgress} from './index'
 
-import {DataStreamIcon} from './data-stream-icon'
-import {raidOperationLabels} from './index'
-
-export function ExpandedContent({operation}: {operation: RaidProgress}) {
+export function ExpandedContent({
+	operation,
+	deviceType = 'ssd',
+}: {
+	operation: IslandRaidProgress
+	deviceType?: DriveVariant
+}) {
 	const {t} = useTranslation()
 	const label = t(raidOperationLabels[operation.type])
 	const isRebooting = operation.state === 'rebooting'
@@ -21,20 +25,20 @@ export function ExpandedContent({operation}: {operation: RaidProgress}) {
 			return t('storage-manager.operation.syncing-restarts')
 		}
 		if (operation.state === 'adding') {
-			return t('storage-manager.operation.adding-ssd')
+			return t('storage-manager.operation.adding')
 		}
 		if (operation.state === 'starting') {
 			return t('storage-manager.operation.starting')
 		}
-		if (operation.type === 'scrub') {
-			if (operation.state === 'finished' && operation.errors) {
-				return t('storage-manager.scrub.errors-found', {count: operation.errors})
-			}
-			if (operation.state === 'finished') return t('storage-manager.scrub.completed')
-			if (operation.state === 'canceled') return t('storage-manager.scrub.canceled')
-			return t('storage-manager.scrub.running')
+		if (operation.state === 'finished' || operation.state === 'complete') {
+			return t('storage-manager.operation.completed')
 		}
-		return operation.state
+		if (operation.state === 'canceled') {
+			return t('storage-manager.operation.canceled')
+		}
+		// In-progress states (expanding/rebuilding/syncing) already read from the label
+		// above - never leak the raw internal state string
+		return ''
 	}
 	const stateDescription = getStateDescription()
 
@@ -142,7 +146,7 @@ export function ExpandedContent({operation}: {operation: RaidProgress}) {
 						delay: 0.2,
 					}}
 				>
-					<DataStreamIcon size={22} isActive={!isComplete && !isCanceled} />
+					<DataStreamIcon size={22} isActive={!isComplete && !isCanceled} variant={deviceType} />
 				</motion.div>
 			</motion.div>
 		</div>

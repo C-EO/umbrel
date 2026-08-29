@@ -1,7 +1,7 @@
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {IoShieldHalf} from 'react-icons/io5'
-import {TbInfoCircle, TbServer} from 'react-icons/tb'
+import {TbCircleCheckFilled, TbInfoCircle, TbServer} from 'react-icons/tb'
 
 import {Button} from '@/components/ui/button'
 import {Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog'
@@ -60,9 +60,16 @@ type StorageModeDisplayProps = {
 	value: RaidType
 	canEnableFailsafe: boolean
 	copyVariant?: 'ssd' | 'drive'
+	/** Overrides the "why can't I switch" copy for FailSafe (single-drive devices) */
+	failsafeUnavailableReason?: string
 }
 
-export function StorageModeDisplay({value, canEnableFailsafe, copyVariant = 'ssd'}: StorageModeDisplayProps) {
+export function StorageModeDisplay({
+	value,
+	canEnableFailsafe,
+	copyVariant = 'ssd',
+	failsafeUnavailableReason,
+}: StorageModeDisplayProps) {
 	const {t} = useTranslation()
 	const [infoDialogOption, setInfoDialogOption] = useState<ModeOption | null>(null)
 	const modeOptions = getModeOptions(copyVariant)
@@ -73,6 +80,9 @@ export function StorageModeDisplay({value, canEnableFailsafe, copyVariant = 'ssd
 			return t('storage-manager.mode.switch-from-failsafe-unavailable')
 		}
 		if (optionId === 'failsafe' && value === 'storage') {
+			// Single-drive devices carry their own explanation of why FailSafe is out of reach
+			if (failsafeUnavailableReason) return failsafeUnavailableReason
+
 			// User has 1 SSD so they CAN enable FailSafe by adding more drives
 			if (canEnableFailsafe) return null
 
@@ -98,13 +108,14 @@ export function StorageModeDisplay({value, canEnableFailsafe, copyVariant = 'ssd
 							onClick={() => setInfoDialogOption(option)}
 							className={cn(
 								'flex flex-1 items-center justify-center gap-2 rounded-17 border px-3 py-2.5 transition-colors',
-								isSelected ? 'border-brand bg-brand/15' : 'border-transparent opacity-50',
+								isSelected ? 'border-brand bg-brand/15' : 'border-transparent',
 							)}
 						>
 							<span className={cn(isSelected ? 'text-white' : 'text-white/80')}>{option.icon}</span>
 							<span className={cn('text-13 font-semibold', isSelected ? 'text-white' : 'text-white/80')}>
 								{t(option.titleKey)}
 							</span>
+							{isSelected && <TbCircleCheckFilled className='size-4 text-brand' />}
 						</button>
 					)
 				})}
@@ -120,7 +131,7 @@ export function StorageModeDisplay({value, canEnableFailsafe, copyVariant = 'ssd
 								key={option.id}
 								className={cn(
 									'flex flex-col gap-2 rounded-17 border px-4 py-3 text-left',
-									isSelected ? 'border-brand bg-brand/15' : 'border-transparent opacity-50',
+									isSelected ? 'border-brand bg-brand/15' : 'border-transparent',
 								)}
 							>
 								<div className='flex items-center gap-2'>
@@ -135,6 +146,7 @@ export function StorageModeDisplay({value, canEnableFailsafe, copyVariant = 'ssd
 									>
 										<TbInfoCircle className='size-4' />
 									</button>
+									{isSelected && <TbCircleCheckFilled className='ml-auto size-[18px] text-brand' />}
 								</div>
 								<p className='text-13 leading-snug font-medium text-white/60'>{t(option.descriptionKey)}</p>
 							</div>

@@ -70,8 +70,9 @@ export function FloatingIslandContainer() {
 	const showBackups = (backupProgressQ.data?.length || 0) > 0
 	// Show formatting island if any devices are being formatted
 	const showFormatting = (disks?.filter((disk) => disk.isFormatting).length || 0) > 0
-	// Show RAID island if any RAID operation is in progress (real or pending)
-	const showRaid = raidProgress !== null || pendingOperation !== null
+	// Show RAID island if any RAID operation is in progress (real or pending).
+	// Scrubs run silently - their results surface via the toasts below, never an island.
+	const showRaid = (raidProgress !== null && raidProgress.type !== 'scrub') || pendingOperation !== null
 	// Show cloud island only when a download has actual files to move,
 	// not during rclone's scan/check phase (no-op syncs never show it)
 	const showCloud = cloudActivities.some(cloudActivityHasWork)
