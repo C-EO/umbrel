@@ -9,6 +9,7 @@ import {
 	type SearchCandidate,
 	type WatcherChange,
 } from './file-index-engine.js'
+import type {ThumbnailReference} from './file-index-enrichment.js'
 import {
 	deserializeError,
 	type FileIndexNotificationMethod,
@@ -71,6 +72,7 @@ export default class FileIndex {
 	#worker?: Worker
 	#workerGeneration = 0
 	#workerThreadId?: number
+	#workerReady = false
 	#readyWaiter?: ReadyWaiter
 	#launch?: Promise<void>
 	#restartTimer?: ReturnType<typeof setTimeout>
@@ -159,6 +161,7 @@ export default class FileIndex {
 			name: 'file-index',
 		})
 		this.#worker = worker
+		this.#workerReady = false
 		worker.on('message', (message: FileIndexWorkerOutboundMessage) => this.#handleMessage(worker, generation, message))
 		worker.on('error', (error) => {
 			if (this.#worker === worker && !this.#stopping) this.logger.error('File index worker error', error)
@@ -180,6 +183,7 @@ export default class FileIndex {
 			if (this.#backgroundReconciliationStarted) {
 				this.#notifyFor(worker, generation, 'startBackgroundReconciliation', [])
 			}
+			this.#workerReady = true
 			this.#restartAttempts = 0
 			this.logger.log(`Started file index worker thread ${this.#workerThreadId}`)
 		} catch (error) {
@@ -233,6 +237,7 @@ export default class FileIndex {
 		if (this.#worker !== worker || this.#workerGeneration !== generation) return false
 		this.#worker = undefined
 		this.#workerThreadId = undefined
+		this.#workerReady = false
 		this.#available = false
 		if (this.#readyWaiter?.generation === generation) {
 			this.#readyWaiter.reject(error)
@@ -258,7 +263,7 @@ export default class FileIndex {
 
 	#request<T>(method: FileIndexRequestMethod, args: unknown[]): Promise<T> {
 		const worker = this.#worker
-		if (!worker) return Promise.reject(new Error('File index worker is unavailable'))
+		if (!worker || !this.#workerReady) return Promise.reject(new Error('File index worker is unavailable'))
 		return this.#requestFor(worker, this.#workerGeneration, method, args) as Promise<T>
 	}
 
@@ -281,7 +286,7 @@ export default class FileIndex {
 
 	#notify(method: FileIndexNotificationMethod, args: unknown[]) {
 		const worker = this.#worker
-		if (worker) this.#notifyFor(worker, this.#workerGeneration, method, args)
+		if (worker && this.#workerReady) this.#notifyFor(worker, this.#workerGeneration, method, args)
 	}
 
 	#notifyFor(worker: Worker, generation: number, method: FileIndexNotificationMethod, args: unknown[]) {
@@ -296,17 +301,17 @@ export default class FileIndex {
 
 	async setRoots(roots: FileIndexRoot[]) {
 		this.#roots = new Map(roots.map((root) => [root.virtualPath, {...root}]))
-		if (this.#worker && this.#workerThreadId !== undefined) await this.#request('setRoots', [[...this.#roots.values()]])
+		if (this.#workerReady) await this.#request('setRoots', [[...this.#roots.values()]])
 	}
 
 	async addRoot(root: FileIndexRoot) {
 		this.#roots.set(root.virtualPath, {...root})
-		if (this.#worker && this.#workerThreadId !== undefined) await this.#request('addRoot', [root])
+		if (this.#workerReady) await this.#request('addRoot', [root])
 	}
 
 	async removeRoot(virtualPath: string) {
 		this.#roots.delete(virtualPath)
-		if (this.#worker && this.#workerThreadId !== undefined) await this.#request('removeRoot', [virtualPath])
+		if (this.#workerReady) await this.#request('removeRoot', [virtualPath])
 	}
 
 	startBackgroundReconciliation() {
@@ -319,17 +324,31 @@ export default class FileIndex {
 	}
 
 	async reconcileAll(reason: string) {
-		if (!this.#worker) return
+		if (!this.#workerReady) return
 		await this.#request('reconcileAll', [reason])
 	}
 
 	async reconcileRoot(virtualPath: string, reason: string) {
-		if (!this.#worker) return
+		if (!this.#workerReady) return
 		await this.#request('reconcileRoot', [virtualPath, reason])
 	}
 
+	async ensureThumbnail(systemPath: string) {
+		return this.#request<ThumbnailReference>('ensureThumbnail', [systemPath])
+	}
+
+	async getExistingThumbnail(systemPath: string) {
+		if (!this.#workerReady) return
+		return this.#request<ThumbnailReference | undefined>('getExistingThumbnail', [systemPath])
+	}
+
+	async matchesThumbnail(systemPath: string, kind: string, key: string, variant: string) {
+		if (!this.#workerReady) return false
+		return this.#request<boolean>('matchesThumbnail', [systemPath, kind, key, variant])
+	}
+
 	noteWatcherChanges(virtualPath: string, events: readonly WatcherChange[]) {
-		if (!this.#started || !this.#worker || events.length === 0) return
+		if (!this.#started || !this.#workerReady || events.length === 0) return
 		if (events.length >= this.#watcherBulkThreshold) {
 			this.#notify('noteWatcherBurst', [virtualPath])
 			return
@@ -338,27 +357,27 @@ export default class FileIndex {
 	}
 
 	async reconcilePath(systemPath: string) {
-		if (!this.#worker) return
+		if (!this.#workerReady) return
 		await this.#request('reconcilePath', [systemPath])
 	}
 
 	async removePath(systemPath: string) {
-		if (!this.#worker) return
+		if (!this.#workerReady) return
 		await this.#request('removePath', [systemPath])
 	}
 
 	async movePath(sourceSystemPath: string, destinationSystemPath: string) {
-		if (!this.#worker) return
+		if (!this.#workerReady) return
 		await this.#request('movePath', [sourceSystemPath, destinationSystemPath])
 	}
 
 	async getEntryByVirtualPath(virtualPath: string) {
-		if (!this.#worker) return undefined
+		if (!this.#workerReady) return undefined
 		return this.#request<IndexedEntry | undefined>('getEntryByVirtualPath', [virtualPath])
 	}
 
 	async getEntryBySystemPath(systemPath: string) {
-		if (!this.#worker) return undefined
+		if (!this.#workerReady) return undefined
 		return this.#request<IndexedEntry | undefined>('getEntryBySystemPath', [systemPath])
 	}
 
@@ -367,13 +386,37 @@ export default class FileIndex {
 	}
 
 	async status() {
-		if (!this.#worker) {
-			return {available: false, schemaVersion: 0, entryCount: 0, roots: [], workerThreadId: undefined}
+		if (!this.#workerReady) {
+			return {
+				available: false,
+				schemaVersion: 0,
+				entryCount: 0,
+				enrichment: {
+					eligibleEntries: 0,
+					hashedEntries: 0,
+					pendingHashes: 0,
+					hashFailures: 0,
+					uniqueContents: 0,
+					readyThumbnails: 0,
+					thumbnailFailures: 0,
+				},
+				roots: [],
+				workerThreadId: undefined,
+			}
 		}
 		const status = await this.#request<{
 			available: boolean
 			schemaVersion: number
 			entryCount: number
+			enrichment: {
+				eligibleEntries: number
+				hashedEntries: number
+				pendingHashes: number
+				hashFailures: number
+				uniqueContents: number
+				readyThumbnails: number
+				thumbnailFailures: number
+			}
 			roots: Array<{
 				virtualPath: string
 				state: 'warming' | 'ready' | 'degraded'
@@ -419,6 +462,7 @@ export default class FileIndex {
 		}
 		this.#worker = undefined
 		this.#workerThreadId = undefined
+		this.#workerReady = false
 		this.#backgroundReconciliationStarted = false
 	}
 }

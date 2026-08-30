@@ -165,7 +165,9 @@ export default class Files {
 			hiddenExtensions: this.hiddenExtensions,
 		})
 		this.watcher = new Watcher(umbreld, {
-			paths: this.#staticIndexRoots().map(({virtualPath}) => virtualPath),
+			paths: this.#staticIndexRoots()
+				.filter(({scanEnabled}) => scanEnabled !== false)
+				.map(({virtualPath}) => virtualPath),
 			onChangeBatch: (virtualPath, events) => this.fileIndex.noteWatcherChanges(virtualPath, events),
 			onRestart: () => this.fileIndex.scheduleFullReconciliation('watcher-restarted'),
 		})
@@ -334,6 +336,30 @@ export default class Files {
 				ownerId: OWNER_USER_ID,
 				kind: 'machines',
 				searchEnabled: false,
+			},
+			{
+				virtualPath: '/External',
+				systemPath: this.getBaseDirectory('/External'),
+				ownerId: OWNER_USER_ID,
+				kind: 'apps',
+				searchEnabled: false,
+				scanEnabled: false,
+			},
+			{
+				virtualPath: '/Backups',
+				systemPath: this.getBaseDirectory('/Backups'),
+				ownerId: OWNER_USER_ID,
+				kind: 'apps',
+				searchEnabled: false,
+				scanEnabled: false,
+			},
+			{
+				virtualPath: '/Network',
+				systemPath: this.getBaseDirectory('/Network'),
+				ownerId: OWNER_USER_ID,
+				kind: 'apps',
+				searchEnabled: false,
+				scanEnabled: false,
 			},
 		]
 	}

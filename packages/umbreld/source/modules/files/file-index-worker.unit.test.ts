@@ -10,7 +10,11 @@ import {afterEach, expect, test, vi} from 'vitest'
 
 import temporaryDirectory from '../utilities/temporary-directory.js'
 import FileIndex, {type FileIndexRoot} from './file-index.js'
-import type {FileIndexWorkerInboundMessage, FileIndexWorkerOutboundMessage} from './file-index-worker-protocol.js'
+import type {
+	FileIndexRequestMethod,
+	FileIndexWorkerInboundMessage,
+	FileIndexWorkerOutboundMessage,
+} from './file-index-worker-protocol.js'
 
 const temporary = temporaryDirectory()
 const indexes: FileIndex[] = []
@@ -132,6 +136,16 @@ class FakeWorker extends EventEmitter {
 		this.#heldMethods.add(method)
 	}
 
+	release(method: FileIndexRequestMethod) {
+		this.#heldMethods.delete(method)
+		const request = this.messages.findLast(
+			(message): message is Extract<FileIndexWorkerInboundMessage, {type: 'request'}> =>
+				message.type === 'request' && message.method === method,
+		)
+		if (!request) throw new Error(`No pending '${method}' request`)
+		queueMicrotask(() => this.emitMessage({type: 'response', id: request.id, result: undefined}))
+	}
+
 	postMessage(message: FileIndexWorkerInboundMessage) {
 		this.messages.push(message)
 		if (message.type !== 'request' || this.#heldMethods.has(message.method)) return
@@ -247,6 +261,46 @@ test('restarts when a live worker stalls during boot', async () => {
 		{retries: 20, factor: 1, minTimeout: 5, maxTimeout: 5},
 	)
 	expect(logger.error).toHaveBeenCalledWith('Failed to start file index worker', expect.any(Error))
+})
+
+test('does not dispatch public work until worker initialization completes', async () => {
+	const dataDirectory = await temporary.create()
+	let worker!: FakeWorker
+	const index = new FileIndex(
+		{dataDirectory, logger, hiddenFiles: [], hiddenExtensions: []},
+		{
+			createWorker: () => {
+				worker = new FakeWorker(1)
+				worker.hold('setRoots')
+				return worker as unknown as Worker
+			},
+		},
+	)
+	indexes.push(index)
+	await index.setRoots([
+		{
+			virtualPath: '/Home',
+			systemPath: nodePath.join(dataDirectory, 'home'),
+			ownerId: 'owner',
+			kind: 'home',
+			searchEnabled: true,
+		},
+	])
+
+	const starting = index.start()
+	await vi.waitFor(() => expect(worker.messages).toContainEqual(expect.objectContaining({method: 'setRoots'})))
+	await expect(index.searchCandidates('/Home', 'photo', 10)).rejects.toThrow('File index worker is unavailable')
+	await expect(index.ensureThumbnail('/data/photo.jpg')).rejects.toThrow('File index worker is unavailable')
+	await expect(index.getExistingThumbnail('/data/photo.jpg')).resolves.toBeUndefined()
+	index.scheduleFullReconciliation('boot-race')
+	expect(worker.messages.some((message) => message.type === 'request' && message.method === 'searchCandidates')).toBe(
+		false,
+	)
+	expect(worker.messages.some((message) => message.type === 'notification')).toBe(false)
+
+	worker.release('setRoots')
+	await starting
+	await expect(index.searchCandidates('/Home', 'photo', 10)).resolves.toStrictEqual([])
 })
 
 test('stops without waiting for a worker stalled during boot', async () => {

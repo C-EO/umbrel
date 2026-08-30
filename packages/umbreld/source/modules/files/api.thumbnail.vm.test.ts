@@ -26,6 +26,7 @@ beforeEach(async () => {
 })
 
 const guestThumbnailDir = '/home/umbrel/umbrel/thumbnails'
+const variant = 'preview-112-webp-v1'
 
 async function createThumbnail(virtualPath: string) {
 	const fixturePath = nodePath.resolve(__dirname, 'fixtures', 'thumbnails', 'master-lossless-image.png')
@@ -47,8 +48,16 @@ function thumbnailFilename(url: string) {
 	return nodePath.basename(new URL(url, 'http://localhost').pathname)
 }
 
-async function readThumbnail(filename: string) {
-	const encoded = await umbreld.vm.sshAsRoot(`base64 -w 0 '${guestThumbnailDir}/${filename}'`)
+function thumbnailSystemPath(url: string) {
+	const match = new RegExp(`^(content|transient)-${variant}-([a-f0-9]{64})\\.webp$`, 'i').exec(thumbnailFilename(url))
+	if (!match) throw new Error(`Unexpected thumbnail URL: ${url}`)
+	const kind = match[1].toLowerCase()
+	const key = match[2].toLowerCase()
+	return `${guestThumbnailDir}/${kind}/${variant}/${key.slice(0, 2)}/${key}.webp`
+}
+
+async function readThumbnail(url: string) {
+	const encoded = await umbreld.vm.sshAsRoot(`base64 -w 0 '${thumbnailSystemPath(url)}'`)
 	return Buffer.from(encoded.trim(), 'base64')
 }
 
@@ -86,7 +95,6 @@ test('GET /api/files/thumbnail/:thumbnail throws 404 error when the source does 
 
 test('GET /api/files/thumbnail/:thumbnail serves an authorized thumbnail with private revalidation caching', async () => {
 	const thumbnailUrl = await createThumbnail('/Home/thumbnail-api/cache.png')
-	const filename = thumbnailFilename(thumbnailUrl)
 
 	const response = await umbreld.api.get(apiPath(thumbnailUrl), {responseType: 'buffer'})
 
@@ -95,7 +103,7 @@ test('GET /api/files/thumbnail/:thumbnail serves an authorized thumbnail with pr
 	expect(response.headers.etag).toBeTypeOf('string')
 	expect(response.headers['content-type']).toBe('image/webp')
 	expect(response.body.length).toBeGreaterThan(0)
-	expect(response.body).toEqual(await readThumbnail(filename))
+	expect(response.body).toEqual(await readThumbnail(thumbnailUrl))
 
 	const revalidated = await umbreld.api.get(apiPath(thumbnailUrl), {
 		headers: {'If-None-Match': response.headers.etag!},

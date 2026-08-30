@@ -1,5 +1,5 @@
 import nodePath from 'node:path'
-import type {Stats} from 'node:fs'
+import type {BigIntStats, Stats} from 'node:fs'
 import {opendir, lstat} from 'node:fs/promises'
 
 import BetterSqlite3 from 'better-sqlite3'
@@ -8,13 +8,21 @@ import {fuzzy} from 'fast-fuzzy'
 import fse from 'fs-extra'
 import PQueue from 'p-queue'
 
+import FileIndexEnrichment, {
+	BACKGROUND_QUIET_PERIOD_MS,
+	type FileIndexEnrichmentRuntime,
+	type ThumbnailReference,
+} from './file-index-enrichment.js'
 import {FILE_INDEX_SCHEMA_VERSION, foldSearchName, migrateFileIndex} from './file-index/migrations.js'
+import {supportsThumbnail, type ThumbnailIdentityKind} from './thumbnail-support.js'
 
 type Database = DatabaseTypes.Database
 
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 6 * 60 * 60 * 1000
 const DEFAULT_RECOVERY_RETRY_MS = 60 * 1000
 const MAX_RECOVERY_RETRY_MS = 60 * 60 * 1000
+const TRANSIENT_ENTRY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+const TRANSIENT_OBSERVATION_REFRESH_MS = 24 * 60 * 60 * 1000
 export const DEFAULT_WATCHER_BULK_THRESHOLD = 250
 const DEFAULT_BATCH_SIZE = 256
 const MAX_LIVE_WORK_PER_SCAN_BATCH = 100
@@ -40,6 +48,7 @@ export type FileIndexRoot = {
 	ownerId: string
 	kind: 'home' | 'trash' | 'apps' | 'machines'
 	searchEnabled: boolean
+	scanEnabled?: boolean
 }
 
 type RootState = FileIndexRoot & {
@@ -59,6 +68,13 @@ type EntryWrite = {
 	type: EntryType
 	size: number
 	modifiedMs: number
+	device: string
+	inode: string
+	modifiedNs: string
+	ctimeNs: string
+	thumbnailIdentityKind: ThumbnailIdentityKind | null
+	hashNotBefore: number | null
+	observedAt: number | null
 	hidden: number
 }
 
@@ -66,12 +82,14 @@ type PathMutation =
 	| {type: 'write'; entries: EntryWrite[]; markSeen: boolean}
 	| {type: 'delete'; rootId: number; relativePath: string}
 
-export type IndexedEntry = Omit<EntryWrite, 'rootId' | 'hidden'> & {
+export type IndexedEntry = Omit<EntryWrite, 'rootId' | 'hidden' | 'hashNotBefore' | 'observedAt'> & {
 	id: number
 	rootId: number
 	rootVirtualPath: string
 	virtualPath: string
 	systemPath: string
+	observedAt?: number
+	thumbnailEligible: number
 	hidden: boolean
 }
 
@@ -81,7 +99,8 @@ export type SearchCandidate = {
 	virtualPath: string
 }
 
-type WalkedEntry = {systemPath: string; stats: Stats}
+type FileStats = Stats | BigIntStats
+type WalkedEntry = {systemPath: string; stats: FileStats}
 type WalkPathError = (systemPath: string, error: unknown) => void
 type WalkTree = (
 	rootSystemPath: string,
@@ -115,6 +134,7 @@ export type FileIndexEngineOptions = {
 	watcherBulkThreshold?: number
 	batchSize?: number
 	walkTree?: WalkTree
+	enrichmentRuntime?: FileIndexEnrichmentRuntime
 }
 
 type RootRow = {
@@ -142,6 +162,12 @@ type EntryRow = {
 	type: EntryType
 	size: number
 	modified_ms: number
+	device: string
+	inode: string
+	modified_ns: string
+	ctime_ns: string
+	thumbnail_identity_kind: ThumbnailIdentityKind | null
+	observed_at: number | null
 	hidden: number
 }
 
@@ -185,9 +211,9 @@ export async function* walkFileTree(
 				if (stopping()) throw new ScanCancelledError('File index is stopping')
 				const systemPath = nodePath.join(directory, directoryEntry.name)
 				if (!includePath(systemPath)) continue
-				let stats: Stats
+				let stats: FileStats
 				try {
-					stats = await lstat(systemPath)
+					stats = await lstat(systemPath, {bigint: true})
 				} catch (error) {
 					if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
 					if (skipUnreadablePath(systemPath, rootSystemPath, error, onPathError)) continue
@@ -240,6 +266,7 @@ export default class FileIndexEngine {
 	#recoveryTimer?: ReturnType<typeof setTimeout>
 	#recoveryAttempt?: Promise<void>
 	#recoveryAttempts = 0
+	#artifactRecoveryBarrierRequired = false
 
 	#isHidden: (name: string) => boolean
 	#onAvailabilityChange?: (available: boolean) => void
@@ -248,6 +275,7 @@ export default class FileIndexEngine {
 	#watcherBulkThreshold: number
 	#batchSize: number
 	#walkTree: WalkTree
+	#enrichment: FileIndexEnrichment
 
 	constructor({
 		dataDirectory,
@@ -259,6 +287,7 @@ export default class FileIndexEngine {
 		watcherBulkThreshold = DEFAULT_WATCHER_BULK_THRESHOLD,
 		batchSize = DEFAULT_BATCH_SIZE,
 		walkTree = walkFileTree,
+		enrichmentRuntime,
 	}: FileIndexEngineOptions) {
 		this.databasePath = nodePath.join(dataDirectory, 'file-index', 'index.sqlite3')
 		this.logger = logger
@@ -269,6 +298,15 @@ export default class FileIndexEngine {
 		this.#watcherBulkThreshold = watcherBulkThreshold
 		this.#batchSize = batchSize
 		this.#walkTree = walkTree
+		this.#enrichment = new FileIndexEnrichment(
+			{
+				dataDirectory,
+				logger,
+				withDatabase: (operation, priority) => this.#mutate(operation, priority),
+				onStalePath: (systemPath) => this.reconcilePath(systemPath),
+			},
+			enrichmentRuntime,
+		)
 	}
 
 	get available() {
@@ -280,6 +318,8 @@ export default class FileIndexEngine {
 		this.#started = true
 		this.#stopping = false
 		this.#recoveryAttempts = 0
+		this.#artifactRecoveryBarrierRequired = false
+		await this.#enrichment.start()
 		await this.#open().catch(async (error) => {
 			await this.#handleOpenFailure(error)
 		})
@@ -328,18 +368,21 @@ export default class FileIndexEngine {
 			this.#closeDatabase()
 			this.#database = undefined
 			await this.#quarantineDatabase(quarantineReason)
+			this.#artifactRecoveryBarrierRequired = true
 			await this.#openAndMigrate()
 		}
 
 		this.#setAvailable(true)
 		this.logger.log(`Opened file index schema v${this.#schemaVersion}`)
 		if (this.#roots.size > 0) await this.#syncRoots()
+		if (!this.#artifactRecoveryBarrierRequired) this.#enrichment.allowDestructiveArtifactMaintenance()
 	}
 
 	async #openAndMigrate() {
 		this.#database = new BetterSqlite3(this.databasePath, {timeout: 5000})
 		this.#database.pragma('journal_mode = WAL')
 		this.#database.pragma('foreign_keys = ON')
+		this.#database.function('file_index_now_ms', () => Date.now())
 		this.#schemaVersion = await migrateFileIndex(this.#database)
 		if (this.#schemaVersion !== FILE_INDEX_SCHEMA_VERSION) {
 			throw new UnsupportedFileIndexSchemaError(
@@ -351,7 +394,49 @@ export default class FileIndexEngine {
 				root_id INTEGER NOT NULL,
 				relative_path TEXT NOT NULL,
 				PRIMARY KEY(root_id, relative_path)
-			) WITHOUT ROWID
+			) WITHOUT ROWID;
+
+			-- Derived assets are reclaimed from authoritative entry relationships.
+			-- These transient candidates make ordinary updates O(changes), while the
+			-- enrichment startup sweep repairs candidates lost to a process crash.
+			CREATE TEMP TABLE content_gc_candidates (
+				content_id INTEGER PRIMARY KEY,
+				deferred_at INTEGER NOT NULL
+			) WITHOUT ROWID;
+
+			CREATE TEMP TABLE transient_artifact_gc_candidates (
+				artifact_key TEXT PRIMARY KEY,
+				deferred_at INTEGER NOT NULL
+			) WITHOUT ROWID;
+
+			CREATE TEMP TRIGGER entries_content_gc_delete AFTER DELETE ON main.entries
+			WHEN old.content_id IS NOT NULL BEGIN
+				INSERT INTO content_gc_candidates(content_id, deferred_at)
+				VALUES(old.content_id, file_index_now_ms())
+				ON CONFLICT(content_id) DO UPDATE SET deferred_at = excluded.deferred_at;
+			END;
+
+			CREATE TEMP TRIGGER entries_content_gc_update AFTER UPDATE OF content_id ON main.entries
+			WHEN old.content_id IS NOT NULL AND old.content_id IS NOT new.content_id BEGIN
+				INSERT INTO content_gc_candidates(content_id, deferred_at)
+				VALUES(old.content_id, file_index_now_ms())
+				ON CONFLICT(content_id) DO UPDATE SET deferred_at = excluded.deferred_at;
+			END;
+
+			CREATE TEMP TRIGGER transient_thumbnail_gc_delete
+			AFTER DELETE ON main.transient_thumbnail_variants BEGIN
+				INSERT INTO transient_artifact_gc_candidates(artifact_key, deferred_at)
+				VALUES(old.artifact_key, file_index_now_ms())
+				ON CONFLICT(artifact_key) DO UPDATE SET deferred_at = excluded.deferred_at;
+			END;
+
+			CREATE TEMP TRIGGER transient_thumbnail_gc_update
+			AFTER UPDATE OF artifact_key ON main.transient_thumbnail_variants
+			WHEN old.artifact_key IS NOT new.artifact_key BEGIN
+				INSERT INTO transient_artifact_gc_candidates(artifact_key, deferred_at)
+				VALUES(old.artifact_key, file_index_now_ms())
+				ON CONFLICT(artifact_key) DO UPDATE SET deferred_at = excluded.deferred_at;
+			END;
 		`)
 	}
 
@@ -389,7 +474,7 @@ export default class FileIndexEngine {
 					{
 						...root,
 						id: existing?.id,
-						state: existing?.state ?? 'warming',
+						state: root.scanEnabled !== false ? (existing?.state ?? 'warming') : 'ready',
 						scanGeneration: existing?.scanGeneration ?? 0,
 						lastSuccessfulScanAt: existing?.lastSuccessfulScanAt,
 						lastError: existing?.lastError,
@@ -413,7 +498,7 @@ export default class FileIndexEngine {
 		const added: RootState = {
 			...root,
 			id: existing?.id,
-			state: existing?.state ?? 'warming',
+			state: root.scanEnabled !== false ? (existing?.state ?? 'warming') : 'ready',
 			scanGeneration: existing?.scanGeneration ?? 0,
 			lastSuccessfulScanAt: existing?.lastSuccessfulScanAt,
 			lastError: existing?.lastError,
@@ -485,7 +570,7 @@ export default class FileIndexEngine {
 			const registered = this.#roots.get(row.virtual_path)
 			if (!registered) continue
 			registered.id = Number(row.id)
-			registered.state = row.state
+			registered.state = registered.scanEnabled !== false ? row.state : 'ready'
 			registered.scanGeneration = Number(row.scan_generation)
 			registered.lastSuccessfulScanAt =
 				row.last_successful_scan_at === null ? undefined : Number(row.last_successful_scan_at)
@@ -495,6 +580,7 @@ export default class FileIndexEngine {
 
 	startBackgroundReconciliation() {
 		if (!this.#started || this.#stopping) return
+		this.#enrichment.startBackground()
 		void this.reconcileAll('startup')
 		this.#schedulePeriodicReconciliation()
 	}
@@ -506,10 +592,48 @@ export default class FileIndexEngine {
 
 	async reconcileAll(reason: string) {
 		if (!this.#available || this.#stopping) return
-		const roots = [...this.#roots.values()].sort(
-			(a, b) => Number(b.searchEnabled) - Number(a.searchEnabled) || a.virtualPath.localeCompare(b.virtualPath),
-		)
+		const roots = [...this.#roots.values()]
+			.filter(({scanEnabled}) => scanEnabled !== false)
+			.sort((a, b) => Number(b.searchEnabled) - Number(a.searchEnabled) || a.virtualPath.localeCompare(b.virtualPath))
 		for (const root of roots) await this.reconcileRoot(root.virtualPath, reason)
+		if (!this.#available || this.#stopping) return
+		await this.#expireTransientEntries().catch((error) =>
+			this.logger.error('Failed to expire unused transient file index entries', error),
+		)
+		if (
+			this.#artifactRecoveryBarrierRequired &&
+			roots.length > 0 &&
+			roots.every((root) => this.#roots.get(root.virtualPath) === root && root.state === 'ready')
+		) {
+			// After database quarantine the artifact directory can still contain a
+			// complete cache while the replacement database is empty. Only let the
+			// destructive maintenance walk infer untracked files after every
+			// scan-enabled root has rebuilt successfully.
+			this.#artifactRecoveryBarrierRequired = false
+			this.#enrichment.allowDestructiveArtifactMaintenance()
+		}
+	}
+
+	async #expireTransientEntries() {
+		const expired = await this.#mutate((database) => {
+			const rootIds = [...this.#roots.values()]
+				.filter((root): root is RootState & {id: number} => root.scanEnabled === false && root.id !== undefined)
+				.map(({id}) => id)
+			if (rootIds.length === 0) return 0
+			const placeholders = rootIds.map(() => '?').join(', ')
+			return run(
+				database,
+				`DELETE FROM entries
+				WHERE root_id IN (${placeholders})
+					AND observed_at IS NOT NULL
+					AND observed_at < ?`,
+				...rootIds,
+				Date.now() - TRANSIENT_ENTRY_RETENTION_MS,
+			).changes
+		})
+		if (expired === 0) return
+		this.logger.log(`Expired ${expired} unused transient file index ${expired === 1 ? 'entry' : 'entries'}`)
+		this.#enrichment.kick()
 	}
 
 	#schedulePeriodicReconciliation() {
@@ -524,7 +648,7 @@ export default class FileIndexEngine {
 	async reconcileRoot(virtualPath: string, reason: string): Promise<void> {
 		if (!this.#available || this.#stopping) return
 		const requestedRoot = this.#roots.get(virtualPath)
-		if (!requestedRoot?.id) return
+		if (!requestedRoot?.id || requestedRoot.scanEnabled === false) return
 		const activeSnapshot = this.#activeRootSnapshot
 		if (activeSnapshot?.root.virtualPath === virtualPath) activeSnapshot.rerunRequested = true
 		const existing = this.#rootScans.get(virtualPath)
@@ -692,6 +816,7 @@ export default class FileIndexEngine {
 		} finally {
 			if (this.#activeRootSnapshot === activeSnapshot) this.#activeRootSnapshot = undefined
 			this.#releasePendingLiveWork()
+			this.#enrichment.kick()
 		}
 	}
 
@@ -792,8 +917,14 @@ export default class FileIndexEngine {
 			return
 		}
 
-		for (let offset = 0; offset < events.length; offset += MAX_LIVE_WORK_PER_SCAN_BATCH) {
-			const batch = events.slice(offset, offset + MAX_LIVE_WORK_PER_SCAN_BATCH)
+		// A move may arrive as an unordered create+delete pair. Observe all live
+		// destinations before removing stale source rows so the index never has a
+		// gap where neither path exists.
+		const orderedEvents = events.toSorted(
+			(left, right) => Number(left.type === 'delete') - Number(right.type === 'delete'),
+		)
+		for (let offset = 0; offset < orderedEvents.length; offset += MAX_LIVE_WORK_PER_SCAN_BATCH) {
+			const batch = orderedEvents.slice(offset, offset + MAX_LIVE_WORK_PER_SCAN_BATCH)
 			void this.#scheduleLiveWork(
 				async () => {
 					for (const {path: systemPath, type} of batch) {
@@ -856,12 +987,12 @@ export default class FileIndexEngine {
 	}
 
 	async movePath(sourceSystemPath: string, destinationSystemPath: string) {
-		const results = await Promise.allSettled([
-			this.removePath(sourceSystemPath),
-			this.reconcilePath(destinationSystemPath),
-		])
-		const failure = results.find((result): result is PromiseRejectedResult => result.status === 'rejected')
-		if (failure) throw failure.reason
+		// Reconcile the live destination before dropping the stale source path.
+		try {
+			await this.reconcilePath(destinationSystemPath)
+		} finally {
+			await this.removePath(sourceSystemPath)
+		}
 	}
 
 	async #reconcileSystemPath(
@@ -877,9 +1008,9 @@ export default class FileIndexEngine {
 				await this.#deleteRelativePath(root, relativePath, priority)
 				return
 			}
-			let stats: Stats
+			let stats: FileStats
 			try {
-				stats = await lstat(systemPath)
+				stats = await lstat(systemPath, {bigint: true})
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
 					await this.#deleteRelativePath(root, relativePath, priority)
@@ -909,20 +1040,30 @@ export default class FileIndexEngine {
 		}
 	}
 
-	#entryWrite(root: RootState, systemPath: string, stats: Stats): EntryWrite | undefined {
+	#entryWrite(root: RootState, systemPath: string, stats: FileStats): EntryWrite | undefined {
 		if (!root.id) return undefined
 		const relativePath = relativePathWithin(root.systemPath, systemPath)
 		if (relativePath === '' || isReservedMemberTrashPath(root, relativePath)) return undefined
 		const name = nodePath.basename(systemPath)
 		const type = entryType(stats)
+		const identity = fileIdentity(stats)
+		const thumbnailEligible = type === 'file' && supportsThumbnail(name)
+		const thumbnailIdentityKind = thumbnailEligible ? (root.scanEnabled === false ? 'transient' : 'content') : null
 
 		return {
 			rootId: root.id,
 			relativePath,
 			name,
 			type,
-			size: stats.size,
-			modifiedMs: Math.trunc(stats.mtimeMs),
+			size: Number(stats.size),
+			modifiedMs: identity.modifiedMs,
+			device: identity.device,
+			inode: identity.inode,
+			modifiedNs: identity.modifiedNs,
+			ctimeNs: identity.ctimeNs,
+			thumbnailIdentityKind,
+			hashNotBefore: thumbnailIdentityKind === 'content' ? Date.now() + BACKGROUND_QUIET_PERIOD_MS : null,
+			observedAt: root.scanEnabled === false ? Date.now() : null,
 			hidden: Number(this.#isHidden(name)),
 		}
 	}
@@ -936,6 +1077,7 @@ export default class FileIndexEngine {
 		const activeRootId = this.#activeRootSnapshot?.root.id
 		if (activeRootId && entries.every(({rootId}) => rootId === activeRootId)) markSeen = true
 		await this.#mutate((database) => this.#applyPathMutation(database, {type: 'write', entries, markSeen}), priority)
+		this.#enrichment.kick()
 	}
 
 	async #deleteRelativePath(root: RootState, relativePath: string, priority: number) {
@@ -945,6 +1087,7 @@ export default class FileIndexEngine {
 			(database) => this.#applyPathMutation(database, {type: 'delete', rootId, relativePath}),
 			priority,
 		)
+		this.#enrichment.kick()
 	}
 
 	#applyPathMutation(database: Database, mutation: PathMutation) {
@@ -994,8 +1137,9 @@ export default class FileIndexEngine {
 			const writeStatement = database.prepare(`
 				INSERT INTO entries(
 						root_id, relative_path, name, search_name, search_name_folded,
-						type, size, modified_ms, hidden
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+						type, size, modified_ms, device, inode, modified_ns, ctime_ns,
+						thumbnail_identity_kind, hash_retry_at, observed_at, hidden
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT(root_id, relative_path) DO UPDATE SET
 						name = excluded.name,
 						search_name = excluded.search_name,
@@ -1003,6 +1147,56 @@ export default class FileIndexEngine {
 						type = excluded.type,
 						size = excluded.size,
 						modified_ms = excluded.modified_ms,
+						device = excluded.device,
+						inode = excluded.inode,
+						modified_ns = excluded.modified_ns,
+						ctime_ns = excluded.ctime_ns,
+						thumbnail_identity_kind = excluded.thumbnail_identity_kind,
+						content_id = CASE
+							WHEN excluded.thumbnail_identity_kind = 'content'
+								AND entries.thumbnail_identity_kind = 'content'
+								AND entries.inode IS excluded.inode
+								AND entries.size IS excluded.size
+								AND entries.modified_ns IS excluded.modified_ns
+								AND entries.ctime_ns IS excluded.ctime_ns
+							THEN entries.content_id
+							ELSE NULL
+						END,
+						hash_failure_count = CASE
+							WHEN excluded.thumbnail_identity_kind = 'content'
+								AND entries.thumbnail_identity_kind = 'content'
+								AND entries.inode IS excluded.inode
+								AND entries.size IS excluded.size
+								AND entries.modified_ns IS excluded.modified_ns
+								AND entries.ctime_ns IS excluded.ctime_ns
+							THEN entries.hash_failure_count
+							ELSE 0
+						END,
+						hash_retry_at = CASE
+							WHEN entries.thumbnail_identity_kind = 'content'
+								AND excluded.thumbnail_identity_kind = 'content'
+								AND entries.inode IS excluded.inode
+								AND entries.size IS excluded.size
+								AND entries.modified_ns IS excluded.modified_ns
+								AND entries.ctime_ns IS excluded.ctime_ns
+							THEN entries.hash_retry_at
+							ELSE excluded.hash_retry_at
+						END,
+						hash_error = CASE
+							WHEN excluded.thumbnail_identity_kind = 'content'
+								AND entries.thumbnail_identity_kind = 'content'
+								AND entries.inode IS excluded.inode
+								AND entries.size IS excluded.size
+								AND entries.modified_ns IS excluded.modified_ns
+								AND entries.ctime_ns IS excluded.ctime_ns
+							THEN entries.hash_error
+							ELSE NULL
+						END,
+						observed_at = CASE
+							WHEN excluded.observed_at IS NULL THEN NULL
+							WHEN entries.observed_at IS NULL OR entries.observed_at <= ? THEN excluded.observed_at
+							ELSE entries.observed_at
+						END,
 						hidden = excluded.hidden
 					WHERE entries.name IS NOT excluded.name
 						OR entries.search_name IS NOT excluded.search_name
@@ -1010,6 +1204,15 @@ export default class FileIndexEngine {
 						OR entries.type IS NOT excluded.type
 						OR entries.size IS NOT excluded.size
 						OR entries.modified_ms IS NOT excluded.modified_ms
+						OR entries.device IS NOT excluded.device
+						OR entries.inode IS NOT excluded.inode
+						OR entries.modified_ns IS NOT excluded.modified_ns
+						OR entries.ctime_ns IS NOT excluded.ctime_ns
+						OR entries.thumbnail_identity_kind IS NOT excluded.thumbnail_identity_kind
+						OR (
+							excluded.observed_at IS NOT NULL
+							AND (entries.observed_at IS NULL OR entries.observed_at <= ?)
+						)
 						OR entries.hidden IS NOT excluded.hidden
 			`)
 			const markSeenStatement = mutation.markSeen
@@ -1022,6 +1225,7 @@ export default class FileIndexEngine {
 
 			for (const entry of mutation.entries) {
 				markSeenStatement?.run(entry.rootId, entry.relativePath)
+				const observationCutoff = entry.observedAt === null ? null : entry.observedAt - TRANSIENT_OBSERVATION_REFRESH_MS
 				writeStatement.run(
 					entry.rootId,
 					entry.relativePath,
@@ -1031,7 +1235,16 @@ export default class FileIndexEngine {
 					entry.type,
 					entry.size,
 					entry.modifiedMs,
+					entry.device,
+					entry.inode,
+					entry.modifiedNs,
+					entry.ctimeNs,
+					entry.thumbnailIdentityKind,
+					entry.hashNotBefore,
+					entry.observedAt,
 					entry.hidden,
+					observationCutoff,
+					observationCutoff,
 				)
 			}
 		})
@@ -1064,6 +1277,71 @@ export default class FileIndexEngine {
 			relativePath,
 		) as EntryRow | undefined
 		return row ? indexedEntry(row) : undefined
+	}
+
+	async ensureThumbnail(systemPath: string): Promise<ThumbnailReference> {
+		if (!supportsThumbnail(nodePath.basename(systemPath))) throw new Error('Unsupported or missing thumbnail source')
+		const stats = await lstat(systemPath).catch(() => undefined)
+		if (!stats?.isFile()) throw new Error('Unsupported or missing thumbnail source')
+		await this.reconcilePath(systemPath)
+		const entry = await this.getEntryBySystemPath(systemPath)
+		if (!entry?.thumbnailEligible || entry.type !== 'file') throw new Error('Unsupported or missing thumbnail source')
+		return this.#enrichment.ensureThumbnail(entry.id)
+	}
+
+	async getExistingThumbnail(systemPath: string): Promise<ThumbnailReference | undefined> {
+		const entry = await this.#currentThumbnailEntry(systemPath)
+		if (!entry) return
+		return this.#enrichment.getExistingThumbnail(entry.id)
+	}
+
+	async matchesThumbnail(systemPath: string, kind: string, key: string, variant: string) {
+		const entry = await this.#currentThumbnailEntry(systemPath)
+		if (!entry) return false
+		return this.#enrichment.matchesThumbnail(entry.id, kind, key, variant)
+	}
+
+	async #observeTransientEntry(entry: IndexedEntry) {
+		const root = this.#roots.get(entry.rootVirtualPath)
+		if (root?.scanEnabled !== false || root.id !== entry.rootId) return
+		const now = Date.now()
+		if (entry.observedAt !== undefined && entry.observedAt > now - TRANSIENT_OBSERVATION_REFRESH_MS) return
+		await this.#mutate((database) => {
+			if (this.#roots.get(root.virtualPath) !== root) return
+			run(
+				database,
+				`UPDATE entries SET observed_at = ?
+				WHERE id = ? AND root_id = ?
+					AND (observed_at IS NULL OR observed_at <= ?)`,
+				now,
+				entry.id,
+				entry.rootId,
+				now - TRANSIENT_OBSERVATION_REFRESH_MS,
+			)
+		}, 10)
+	}
+
+	async #currentThumbnailEntry(systemPath: string) {
+		const entry = await this.getEntryBySystemPath(systemPath)
+		if (!entry?.thumbnailEligible || entry.type !== 'file') return
+		const stats = await lstat(systemPath, {bigint: true}).catch(() => undefined)
+		if (!stats?.isFile()) return
+		const identity = fileIdentity(stats)
+		const revisionChanged =
+			entry.inode !== identity.inode ||
+			entry.size !== Number(stats.size) ||
+			entry.modifiedNs !== identity.modifiedNs ||
+			(entry.thumbnailIdentityKind === 'content'
+				? entry.ctimeNs !== identity.ctimeNs
+				: entry.device !== identity.device)
+		if (revisionChanged) {
+			void this.reconcilePath(systemPath).catch((error) =>
+				this.logger.error(`Failed to refresh thumbnail source '${systemPath}'`, error),
+			)
+			return
+		}
+		await this.#observeTransientEntry(entry)
+		return entry
 	}
 
 	async searchCandidates(virtualRoot: string, query: string, maxResults: number): Promise<SearchCandidate[]> {
@@ -1112,15 +1390,26 @@ export default class FileIndexEngine {
 
 	async status() {
 		let entryCount = 0
+		let enrichment = {
+			eligibleEntries: 0,
+			hashedEntries: 0,
+			pendingHashes: 0,
+			hashFailures: 0,
+			uniqueContents: 0,
+			readyThumbnails: 0,
+			thumbnailFailures: 0,
+		}
 		if (this.#available) {
 			const row = get(this.#requireDatabase(), 'SELECT COUNT(*) AS count FROM entries') as {count: number}
 			entryCount = Number(row.count)
+			enrichment = await this.#enrichment.status()
 		}
 
 		return {
 			available: this.#available,
 			schemaVersion: this.#schemaVersion,
 			entryCount,
+			enrichment,
 			roots: [...this.#roots.values()].map((root) => ({
 				virtualPath: root.virtualPath,
 				state: root.state,
@@ -1184,6 +1473,7 @@ export default class FileIndexEngine {
 		this.#reconciliationTimer = undefined
 		this.#recoveryTimer = undefined
 		await this.#recoveryAttempt
+		await this.#enrichment.stop()
 		await this.#scanQueue.onIdle()
 		await this.#mutationQueue.onIdle()
 		try {
@@ -1400,7 +1690,8 @@ function sameRootDefinition(left: FileIndexRoot, right: FileIndexRoot) {
 		left.systemPath === right.systemPath &&
 		left.ownerId === right.ownerId &&
 		left.kind === right.kind &&
-		left.searchEnabled === right.searchEnabled
+		left.searchEnabled === right.searchEnabled &&
+		(left.scanEnabled ?? true) === (right.scanEnabled ?? true)
 	)
 }
 
@@ -1447,7 +1738,7 @@ function joinVirtualPath(rootVirtualPath: string, relativePath: string) {
 	return nodePath.posix.join(rootVirtualPath, relativePath)
 }
 
-function entryType(stats: Stats): EntryType {
+function entryType(stats: FileStats): EntryType {
 	if (stats.isDirectory()) return 'directory'
 	if (stats.isSymbolicLink()) return 'symbolic-link'
 	if (stats.isSocket()) return 'socket'
@@ -1455,6 +1746,30 @@ function entryType(stats: Stats): EntryType {
 	if (stats.isCharacterDevice()) return 'character-device'
 	if (stats.isFIFO()) return 'fifo'
 	return 'file'
+}
+
+function fileIdentity(stats: FileStats) {
+	if (isBigIntStats(stats)) {
+		return {
+			device: stats.dev.toString(),
+			inode: stats.ino.toString(),
+			modifiedNs: stats.mtimeNs.toString(),
+			ctimeNs: stats.ctimeNs.toString(),
+			modifiedMs: Number(stats.mtimeNs / 1_000_000n),
+		}
+	}
+
+	return {
+		device: stats.dev.toString(),
+		inode: stats.ino.toString(),
+		modifiedNs: BigInt(Math.round(stats.mtimeMs * 1_000_000)).toString(),
+		ctimeNs: BigInt(Math.round(stats.ctimeMs * 1_000_000)).toString(),
+		modifiedMs: Math.trunc(stats.mtimeMs),
+	}
+}
+
+function isBigIntStats(stats: FileStats): stats is BigIntStats {
+	return typeof stats.size === 'bigint'
 }
 
 function entrySelectSql() {
@@ -1478,6 +1793,13 @@ function indexedEntry(row: EntryRow): IndexedEntry {
 		type: row.type,
 		size: Number(row.size),
 		modifiedMs: Number(row.modified_ms),
+		device: row.device,
+		inode: row.inode,
+		modifiedNs: row.modified_ns,
+		ctimeNs: row.ctime_ns,
+		thumbnailIdentityKind: row.thumbnail_identity_kind,
+		thumbnailEligible: Number(row.thumbnail_identity_kind !== null),
+		observedAt: row.observed_at === null ? undefined : Number(row.observed_at),
 		hidden: Boolean(row.hidden),
 	}
 }

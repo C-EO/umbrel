@@ -23,6 +23,9 @@ export type FileIndexRequestMethod =
 	| 'movePath'
 	| 'getEntryByVirtualPath'
 	| 'getEntryBySystemPath'
+	| 'ensureThumbnail'
+	| 'getExistingThumbnail'
+	| 'matchesThumbnail'
 	| 'searchCandidates'
 	| 'status'
 
@@ -89,6 +92,7 @@ export function isFileIndexRoot(value: unknown): value is FileIndexRoot {
 		typeof root.systemPath === 'string' &&
 		typeof root.ownerId === 'string' &&
 		['home', 'trash', 'apps', 'machines'].includes(root.kind ?? '') &&
-		typeof root.searchEnabled === 'boolean'
+		typeof root.searchEnabled === 'boolean' &&
+		(root.scanEnabled === undefined || typeof root.scanEnabled === 'boolean')
 	)
 }

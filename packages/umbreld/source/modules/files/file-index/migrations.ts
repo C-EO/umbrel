@@ -205,6 +205,85 @@ export const fileIndexMigrations: FileIndexMigration[] = [
 			`)
 		},
 	},
+	{
+		version: 7,
+		up: (database) => {
+			database.exec(`
+				CREATE TABLE contents (
+					id INTEGER PRIMARY KEY,
+					blake3 BLOB NOT NULL UNIQUE CHECK (length(blake3) = 32),
+					size INTEGER NOT NULL,
+					created_at INTEGER NOT NULL
+				);
+
+				ALTER TABLE entries ADD COLUMN device TEXT NOT NULL DEFAULT '';
+				ALTER TABLE entries ADD COLUMN inode TEXT NOT NULL DEFAULT '';
+				ALTER TABLE entries ADD COLUMN modified_ns TEXT NOT NULL DEFAULT '';
+				ALTER TABLE entries ADD COLUMN ctime_ns TEXT NOT NULL DEFAULT '';
+				ALTER TABLE entries ADD COLUMN thumbnail_identity_kind TEXT
+					CHECK (thumbnail_identity_kind IN ('content', 'transient'));
+				ALTER TABLE entries ADD COLUMN content_id INTEGER REFERENCES contents(id);
+				ALTER TABLE entries ADD COLUMN hash_failure_count INTEGER NOT NULL DEFAULT 0;
+				ALTER TABLE entries ADD COLUMN hash_retry_at INTEGER;
+				ALTER TABLE entries ADD COLUMN hash_error TEXT;
+				ALTER TABLE entries ADD COLUMN observed_at INTEGER;
+
+				CREATE INDEX entries_by_content ON entries(content_id);
+				CREATE INDEX entries_pending_content_hash
+					ON entries(hash_retry_at, id)
+					WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL;
+
+				CREATE TABLE thumbnail_variants (
+					content_id INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,
+					variant TEXT NOT NULL,
+					state TEXT NOT NULL CHECK (state IN ('pending', 'ready', 'failed')),
+					failure_count INTEGER NOT NULL DEFAULT 0,
+					retry_at INTEGER,
+					last_error TEXT,
+					created_at INTEGER,
+					updated_at INTEGER NOT NULL,
+					PRIMARY KEY(content_id, variant)
+				) WITHOUT ROWID;
+
+				CREATE INDEX thumbnail_variants_pending_work
+					ON thumbnail_variants(variant, content_id)
+					WHERE state = 'pending';
+				CREATE INDEX thumbnail_variants_failed_work
+					ON thumbnail_variants(variant, retry_at, content_id)
+					WHERE state = 'failed';
+
+				CREATE TABLE transient_thumbnail_variants (
+					entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE,
+					variant TEXT NOT NULL,
+					artifact_key TEXT NOT NULL CHECK (
+						length(artifact_key) = 64 AND artifact_key = lower(artifact_key)
+					),
+					state TEXT NOT NULL CHECK (state IN ('pending', 'ready', 'failed')),
+					failure_count INTEGER NOT NULL DEFAULT 0,
+					last_error TEXT,
+					created_at INTEGER,
+					updated_at INTEGER NOT NULL,
+					PRIMARY KEY(entry_id, variant)
+				) WITHOUT ROWID;
+
+				CREATE INDEX transient_thumbnail_variants_by_artifact
+					ON transient_thumbnail_variants(variant, artifact_key);
+
+				CREATE TRIGGER entries_transient_thumbnail_revision_update
+				AFTER UPDATE OF thumbnail_identity_kind, device, inode, size, modified_ns ON entries
+				WHEN old.thumbnail_identity_kind = 'transient' AND (
+					new.thumbnail_identity_kind IS NOT old.thumbnail_identity_kind
+					OR new.device IS NOT old.device
+					OR new.inode IS NOT old.inode
+					OR new.size IS NOT old.size
+					OR new.modified_ns IS NOT old.modified_ns
+				) BEGIN
+					DELETE FROM transient_thumbnail_variants
+					WHERE entry_id = new.id;
+				END;
+			`)
+		},
+	},
 ]
 
 export const FILE_INDEX_SCHEMA_VERSION = fileIndexMigrations.at(-1)?.version ?? 0

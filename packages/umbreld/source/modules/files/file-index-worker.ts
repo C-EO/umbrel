@@ -101,6 +101,12 @@ async function request(method: FileIndexRequestMethod, args: unknown[]) {
 			return index.getEntryByVirtualPath(stringArg(args))
 		case 'getEntryBySystemPath':
 			return index.getEntryBySystemPath(stringArg(args))
+		case 'ensureThumbnail':
+			return index.ensureThumbnail(stringArg(args))
+		case 'getExistingThumbnail':
+			return index.getExistingThumbnail(stringArg(args))
+		case 'matchesThumbnail':
+			return index.matchesThumbnail(stringArg(args), stringArg(args, 1), stringArg(args, 2), stringArg(args, 3))
 		case 'searchCandidates':
 			return index.searchCandidates(stringArg(args), stringArg(args, 1), numberArg(args, 2))
 		case 'status':

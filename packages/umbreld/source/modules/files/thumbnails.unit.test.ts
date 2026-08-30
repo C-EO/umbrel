@@ -6,16 +6,12 @@ import fse from 'fs-extra'
 import {afterEach, expect, test, vi} from 'vitest'
 
 import type Umbreld from '../../index.js'
-import Thumbnails, {MAX_BACKGROUND_THUMBNAIL_WORK} from './thumbnails.js'
-import type {FileChangeEvent} from './watcher.js'
-
-const convert = vi.hoisted(() => vi.fn(async () => ({stdout: ''})))
-vi.mock('execa', () => ({$: convert}))
+import {THUMBNAIL_FORMAT, THUMBNAIL_VARIANT, thumbnailSystemPath} from './thumbnail-support.js'
+import Thumbnails from './thumbnails.js'
 
 const cleanups: Array<() => Promise<void>> = []
 
 afterEach(async () => {
-	vi.useRealTimers()
 	vi.restoreAllMocks()
 	await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()))
 })
@@ -23,53 +19,78 @@ afterEach(async () => {
 async function createThumbnails() {
 	const root = await mkdtemp(nodePath.join(tmpdir(), 'thumbnails-unit-'))
 	cleanups.push(() => rm(root, {recursive: true, force: true}))
-	let fileListener!: (event: FileChangeEvent) => Promise<void>
 	const logger = {error: vi.fn(), log: vi.fn(), verbose: vi.fn()}
+	const fileIndex = {
+		ensureThumbnail: vi.fn(),
+		getExistingThumbnail: vi.fn(),
+		matchesThumbnail: vi.fn(),
+	}
+	const files = {
+		fileIndex,
+		systemToVirtualPath: vi.fn((path: string) => `/Home/${nodePath.basename(path)}`),
+		virtualToSystemPath: vi.fn(async (path: string) => nodePath.join(root, nodePath.basename(path))),
+	}
 	const thumbnails = new Thumbnails({
 		dataDirectory: root,
-		eventBus: {
-			on: vi.fn((event: string, listener: (event: FileChangeEvent) => Promise<void>) => {
-				if (event === 'files:watcher:change') fileListener = listener
-				return () => {}
-			}),
-		},
-		files: {
-			systemToVirtualPath: vi.fn((path: string) => path),
-			virtualToSystemPath: vi.fn(async (path: string) => path),
-		},
+		files,
 		logger: {createChildLogger: () => logger},
 	} as unknown as Umbreld)
 	await thumbnails.start()
-	return {fileListener, logger, thumbnails}
+	return {fileIndex, files, root, thumbnails}
 }
 
-test('delete events never stat supported thumbnail paths', async () => {
-	const {fileListener, thumbnails} = await createThumbnails()
-	const stat = vi.spyOn(fse, 'stat')
+const reference = {kind: 'content' as const, key: 'ab'.repeat(32), variant: THUMBNAIL_VARIANT, format: THUMBNAIL_FORMAT}
 
-	await fileListener({type: 'delete', path: '/tmp/deleted.jpg'})
-
-	expect(stat).not.toHaveBeenCalledWith('/tmp/deleted.jpg')
-	await thumbnails.stop()
+test('stores thumbnails in one directory sharded by the first hash byte', () => {
+	expect(thumbnailSystemPath('/data/thumbnails', reference)).toBe(
+		nodePath.join('/data/thumbnails', 'content', THUMBNAIL_VARIANT, 'ab', `${reference.key}.webp`),
+	)
 })
 
-test('bounds watcher-triggered work without affecting on-demand thumbnails', async () => {
-	const {fileListener, logger, thumbnails} = await createThumbnails()
-	vi.useFakeTimers()
-	vi.spyOn(fse, 'stat').mockResolvedValue({isFile: () => true} as never)
-	const eventCount = MAX_BACKGROUND_THUMBNAIL_WORK + 250
+test('keeps authorization in the facade and delegates on-demand generation to the index worker', async () => {
+	const {fileIndex, files, root, thumbnails} = await createThumbnails()
+	fileIndex.ensureThumbnail.mockResolvedValue(reference)
 
-	await Promise.all(
-		Array.from({length: eventCount}, (_, index) =>
-			fileListener({type: 'create', path: `/tmp/background-${index}.jpg`}),
-		),
+	await expect(thumbnails.getThumbnailOnDemand('/Home/photo.png', 'alice')).resolves.toBe(
+		`/api/files/thumbnail/content-${THUMBNAIL_VARIANT}-${reference.key}.webp?path=%2FHome%2Fphoto.png`,
+	)
+	expect(files.virtualToSystemPath).toHaveBeenCalledWith('/Home/photo.png', 'alice')
+	expect(fileIndex.ensureThumbnail).toHaveBeenCalledWith(nodePath.join(root, 'photo.png'))
+})
+
+test('returns only ready index-owned thumbnails for directory listings', async () => {
+	const {fileIndex, thumbnails} = await createThumbnails()
+	fileIndex.getExistingThumbnail.mockResolvedValueOnce(undefined).mockResolvedValueOnce(reference)
+
+	await expect(thumbnails.getExistingThumbnail('/data/notes.txt')).resolves.toBeUndefined()
+	expect(fileIndex.getExistingThumbnail).not.toHaveBeenCalled()
+	await expect(thumbnails.getExistingThumbnail('/data/photo.png')).resolves.toBeUndefined()
+	await expect(thumbnails.getExistingThumbnail('/data/photo.png')).resolves.toBe(
+		`/api/files/thumbnail/content-${THUMBNAIL_VARIANT}-${reference.key}.webp?path=%2FHome%2Fphoto.png`,
+	)
+	expect(fileIndex.getExistingThumbnail).toHaveBeenCalledTimes(2)
+})
+
+test('serves a content-addressed asset only when it is still bound to an authorized source', async () => {
+	const {fileIndex, root, thumbnails} = await createThumbnails()
+	const asset = thumbnailSystemPath(nodePath.join(root, 'thumbnails'), reference)
+	await fse.outputFile(asset, 'thumbnail')
+	fileIndex.matchesThumbnail.mockResolvedValue(true)
+	const filename = `content-${THUMBNAIL_VARIANT}-${reference.key}.webp`
+
+	await expect(thumbnails.resolveThumbnailRequest(filename, '/Home/photo.png', 'alice')).resolves.toBe(asset)
+	expect(fileIndex.matchesThumbnail).toHaveBeenCalledWith(
+		nodePath.join(root, 'photo.png'),
+		'content',
+		reference.key,
+		THUMBNAIL_VARIANT,
 	)
 
-	expect(logger.verbose).toHaveBeenCalledTimes(MAX_BACKGROUND_THUMBNAIL_WORK)
-	vi.spyOn(thumbnails, 'getThumbnailHash').mockResolvedValue('a'.repeat(64))
-	await expect(thumbnails.getThumbnailOnDemand('/tmp/background-overflow.jpg')).resolves.toContain(
-		`/api/files/thumbnail/${'a'.repeat(64)}.webp`,
+	fileIndex.matchesThumbnail.mockResolvedValue(false)
+	await expect(thumbnails.resolveThumbnailRequest(filename, '/Home/photo.png', 'alice')).rejects.toThrow(
+		'[thumbnail-not-found]',
 	)
-	expect(convert).toHaveBeenCalledOnce()
-	await thumbnails.stop()
+	await expect(
+		thumbnails.resolveThumbnailRequest(`wrong-${THUMBNAIL_VARIANT}-${reference.key}.webp`, '/Home/photo.png', 'alice'),
+	).rejects.toThrow('[thumbnail-not-found]')
 })
