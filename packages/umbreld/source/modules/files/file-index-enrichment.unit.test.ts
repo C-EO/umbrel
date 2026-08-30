@@ -9,7 +9,12 @@ import {afterEach, expect, test, vi} from 'vitest'
 import {execa} from 'execa'
 
 import {THUMBNAIL_HEIGHT, THUMBNAIL_QUALITY, THUMBNAIL_WIDTH} from './thumbnail-support.js'
-import {generateThumbnailFile, hashFileRevision, THUMBNAIL_GENERATION_TIMEOUT_MS} from './file-index-enrichment.js'
+import {
+	enrichmentQueueConcurrency,
+	generateThumbnailFile,
+	hashFileRevision,
+	THUMBNAIL_GENERATION_TIMEOUT_MS,
+} from './file-index-enrichment.js'
 
 vi.mock('execa')
 
@@ -22,7 +27,17 @@ afterEach(async () => {
 	await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, {recursive: true, force: true})))
 })
 
-test('auto-orients before resizing the source image', async () => {
+test.each([
+	[1, 1, 1],
+	[2, 1, 2],
+	[4, 1, 3],
+	[8, 2, 6],
+	[32, 8, 24],
+])('sizes enrichment queues for %i available CPU threads', (parallelism, background, onDemand) => {
+	expect(enrichmentQueueConcurrency(parallelism)).toStrictEqual({background, onDemand})
+})
+
+test('auto-orients before applying the thumbnail optimization', async () => {
 	await generateThumbnailFile('/home/photo.jpg', '/data/thumbnail.webp')
 
 	expect(execa).toHaveBeenCalledOnce()
@@ -32,11 +47,10 @@ test('auto-orients before resizing the source image', async () => {
 		killSignal: 'SIGKILL',
 	})
 	const arguments_ = vi.mocked(execa).mock.calls[0][1] as string[]
-	expect(arguments_).not.toContain('-thumbnail')
 	expect(arguments_.slice(arguments_.indexOf('/home/photo.jpg[0]'))).toStrictEqual([
 		'/home/photo.jpg[0]',
 		'-auto-orient',
-		'-resize',
+		'-thumbnail',
 		`${THUMBNAIL_WIDTH}x${THUMBNAIL_HEIGHT}`,
 		'-quality',
 		String(THUMBNAIL_QUALITY),

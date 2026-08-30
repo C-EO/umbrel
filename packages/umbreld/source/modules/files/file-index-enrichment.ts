@@ -1,5 +1,6 @@
 import {constants as fsConstants} from 'node:fs'
 import {mkdir, open, opendir} from 'node:fs/promises'
+import {availableParallelism as nodeAvailableParallelism} from 'node:os'
 import nodePath from 'node:path'
 import {createHash, randomUUID} from 'node:crypto'
 
@@ -96,6 +97,15 @@ export type FileIndexEnrichmentRuntime = {
 	thumbnailIsUsable?: typeof thumbnailArtifactIsUsable
 	remove?: typeof fse.remove
 	orphanGcMaxDeferralMs?: number
+	availableParallelism?: number
+}
+
+export function enrichmentQueueConcurrency(availableParallelism: number) {
+	const parallelism = Math.max(1, Math.floor(availableParallelism))
+	return {
+		background: Math.max(1, Math.floor(parallelism / 4)),
+		onDemand: Math.max(1, Math.ceil(parallelism * 0.75)),
+	}
 }
 
 class StaleFileRevisionError extends Error {}
@@ -117,14 +127,19 @@ export default class FileIndexEnrichment {
 	#thumbnailIsUsable: typeof thumbnailArtifactIsUsable
 	#remove: typeof fse.remove
 	#orphanGcMaxDeferralMs: number
-	#backgroundQueue = new PQueue({concurrency: 1})
-	#onDemandQueue = new PQueue({concurrency: 1})
+	#backgroundConcurrency: number
+	#backgroundQueue: PQueue
+	#onDemandQueue: PQueue
+	#onDemandOperations = new Map<number, Promise<ThumbnailReference>>()
 	#started = false
 	#stopping = false
 	#backgroundEnabled = false
-	#backgroundQueued = false
+	#backgroundQueued = 0
 	#wakeRequested = false
 	#timer?: ReturnType<typeof setTimeout>
+	#activeHashEntries = new Set<number>()
+	#activeThumbnailContents = new Set<number>()
+	#maintenanceActive = false
 	#orphanSweepCursor?: number
 	#thumbnailVerificationCursor?: number
 	#thumbnailVerificationCompletedAt = 0
@@ -142,8 +157,10 @@ export default class FileIndexEnrichment {
 			thumbnailIsUsable = thumbnailArtifactIsUsable,
 			remove = fse.remove,
 			orphanGcMaxDeferralMs = ORPHAN_GC_MAX_DEFERRAL_MS,
+			availableParallelism = nodeAvailableParallelism(),
 		}: FileIndexEnrichmentRuntime = {},
 	) {
+		const concurrency = enrichmentQueueConcurrency(availableParallelism)
 		this.thumbnailDirectory = nodePath.join(dataDirectory, 'thumbnails')
 		this.logger = logger
 		this.#withDatabase = withDatabase
@@ -153,6 +170,9 @@ export default class FileIndexEnrichment {
 		this.#thumbnailIsUsable = thumbnailIsUsable
 		this.#remove = remove
 		this.#orphanGcMaxDeferralMs = orphanGcMaxDeferralMs
+		this.#backgroundConcurrency = concurrency.background
+		this.#backgroundQueue = new PQueue({concurrency: concurrency.background})
+		this.#onDemandQueue = new PQueue({concurrency: concurrency.onDemand})
 	}
 
 	async start() {
@@ -167,6 +187,11 @@ export default class FileIndexEnrichment {
 		this.#destructiveArtifactMaintenanceAllowed = false
 		this.#directoryPublication.clear()
 		this.#artifactOperations.clear()
+		this.#onDemandOperations.clear()
+		this.#activeHashEntries.clear()
+		this.#activeThumbnailContents.clear()
+		this.#maintenanceActive = false
+		this.#backgroundQueued = 0
 		this.#wakeRequested = false
 		await this.#ensureArtifactDirectory(this.thumbnailDirectory).catch((error) =>
 			this.logger.error('Thumbnail artifact storage is unavailable; file indexing will continue', error),
@@ -186,22 +211,26 @@ export default class FileIndexEnrichment {
 
 	kick() {
 		if (!this.#started || this.#stopping || !this.#backgroundEnabled) return
-		if (this.#backgroundQueued) {
+		if (this.#backgroundQueued >= this.#backgroundConcurrency) {
 			this.#wakeRequested = true
 			return
 		}
 		if (this.#timer) clearTimeout(this.#timer)
 		this.#timer = undefined
-		this.#backgroundQueued = true
+		while (this.#backgroundQueued < this.#backgroundConcurrency) this.#queueBackgroundStep()
+	}
+
+	#queueBackgroundStep() {
+		this.#backgroundQueued++
 		void (this.#backgroundQueue.add(() => this.#backgroundStep()) as Promise<void>)
 			.catch((error) => this.logger.error('File enrichment background step failed', error))
 			.finally(() => {
-				this.#backgroundQueued = false
+				this.#backgroundQueued--
 				if (this.#stopping || !this.#backgroundEnabled) return
 				if (this.#wakeRequested) {
 					this.#wakeRequested = false
 					this.kick()
-				} else if (!this.#timer) {
+				} else if (!this.#timer && this.#backgroundQueued === 0) {
 					this.#schedule(IDLE_RECHECK_MS)
 				}
 			})
@@ -209,7 +238,9 @@ export default class FileIndexEnrichment {
 
 	async ensureThumbnail(entryId: number): Promise<ThumbnailReference> {
 		if (!this.#started || this.#stopping) throw new Error('File enrichment is unavailable')
-		return (await this.#onDemandQueue.add(async () => {
+		const existing = this.#onDemandOperations.get(entryId)
+		if (existing) return existing
+		const operation = this.#onDemandQueue.add(async () => {
 			if (this.#stopping) throw new Error('File enrichment is unavailable')
 			for (let attempt = 0; attempt < 2; attempt++) {
 				try {
@@ -229,7 +260,13 @@ export default class FileIndexEnrichment {
 				}
 			}
 			throw new StaleFileRevisionError('File kept changing during thumbnail generation')
-		})) as ThumbnailReference
+		}) as Promise<ThumbnailReference>
+		this.#onDemandOperations.set(entryId, operation)
+		try {
+			return await operation
+		} finally {
+			if (this.#onDemandOperations.get(entryId) === operation) this.#onDemandOperations.delete(entryId)
+		}
 	}
 
 	async getExistingThumbnail(entryId: number): Promise<ThumbnailReference | undefined> {
@@ -327,15 +364,18 @@ export default class FileIndexEnrichment {
 
 		// Entry triggers provide exact, transient GC hints for ordinary mutations.
 		// The bounded startup sweep below remains the crash-recovery source of truth.
-		const candidates = await this.#takeOrphanCandidates()
-		if (candidates.processed) {
-			await this.#removeOrphanedArtifacts(candidates.orphans)
-			this.#schedule(0)
-			return
-		}
-		const transientArtifacts = await this.#takeTransientArtifactCandidates()
-		if (transientArtifacts.processed) {
+		const immediateMaintenanceProcessed = await this.#withMaintenanceSlot(async () => {
+			const candidates = await this.#takeOrphanCandidates()
+			if (candidates.processed) {
+				await this.#removeOrphanedArtifacts(candidates.orphans)
+				return true
+			}
+			const transientArtifacts = await this.#takeTransientArtifactCandidates()
+			if (!transientArtifacts.processed) return false
 			await this.#removeTransientArtifacts(transientArtifacts.keys)
+			return true
+		})
+		if (immediateMaintenanceProcessed) {
 			this.#schedule(0)
 			return
 		}
@@ -345,7 +385,13 @@ export default class FileIndexEnrichment {
 			let retryDelay = 0
 			try {
 				const content = await this.#ensureEntryContent(entry.id, false, entry)
-				await this.#ensureContentThumbnail(content, false)
+				const ownsContentReservation = !this.#activeThumbnailContents.has(content.id)
+				if (ownsContentReservation) this.#activeThumbnailContents.add(content.id)
+				try {
+					await this.#ensureContentThumbnail(content, false)
+				} finally {
+					if (ownsContentReservation) this.#activeThumbnailContents.delete(content.id)
+				}
 			} catch (error) {
 				if (error instanceof StaleFileRevisionError) {
 					await this.#onStalePath(entry.systemPath).catch((refreshError) => {
@@ -356,6 +402,8 @@ export default class FileIndexEnrichment {
 					if (!(error instanceof PersistedEnrichmentFailure)) retryDelay = INFRASTRUCTURE_RETRY_MS
 					this.logger.error(`Failed to enrich '${entry.systemPath}'`, error)
 				}
+			} finally {
+				this.#activeHashEntries.delete(entry.id)
 			}
 			this.#schedule(retryDelay)
 			return
@@ -364,17 +412,21 @@ export default class FileIndexEnrichment {
 		const content = await this.#nextContentNeedingThumbnail()
 		if (content) {
 			let retryDelay = 0
-			await this.#ensureContentThumbnail(content, false).catch(async (error) => {
-				if (error instanceof StaleFileRevisionError) {
-					await this.#onStalePath(content.systemPath).catch((refreshError) => {
-						retryDelay = INFRASTRUCTURE_RETRY_MS
-						this.logger.error(`Failed to refresh stale thumbnail source '${content.systemPath}'`, refreshError)
-					})
-					return
-				}
-				if (!(error instanceof PersistedEnrichmentFailure)) retryDelay = INFRASTRUCTURE_RETRY_MS
-				this.logger.error(`Failed to generate thumbnail for '${content.systemPath}'`, error)
-			})
+			try {
+				await this.#ensureContentThumbnail(content, false).catch(async (error) => {
+					if (error instanceof StaleFileRevisionError) {
+						await this.#onStalePath(content.systemPath).catch((refreshError) => {
+							retryDelay = INFRASTRUCTURE_RETRY_MS
+							this.logger.error(`Failed to refresh stale thumbnail source '${content.systemPath}'`, refreshError)
+						})
+						return
+					}
+					if (!(error instanceof PersistedEnrichmentFailure)) retryDelay = INFRASTRUCTURE_RETRY_MS
+					this.logger.error(`Failed to generate thumbnail for '${content.systemPath}'`, error)
+				})
+			} finally {
+				this.#activeThumbnailContents.delete(content.id)
+			}
 			this.#schedule(retryDelay)
 			return
 		}
@@ -382,14 +434,13 @@ export default class FileIndexEnrichment {
 		// Maintenance is independent of a source file's retry schedule. In
 		// particular, one unreadable file must not prevent repair or garbage
 		// collection for every other content record.
-		if (await this.#artifactMaintenanceStep()) {
-			this.#schedule(0)
-			return
-		}
-
-		const sweep = await this.#orphanSweepStep()
-		if (sweep.processed) {
-			await this.#removeOrphanedArtifacts(sweep.orphans)
+		const maintenanceProcessed = await this.#withMaintenanceSlot(async () => {
+			if (await this.#artifactMaintenanceStep()) return true
+			const sweep = await this.#orphanSweepStep()
+			if (sweep.processed) await this.#removeOrphanedArtifacts(sweep.orphans)
+			return sweep.processed
+		})
+		if (maintenanceProcessed) {
 			this.#schedule(0)
 			return
 		}
@@ -404,6 +455,16 @@ export default class FileIndexEnrichment {
 		return this.#onDemandQueue.pending > 0 || this.#onDemandQueue.size > 0
 	}
 
+	async #withMaintenanceSlot(operation: () => Promise<boolean>) {
+		if (this.#maintenanceActive) return
+		this.#maintenanceActive = true
+		try {
+			return await operation()
+		} finally {
+			this.#maintenanceActive = false
+		}
+	}
+
 	#schedule(delay: number) {
 		if (this.#stopping || !this.#backgroundEnabled) return
 		if (this.#timer) clearTimeout(this.#timer)
@@ -415,6 +476,8 @@ export default class FileIndexEnrichment {
 
 	async #nextEntryNeedingHash() {
 		return this.#withDatabase((database) => {
+			const excludedIds = [...this.#activeHashEntries]
+			const exclusion = excludedIds.length > 0 ? `AND entries.id NOT IN (${excludedIds.map(() => '?').join(', ')})` : ''
 			const row = database
 				.prepare(
 					`SELECT entries.id, entries.device, entries.inode, entries.size, entries.modified_ns,
@@ -425,10 +488,11 @@ export default class FileIndexEnrichment {
 					WHERE entries.thumbnail_identity_kind = 'content'
 						AND entries.content_id IS NULL
 						AND (entries.hash_retry_at IS NULL OR entries.hash_retry_at <= ?)
+						${exclusion}
 					ORDER BY entries.hash_retry_at, entries.id
 					LIMIT 1`,
 				)
-				.get(Date.now()) as
+				.get(Date.now(), ...excludedIds) as
 				| {
 						id: number
 						device: string
@@ -442,12 +506,22 @@ export default class FileIndexEnrichment {
 				  }
 				| undefined
 			if (!row) return
-			return entryCandidate(row)
+			const candidate = entryCandidate(row)
+			this.#activeHashEntries.add(candidate.id)
+			return candidate
 		}, BACKGROUND_DATABASE_PRIORITY)
 	}
 
 	async #nextAttemptAt() {
 		return this.#withDatabase((database) => {
+			const excludedEntryIds = [...this.#activeHashEntries]
+			const excludedContentIds = [...this.#activeThumbnailContents]
+			const hashExclusion =
+				excludedEntryIds.length > 0 ? `AND id NOT IN (${excludedEntryIds.map(() => '?').join(', ')})` : ''
+			const thumbnailExclusion =
+				excludedContentIds.length > 0
+					? `AND failed.content_id NOT IN (${excludedContentIds.map(() => '?').join(', ')})`
+					: ''
 			const row = database
 				.prepare(
 					`SELECT MIN(attempt_at) AS attempt_at FROM (
@@ -456,6 +530,7 @@ export default class FileIndexEnrichment {
 							FROM entries INDEXED BY entries_pending_content_hash
 							WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL
 								AND hash_retry_at IS NOT NULL
+								${hashExclusion}
 							ORDER BY hash_retry_at, id LIMIT 1
 						)
 						UNION ALL
@@ -464,6 +539,7 @@ export default class FileIndexEnrichment {
 							FROM thumbnail_variants AS failed INDEXED BY thumbnail_variants_failed_work
 							WHERE variant = ? AND state = 'failed'
 								AND EXISTS (SELECT 1 FROM entries WHERE entries.content_id = failed.content_id)
+								${thumbnailExclusion}
 							ORDER BY retry_at, content_id LIMIT 1
 						)
 						UNION ALL
@@ -471,7 +547,9 @@ export default class FileIndexEnrichment {
 						FROM content_gc_candidates
 					)`,
 				)
-				.get(THUMBNAIL_VARIANT, this.#orphanGcMaxDeferralMs) as {attempt_at: number | null}
+				.get(...excludedEntryIds, THUMBNAIL_VARIANT, ...excludedContentIds, this.#orphanGcMaxDeferralMs) as {
+				attempt_at: number | null
+			}
 			return row.attempt_at === null ? undefined : Number(row.attempt_at)
 		}, BACKGROUND_DATABASE_PRIORITY)
 	}
@@ -558,6 +636,11 @@ export default class FileIndexEnrichment {
 
 	async #nextContentNeedingThumbnail() {
 		return this.#withDatabase((database) => {
+			const excludedIds = [...this.#activeThumbnailContents]
+			const exclusion =
+				excludedIds.length > 0
+					? `AND thumbnail_variants.content_id NOT IN (${excludedIds.map(() => '?').join(', ')})`
+					: ''
 			const select = (state: 'pending' | 'failed') => {
 				const workIndex = state === 'pending' ? 'thumbnail_variants_pending_work' : 'thumbnail_variants_failed_work'
 				const retryPredicate = state === 'pending' ? '' : 'AND thumbnail_variants.retry_at <= ?'
@@ -577,13 +660,19 @@ export default class FileIndexEnrichment {
 					JOIN index_roots ON index_roots.id = entries.root_id
 					WHERE thumbnail_variants.variant = ? AND thumbnail_variants.state = '${state}'
 						${retryPredicate}
+						${exclusion}
 					ORDER BY ${workOrder}
 					LIMIT 1`,
 					)
-					.get(THUMBNAIL_VARIANT, ...(state === 'failed' ? [Date.now()] : [])) as ContentCandidateRow | undefined
+					.get(THUMBNAIL_VARIANT, ...(state === 'failed' ? [Date.now()] : []), ...excludedIds) as
+					| ContentCandidateRow
+					| undefined
 			}
 			const row = select('pending') ?? select('failed')
-			return row ? contentCandidate(row) : undefined
+			if (!row) return
+			const candidate = contentCandidate(row)
+			this.#activeThumbnailContents.add(candidate.id)
+			return candidate
 		}, BACKGROUND_DATABASE_PRIORITY)
 	}
 
@@ -1403,7 +1492,7 @@ export async function generateThumbnailFile(systemPath: string, destination: str
 			String(Math.ceil(THUMBNAIL_GENERATION_TIMEOUT_MS / 1000)),
 			`${escapeImageMagickInputPath(systemPath)}[0]`,
 			'-auto-orient',
-			'-resize',
+			'-thumbnail',
 			`${THUMBNAIL_WIDTH}x${THUMBNAIL_HEIGHT}`,
 			'-quality',
 			String(THUMBNAIL_QUALITY),

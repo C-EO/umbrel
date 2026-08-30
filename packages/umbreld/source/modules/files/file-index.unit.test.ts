@@ -46,6 +46,7 @@ async function fixture(
 		>
 	> = {},
 ) {
+	const {enrichmentRuntime, ...engineOptions} = options
 	const rootDirectory = await temporary.create()
 	const dataDirectory = await temporary.create()
 	const homeDirectory = nodePath.join(rootDirectory, 'home')
@@ -56,7 +57,8 @@ async function fixture(
 		logger,
 		isHidden: (name) => name.startsWith('.') || name.endsWith('.umbrel-upload'),
 		walkTree,
-		...options,
+		...engineOptions,
+		enrichmentRuntime: {availableParallelism: 1, ...enrichmentRuntime},
 	})
 	indexes.push(index)
 	await index.start()
@@ -1004,6 +1006,126 @@ test('drains the durable thumbnail backlog one entry at a time', async () => {
 	expect(generateThumbnail).toHaveBeenCalledTimes(fileCount)
 })
 
+test('uses one quarter of available CPU threads for background enrichment', async () => {
+	let activeHashes = 0
+	let maxActiveHashes = 0
+	let releaseHashes!: () => void
+	const hashesReleased = new Promise<void>((resolve) => (releaseHashes = resolve))
+	const hashFile = vi.fn(async (systemPath: string) => {
+		activeHashes++
+		maxActiveHashes = Math.max(maxActiveHashes, activeHashes)
+		try {
+			await hashesReleased
+		} finally {
+			activeHashes--
+		}
+		const number = Number(nodePath.basename(systemPath).match(/\d+/)?.[0] ?? 0)
+		return Buffer.alloc(32, number + 1)
+	})
+	const generateThumbnail = vi.fn(async (_source: string, destination: string) => {
+		await fse.outputFile(destination, 'thumbnail')
+	})
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {availableParallelism: 8, hashFile, generateThumbnail},
+	})
+	const fileCount = 4
+	await Promise.all(
+		Array.from({length: fileCount}, (_, number) =>
+			writeFile(nodePath.join(homeDirectory, `parallel-background-${number}.png`), String(number)),
+		),
+	)
+
+	index.startBackgroundReconciliation()
+	try {
+		await pRetry(async () => expect(maxActiveHashes).toBe(2), {retries: 100, minTimeout: 10, maxTimeout: 20})
+	} finally {
+		releaseHashes()
+	}
+
+	await pRetry(async () => expect(await index.status()).toMatchObject({enrichment: {readyThumbnails: fileCount}}), {
+		retries: 100,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	expect(maxActiveHashes).toBe(2)
+	expect(hashFile).toHaveBeenCalledTimes(fileCount)
+	expect(generateThumbnail).toHaveBeenCalledTimes(fileCount)
+})
+
+test('uses three quarters of available CPU threads for on-demand enrichment', async () => {
+	let activeConversions = 0
+	let maxActiveConversions = 0
+	let releaseConversions!: () => void
+	const conversionsReleased = new Promise<void>((resolve) => (releaseConversions = resolve))
+	const hashFile = vi.fn(async (systemPath: string) => {
+		const number = Number(nodePath.basename(systemPath).match(/\d+/)?.[0] ?? 0)
+		return Buffer.alloc(32, number + 1)
+	})
+	const generateThumbnail = vi.fn(async (_source: string, destination: string) => {
+		activeConversions++
+		maxActiveConversions = Math.max(maxActiveConversions, activeConversions)
+		try {
+			await conversionsReleased
+		} finally {
+			activeConversions--
+		}
+		await fse.outputFile(destination, 'thumbnail')
+	})
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {availableParallelism: 8, hashFile, generateThumbnail},
+	})
+	const paths = Array.from({length: 8}, (_, number) => nodePath.join(homeDirectory, `parallel-on-demand-${number}.png`))
+	await Promise.all(paths.map((path, number) => writeFile(path, String(number))))
+	await Promise.all(paths.map((path) => index.reconcilePath(path)))
+
+	const thumbnails = paths.map((path) => index.ensureThumbnail(path))
+	try {
+		await pRetry(async () => expect(maxActiveConversions).toBe(6), {retries: 100, minTimeout: 10, maxTimeout: 20})
+	} finally {
+		releaseConversions()
+	}
+	await expect(Promise.all(thumbnails)).resolves.toHaveLength(paths.length)
+
+	expect(maxActiveConversions).toBe(6)
+	expect(hashFile).toHaveBeenCalledTimes(paths.length)
+	expect(generateThumbnail).toHaveBeenCalledTimes(paths.length)
+})
+
+test('coalesces concurrent on-demand enrichment for the same entry', async () => {
+	let signalHashStarted!: () => void
+	let releaseHash!: () => void
+	const hashStarted = new Promise<void>((resolve) => (signalHashStarted = resolve))
+	const hashReleased = new Promise<void>((resolve) => (releaseHash = resolve))
+	const hashFile = vi.fn(async () => {
+		signalHashStarted()
+		await hashReleased
+		return Buffer.alloc(32, 0x77)
+	})
+	const generateThumbnail = vi.fn(async (_source: string, destination: string) => {
+		await fse.outputFile(destination, 'thumbnail')
+	})
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {availableParallelism: 8, hashFile, generateThumbnail},
+	})
+	const path = nodePath.join(homeDirectory, 'parallel-same-entry.png')
+	await writeFile(path, 'image')
+	await index.reconcilePath(path)
+
+	const thumbnails = Array.from({length: 8}, () => index.ensureThumbnail(path))
+	try {
+		await hashStarted
+		await new Promise((resolve) => setTimeout(resolve, 50))
+		expect(hashFile).toHaveBeenCalledOnce()
+	} finally {
+		releaseHash()
+	}
+	const references = await Promise.all(thumbnails)
+
+	expect(references.every((reference) => reference.key === references[0].key)).toBe(true)
+	expect(hashFile).toHaveBeenCalledOnce()
+	expect(generateThumbnail).toHaveBeenCalledOnce()
+})
+
 test('continues background thumbnail enrichment during an active metadata reconciliation', async () => {
 	let releaseScan!: () => void
 	let signalScanBlocked!: () => void
@@ -1767,11 +1889,12 @@ test('settles queued thumbnail requests when the index stops', async () => {
 		enrichmentRuntime: {hashFile: async () => Buffer.alloc(32, 0x78), generateThumbnail},
 	})
 	const image = nodePath.join(homeDirectory, 'shutdown.png')
-	await writeFile(image, 'image')
+	const queuedImage = nodePath.join(homeDirectory, 'shutdown-queued.png')
+	await Promise.all([writeFile(image, 'image'), writeFile(queuedImage, 'queued image')])
 
 	const active = index.ensureThumbnail(image)
 	await generationStarted
-	const queued = index.ensureThumbnail(image)
+	const queued = index.ensureThumbnail(queuedImage)
 	const queuedResult = queued.then(
 		() => 'resolved',
 		(error: Error) => error.message,
@@ -1899,6 +2022,56 @@ test('wakes for a thumbnail retry before a later unrelated hash retry', async ()
 	)
 	expect(hashFile).toHaveBeenCalledTimes(2)
 	expect(generateThumbnail).toHaveBeenCalledTimes(2)
+})
+
+test('does not poll the retry scheduler while due hash work is already in flight', async () => {
+	let signalHashStarted!: () => void
+	let releaseHash!: () => void
+	const hashStarted = new Promise<void>((resolve) => (signalHashStarted = resolve))
+	const hashReleased = new Promise<void>((resolve) => (releaseHash = resolve))
+	const hashFile = vi.fn(async () => {
+		signalHashStarted()
+		await hashReleased
+		return Buffer.alloc(32, 0x85)
+	})
+	const generateThumbnail = vi.fn(async (_source: string, destination: string) => {
+		await fse.outputFile(destination, 'thumbnail')
+	})
+	const {index, homeDirectory, dataDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {availableParallelism: 8, hashFile, generateThumbnail},
+	})
+	const image = nodePath.join(homeDirectory, 'in-flight-retry.png')
+	await writeFile(image, 'image')
+	await index.reconcilePath(image)
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	database.prepare('UPDATE entries SET hash_retry_at = 0').run()
+	database.close()
+
+	const prepare = vi.spyOn(BetterSqlite3.prototype, 'prepare')
+	index.startBackgroundReconciliation()
+	try {
+		await hashStarted
+		await new Promise((resolve) => setTimeout(resolve, 50))
+		const settledQueryCount = prepare.mock.calls.filter(([sql]) =>
+			String(sql).includes('SELECT MIN(attempt_at) AS attempt_at'),
+		).length
+		await new Promise((resolve) => setTimeout(resolve, 100))
+		const schedulerQueries = prepare.mock.calls.filter(([sql]) =>
+			String(sql).includes('SELECT MIN(attempt_at) AS attempt_at'),
+		)
+		expect(schedulerQueries).toHaveLength(settledQueryCount)
+	} finally {
+		prepare.mockRestore()
+		releaseHash()
+	}
+
+	await pRetry(async () => expect(await index.status()).toMatchObject({enrichment: {readyThumbnails: 1}}), {
+		retries: 100,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	expect(hashFile).toHaveBeenCalledOnce()
+	expect(generateThumbnail).toHaveBeenCalledOnce()
 })
 
 test('ignores orphaned failed variants when scheduling the next retry wake', async () => {
