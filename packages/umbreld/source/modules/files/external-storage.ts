@@ -29,6 +29,13 @@ type BlockDevice = {
 	}[]
 }
 
+export function isEligibleExternalStorageDevice(
+	device: Pick<BlockDevice, 'id' | 'transport' | 'size'>,
+	systemDiskNames: ReadonlySet<string>,
+) {
+	return device.transport === 'usb' && device.size > 0 && !systemDiskNames.has(device.id)
+}
+
 export function syntheticOwnershipMountOptions(filesystemType: string, userId: number, groupId: number) {
 	if (!['exfat', 'vfat', 'ntfs', 'ntfs3'].includes(filesystemType.toLowerCase())) return undefined
 	return `uid=${userId},gid=${groupId},fmask=0007,dmask=0007`
@@ -498,8 +505,9 @@ export default class ExternalStorage {
 			if (hasSystemMount) systemDiskNames.add(blockDevice.id)
 		}
 
-		// Filter out any non-USB devices and disks that back the running system.
-		return blockDevices.filter((device) => device.transport === 'usb' && !systemDiskNames.has(device.id))
+		// Filter out non-USB devices, disks that back the running system, and
+		// empty readers or unresponsive enclosures that report no usable capacity.
+		return blockDevices.filter((device) => isEligibleExternalStorageDevice(device, systemDiskNames))
 	}
 
 	#isPathOnMountpoint(systemPath: string, mountpoint: string) {

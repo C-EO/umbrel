@@ -173,6 +173,20 @@ describe('files.mountedExternalDevices', () => {
 		expect(externalDevices[0].id).toBe('sdb')
 	})
 
+	test('excludes USB disks that report zero capacity', async () => {
+		const blockDevices = structuredClone(LSBLK_EXTERNAL_DISK_ATTACHED)
+		const disk = blockDevices.blockdevices[0]
+		disk.model = 'JMS583'
+		disk.size = 0
+		disk.children = []
+
+		mockCommand = (command: string) => {
+			if (command.startsWith('lsblk')) return JSON.stringify(blockDevices)
+		}
+
+		await expect(umbreld.client.files.externalDevices.query()).resolves.toEqual([])
+	})
+
 	test('returns external devices that are attached but not mounted', async () => {
 		// Mock lsblk command to return a valid response for a mounted external disk
 		mockCommand = (command: string) => {
