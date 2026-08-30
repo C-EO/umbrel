@@ -10,6 +10,7 @@ import {useLocation, useNavigate} from 'react-router-dom'
 import {Area, AreaChart, ResponsiveContainer, XAxis, YAxis} from 'recharts'
 
 import {AppIcon} from '@/components/app-icon'
+import {DarkTooltip} from '@/components/ui/dark-tooltip'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
 import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fallback'
 import {
@@ -775,7 +776,6 @@ function CompositionBar({segments, flat, progress}: {segments: BarSegment[]; fla
 			{segments.map((segment) => (
 				<div
 					key={segment.id}
-					title={flat ? undefined : segment.label}
 					className={cn(
 						'absolute inset-0 transition-[clip-path,background-color,opacity] duration-700 [transition-timing-function:steps(14),ease,ease]',
 						flat && 'opacity-0',
@@ -789,6 +789,19 @@ function CompositionBar({segments, flat, progress}: {segments: BarSegment[]; fla
 					}}
 				/>
 			))}
+			{/* Tooltip anchors: the painted segments are full-width and only clipped,
+			    so Radix would centre the label on the whole bar. Shape these with a
+			    transform instead — hit-testing and getBoundingClientRect both follow
+			    it, and it's still compositor-only. */}
+			{!flat &&
+				segments.map((segment) => (
+					<DarkTooltip key={segment.id} label={segment.label}>
+						<div
+							className='absolute inset-0 origin-left transition-transform duration-700 [transition-timing-function:steps(14)]'
+							style={{transform: `translateX(${segment.start * 100}%) scaleX(${segment.width})`}}
+						/>
+					</DarkTooltip>
+				))}
 		</div>
 	)
 }

@@ -511,13 +511,14 @@ export default function UsersDialog() {
 		view.view === 'list' || (view.view === 'edit' && !editingMember) || (view.view === 'owner' && !owner)
 
 	const memberShareInfo = (userId: string) => {
-		const folderCount = folderShares.filter(
+		const userFolderShares = folderShares.filter(
 			(share) => !isStorageCategoryPath(share.path) && shareCoversUser(share.sharedWith, userId),
-		).length
+		)
+		const allFolders = userFolderShares.some((share) => share.path === '/Home')
 		const userAppShares = appShares.filter((share) => shareCoversUser(share.sharedWith, userId))
 		const allApps = userAppShares.some((share) => share.appId === '*')
 		const appIds = allApps ? installedApps.map((app) => app.id) : userAppShares.map((share) => share.appId)
-		return {folderCount, allApps, appCount: appIds.length, appIds}
+		return {folderCount: userFolderShares.length, allFolders, allApps, appCount: appIds.length, appIds}
 	}
 
 	const pickerApps = availableApps.map((app) => ({
@@ -784,7 +785,7 @@ export default function UsersDialog() {
 						) : (
 							<div className={listClass}>
 								{members.map((member) => {
-									const {folderCount, allApps, appCount, appIds} = memberShareInfo(member.userId)
+									const {folderCount, allFolders, allApps, appCount, appIds} = memberShareInfo(member.userId)
 									return (
 										<button
 											key={member.userId}
@@ -800,7 +801,12 @@ export default function UsersDialog() {
 											<span className='min-w-0 flex-1 truncate text-14 font-medium -tracking-2 text-white/90'>
 												{member.name}
 											</span>
-											{folderCount > 0 && <GrantSummary folder label={t('users.folder-count', {count: folderCount})} />}
+											{folderCount > 0 && (
+												<GrantSummary
+													folder
+													label={allFolders ? t('users.all-folders') : t('users.folder-count', {count: folderCount})}
+												/>
+											)}
 											{(allApps || appCount > 0) && (
 												<GrantSummary
 													icons={appIds.map((appId) => appIconById.get(appId))}

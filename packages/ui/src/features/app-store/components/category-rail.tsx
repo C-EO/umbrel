@@ -123,3 +123,77 @@ function CategoryRailPills({
 		</FadeScroller>
 	)
 }
+
+// Route-free variant of the rail for stores without per-category routes
+// (community app stores): plain buttons, no icons, same pill treatment and
+// morphing active surface.
+export function StorePills({
+	items,
+	activeId,
+	onSelect,
+	className,
+}: {
+	items: {id: string; label: string}[]
+	activeId: string
+	onSelect: (id: string) => void
+	className?: string
+}) {
+	const layoutId = useId()
+	const reduceMotion = Boolean(useReducedMotion())
+	const scrollerRef = useRef<HTMLDivElement>(null)
+	const activeRef = useRef<HTMLButtonElement>(null)
+
+	useEffect(() => {
+		if (!activeRef.current) return
+		const actions = compute(activeRef.current, {
+			scrollMode: 'if-needed',
+			inline: 'center',
+			boundary: scrollerRef.current,
+		})
+		actions.forEach(({el, top, left}) => {
+			el.scrollTop = top
+			el.scrollLeft = left
+		})
+	}, [activeId])
+
+	return (
+		<FadeScroller
+			ref={scrollerRef}
+			direction='x'
+			className={cn(
+				'umbrel-hide-scrollbar -mx-2.5 flex shrink-0 gap-1 overflow-x-auto px-2.5 py-1 md:mx-0 md:px-0',
+				className,
+			)}
+		>
+			{items.map(({id, label}) => {
+				const isActive = id === activeId
+				return (
+					<button
+						key={id}
+						type='button'
+						ref={isActive ? activeRef : undefined}
+						aria-pressed={isActive}
+						onClick={() => onSelect(id)}
+						className={cn(
+							pillClass,
+							'px-3.5',
+							isActive
+								? 'text-white'
+								: 'text-white/70 ring-1 ring-white/10 ring-inset hover:text-white hover:ring-white/16 focus-visible:text-white',
+							'focus-visible:ring-2 focus-visible:ring-white/25',
+						)}
+					>
+						{isActive && (
+							<motion.span
+								layoutId={reduceMotion ? undefined : layoutId}
+								className='settings-edge-material absolute inset-0 rounded-full bg-white/10'
+								transition={{type: 'spring', bounce: 0.2, duration: 0.4}}
+							/>
+						)}
+						<span className='relative z-10 pt-[1px]'>{label}</span>
+					</button>
+				)
+			})}
+		</FadeScroller>
+	)
+}

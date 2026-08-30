@@ -39,7 +39,7 @@ export function Sidebar({className}: {className?: string}) {
 
 	// Visibility flags
 	const hidden = capabilities.hiddenSidebarItems || {}
-	// Members only have their own home + trash; hide everything else
+	// Members only have their own home, favorites + trash; hide everything else
 	const isMember = useIsMember()
 
 	// Paths the owner has shared with this member
@@ -51,7 +51,7 @@ export function Sidebar({className}: {className?: string}) {
 	const sharedWithMeLabel = sharedWithMe?.ownerName
 		? t('files-sidebar.owners-umbrel', {name: firstNameFromFullName(sharedWithMe.ownerName)})
 		: ''
-	const showFavorites = !isMember && !isLoadingFavorites && !!favorites && favorites.length > 0
+	const showFavorites = !isLoadingFavorites && !!favorites && favorites.length > 0
 	const showShares = !isMember && !isLoadingShares && !!displayShares && displayShares.length > 0
 	const showNetwork = !hidden.network && !isMember
 	const showExternal =

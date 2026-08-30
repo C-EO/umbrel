@@ -24,7 +24,6 @@ export const wallpapers = [
 	{id: '23', brandColorHsl: '24 90% 50%'},
 	{id: '24', brandColorHsl: '209 85% 42%'},
 	{id: '25', brandColorHsl: '174 75% 32%'},
-	{id: '26', brandColorHsl: '14 96% 52%'},
 ] as const
 
 export type Wallpaper = (typeof wallpapers)[number]

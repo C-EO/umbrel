@@ -16,7 +16,6 @@ import {useImmersiveDialogCounter} from '@/providers/immersive-dialog'
 import {tw} from '@/utils/tw'
 
 import {IconTypes} from './icon'
-import {IconButton} from './icon-button'
 
 export const immersiveDialogTitleClass = tw`text-24 font-bold leading-none -tracking-4 text-white/80`
 export const immersiveDialogDescriptionClass = tw`text-15 font-normal leading-tight -tracking-2 text-white/40`
@@ -158,12 +157,10 @@ function ImmersiveDialogClose() {
 	return (
 		<div className='absolute top-full left-1/2 mt-5 -translate-x-1/2'>
 			{/* Note, because this parent has a backdrop, this button won't have a backdrop */}
-			<DialogClose asChild>
-				<IconButton
-					icon={RiCloseLine}
-					// Overriding state colors
-					className='h-[36px] w-[36px] border-none bg-dialog-content/70 shadow-immersive-dialog-close hover:border-solid hover:bg-dialog-content focus:border-solid focus:bg-dialog-content active:bg-dialog-content'
-				/>
+			{/* Plain button rather than IconButton: the button variant's border and
+			    shadow utilities would override the settings-edge-material surface */}
+			<DialogClose className='settings-edge-material umbrel-material flex h-[36px] w-[36px] items-center justify-center rounded-full bg-white/6 text-white transition-[background-color,transform] duration-200 hover:bg-white/12 focus:outline-hidden focus-visible:ring-3 focus-visible:ring-white/20 active:scale-90'>
+				<RiCloseLine className='size-5 opacity-90' />
 			</DialogClose>
 		</div>
 	)

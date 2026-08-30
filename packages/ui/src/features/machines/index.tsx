@@ -217,7 +217,7 @@ export default function MachinesLayout() {
 					</motion.div>
 					{machine && (
 						<div className='w-full shrink-0 xl:w-auto' onClick={stopImplicitDismiss}>
-							<MachineRail machine={machine} />
+							<MachineRail machine={machine} onClose={close} />
 						</div>
 					)}
 				</div>

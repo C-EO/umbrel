@@ -93,10 +93,10 @@ html {
 
 	/* System material recipe */
 	--material-tint-rgb: 0 0 0;
-	--material-tint-opacity: 0.36;
+	--material-tint-opacity: 0.4;
 	--material-blur: 20px;
 	--material-saturation: 120%;
-	--material-brightness: 90%;
+	--material-brightness: 85%;
 	--material-border-width: 0.5px;
 	--material-border-opacity: 0.1;
 	--material-shine-opacity: 0.2;
@@ -183,8 +183,8 @@ html {
 		/* Lighter, airier surface than menus: softer tint, gentler blur and a
 		   tighter shadow so toasts sit quietly over any wallpaper */
 		--material-blur: 10px;
-		--material-brightness: 100%;
-		--material-tint-opacity: 0.25;
+		--material-brightness: 95%;
+		--material-tint-opacity: 0.3;
 		--material-shadow-y: 6px;
 		--material-shadow-blur: 16px;
 		--material-shadow-opacity: 0.3;
@@ -503,6 +503,25 @@ html {
 	will-change: transform;
 }
 
+/* Welcome desktop illustrations: a column of duplicated items scrolling up
+   by half its height loops seamlessly. */
+@keyframes welcome-marquee {
+	to {
+		transform: translateY(-50%);
+	}
+}
+
+.welcome-marquee {
+	animation: welcome-marquee var(--marquee-duration, 20s) linear infinite;
+	will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.welcome-marquee {
+		animation: none;
+	}
+}
+
 /* Per-card variant: shorter and subtler, cheap enough to run on every card
    of a large grid at once */
 @keyframes umbrel-store-reveal-card {
@@ -560,13 +579,6 @@ html {
 
 .umbrel-fade-scroller-y {
 	mask-image: linear-gradient(to bottom, transparent, red var(--distance1) calc(100% - var(--distance2)), transparent);
-}
-
-/* Mobile settings pins a controls rail to the top of the sheet's scroller. Drop the
-   top half of the fade mask while it's stuck so the rail reads as solid chrome
-   rather than fading out under its own sticky position. */
-.umbrel-fade-scroller-y:has([data-settings-rail-stuck='true']) {
-	mask-image: linear-gradient(to bottom, red 0, red calc(100% - var(--distance2)), transparent);
 }
 
 .umbrel-fade-scroller-x {

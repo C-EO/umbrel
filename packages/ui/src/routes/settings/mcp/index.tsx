@@ -536,7 +536,7 @@ function EnabledView({
 
 			<section className='flex flex-col gap-2'>
 				<SectionLabel>{t('mcp-permissions')}</SectionLabel>
-				<p className='-mt-1 text-12 leading-tight text-white/35'>{t('mcp-always-available-description')}</p>
+				<p className='-mt-1 text-12 leading-tight text-white/50'>{t('mcp-always-available-description')}</p>
 				<div className={listClass}>
 					<button
 						type='button'
@@ -545,7 +545,7 @@ function EnabledView({
 					>
 						<span className='min-w-0 flex-1'>
 							<span className='block truncate text-13 font-medium -tracking-2 text-white/90'>{t('mcp-apps')}</span>
-							<span className='block text-12 leading-tight text-white/35'>{t('mcp-apps-summary')}</span>
+							<span className='block text-12 leading-tight text-white/50'>{t('mcp-apps-summary')}</span>
 						</span>
 						<GrantSummary icons={summaryAppIcons} label={appsSummaryLabel} />
 						<RowChevron />
@@ -557,7 +557,7 @@ function EnabledView({
 					>
 						<span className='min-w-0 flex-1'>
 							<span className='block truncate text-13 font-medium -tracking-2 text-white/90'>{t('mcp-folders')}</span>
-							<span className='block text-12 leading-tight text-white/35'>{t('mcp-folders-summary')}</span>
+							<span className='block text-12 leading-tight text-white/50'>{t('mcp-folders-summary')}</span>
 						</span>
 						<GrantSummary folder={allFolders || folderGrants.length > 0} label={filesSummaryLabel} />
 						<RowChevron />
@@ -579,12 +579,10 @@ function EnabledView({
 				</div>
 			</section>
 
-			{/* Token accounting only earns its keep once there's more than one:
-			    the single-token steady state stays as simple as it always was */}
-			{tokens.length > 1 && (
+			{tokens.length > 0 && (
 				<section className='flex flex-col gap-2'>
 					<SectionLabel>{t('mcp-tokens')}</SectionLabel>
-					<p className='-mt-1 text-12 leading-tight text-white/35'>{t('mcp-tokens-description')}</p>
+					<p className='-mt-1 text-12 leading-tight text-white/40'>{t('mcp-tokens-description')}</p>
 					<div className={listClass}>
 						<button
 							type='button'
@@ -595,9 +593,9 @@ function EnabledView({
 								<span className='block truncate text-13 font-medium -tracking-2 text-white/90'>
 									{t('mcp-tokens-manage')}
 								</span>
-								<span className='block text-12 leading-tight text-white/35'>{t('mcp-tokens-manage-description')}</span>
+								<span className='block text-12 leading-tight text-white/40'>{t('mcp-tokens-manage-description')}</span>
 							</span>
-							<span className='shrink-0 text-12 text-white/40'>{t('mcp-token-count', {count: tokens.length})}</span>
+							<span className='shrink-0 text-12 text-white/60'>{t('mcp-token-count', {count: tokens.length})}</span>
 							<RowChevron />
 						</button>
 					</div>
@@ -666,7 +664,7 @@ function TokenConnectionRow({token}: {token: McpToken}) {
 			<AgentLogoPlate agent={agent ?? OTHER_AGENT} size={32} className='shrink-0' />
 			<span className='min-w-0 flex-1'>
 				<span className='block truncate text-13 font-medium -tracking-2 text-white/90'>{token.label}</span>
-				<span className='block text-12 leading-tight text-white/35'>
+				<span className='block text-12 leading-tight text-white/40'>
 					{relativeTime ? t('mcp-last-request', {time: relativeTime}) : t('mcp-connect-waiting')}
 				</span>
 			</span>
@@ -699,7 +697,7 @@ function PermissionToggleRow({
 		<label className='flex items-center justify-between gap-4 p-3'>
 			<div className='min-w-0 flex-1'>
 				<div className='text-13 font-medium -tracking-2 text-white/90'>{title}</div>
-				<div className='text-12 leading-tight text-white/35'>{description}</div>
+				<div className='text-12 leading-tight text-white/45'>{description}</div>
 			</div>
 			<Switch
 				className={cn(disabled && 'umbrel-pulse')}

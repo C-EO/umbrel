@@ -23,11 +23,24 @@ export function useGpu(options: {poll?: boolean} = {}) {
 			: undefined,
 	})
 	const data = gpuQ.data
+	// Presence is known long before the first usage sample: the graphics
+	// controller list is a cheap lspci call, prefetched at startup, and never
+	// goes stale on its own (a hotplugged GPU shows up through the usage poll
+	// above). Using it while the first sample is in flight lets Live Usage lay
+	// out the GPU card on first paint instead of reflowing a second later. The
+	// route is owner-only, so members wait for the usage sample instead.
+	const userQ = trpcReact.user.get.useQuery()
+	const gpuInfoQ = trpcReact.hardware.gpu.getInfo.useQuery(undefined, {
+		retry: false,
+		staleTime: Infinity,
+		enabled: userQ.data?.role === 'owner',
+	})
+	const hasGpu = data ? data.devices.length > 0 : (gpuInfoQ.data?.gpus.length ?? 0) > 0
 
 	return {
 		data,
 		isLoading: gpuQ.isLoading,
-		hasGpu: (data?.devices.length ?? 0) > 0,
+		hasGpu,
 		percentUsed: data?.totalUsed,
 		memoryUsed: data?.memoryUsed ?? 0,
 		devices: data?.devices ?? [],
@@ -48,7 +61,7 @@ export function useGpuForUi(options: {poll?: boolean} = {}) {
 	if (isLoading) {
 		return {
 			isLoading: true,
-			hasGpu: false,
+			hasGpu,
 			value: LOADING_DASH,
 			secondaryValue: LOADING_DASH,
 			progress: 0,

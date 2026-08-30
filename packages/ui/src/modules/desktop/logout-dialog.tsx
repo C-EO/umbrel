@@ -10,7 +10,9 @@ import {
 	AlertDialogHeader,
 	AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import {AccountAvatar} from '@/modules/auth/account-avatar'
 import {useAuth} from '@/modules/auth/use-auth'
+import {trpcReact} from '@/trpc/trpc'
 import {useDialogOpenProps} from '@/utils/dialog'
 
 export function LogoutDialog() {
@@ -19,11 +21,21 @@ export function LogoutDialog() {
 	// useUmbrelTitle('Log out')
 	const dialogProps = useDialogOpenProps('logout')
 	const {logout} = useAuth()
+	const userQ = trpcReact.user.get.useQuery()
 
 	return (
 		<AlertDialog {...dialogProps}>
 			<AlertDialogContent>
-				<AlertDialogHeader icon={RiLogoutCircleRLine}>
+				<AlertDialogHeader icon={userQ.data ? undefined : RiLogoutCircleRLine}>
+					{userQ.data && (
+						<AccountAvatar
+							name={userQ.data.name}
+							userId={userQ.data.userId}
+							avatarUrl={userQ.data.avatarUrl}
+							size={80}
+							className='mx-auto'
+						/>
+					)}
 					<AlertDialogTitle>{t('logout.confirm.title')}</AlertDialogTitle>
 				</AlertDialogHeader>
 				<AlertDialogFooter>

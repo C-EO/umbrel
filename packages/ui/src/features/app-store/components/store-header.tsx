@@ -6,9 +6,20 @@ import {TbCircleArrowUp, TbDots, TbSearch} from 'react-icons/tb'
 import {Link} from 'react-router-dom'
 
 import {DialogCloseButton} from '@/components/ui/dialog-close-button'
-import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuPortal,
+	DropdownMenuSeparator,
+	DropdownMenuSub,
+	DropdownMenuSubContent,
+	DropdownMenuSubTrigger,
+	DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {NotificationBadge} from '@/components/ui/notification-badge'
 import {SheetHeader, SheetTitle} from '@/components/ui/sheet'
+import {UMBREL_APP_STORE_ID} from '@/constants/app-store'
 import {CategoryRail} from '@/features/app-store/components/category-rail'
 import {UpdatesDialogConnected} from '@/features/app-store/components/updates-dialog'
 import {storeRevealSoftClass} from '@/features/app-store/constants'
@@ -21,6 +32,7 @@ import {cn} from '@/lib/utils'
 import {CommunityAppStoreDialog} from '@/modules/app-store/community-app-store-dialog'
 import {SheetFixedContent} from '@/modules/sheet-top-fixed'
 import {SheetStickyHeader} from '@/providers/sheet-sticky-header'
+import {trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
 
 type StoreSearch = ReturnType<typeof useStoreSearch>
@@ -173,14 +185,16 @@ function MobileStoreHeader({
 	)
 }
 
-function StoreSearchInput({
+export function StoreSearchInput({
 	value,
 	onValueChange,
 	inputRef,
+	className,
 }: {
 	value: string
 	onValueChange: (query: string) => void
 	inputRef?: React.Ref<HTMLInputElement>
+	className?: string
 }) {
 	const {t} = useTranslation()
 	return (
@@ -188,6 +202,7 @@ function StoreSearchInput({
 			className={cn(
 				'settings-edge-material flex h-9 w-full max-w-[200px] min-w-0 shrink items-center gap-2 rounded-full bg-white/3 px-3 text-white/55 transition-colors duration-200',
 				'focus-within:bg-white/7 focus-within:text-white/80 hover:bg-white/6',
+				className,
 			)}
 		>
 			<TbSearch className='h-4 w-4 shrink-0 opacity-70' />
@@ -249,6 +264,13 @@ function UpdatesTrigger({updates}: {updates?: UpdatesState}) {
 function CommunityAppsMenuTrigger() {
 	const {t} = useTranslation()
 	const {addLinkSearchParams} = useQueryParams()
+	// Already cached by AvailableAppsProvider — no extra request
+	const registryQ = trpcReact.appStore.registry.useQuery()
+	const communityStores = (registryQ.data ?? []).filter(
+		(repo): repo is NonNullable<typeof repo> => repo !== null && repo.meta.id !== UMBREL_APP_STORE_ID,
+	)
+	const manageLink = {search: addLinkSearchParams({dialog: 'add-community-store'})}
+
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger
@@ -259,11 +281,34 @@ function CommunityAppsMenuTrigger() {
 				<TbDots className='h-4.5 w-4.5' />
 			</DropdownMenuTrigger>
 			<DropdownMenuContent className='p-1' align='end'>
-				<DropdownMenuItem asChild>
-					<Link to={{search: addLinkSearchParams({dialog: 'add-community-store'})}}>
-						{t('app-store.menu.community-app-stores')}
-					</Link>
-				</DropdownMenuItem>
+				{communityStores.length === 0 ? (
+					<DropdownMenuItem asChild>
+						<Link to={manageLink}>{t('app-store.menu.community-app-stores')}</Link>
+					</DropdownMenuItem>
+				) : (
+					// With stores added, each one is a hover away instead of buried
+					// behind the manage dialog
+					<DropdownMenuSub>
+						<DropdownMenuSubTrigger className='gap-3'>
+							{t('app-store.menu.community-app-stores')}
+						</DropdownMenuSubTrigger>
+						<DropdownMenuPortal>
+							<DropdownMenuSubContent className='max-w-64 p-1'>
+								<DropdownMenuItem asChild>
+									<Link to={manageLink}>{t('app-store.menu.manage-community-app-stores')}</Link>
+								</DropdownMenuItem>
+								<DropdownMenuSeparator className='-mx-1 my-1' />
+								{communityStores.map((repo) => (
+									<DropdownMenuItem key={repo.meta.id} asChild>
+										<Link to={`/community-app-store/${repo.meta.id}`} title={repo.meta.name} className='min-w-0'>
+											<span className='min-w-0 truncate'>{repo.meta.name}</span>
+										</Link>
+									</DropdownMenuItem>
+								))}
+							</DropdownMenuSubContent>
+						</DropdownMenuPortal>
+					</DropdownMenuSub>
+				)}
 			</DropdownMenuContent>
 		</DropdownMenu>
 	)

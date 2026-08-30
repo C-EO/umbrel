@@ -1,9 +1,10 @@
 import {Minus, Plus} from 'lucide-react'
-import {AnimatePresence, motion} from 'motion/react'
-import {ReactNode, useEffect, useState} from 'react'
+import {animate, AnimatePresence, motion, useMotionValue, type PanInfo} from 'motion/react'
+import {ReactNode, useEffect, useRef, useState} from 'react'
 import {ErrorBoundary} from 'react-error-boundary'
-import {Trans, useTranslation} from 'react-i18next'
-import {Link} from 'react-router-dom'
+import {useTranslation} from 'react-i18next'
+import {useMeasure} from 'react-use'
+import {chunk} from 'remeda'
 
 import {AppIcon} from '@/components/app-icon'
 import {DialogCloseButton} from '@/components/ui/dialog-close-button'
@@ -13,20 +14,45 @@ import {ScrollArea} from '@/components/ui/sheet-scroll-area'
 import {WidgetCheckIcon} from '@/components/widget-check-icon'
 import {useWidgets} from '@/hooks/use-widgets'
 import {cn} from '@/lib/utils'
+import {ArrowButton, PaginatorPills} from '@/modules/desktop/app-grid/paginator'
 import {DockSpacer} from '@/modules/desktop/dock'
 import {ExampleWidget, Widget} from '@/modules/widgets'
 import {BackdropBlurVariantContext} from '@/modules/widgets/shared/backdrop-blur-context'
 
-export function WidgetSelector({
-	open,
-	onOpenChange,
-	disabled = false,
-}: {
-	open: boolean
-	onOpenChange: (open: boolean) => void
-	disabled?: boolean
-}) {
-	const {t} = useTranslation()
+const carouselSpring = {type: 'spring', stiffness: 400, damping: 40} as const
+
+// How many selected widgets fit per carousel page, matching the homescreen's
+// widget row: derived from the CSS vars the desktop's usePager injects on
+// documentElement. Those vars land only after the desktop grid has measured
+// itself, so keep retrying each frame until they exist — reading them once on
+// mount can race the measurement and stick the wrong count.
+function useWidgetsPerPage() {
+	const [perPage, setPerPage] = useState(3)
+	useEffect(() => {
+		const compute = () => {
+			const style = getComputedStyle(document.documentElement)
+			const pageW = parseFloat(style.getPropertyValue('--page-w'))
+			const widgetW = parseFloat(style.getPropertyValue('--widget-w'))
+			const gap = parseFloat(style.getPropertyValue('--app-x-gap'))
+			if (!(pageW > 0) || !(widgetW > 0)) return false
+			setPerPage(Math.max(1, Math.floor((pageW + gap) / (widgetW + gap))))
+			return true
+		}
+		let raf = 0
+		const tick = () => {
+			if (!compute()) raf = requestAnimationFrame(tick)
+		}
+		tick()
+		window.addEventListener('resize', tick)
+		return () => {
+			cancelAnimationFrame(raf)
+			window.removeEventListener('resize', tick)
+		}
+	}, [])
+	return perPage
+}
+
+export function WidgetSelector({open, onOpenChange}: {open: boolean; onOpenChange: (open: boolean) => void}) {
 	// Delay until after `usePager` has injected CSS vars
 	const [isReady, setIsReady] = useState(false)
 	useEffect(() => {
@@ -36,16 +62,67 @@ export function WidgetSelector({
 
 	const {availableWidgets, toggleSelected, selected, selectedTooMany} = useWidgets()
 
+	// Selected widgets page like the homescreen's widget row instead of
+	// overflowing a single row. The carousel is transform-driven (no scroll
+	// container), so the widgets' glass shadows are never clipped — off-page
+	// widgets fade out instead, and fade back in while dragging.
+	// Paginating is disabled while the MAX_WIDGETS cap keeps every selection on
+	// one page; flip this back on when the cap is lifted (needs the glass
+	// lenses consolidated into one shared canvas renderer first).
+	const paginate = false
+	const widgetsPerPage = useWidgetsPerPage()
+	const widgetPages = chunk(selected, paginate ? widgetsPerPage : Math.max(selected.length, 1))
+	const pageCount = Math.max(1, widgetPages.length)
+	const [page, setPage] = useState(0)
+	const [dragging, setDragging] = useState(false)
+	const [measureRef, {width: pageW}] = useMeasure<HTMLDivElement>()
+
+	const x = useMotionValue(0)
+	useEffect(() => {
+		const controls = animate(x, -page * pageW, carouselSpring)
+		return () => controls.stop()
+	}, [page, pageW, x])
+
+	const toPage = (index: number) => setPage(Math.max(0, Math.min(pageCount - 1, index)))
+
+	const handleDragEnd = (_event: unknown, info: PanInfo) => {
+		setDragging(false)
+		// Land on the neighboring page when the drag traveled far or flicked fast
+		const swipe = info.offset.x + info.velocity.x * 0.2
+		let target = page
+		if (swipe < -pageW / 3) target = page + 1
+		else if (swipe > pageW / 3) target = page - 1
+		target = Math.max(0, Math.min(pageCount - 1, target))
+		setPage(target)
+		// Same-page release still needs the spring back to the resting position
+		animate(x, -target * pageW, carouselSpring)
+	}
+
+	// Adding a widget appends it to the end, so slide the carousel there to
+	// show it
+	const prevSelectedCount = useRef(selected.length)
+	useEffect(() => {
+		if (selected.length > prevSelectedCount.current) setPage(pageCount - 1)
+		prevSelectedCount.current = selected.length
+	}, [selected.length, pageCount])
+
+	// Removing widgets can drop the last page out from under the current one
+	useEffect(() => {
+		setPage((current) => Math.min(current, pageCount - 1))
+	}, [pageCount])
+
 	if (!isReady) return null
 
-	const selectedH = disabled || selected.length == 0 ? 'var(--sheet-top)' : `calc(var(--widget-h) + 8vh)`
+	const selectedH = selected.length == 0 ? 'var(--sheet-top)' : `calc(var(--widget-h) + 8vh)`
 
 	return (
 		<>
-			{open && !disabled && (
-				// Don't make this take up full width because clicking outside should close the widget selector
-				// `pointer-events-none` because we want clicking outside the sheet to close the sheet, not interact with the widget
-				<div className='pointer-events-none absolute top-0 left-1/2 z-50 -translate-x-1/2 max-lg:scale-[85%] max-md:scale-[65%]'>
+			{open && (
+				// `pointer-events-none` because we want clicking outside the sheet to close the sheet, not interact with the widget.
+				// `overflow-x-clip` (at the screen edge, so shadows still flow freely over the visible strip): the carousel's
+				// off-page widgets extend past the viewport, and without the clip that overflow widens a transformed ancestor —
+				// which the sheet's `fixed` position resolves against, shoving it below the viewport on mobile
+				<div className='pointer-events-none absolute inset-x-0 top-0 z-50 flex flex-col items-center overflow-x-clip'>
 					{/* <div className='absoulte top-0 grid h-[var(--widget-h)] w-full place-items-center whitespace-nowrap'>
 						No widgets selected
 					</div> */}
@@ -62,64 +139,89 @@ export function WidgetSelector({
 							duration: 0.2,
 							ease: 'easeOut',
 						}}
-						className={cn('flex items-center gap-[var(--app-x-gap)]', selectedTooMany && 'animate-shake')}
+						className={cn('flex flex-col items-center justify-center gap-5', selectedTooMany && 'animate-shake')}
 						style={{height: selectedH}}
 					>
-						<AnimatePresence>
-							{selected.map((widget) => {
-								return (
-									<motion.div
-										key={widget.id}
-										layout
-										initial={{
-											opacity: 1,
-											y: -20,
-										}}
-										animate={{
-											opacity: 1,
-											y: 0,
-										}}
-										exit={{
-											opacity: 0,
-											y: 20,
-										}}
-										transition={{
-											type: 'spring',
-											stiffness: 500,
-											damping: 30,
-										}}
-									>
-										<Widget appId={widget.app.id} config={widget} />
-									</motion.div>
-								)
-							})}
-						</AnimatePresence>
+						{/* Same paged carousel as the homescreen's widget row: swipeable,
+						   with arrows on lg+ and pills below. Transform-driven with no
+						   overflow clipping so the widgets' glass shadows paint freely;
+						   off-page widgets fade out and fade back in while dragging. The
+						   widgets themselves stay click-through (they'd open their apps
+						   otherwise). */}
+						<div className='relative flex items-center'>
+							{pageCount > 1 && (
+								<div className='pointer-events-auto absolute top-1/2 -left-4 hidden -translate-x-full -translate-y-1/2 lg:block'>
+									<ArrowButton direction='left' disabled={page <= 0} onClick={() => toPage(page - 1)} />
+								</div>
+							)}
+							{/* Match the widget sheet's max width below */}
+							<div ref={measureRef} className='w-screen max-w-[1040px]'>
+								<motion.div
+									className='pointer-events-auto flex'
+									style={{x}}
+									drag={pageCount > 1 ? 'x' : false}
+									dragConstraints={{left: -(pageCount - 1) * pageW, right: 0}}
+									dragElastic={0.12}
+									dragMomentum={false}
+									onDragStart={() => setDragging(true)}
+									onDragEnd={handleDragEnd}
+								>
+									{widgetPages.map((pageWidgets, pageIndex) => (
+										<motion.div
+											key={pageIndex}
+											animate={{opacity: dragging || pageIndex === page ? 1 : 0}}
+											transition={{duration: 0.2}}
+											className='pointer-events-none flex h-[var(--widget-h)] w-full flex-none items-center justify-center gap-[var(--app-x-gap)]'
+										>
+											<AnimatePresence>
+												{pageWidgets.map((widget) => {
+													return (
+														<motion.div
+															key={widget.id}
+															layout
+															initial={{
+																opacity: 1,
+																y: -20,
+															}}
+															animate={{
+																opacity: 1,
+																y: 0,
+															}}
+															exit={{
+																opacity: 0,
+																y: 20,
+															}}
+															transition={{
+																type: 'spring',
+																stiffness: 500,
+																damping: 30,
+															}}
+														>
+															<Widget appId={widget.app.id} config={widget} />
+														</motion.div>
+													)
+												})}
+											</AnimatePresence>
+										</motion.div>
+									))}
+								</motion.div>
+							</div>
+							{pageCount > 1 && (
+								<div className='pointer-events-auto absolute top-1/2 -right-4 hidden translate-x-full -translate-y-1/2 lg:block'>
+									<ArrowButton direction='right' disabled={page >= pageCount - 1} onClick={() => toPage(page + 1)} />
+								</div>
+							)}
+						</div>
+						{pageCount > 1 && (
+							<div className='pointer-events-auto'>
+								<PaginatorPills total={pageCount} current={page} onCurrentChange={toPage} />
+							</div>
+						)}
 					</motion.div>
 				</div>
 			)}
 			<WidgetSheet open={open} onOpenChange={onOpenChange} selectedCssHeight={selectedH}>
-				{disabled && (
-					<p className='text-13 text-white/40'>
-						<Trans
-							t={t}
-							i18nKey='widgets.install-app-to-customize'
-							components={{
-								linked: (
-									<Link
-										to='/app-store'
-										className='text-white/60 underline decoration-white/20 underline-offset-2 hover:text-white/80 hover:decoration-white/40'
-									/>
-								),
-							}}
-						/>
-					</p>
-				)}
-				<div
-					className={cn(
-						'flex flex-col items-start gap-5 md:gap-8',
-						disabled && 'pointer-events-none opacity-40 blur-[2px]',
-					)}
-				>
+				<div className='flex flex-col items-start gap-5 md:gap-8'>
 					{availableWidgets.map(({appId, icon, name, widgets}) => {
 						return (
 							<WidgetSection key={appId} iconSrc={icon} title={name}>

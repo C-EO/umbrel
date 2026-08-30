@@ -4,6 +4,7 @@ import {useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 
 import {PitchPoints} from '@/components/ui/pitch-points'
+import {toast} from '@/components/ui/toast'
 import {CLOUD_PROVIDER_LOGOS} from '@/features/files/constants'
 import type {CloudProvider} from '@/features/files/hooks/use-cloud'
 import {CLOUD_SELF_TILE_BRANDS, CLOUD_WEBDAV_FLAVORS, type CloudWebDavFlavorId} from '@/features/files/utils/cloud'
@@ -26,6 +27,36 @@ type SatelliteSlot = {ring: 'inner' | 'outer'; angle: number; size: number}
 const TILE_ORDER = ['google-drive', 'dropbox', 'icloud', 'onedrive']
 const CONSTELLATION_IDS = new Set([...TILE_ORDER, ...CLOUD_WEBDAV_FLAVORS.map(({id}) => id)])
 const COMING_SOON_PROVIDER_IDS = new Set(['google-drive'])
+
+// A coming-soon tile unlocks after seven quick taps.
+const UNLOCK_TAPS = 7
+const UNLOCK_TAP_WINDOW_MS = 2000
+
+function useProviderUnlock() {
+	const {t} = useTranslation()
+	const [unlocked, setUnlocked] = useState<Set<string>>(() => new Set())
+	// The tile currently rattling from the shake keyframes, cleared once they finish
+	const [shaking, setShaking] = useState<string | null>(null)
+	const taps = useRef<{id: string; count: number; at: number}>({id: '', count: 0, at: 0})
+
+	const tap = (id: string, displayName: string) => {
+		const now = Date.now()
+		const previous = taps.current
+		const count = previous.id === id && now - previous.at < UNLOCK_TAP_WINDOW_MS ? previous.count + 1 : 1
+		taps.current = {id, count, at: now}
+		if (count < UNLOCK_TAPS) {
+			// The tile starts pushing back halfway there, hinting that the taps count
+			if (count >= 4) setShaking(id)
+			return
+		}
+		taps.current = {id: '', count: 0, at: 0}
+		setShaking(null)
+		setUnlocked((current) => new Set(current).add(id))
+		toast.success(t('files-cloud.unlocked', {provider: displayName}), {area: 'files'})
+	}
+
+	return {isUnlocked: (id: string) => unlocked.has(id), shaking, tap, settleShake: () => setShaking(null)}
+}
 
 // Logos that are already full app-icon squares render edge to edge; everything
 // else sits inset on a white plate, so every satellite reads as an app icon.
@@ -291,6 +322,7 @@ export function CloudConstellation({
 	}, [])
 
 	const layoutTransition = reducedMotion ? {duration: 0} : PLATE_SPRING
+	const unlock = useProviderUnlock()
 
 	const satellite = (entry: CloudEntry, slot: SatelliteSlot | undefined, index: number, isFooter = false) => {
 		// The stagger applies to the mount entrance only, never to the morph.
@@ -299,7 +331,8 @@ export function CloudConstellation({
 		const entranceDelay = isPitch ? (mountedAsPitch ? 0.2 + index * 0.05 : 0) : mountedAsPitch ? 0 : index * 0.03
 		const orbit = slot ? orbitKeyframes(slot) : undefined
 		const orbiting = isPitch && !reducedMotion && orbit
-		const isComingSoon = COMING_SOON_PROVIDER_IDS.has(entry.id)
+		const isComingSoon = COMING_SOON_PROVIDER_IDS.has(entry.id) && !unlock.isUnlocked(entry.id)
+		const isShaking = !isPitch && isComingSoon && unlock.shaking === entry.id
 		return (
 			// The view is part of the key: switching to the picker mounts a fresh,
 			// transform-free tile that flies in from the orbiting satellite's last
@@ -325,7 +358,7 @@ export function CloudConstellation({
 				aria-hidden={isPitch}
 				aria-disabled={!isPitch && isComingSoon}
 				onClick={() => {
-					if (isComingSoon) return
+					if (isComingSoon) return unlock.tap(entry.id, entry.displayName)
 					onSelect?.({provider: entry.provider, ...(entry.flavor && {flavor: entry.flavor})})
 				}}
 				whileTap={isPitch || isComingSoon ? undefined : {scale: 0.96}}
@@ -334,13 +367,13 @@ export function CloudConstellation({
 					// the change lands instantly so the grid feels snappy under the cursor
 					!isPitch &&
 						!isFooter &&
-						'flex flex-col items-center gap-2 rounded-xl border border-white/5 bg-white/3 p-4 focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6',
+						'flex flex-col items-center gap-2 rounded-xl border border-white/5 bg-white/7 p-4 focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6',
 					!isPitch &&
 						!isFooter &&
-						(isComingSoon ? 'cursor-not-allowed text-white/50' : 'hover:border-white/10 hover:bg-white/6'),
+						(isComingSoon ? 'cursor-not-allowed text-white/50' : 'hover:border-white/10 hover:bg-white/10'),
 					!isPitch &&
 						isFooter &&
-						'col-span-2 flex items-center justify-center gap-2 rounded-xl border border-white/5 bg-white/3 px-3 py-2.5 text-white/60 hover:border-white/10 hover:bg-white/6 hover:text-white focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6 focus-visible:text-white sm:col-span-3',
+						'col-span-2 flex items-center justify-center gap-2 rounded-xl border border-white/5 bg-white/7 px-3 py-2.5 text-white/60 hover:border-white/10 hover:bg-white/6 hover:text-white focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6 focus-visible:text-white sm:col-span-3',
 				)}
 				style={
 					isPitch && orbit && slot
@@ -359,18 +392,27 @@ export function CloudConstellation({
 					// the remount on the view switch must not replay either mid-flight.
 					initial={false}
 					animate={
-						entered ? {opacity: 1, scale: 1} : mountedAsPitch ? {opacity: 0, scale: 0.4} : {opacity: 0, scale: 0.97}
+						isShaking && !reducedMotion
+							? {opacity: 1, scale: 1, x: [0, -4, 4, -3, 3, -2, 2, 0]}
+							: entered
+								? {opacity: 1, scale: 1, x: 0}
+								: mountedAsPitch
+									? {opacity: 0, scale: 0.4}
+									: {opacity: 0, scale: 0.97}
 					}
+					onAnimationComplete={() => isShaking && unlock.settleShake()}
 					transition={
-						mountedAsPitch
-							? {
-									opacity: {duration: 0.4, delay: entranceDelay},
-									scale: {type: 'spring', stiffness: 340, damping: 20, delay: entranceDelay},
-								}
-							: {
-									opacity: {duration: 0.25, delay: entranceDelay},
-									scale: {type: 'spring', stiffness: 300, damping: 30, delay: entranceDelay},
-								}
+						isShaking
+							? {x: {duration: 0.4, ease: 'easeInOut'}}
+							: mountedAsPitch
+								? {
+										opacity: {duration: 0.4, delay: entranceDelay},
+										scale: {type: 'spring', stiffness: 340, damping: 20, delay: entranceDelay},
+									}
+								: {
+										opacity: {duration: 0.25, delay: entranceDelay},
+										scale: {type: 'spring', stiffness: 300, damping: 30, delay: entranceDelay},
+									}
 					}
 					className={cn(
 						'flex items-center justify-center',
@@ -389,11 +431,18 @@ export function CloudConstellation({
 							{entry.displayName}
 						</motion.span>
 					)}
-					{!isPitch && isComingSoon && (
-						<span className='-mt-1 rounded-full bg-white/8 px-1.5 py-0.5 text-[9px] leading-none font-medium text-white/50'>
-							{t('files-cloud.coming-soon')}
-						</span>
-					)}
+					<AnimatePresence initial={false}>
+						{!isPitch && isComingSoon && (
+							<motion.span
+								key='coming-soon'
+								exit={reducedMotion ? {opacity: 0} : {opacity: 0, scale: 0.6, y: -6}}
+								transition={{duration: 0.25}}
+								className='-mt-1 rounded-full bg-white/8 px-1.5 py-0.5 text-[9px] leading-none font-medium text-white/50'
+							>
+								{t('files-cloud.coming-soon')}
+							</motion.span>
+						)}
+					</AnimatePresence>
 				</motion.div>
 			</motion.button>
 		)

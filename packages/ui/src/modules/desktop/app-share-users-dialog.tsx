@@ -33,6 +33,13 @@ export function AppShareUsersDialog() {
 		isRemovingAppMemberShare,
 	} = useAppMemberShares()
 	const existingShare = shareForApp(appId)
+	// Members covered by the '*' share already have this app via "Share all
+	// apps"; their rows lock on and point to where that's controlled
+	const allAppsShare = appId === '*' ? undefined : shareForApp('*')
+	const lockedReason = ({userId, name}: {userId: string; name: string}) =>
+		allAppsShare && (allAppsShare.sharedWith === 'all' || allAppsShare.sharedWith.includes(userId))
+			? t('app-share-users.locked-by-share-all', {name})
+			: undefined
 	// Writes replace the whole share record computed from existingShare, so
 	// they must wait for the share list to load — before that, a toggle would
 	// rewrite the record from nothing and drop other members' access
@@ -64,7 +71,12 @@ export function AppShareUsersDialog() {
 					</div>
 				</DialogHeader>
 
-				<MemberSharePicker sharedWith={existingShare?.sharedWith} isBusy={isBusy} onChange={writeShare} />
+				<MemberSharePicker
+					sharedWith={existingShare?.sharedWith}
+					isBusy={isBusy}
+					onChange={writeShare}
+					lockedReason={lockedReason}
+				/>
 			</DialogContent>
 		</Dialog>
 	)

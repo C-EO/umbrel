@@ -1,8 +1,10 @@
 import z from 'zod'
 import ms from 'ms'
 
-import {router, privateProcedure, privateProcedureWithMembers} from '../server/trpc/trpc.js'
+import type Umbreld from '../../index.js'
+import {router, privateProcedureWithMembers} from '../server/trpc/trpc.js'
 import {OWNER_USER_ID} from '../user/constants.js'
+import {DEFAULT_WIDGETS} from '../user/user.js'
 import {systemWidgets} from '../system/system-widgets.js'
 import {filesWidgets} from '../files/widgets.js'
 
@@ -18,73 +20,96 @@ function splitWidgetId(widgetId: string) {
 	return {appId, widgetName}
 }
 
-export default router({
-	// List enabled widgets.
-	// Members don't have widgets yet so they get an empty list rather than a
-	// permission error, letting the desktop render for them.
-	enabled: privateProcedureWithMembers.query(async ({ctx}) => {
-		if (ctx.principal?.accountId !== OWNER_USER_ID) return []
-		const widgetIds = (await ctx.umbreld.store.get('widgets')) || []
+// Build a predicate for which widgets an account may use. Umbrel widgets are
+// open to everyone, app widgets only to the owner and members the app is
+// shared with. The share lookup happens once here so the predicate can run
+// synchronously inside the store write lock.
+async function widgetFilterFor(umbreld: Umbreld, accountId: string): Promise<(widgetId: string) => boolean> {
+	if (accountId === OWNER_USER_ID) return () => true
+	const sharedAppIds = new Set(await umbreld.apps.sharedAppIdsForUser(accountId))
+	return (widgetId) => {
+		const {appId} = splitWidgetId(widgetId)
+		return appId === 'umbrel' || sharedAppIds.has(appId)
+	}
+}
 
-		return widgetIds
+// Resolve an account's enabled widgets from its stored value. An account
+// that has never changed its widgets gets the defaults, and members lose
+// widgets for apps no longer shared with them, without persisting either.
+// Stored state only changes when the account explicitly enables or disables
+// a widget.
+function resolveWidgets(stored: string[] | undefined, isAllowed: (widgetId: string) => boolean) {
+	return (stored ?? DEFAULT_WIDGETS).filter(isAllowed)
+}
+
+export default router({
+	// List enabled widgets for the current account
+	enabled: privateProcedureWithMembers.query(async ({ctx}) => {
+		const accountId = ctx.principal!.accountId
+		const isAllowed = await widgetFilterFor(ctx.umbreld, accountId)
+		return resolveWidgets(await ctx.umbreld.user.getAccountWidgets(accountId), isAllowed)
 	}),
 
 	// Enable widget
-	enable: privateProcedure
+	enable: privateProcedureWithMembers
 		.input(
 			z.object({
 				widgetId: z.string(),
 			}),
 		)
 		.mutation(async ({ctx, input}) => {
+			const accountId = ctx.principal!.accountId
 			const {appId, widgetName} = splitWidgetId(input.widgetId)
+			const isAllowed = await widgetFilterFor(ctx.umbreld, accountId)
 
 			// Validate widget
 			if (appId === 'umbrel') {
 				// This is an Umbrel widget
 				if (!(widgetName in umbrelWidgets)) throw new Error(`No widget named ${widgetName} found in Umbrel widgets`)
 			} else {
-				// This is an app widget
+				// This is an app widget, members can only enable widgets of apps shared with them
+				if (!isAllowed(input.widgetId)) throw new Error('[widget-not-found]')
 				// Throws an error if the widget doesn't exist
 				await ctx.apps.getApp(appId).getWidgetMetadata(widgetName)
 			}
 
 			// Save widget ID
-			await ctx.umbreld.store.getWriteLock(async ({get, set}) => {
-				const widgets = (await get('widgets')) || []
+			await ctx.umbreld.user.updateAccountWidgets(accountId, (stored) => {
+				const current = resolveWidgets(stored, isAllowed)
 
 				// Check if widget is already active
-				if (widgets.includes(input.widgetId)) throw new Error(`Widget ${input.widgetId} is already enabled`)
+				if (current.includes(input.widgetId)) throw new Error(`Widget ${input.widgetId} is already enabled`)
 
 				// Check we don't have more than 3 widgets enabled
-				if (widgets.length >= MAX_ALLOWED_WIDGETS)
+				if (current.length >= MAX_ALLOWED_WIDGETS)
 					throw new Error(`The maximum number of widgets (${MAX_ALLOWED_WIDGETS}) has already been enabled`)
 
-				widgets.push(input.widgetId)
-				await set('widgets', widgets)
+				return [...current, input.widgetId]
 			})
 
 			return true
 		}),
 
 	// Disable widget
-	disable: privateProcedure
+	disable: privateProcedureWithMembers
 		.input(
 			z.object({
 				widgetId: z.string(),
 			}),
 		)
 		.mutation(async ({ctx, input}) => {
+			const accountId = ctx.principal!.accountId
+			const isAllowed = await widgetFilterFor(ctx.umbreld, accountId)
+
 			// Remove widget ID
-			await ctx.umbreld.store.getWriteLock(async ({get, set}) => {
-				const widgets = await get('widgets')
+			await ctx.umbreld.user.updateAccountWidgets(accountId, (stored) => {
+				const current = resolveWidgets(stored, isAllowed)
 
 				// Check if widget is currently enabled
-				if (!widgets.includes(input.widgetId)) throw new Error(`Widget ${input.widgetId} is not enabled`)
+				if (!current.includes(input.widgetId)) throw new Error(`Widget ${input.widgetId} is not enabled`)
 
 				// Remove widget
-				const updatedWidgets = widgets.filter((widget) => widget !== input.widgetId)
-				await set('widgets', updatedWidgets)
+				return current.filter((widget) => widget !== input.widgetId)
 			})
 
 			return true

@@ -98,9 +98,9 @@ export function usePager({apps, widgets, forceBreakpoint}: PageT & {forceBreakpo
 		pageH: number
 	}): PageT[] {
 		function countWidgetsPerPage({pageW}: {pageW: number}) {
-			const widgetsPerPage = (pageW + appXGap) / (widgetW + appXGap)
-			// const pagesWithWidgetsCount = Math.ceil(widgetCount / widgetsPerPage);
-			return widgetsPerPage
+			// Whole widgets only: chunk() slices at fractional offsets, which lands
+			// an extra widget on some pages. At least one so chunk() always advances.
+			return Math.max(1, Math.floor((pageW + appXGap) / (widgetW + appXGap)))
 		}
 		function countAppsPerCol({pageH}: {pageH: number}) {
 			return Math.floor((pageH + appYGap) / (appH + appYGap))
@@ -145,7 +145,8 @@ export function usePager({apps, widgets, forceBreakpoint}: PageT & {forceBreakpo
 		return [...widgetPages, ...nonWidgetPages]
 	}
 
-	if (pageH < widgetLabeledH || !apps.length || apps.length === 0) {
+	// A widgets-only desktop (no apps yet) still pages its widgets
+	if (pageH < widgetLabeledH || (!apps.length && !widgets.length)) {
 		// Don't show any apps or widgets
 		return {
 			pageInnerRef,

@@ -85,9 +85,9 @@ export default {
 					'1px 0px 0px 0px rgba(255, 255, 255, 0.04) inset, -1px 0px 0px 0px rgba(255, 255, 255, 0.04) inset, 0px 1px 0px 0px rgba(255, 255, 255, 0.20) inset, 0px 0.5px 0px 0px rgba(255, 255, 255, 0.10) inset',
 				// Outer-only drop shadows for surfaces whose inset shine comes from <Glass>
 				'dock-drop': '0px 4.04029px 24.24174px 0px rgba(0, 0, 0, 0.56)',
-				'widget-drop': '0px 20px 30px 0px rgba(0, 0, 0, 0.30)',
+				'widget-drop': '0px 10px 20px 0px rgba(0, 0, 0, 0.25)',
 				widget:
-					'0px 20px 30px 0px rgba(0, 0, 0, 0.30), 0 1px 0 0 rgba(255, 255, 255, 0.2) inset, 1px 0 0 0 rgba(255, 255, 255, 0.04) inset, -1px 0 0 0 rgba(255, 255, 255, 0.04) inset',
+					'0px 10px 20px 0px rgba(0, 0, 0, 0.25), 0 1px 0 0 rgba(255, 255, 255, 0.2) inset, 1px 0 0 0 rgba(255, 255, 255, 0.04) inset, -1px 0 0 0 rgba(255, 255, 255, 0.04) inset',
 				dialog: '0px 20px 36px 0px rgba(0, 0, 0, 0.25), 0px 1px 1px 0px rgba(255, 255, 255, 0.1) inset',
 				'button-highlight': '0px 1px 0px 0px rgba(255, 255, 255, 0.3) inset',
 				'button-highlight-hpx': '0px 0.5px 0px 0px rgba(255, 255, 255, 0.3) inset',

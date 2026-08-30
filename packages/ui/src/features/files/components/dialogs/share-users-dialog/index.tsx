@@ -21,6 +21,17 @@ export default function ShareUsersDialog() {
 	const {memberShares, shareForPath, addMemberShare, isAddingMemberShare, removeMemberShare, isRemovingMemberShare} =
 		useMemberShares()
 	const existingShare = shareForPath(path)
+	// Members who already reach this folder through a share on an ancestor
+	// lock on, pointing at the grant that actually controls their access. A
+	// share only covers its own subtree, so "Share all folders" (the /Home
+	// share) locks Home paths but not app or drive folders.
+	const ancestorShares = (memberShares ?? []).filter((share) => path.startsWith(share.path + '/'))
+	const lockedReason = ({userId, name}: {userId: string; name: string}) => {
+		const via = ancestorShares.find((share) => share.sharedWith === 'all' || share.sharedWith.includes(userId))
+		if (!via) return undefined
+		if (via.path === '/Home') return t('files-share-users.locked-by-share-all', {name})
+		return t('files-share-users.locked-by-ancestor', {name, folder: via.path.split('/').pop()})
+	}
 	// Writes replace the whole share record computed from existingShare, so
 	// they must wait for the share list to load — before that, a toggle would
 	// rewrite the record from nothing and drop existing members.
@@ -57,7 +68,12 @@ export default function ShareUsersDialog() {
 					</div>
 				</DialogHeader>
 
-				<MemberSharePicker sharedWith={existingShare?.sharedWith} isBusy={isBusy} onChange={writeShare} />
+				<MemberSharePicker
+					sharedWith={existingShare?.sharedWith}
+					isBusy={isBusy}
+					onChange={writeShare}
+					lockedReason={lockedReason}
+				/>
 			</DialogContent>
 		</Dialog>
 	)

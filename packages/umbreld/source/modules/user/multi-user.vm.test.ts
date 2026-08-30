@@ -529,12 +529,16 @@ describe('Multi-user accounts', () => {
 		await expect(umbreld.client.system.getNetworkInterfaces.query()).rejects.toThrow('owner')
 	})
 
-	test('members get empty apps and enabled widgets before any apps are shared', async () => {
+	test('members get empty apps and the default umbrel widgets before any apps are shared', async () => {
 		await loginAs(memberToken)
-		// App lists and the legacy enabled-widget preference remain empty, while
-		// unshared app widget data stays inaccessible.
+		// The app list is empty, widgets fall back to the umbrel defaults at read
+		// time, and unshared app widget data stays inaccessible.
 		await expect(umbreld.client.apps.list.query()).resolves.toStrictEqual([])
-		await expect(umbreld.client.widget.enabled.query()).resolves.toStrictEqual([])
+		await expect(umbreld.client.widget.enabled.query()).resolves.toStrictEqual([
+			'umbrel:files-favorites',
+			'umbrel:storage',
+			'umbrel:system-stats',
+		])
 		await expect(umbreld.client.widget.data.query({widgetId: 'bitcoin:stats'})).rejects.toThrow('[widget-not-found]')
 
 		// The owner still sees their real apps/widgets

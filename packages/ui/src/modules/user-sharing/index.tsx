@@ -193,10 +193,15 @@ export function MemberSharePicker({
 	sharedWith,
 	isBusy,
 	onChange,
+	lockedReason,
 }: {
 	sharedWith: 'all' | string[] | undefined
 	isBusy: boolean
 	onChange: (sharedWith: 'all' | string[]) => void
+	// Members who already have access through a broader grant (share-all or an
+	// ancestor folder). Their rows render as on + disabled with the returned
+	// text as a tooltip explaining where the real control lives.
+	lockedReason?: (member: {userId: string; name: string}) => string | undefined
 }) {
 	const {t} = useTranslation()
 	const accountsQ = trpcReact.user.listAccounts.useQuery()
@@ -232,22 +237,35 @@ export function MemberSharePicker({
 					<div className='text-13 font-medium -tracking-2 text-white/90'>{t('users.share-specific-members')}</div>
 					{members.length > 0 ? (
 						<div className={shareListClass()}>
-							{members.map((member) => (
-								<label
-									key={member.userId}
-									className='flex cursor-pointer items-center gap-3 p-3 transition-colors hover:bg-white/4'
-								>
-									<AccountAvatar name={member.name} userId={member.userId} avatarUrl={member.avatarUrl} size={28} />
-									<span className='min-w-0 flex-1 truncate text-14 font-medium -tracking-2 text-white/90'>
-										{member.name}
-									</span>
-									<Switch
-										checked={selectedUserIds.includes(member.userId)}
-										disabled={disabled}
-										onCheckedChange={() => toggleUser(member.userId)}
-									/>
-								</label>
-							))}
+							{members.map((member) => {
+								const locked = lockedReason?.(member)
+								// A label so the whole row toggles the switch; a locked row has
+								// nothing to toggle
+								const Row = locked ? 'div' : 'label'
+								return (
+									<Row
+										key={member.userId}
+										className={cn(
+											'flex items-center gap-3 p-3',
+											!locked && 'cursor-pointer transition-colors hover:bg-white/4',
+										)}
+									>
+										<AccountAvatar name={member.name} userId={member.userId} avatarUrl={member.avatarUrl} size={28} />
+										<span className='min-w-0 flex-1 truncate text-14 font-medium -tracking-2 text-white/90'>
+											{member.name}
+										</span>
+										{locked ? (
+											<LockedSwitch tooltip={locked} />
+										) : (
+											<Switch
+												checked={selectedUserIds.includes(member.userId)}
+												disabled={disabled}
+												onCheckedChange={() => toggleUser(member.userId)}
+											/>
+										)}
+									</Row>
+								)
+							})}
 						</div>
 					) : (
 						accountsQ.data && <EmptyCard>{t('users.no-members')}</EmptyCard>
@@ -255,5 +273,28 @@ export function MemberSharePicker({
 				</div>
 			)}
 		</>
+	)
+}
+
+// An on + disabled switch wrapped in a dark tooltip. Disabled elements don't
+// emit pointer events, so the wrapper span is the trigger; controlled so a
+// tap also opens it on touch.
+function LockedSwitch({tooltip}: {tooltip: string}) {
+	const [open, setOpen] = useState(false)
+	return (
+		<Tooltip open={open} onOpenChange={setOpen} delayDuration={150}>
+			<TooltipTrigger asChild>
+				<span className='inline-flex' onClick={() => setOpen((open) => !open)}>
+					<Switch checked disabled className='disabled:opacity-60' />
+				</span>
+			</TooltipTrigger>
+			<TooltipContent
+				side='top'
+				collisionPadding={12}
+				className='z-50 max-w-60 rounded-8 border-hpx border-white/10 px-3 py-2 text-center text-12 leading-snug text-white/90 shadow-xl [--tooltip-background:var(--color-neutral-800)]'
+			>
+				{tooltip}
+			</TooltipContent>
+		</Tooltip>
 	)
 }

@@ -394,7 +394,7 @@ async function expectBrowserLoginFlow(browser: Browser, protocol: 'http' | 'http
 
 		const appUrl = `${protocol}://127.0.0.1:9094/private`
 		const authNavigation = await page.goto(appUrl)
-		await page.getByRole('heading', {name: 'Welcome back, satoshi 👋'}).waitFor()
+		await page.getByRole('heading', {name: 'Welcome back, satoshi'}).waitFor()
 
 		const authUrl = new URL(page.url())
 		expect(authUrl.protocol).toBe(`${protocol}:`)

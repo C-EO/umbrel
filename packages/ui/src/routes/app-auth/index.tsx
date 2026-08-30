@@ -271,7 +271,7 @@ export default function LoginWithUmbrel() {
 										    icons alone carry the identity, skip the title */}
 										{!chosen && (
 											<Title>
-												<span style={{fontFamily: "'SF Pro Rounded', ui-rounded, 'Inter', system-ui, sans-serif"}}>
+												<span style={{fontFamily: "'SF Pro Rounded', 'Inter', system-ui, sans-serif"}}>
 													{t('login-with-umbrel.title')}
 												</span>
 											</Title>

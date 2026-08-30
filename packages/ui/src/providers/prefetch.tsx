@@ -45,12 +45,14 @@ export function Prefetcher() {
 			// Settings backups
 			utils.backups.getRepositories,
 
-			// Settings raid (Pro devices — returns empty on non-Pro)
+			// Settings raid
 			utils.hardware.raid.getStatus,
 			utils.hardware.internalStorage.getDevices,
 
-			// Settings device info
+			// Settings device info, and Live Usage's early "is there a GPU" hint
+			// so the GPU card doesn't pop in after the first telemetry sample
 			utils.systemNg.device.getSpecs,
+			utils.hardware.gpu.getInfo,
 
 			// Settings sidebar
 			utils.system.systemDiskUsage,

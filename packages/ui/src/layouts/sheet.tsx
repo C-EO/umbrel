@@ -115,11 +115,10 @@ export function SheetLayout() {
 }
 
 function SheetCloseButton() {
-	const {showStickyHeader, hideCloseButton} = useSheetStickyHeader()
+	const {showStickyHeader} = useSheetStickyHeader()
 
-	// A sticky header portals in its own close button, and a page can suppress this
-	// one outright when it renders its own (mobile settings' sticky controls rail).
-	if (showStickyHeader || hideCloseButton) return null
+	// A sticky header portals in its own close button
+	if (showStickyHeader) return null
 
 	return <DialogCloseButton className='absolute top-3 right-3 z-[60] sm:top-5 sm:right-5' />
 }

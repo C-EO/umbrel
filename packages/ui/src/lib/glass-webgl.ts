@@ -142,56 +142,85 @@ export function attachBackdropLens(
 	getSource: () => LensSource | null,
 	getParams: () => GlassLensParams,
 	onFirstFrame?: () => void,
+	onContextLost?: () => void,
 ): (() => void) | null {
 	const gl = canvas.getContext('webgl', {antialias: false, alpha: false})
 	if (!gl) return null
 
-	const vs = compile(gl, gl.VERTEX_SHADER, VERT)
-	const fs = compile(gl, gl.FRAGMENT_SHADER, FRAG)
-	const program = gl.createProgram()
-	if (!vs || !fs || !program) return null
-	gl.attachShader(program, vs)
-	gl.attachShader(program, fs)
-	gl.linkProgram(program)
-	if (!gl.getProgramParameter(program, gl.LINK_STATUS)) return null
-	gl.useProgram(program)
-
-	const quad = gl.createBuffer()
-	gl.bindBuffer(gl.ARRAY_BUFFER, quad)
-	gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW)
-	const aPos = gl.getAttribLocation(program, 'aPos')
-	gl.enableVertexAttribArray(aPos)
-	gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0)
-
-	const tex = gl.createTexture()
-	gl.bindTexture(gl.TEXTURE_2D, tex)
-	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-	gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-
-	const u = (name: string) => gl.getUniformLocation(program, name)
-	const uSize = u('uSize')
-	const uRadius = u('uRadius')
-	const uBevel = u('uBevel')
-	const uScale = u('uScale')
-	const uChroma = u('uChroma')
-	const uSaturate = u('uSaturate')
-	const uBrightness = u('uBrightness')
-	const uBlur = u('uBlur')
-	const uUvOff = u('uUvOff')
-	const uUvStep = u('uUvStep')
-
-	// border-radius: inherit resolves through computed style; % clamps below.
-	const radiusRaw = getComputedStyle(canvas).borderRadius
+	// All GL objects live in `let`s so they can be rebuilt wholesale after a
+	// context restore — a lost context invalidates every one of them.
+	let vs: WebGLShader | null = null
+	let fs: WebGLShader | null = null
+	let program: WebGLProgram | null = null
+	let quad: WebGLBuffer | null = null
+	let tex: WebGLTexture | null = null
+	let uSize: WebGLUniformLocation | null = null
+	let uRadius: WebGLUniformLocation | null = null
+	let uBevel: WebGLUniformLocation | null = null
+	let uScale: WebGLUniformLocation | null = null
+	let uChroma: WebGLUniformLocation | null = null
+	let uSaturate: WebGLUniformLocation | null = null
+	let uBrightness: WebGLUniformLocation | null = null
+	let uBlur: WebGLUniformLocation | null = null
+	let uUvOff: WebGLUniformLocation | null = null
+	let uUvStep: WebGLUniformLocation | null = null
 
 	let raf = 0
 	let uploadedSrc: string | null = null
 	let lastState = ''
 	let drawn = false
 
+	function init(): boolean {
+		vs = compile(gl!, gl!.VERTEX_SHADER, VERT)
+		fs = compile(gl!, gl!.FRAGMENT_SHADER, FRAG)
+		program = gl!.createProgram()
+		if (!vs || !fs || !program) return false
+		gl!.attachShader(program, vs)
+		gl!.attachShader(program, fs)
+		gl!.linkProgram(program)
+		if (!gl!.getProgramParameter(program, gl!.LINK_STATUS)) return false
+		gl!.useProgram(program)
+
+		quad = gl!.createBuffer()
+		gl!.bindBuffer(gl!.ARRAY_BUFFER, quad)
+		gl!.bufferData(gl!.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl!.STATIC_DRAW)
+		const aPos = gl!.getAttribLocation(program, 'aPos')
+		gl!.enableVertexAttribArray(aPos)
+		gl!.vertexAttribPointer(aPos, 2, gl!.FLOAT, false, 0, 0)
+
+		tex = gl!.createTexture()
+		gl!.bindTexture(gl!.TEXTURE_2D, tex)
+		gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_S, gl!.CLAMP_TO_EDGE)
+		gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_WRAP_T, gl!.CLAMP_TO_EDGE)
+		gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MIN_FILTER, gl!.LINEAR)
+		gl!.texParameteri(gl!.TEXTURE_2D, gl!.TEXTURE_MAG_FILTER, gl!.LINEAR)
+
+		const u = (name: string) => gl!.getUniformLocation(program!, name)
+		uSize = u('uSize')
+		uRadius = u('uRadius')
+		uBevel = u('uBevel')
+		uScale = u('uScale')
+		uChroma = u('uChroma')
+		uSaturate = u('uSaturate')
+		uBrightness = u('uBrightness')
+		uBlur = u('uBlur')
+		uUvOff = u('uUvOff')
+		uUvStep = u('uUvStep')
+
+		// Force a texture re-upload and a full redraw on the fresh context
+		uploadedSrc = null
+		lastState = ''
+		drawn = false
+		return true
+	}
+	if (!init()) return null
+
+	// border-radius: inherit resolves through computed style; % clamps below.
+	const radiusRaw = getComputedStyle(canvas).borderRadius
+
 	function frame() {
 		raf = requestAnimationFrame(frame)
+		if (gl!.isContextLost()) return
 		const source = getSource()
 		if (!source || !sourceReady(source)) return
 		const cw = canvas.offsetWidth
@@ -275,15 +304,37 @@ export function attachBackdropLens(
 		raf = 0
 	}
 
+	let visible = false
 	const io = new IntersectionObserver((entries) => {
-		if (entries[0]?.isIntersecting) start()
+		visible = Boolean(entries[0]?.isIntersecting)
+		if (visible) start()
 		else stop()
 	})
 	io.observe(canvas)
 
+	// The browser evicts the oldest WebGL contexts past its per-page cap (~16 in
+	// Chromium) — e.g. with many glass widgets mounted at once. preventDefault
+	// signals we can recover, and the browser fires webglcontextrestored once
+	// pressure drops (say, a sheet full of example widgets unmounts); rebuild
+	// the GL state and repaint. Without this the canvas is dead for good and
+	// Chromium paints its sad-face placeholder over the widget.
+	const handleContextLost = (event: Event) => {
+		event.preventDefault()
+		stop()
+		onContextLost?.()
+	}
+	const handleContextRestored = () => {
+		// An off-screen lens stays parked; the observer starts it when it scrolls in
+		if (init() && visible) start()
+	}
+	canvas.addEventListener('webglcontextlost', handleContextLost)
+	canvas.addEventListener('webglcontextrestored', handleContextRestored)
+
 	return () => {
 		stop()
 		io.disconnect()
+		canvas.removeEventListener('webglcontextlost', handleContextLost)
+		canvas.removeEventListener('webglcontextrestored', handleContextRestored)
 		gl.deleteTexture(tex)
 		gl.deleteBuffer(quad)
 		gl.deleteProgram(program)

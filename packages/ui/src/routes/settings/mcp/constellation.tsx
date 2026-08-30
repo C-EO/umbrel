@@ -182,7 +182,7 @@ export function AgentConstellation({
 					// The resting card is barely there; hover firms it up a notch, and
 					// the change lands instantly so the grid feels snappy under the cursor
 					!isPitch &&
-						'flex flex-col items-center gap-2 rounded-xl border border-white/5 bg-white/3 p-4 hover:border-white/10 hover:bg-white/6 focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6',
+						'flex flex-col items-center gap-2 rounded-xl border border-white/5 bg-white/7 p-4 hover:border-white/10 hover:bg-white/10 focus:outline-hidden focus-visible:border-white/10 focus-visible:bg-white/6',
 				)}
 				style={
 					isPitch

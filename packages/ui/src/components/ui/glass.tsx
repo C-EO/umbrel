@@ -312,6 +312,9 @@ export function Glass({
 			() => refractionTarget.current,
 			() => lensParamsRef.current,
 			() => setCanvasLens(true),
+			// Lost context (e.g. evicted when many glass surfaces are live): show
+			// the CSS backdrop fallback until the lens redraws after restoration
+			() => setCanvasLens(false),
 		)
 		if (!detach) return
 		return () => {

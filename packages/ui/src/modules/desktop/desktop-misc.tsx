@@ -1,6 +1,7 @@
 import {useTranslation} from 'react-i18next'
 import {useLocation} from 'react-router-dom'
 
+import {darkTooltipClass} from '@/components/ui/dark-tooltip'
 import {useIsSmallMobile} from '@/hooks/use-is-mobile'
 import {cn} from '@/lib/utils'
 import {useWallpaper} from '@/providers/wallpaper'
@@ -13,13 +14,15 @@ export function Search({onClick}: {onClick?: () => void}) {
 	return (
 		<button
 			className={cn(
-				'z-10 animate-in rounded-full border border-white/5 bg-neutral-600/20 px-3 py-2.5 text-12 leading-inter-trimmed text-white/90 backdrop-blur-xs transition-colors duration-300 fill-mode-both fade-in hover:bg-neutral-600/30 active:bg-neutral-600/10',
+				darkTooltipClass,
+				'z-10 flex animate-in items-center gap-2 px-3 py-2.5 leading-inter-trimmed transition-colors duration-300 fill-mode-both fade-in hover:bg-white/10 active:bg-white/5',
 				focusRingOnWallpaperClass,
 			)}
 			onClick={onClick}
 		>
 			{/* TODO: ideally, centralize shortcut preview and shortcut event listener so always in sync */}
-			{t('search')} {platform() !== 'other' && !isMobile && <span className='text-white/20'>{cmdOrCtrl()}K</span>}
+			{t('search')}
+			{platform() !== 'other' && !isMobile && <span className='text-white/40'>{cmdOrCtrl()}K</span>}
 		</button>
 	)
 }
@@ -40,9 +43,13 @@ export function AppGridGradientMasking() {
 }
 
 function GradientMaskSide({side}: {side: 'left' | 'right'}) {
-	const {wallpaperLoadedUrl, wallpaperFullyVisible, isLoading} = useWallpaper()
+	const {wallpaper, wallpaperLoadedUrl, wallpaperFullyVisible, isLoading} = useWallpaper()
 
 	if (!wallpaperLoadedUrl || !wallpaperFullyVisible || isLoading) return null
+	// The fade repaints the wallpaper image over the sliding content, which can
+	// never line up with the live video wallpaper's current frame — the strip's
+	// opaque edge then shows as a hard seam during page slides
+	if (wallpaper?.id === '23') return null
 
 	return (
 		<div

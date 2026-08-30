@@ -18,11 +18,6 @@ type ContextT = {
 	// State-backed rather than a RefObject so consumers rebind when Radix mounts
 	// or replaces the actual viewport element.
 	scrollElement: HTMLDivElement | null
-	// Lets a page suppress the sheet's floating close button while it renders its
-	// own close affordance (see settings on mobile, where a sticky controls rail
-	// would otherwise sit underneath it).
-	hideCloseButton: boolean
-	setHideCloseButton: (hide: boolean) => void
 }
 
 const StickyContext = createContext<ContextT | null>(null)
@@ -37,7 +32,6 @@ export function SheetStickyHeaderProvider({
 	const [showStickyHeader, setShowStickyHeader] = useState(false)
 	const [showStickyHeaderSurface, setShowStickyHeaderSurface] = useState(false)
 	const [fadeStickyHeaderSurface, setFadeStickyHeaderSurface] = useState(false)
-	const [hideCloseButton, setHideCloseButton] = useState(false)
 
 	return (
 		<StickyContext
@@ -49,8 +43,6 @@ export function SheetStickyHeaderProvider({
 				fadeStickyHeaderSurface,
 				setFadeStickyHeaderSurface,
 				scrollElement,
-				hideCloseButton,
-				setHideCloseButton,
 			}}
 		>
 			{children}

@@ -36,7 +36,7 @@ export function LoginForm({
 		<>
 			<div className='flex flex-col items-center gap-1.5'>
 				<Title>
-					<span style={{fontFamily: "'SF Pro Rounded', ui-rounded, 'Inter', system-ui, sans-serif"}}>
+					<span style={{fontFamily: "'SF Pro Rounded', 'Inter', system-ui, sans-serif"}}>
 						{account ? (
 							<>
 								{/* On desktop the greeting carries the name; on mobile it lives

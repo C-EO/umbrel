@@ -22,6 +22,9 @@ export type Member = {
 	viewPreferences?: Partial<ViewPreferences>
 	favorites?: string[]
 	recents?: string[]
+	// Enabled desktop widgets. Undefined means the member has never changed
+	// them and gets the defaults at read time.
+	widgets?: string[]
 }
 
 export type DeletedMember = {
@@ -31,6 +34,10 @@ export type DeletedMember = {
 }
 
 export type MemberRecord = Member | DeletedMember
+
+// Widgets every account starts with. The owner is seeded at registration,
+// members get these at read time until they change their widgets.
+export const DEFAULT_WIDGETS = ['umbrel:files-favorites', 'umbrel:storage', 'umbrel:system-stats']
 
 export type Account = {
 	userId: string
@@ -179,7 +186,9 @@ export default class User {
 		await this.setName(name)
 		await this.setLanguage(language)
 		// We can do this a cleaner way if we refactor widgets into a proper module
-		await this.#umbreld.store.set('widgets', ['umbrel:files-favorites', 'umbrel:storage', 'umbrel:system-stats'])
+		await this.#umbreld.store.set('widgets', DEFAULT_WIDGETS)
+		// Drives the tips on the homescreen until the user dismisses
+		await this.#umbreld.notifications.add('onboarding-complete')
 		return this.setPassword(password)
 	}
 
@@ -309,6 +318,10 @@ export default class User {
 
 		// Create the user's home directory with the default skeleton
 		await this.#umbreld.files.createMemberDirectories(member.id)
+
+		// Drives the member's welcome desktop until they dismiss it; scoped so
+		// only this account sees it
+		await this.#umbreld.notifications.addForAccount(member.id, 'onboarding-complete')
 
 		this.logger.log(`Created user ${name} (${member.id})`)
 		return {userId: member.id, name: member.name}
@@ -693,6 +706,42 @@ export default class User {
 	async setAccountRecents(userId: string, recents: string[]) {
 		if (userId === OWNER_USER_ID) return this.#store.set('files.recents', recents)
 		return this.#updateMember(userId, {recents})
+	}
+
+	// Desktop widgets follow the same account boundary as favorites. Undefined
+	// means the account has never changed its widgets; callers apply defaults.
+	async getAccountWidgets(userId: string): Promise<string[] | undefined> {
+		if (userId === OWNER_USER_ID) return this.#store.get('widgets')
+		const member = await this.getMember(userId)
+		return member?.widgets
+	}
+
+	// Atomically update widgets so concurrent enable/disable requests cannot
+	// overwrite one another. Returning undefined leaves stored state unchanged.
+	async updateAccountWidgets(userId: string, update: (widgets: string[] | undefined) => string[] | undefined) {
+		let found = false
+		await this.#store.getWriteLock(async ({get, set}) => {
+			if (userId === OWNER_USER_ID) {
+				found = true
+				const widgets = update(await get('widgets'))
+				if (widgets !== undefined) await set('widgets', widgets)
+				return
+			}
+
+			const memberRecords = (await get('members')) ?? []
+			let changed = false
+			const updatedMembers = memberRecords.map((member) => {
+				if (member.id !== userId || !isActiveMember(member)) return member
+				found = true
+				const widgets = update(member.widgets)
+				if (widgets === undefined) return member
+				changed = true
+				return {...member, widgets}
+			})
+			if (changed) await set('members', updatedMembers)
+		})
+		if (!found) throw new Error('User not found')
+		return true
 	}
 
 	// ── Account scoped 2FA ──────────────────────────────────────────────────

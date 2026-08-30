@@ -64,7 +64,7 @@ function CloudConnectDiagram({
 				initial={{opacity: 0, y: 4}}
 				animate={{opacity: 1, y: 0}}
 				transition={{duration: 0.25, delay: 0.2}}
-				className='max-w-[340px] text-center text-12 leading-relaxed text-white/40'
+				className='max-w-[340px] text-center text-12 leading-relaxed text-white/60'
 			>
 				{t('files-cloud.connect-direct-note', {provider: name})}
 			</motion.p>
@@ -220,7 +220,7 @@ function OAuthConnect({
 	return (
 		<div className='py-2'>
 			<div className='flex flex-col items-center gap-4 py-4 text-center'>
-				<p className='max-w-[340px] text-13 leading-relaxed text-white/60'>
+				<p className='max-w-[340px] text-13 leading-relaxed text-white/80'>
 					{t('files-cloud.oauth-description', {provider: provider.displayName})}
 				</p>
 			</div>

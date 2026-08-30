@@ -1,6 +1,6 @@
 import {ChevronRight} from 'lucide-react'
 import {motion, useReducedMotion} from 'motion/react'
-import {ComponentType, Fragment, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState} from 'react'
+import {ComponentType, Fragment, ReactNode, useMemo, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {PiCircuitryBold, PiHardDriveFill, PiPulseBold, PiThermometerSimpleBold} from 'react-icons/pi'
 import {Link, useNavigate} from 'react-router-dom'
@@ -9,7 +9,6 @@ import {BetaPill} from '@/components/ui/beta-pill'
 import {Button} from '@/components/ui/button'
 import {ButtonLink} from '@/components/ui/button-link'
 import {Card} from '@/components/ui/card'
-import {DialogCloseButton} from '@/components/ui/dialog-close-button'
 import {Separator} from '@/components/ui/separator'
 import {SETTINGS_SYSTEM_CARDS_ID} from '@/constants'
 import {getDeviceHealth} from '@/features/storage/hooks/use-storage'
@@ -19,7 +18,6 @@ import {useQueryParams} from '@/hooks/use-query-params'
 import {cn} from '@/lib/utils'
 import {DesktopPreviewConnected, DesktopPreviewFrame} from '@/modules/desktop/desktop-preview'
 import {WifiListRowConnectedDescription} from '@/modules/wifi/wifi-list-row-connected-description'
-import {useSheetStickyHeader} from '@/providers/sheet-sticky-header'
 import {useWallpaper, WallpaperAvifSource} from '@/providers/wallpaper'
 import {SettingsSummary} from '@/routes/settings/_components/settings-summary'
 import {trpcReact} from '@/trpc/trpc'
@@ -39,10 +37,6 @@ import {StorageCardContent} from './storage-card-content'
 const statCardClass = 'settings-edge-material h-full min-h-[104px] !rounded-24 !p-4'
 const mobileActionButtonClass = 'settings-edge-material h-9 min-w-0 flex-1 rounded-full px-2 text-12 whitespace-nowrap'
 
-function getSheetScrollViewport(element: HTMLElement | null) {
-	return element?.closest<HTMLElement>('[data-radix-scroll-area-viewport]') ?? null
-}
-
 export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) {
 	const {t} = useTranslation()
 	const filterLabels = useSettingsFilterLabels()
@@ -55,17 +49,12 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 	const is2faEnabledQ = trpcReact.user.is2faEnabled.useQuery(undefined, {enabled: isMember})
 	const {deviceName} = useIsHomeOrPro()
 	const {wallpaper} = useWallpaper()
-	const {setHideCloseButton} = useSheetStickyHeader()
 	const raidStatusQ = trpcReact.hardware.raid.getStatus.useQuery(undefined, {enabled: !isMember})
 	const devicesQ = trpcReact.hardware.internalStorage.getDevices.useQuery(undefined, {
 		enabled: !isMember,
 	})
 
 	const [searchQuery, setSearchQuery] = useState('')
-	const [controlsStuck, setControlsStuck] = useState(false)
-	const isContentReady = Boolean(userQ.data)
-	const controlsRef = useRef<HTMLDivElement>(null)
-	const scrollFrameRef = useRef<number | null>(null)
 
 	const hasRaidIssue = raidStatusQ.data?.exists && raidStatusQ.data?.status && raidStatusQ.data?.status !== 'ONLINE'
 	const hasHealthIssue = devicesQ.data?.some((device) => getDeviceHealth(device).hasWarning)
@@ -89,45 +78,6 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 		),
 		[],
 	)
-
-	useEffect(() => {
-		const scrollViewport = getSheetScrollViewport(controlsRef.current)
-		if (!scrollViewport) return
-
-		const updateStickyControls = () => {
-			if (scrollFrameRef.current !== null) return
-
-			scrollFrameRef.current = requestAnimationFrame(() => {
-				scrollFrameRef.current = null
-				const controlsElement = controlsRef.current
-				if (!controlsElement) return
-
-				// Batch all layout reads into this animation frame; the raw passive scroll
-				// listener does no measuring or state updates.
-				const viewportTop = scrollViewport.getBoundingClientRect().top
-				const controlsRect = controlsElement.getBoundingClientRect()
-				const nextControlsStuck = scrollViewport.scrollTop > 0 && controlsRect.top <= viewportTop + 1
-				setControlsStuck((current) => (current === nextControlsStuck ? current : nextControlsStuck))
-			})
-		}
-
-		scrollViewport.addEventListener('scroll', updateStickyControls, {passive: true})
-		window.addEventListener('resize', updateStickyControls, {passive: true})
-		updateStickyControls()
-		return () => {
-			scrollViewport.removeEventListener('scroll', updateStickyControls)
-			window.removeEventListener('resize', updateStickyControls)
-			if (scrollFrameRef.current !== null) {
-				cancelAnimationFrame(scrollFrameRef.current)
-				scrollFrameRef.current = null
-			}
-		}
-	}, [isContentReady])
-
-	useLayoutEffect(() => {
-		setHideCloseButton(controlsStuck)
-		return () => setHideCloseButton(false)
-	}, [controlsStuck, setHideCloseButton])
 
 	const renderSettingsItem = (item: SettingsPageItem) => {
 		const navigateToItem = () => {
@@ -291,27 +241,13 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 				</div>
 			)}
 
-			<div
-				ref={controlsRef}
-				data-testid='mobile-settings-controls'
-				data-settings-rail-stuck={controlsStuck ? 'true' : 'false'}
-				className={cn(
-					'sticky top-0 z-30 -mx-3 -mb-4 flex items-center justify-between gap-2 px-3 py-3 transition-[background-color,box-shadow] duration-200',
-					controlsStuck && 'border-b border-white/8 shadow-[0_12px_24px_rgba(0,0,0,0.22)]',
-				)}
-				style={{
-					backgroundColor: controlsStuck
-						? 'color-mix(in srgb, hsl(var(--color-brand)) 14%, #03080b 86%)'
-						: 'transparent',
-				}}
-			>
+			<div data-testid='mobile-settings-controls' className='-mx-3 -mb-4 flex items-center px-3 py-3'>
 				<SettingsSearch
 					value={searchQuery}
 					onChange={setSearchQuery}
 					label={t('search')}
 					className='w-full min-w-0 shrink'
 				/>
-				{controlsStuck && <DialogCloseButton className='shrink-0' />}
 			</div>
 
 			<div className='flex flex-col gap-4'>

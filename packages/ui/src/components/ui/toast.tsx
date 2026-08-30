@@ -33,11 +33,11 @@ export function Toaster() {
 					content: tw`min-w-0 flex-1`,
 					title: tw`leading-snug font-medium select-text`,
 					description: tw`text-13 leading-snug text-white/45 select-text`,
-					actionButton: tw`h-7 shrink-0 rounded-full bg-white/10 px-3 text-12 font-medium whitespace-nowrap transition-colors hover:bg-white/16`,
+					actionButton: tw`h-7 text-white shrink-0 rounded-full bg-white/15 px-3 text-12 font-medium whitespace-nowrap transition-colors hover:bg-white/20`,
 					cancelButton: tw`h-7 shrink-0 rounded-full px-3 text-12 font-medium whitespace-nowrap text-white/60 transition-colors hover:bg-white/10 hover:text-white`,
 					// Floats just outside the capsule's right edge, revealed on hover;
 					// swipe dismisses on touch
-					closeButton: tw`absolute top-1/2 -right-7 hidden size-6 -translate-y-1/2 items-center justify-center rounded-full bg-black/35 text-white/70 opacity-0 backdrop-blur-sm transition-[opacity,background-color,color] group-hover/toast:opacity-100 hover:bg-black/50 hover:text-white focus-visible:opacity-100 sm:flex`,
+					closeButton: tw`absolute top-1/2 -right-7 hidden size-6 -translate-y-1/2 items-center justify-center rounded-full bg-black/35 text-white/90 opacity-0 backdrop-blur-sm transition-[opacity,background-color,color] group-hover/toast:opacity-100 hover:bg-black/50 hover:text-white focus-visible:opacity-100 sm:flex`,
 				},
 			}}
 		/>
@@ -148,7 +148,7 @@ export const toast = Object.assign(toastFunction, {
 
 /** The icon of the area a toast comes from (Files, Settings, App Store, …) */
 function ToastSourceIcon({src}: {src: string}) {
-	return <AppIcon src={src} size={40} className='shrink-0 rounded-10 shadow-md' />
+	return <AppIcon src={src} size={40} className='shrink-0 rounded-10 border-none shadow-md' />
 }
 
 export function ToastStatusDot({hexColor, pulse}: {hexColor: string; pulse?: boolean}) {

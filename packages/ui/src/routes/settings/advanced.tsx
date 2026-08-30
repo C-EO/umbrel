@@ -13,6 +13,7 @@ import {Icon, IconTypes} from '@/components/ui/icon'
 import {IconButtonLink} from '@/components/ui/icon-button-link'
 import {Loading} from '@/components/ui/loading'
 import {Switch} from '@/components/ui/switch'
+import {useIsHomeOrPro} from '@/hooks/use-is-home-or-pro'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useSoftwareUpdate} from '@/hooks/use-software-update'
 import {useTorEnabled} from '@/hooks/use-tor-enabled'
@@ -25,6 +26,12 @@ import {trpcReact} from '@/trpc/trpc'
 import {tw} from '@/utils/tw'
 
 type AdvancedPanel = 'overview' | 'network' | 'https-certificate' | 'thunderbolt'
+
+function panelFromSelection(selection: string | undefined, isThunderboltSupported: boolean): AdvancedPanel {
+	if (selection === 'network') return 'network'
+	if (selection === 'thunderbolt' && isThunderboltSupported) return 'thunderbolt'
+	return 'overview'
+}
 
 export default function AdvancedSettingsDrawerOrDialog() {
 	const {t} = useTranslation()
@@ -39,6 +46,10 @@ export default function AdvancedSettingsDrawerOrDialog() {
 
 	const isMobile = useIsMobile()
 
+	// Umbrel Home and Umbrel Pro have no Thunderbolt ports, so the panel is inert there.
+	const {isHomeOrPro} = useIsHomeOrPro()
+	const isThunderboltSupported = !isHomeOrPro
+
 	const tor = useTorEnabled()
 	const hiddenServiceQ = trpcReact.system.hiddenService.useQuery(undefined, {
 		enabled: tor.enabled,
@@ -47,7 +58,7 @@ export default function AdvancedSettingsDrawerOrDialog() {
 	// Track the last action (enable/disable) to show appropriate cover message
 	const [torEnabling, setTorEnabling] = React.useState(false)
 	const [activePanel, setActivePanel] = React.useState<AdvancedPanel>(() =>
-		advancedSelection === 'network' || advancedSelection === 'thunderbolt' ? advancedSelection : 'overview',
+		panelFromSelection(advancedSelection, isThunderboltSupported),
 	)
 
 	const handleTorToggle = (checked: boolean) => {
@@ -58,10 +69,8 @@ export default function AdvancedSettingsDrawerOrDialog() {
 	// Keep URL-driven shortcuts in sync without coupling manual panel navigation
 	// to the route parameter.
 	React.useEffect(() => {
-		setActivePanel(
-			advancedSelection === 'network' || advancedSelection === 'thunderbolt' ? advancedSelection : 'overview',
-		)
-	}, [advancedSelection])
+		setActivePanel(panelFromSelection(advancedSelection, isThunderboltSupported))
+	}, [advancedSelection, isThunderboltSupported])
 
 	const remoteTorAccessSettingRow = (
 		<div className={cn('flex flex-col gap-2', cardClass, advancedSelection === 'tor' && 'umbrel-pulse-a-few-times')}>
@@ -93,7 +102,7 @@ export default function AdvancedSettingsDrawerOrDialog() {
 		</button>
 	)
 
-	const thunderboltSettingRow = (
+	const thunderboltSettingRow = isThunderboltSupported ? (
 		<button
 			onClick={() => setActivePanel('thunderbolt')}
 			className={cn(cardClass, 'pointer-events-auto cursor-pointer text-left transition-colors hover:bg-white/8')}
@@ -101,6 +110,13 @@ export default function AdvancedSettingsDrawerOrDialog() {
 			<CardText title={t('thunderbolt-settings.title')} description={t('thunderbolt-settings.description')} />
 			<TbChevronRight className='pointer-events-auto mt-0.5 size-4.5 shrink-0 self-center text-white/30' />
 		</button>
+	) : (
+		<div className={cn(cardClass, 'opacity-50')}>
+			<CardText
+				title={t('thunderbolt-settings.title')}
+				description={t('thunderbolt-settings.unsupported-description')}
+			/>
+		</div>
 	)
 
 	// Show loading cover state while enabling/disabling Tor
@@ -145,7 +161,7 @@ export default function AdvancedSettingsDrawerOrDialog() {
 	)
 
 	const content =
-		activePanel === 'thunderbolt' ? (
+		activePanel === 'thunderbolt' && isThunderboltSupported ? (
 			<ThunderboltSettingsPanel onBack={() => setActivePanel('overview')} />
 		) : activePanel === 'https-certificate' ? (
 			<HttpsCertificateSettingsPanel onBack={() => setActivePanel('network')} />

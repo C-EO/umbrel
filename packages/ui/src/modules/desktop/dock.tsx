@@ -2,7 +2,6 @@ import {motion, useMotionValue} from 'motion/react'
 import React, {Suspense} from 'react'
 import {ErrorBoundary} from 'react-error-boundary'
 import {useLocation, useNavigate} from 'react-router-dom'
-import {useMedia} from 'react-use'
 
 import {Glass} from '@/components/ui/glass'
 import {getLastFilesPath} from '@/features/files/utils/last-files-path'
@@ -23,7 +22,6 @@ const LiveUsageDialog = React.lazy(() => import('@/routes/live-usage'))
 const WhatsNewModal = React.lazy(() => import('@/routes/whats-new-modal').then((m) => ({default: m.WhatsNewModal})))
 
 const DOCK_BOTTOM_PADDING_PX = 10
-const SHOW_DOCK_UTILITIES_QUERY = '(min-width: 496px)'
 
 const DOCK_DIMENSIONS_PX = {
 	preview: {
@@ -71,7 +69,6 @@ export function Dock() {
 	const settingsNotificationCount = useSettingsNotificationCount()
 	const {appsWithUpdates} = useAppsWithUpdates()
 	const isMobile = useIsMobile()
-	const showDockUtilities = useMedia(SHOW_DOCK_UTILITIES_QUERY)
 	const {iconSize, iconSizeZoomed, padding, dockHeight} = useDockDimensions()
 	const {wallpaperImgRef} = useWallpaper()
 
@@ -125,7 +122,11 @@ export function Dock() {
 						iconSize={iconSize}
 						iconSizeZoomed={iconSizeZoomed}
 						to={systemAppsKeyed['UMBREL_app-store'].systemAppTo}
-						open={pathname.startsWith(systemAppsKeyed['UMBREL_app-store'].systemAppTo)}
+						open={
+							pathname.startsWith(systemAppsKeyed['UMBREL_app-store'].systemAppTo) ||
+							// Community stores live outside /app-store but are still the App Store
+							pathname.startsWith('/community-app-store')
+						}
 						bg={systemAppsKeyed['UMBREL_app-store'].icon}
 						label={systemAppsKeyed['UMBREL_app-store'].name}
 						notificationCount={isMember ? undefined : appUpdateCount}
@@ -152,17 +153,15 @@ export function Dock() {
 						notificationCount={settingsNotificationCount}
 						mouseX={mouseX}
 					/>
-					{showDockUtilities && (
-						<DockItem
-							iconSize={iconSize}
-							iconSizeZoomed={iconSizeZoomed}
-							to={{search: addLinkSearchParams({dialog: 'live-usage'})}}
-							open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
-							bg={systemAppsKeyed['UMBREL_live-usage'].icon}
-							label={systemAppsKeyed['UMBREL_live-usage'].name}
-							mouseX={mouseX}
-						/>
-					)}
+					<DockItem
+						iconSize={iconSize}
+						iconSizeZoomed={iconSizeZoomed}
+						to={{search: addLinkSearchParams({dialog: 'live-usage'})}}
+						open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
+						bg={systemAppsKeyed['UMBREL_live-usage'].icon}
+						label={systemAppsKeyed['UMBREL_live-usage'].name}
+						mouseX={mouseX}
+					/>
 				</Glass>
 			</motion.div>
 			<LogoutDialog />

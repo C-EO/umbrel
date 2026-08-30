@@ -20,8 +20,65 @@ import {Header} from './header'
 import {MachineIcon} from './machine-icon'
 import {ShortcutIcon} from './shortcut-icon'
 
-export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
+// How the desktop presents for the current route: shown on the homescreen,
+// lifted away under the widget editor, and hidden outright (no transition)
+// under a sheet. Shared with the welcome desktop so both behave the same.
+type DesktopVariant = 'default' | 'edit-widgets' | 'overlayed'
+
+export const desktopVariants: Record<DesktopVariant, Variant> = {
+	default: {
+		opacity: 1,
+	},
+	'edit-widgets': {
+		translateY: -20,
+		opacity: 0,
+	},
+	overlayed: {
+		translateY: 0,
+		opacity: 0,
+		transition: {
+			duration: 0,
+		},
+	},
+}
+
+export function useDesktopVariant(): DesktopVariant {
 	const {pathname} = useLocation()
+	return pathname === '/' ? 'default' : pathname.startsWith('/edit-widgets') ? 'edit-widgets' : 'overlayed'
+}
+
+// One of the account's enabled widgets as it appears in the homescreen row:
+// the app's live widget once the app is ready, its state until then. Shared
+// with the welcome desktop so a fresh account sees its real selection there.
+export function desktopWidgetNode(widget: ReturnType<typeof useWidgets>['selected'][number]) {
+	return (
+		<motion.div
+			key={widget.id}
+			layout
+			// No opacity animation — backdrop-filter on widgets can't be smoothly
+			// faded (browsers skip compositing it at opacity 0, causing a flash).
+			exit={{
+				opacity: 0,
+			}}
+		>
+			<WidgetWrapper
+				// Get the app name from the endpoint
+				label={widget.app.name}
+			>
+				{widget.app.state === 'ready' ? (
+					<Widget appId={widget.app.id} config={widget} />
+				) : (
+					<WidgetContainer className='grid place-items-center text-13 text-white/50'>
+						<AppLabel state={widget.app.state} />
+					</WidgetContainer>
+				)}
+			</WidgetWrapper>
+		</motion.div>
+	)
+}
+
+export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
+	const variant = useDesktopVariant()
 
 	const getQuery = trpcReact.user.get.useQuery()
 	const name = getQuery.data?.name
@@ -73,32 +130,11 @@ export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
 	if (!userApps) return null
 	if (!name) return null
 
-	type DesktopVariant = 'default' | 'edit-widgets' | 'overlayed'
-	const variant: DesktopVariant =
-		pathname === '/' ? 'default' : pathname.startsWith('/edit-widgets') ? 'edit-widgets' : 'overlayed'
-
-	const variants: Record<DesktopVariant, Variant> = {
-		default: {
-			opacity: 1,
-		},
-		'edit-widgets': {
-			translateY: -20,
-			opacity: 0,
-		},
-		overlayed: {
-			translateY: 0,
-			opacity: 0,
-			transition: {
-				duration: 0,
-			},
-		},
-	}
-
 	return (
 		<>
 			<motion.div
 				className='flex h-full w-full flex-col items-center justify-between'
-				variants={variants}
+				variants={desktopVariants}
 				animate={variant}
 				initial={{opacity: 1}}
 				transition={{duration: 0.15, ease: 'easeOut'}}
@@ -108,30 +144,7 @@ export function DesktopContent({onSearchClick}: {onSearchClick?: () => void}) {
 				<div className='pt-6 md:pt-8' />
 				<div className='flex w-full grow overflow-hidden'>
 					<AppGrid
-						widgets={widgets.selected.map((widget) => (
-							<motion.div
-								key={widget.id}
-								layout
-								// No opacity animation — backdrop-filter on widgets can't be smoothly
-								// faded (browsers skip compositing it at opacity 0, causing a flash).
-								exit={{
-									opacity: 0,
-								}}
-							>
-								<WidgetWrapper
-									// Get the app name from the endpoint
-									label={widget.app.name}
-								>
-									{widget.app.state === 'ready' ? (
-										<Widget appId={widget.app.id} config={widget} />
-									) : (
-										<WidgetContainer className='grid place-items-center text-13 text-white/50'>
-											<AppLabel state={widget.app.state} />
-										</WidgetContainer>
-									)}
-								</WidgetWrapper>
-							</motion.div>
-						))}
+						widgets={widgets.selected.map(desktopWidgetNode)}
 						apps={gridItems.map((item, i) => (
 							<motion.div
 								key={item.type === 'app' ? item.id : item.type === 'shortcut' ? item.shortcut.url : item.machine.id}

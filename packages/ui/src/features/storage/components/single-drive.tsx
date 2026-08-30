@@ -179,7 +179,9 @@ export default function SingleDriveStorageManager({devices}: {devices: StorageDe
 							<div className='flex flex-col items-center gap-4 md:w-[240px] md:shrink-0 md:justify-center'>
 								<StorageDonutChart
 									used={usedBytes / 1e12}
-									available={freeBytes / 1e12}
+									// The chart expects total usable capacity, not free space - the used
+									// arc is drawn as a fraction of it
+									available={totalBytes / 1e12}
 									failsafe={0}
 									wasted={0}
 									usedBytes={usedBytes}

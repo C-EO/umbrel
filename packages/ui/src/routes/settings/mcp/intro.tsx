@@ -50,7 +50,7 @@ export function IntroView({
 							<BetaPill />
 						</div>
 						<h3 className='text-19 font-semibold -tracking-2'>{t('mcp-picker-title')}</h3>
-						<p className='text-13 leading-tight text-white/40'>{t('mcp-picker-description')}</p>
+						<p className='text-13 leading-tight text-white/70'>{t('mcp-picker-description')}</p>
 					</motion.div>
 				)}
 			</AnimatePresence>

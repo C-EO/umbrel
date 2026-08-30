@@ -24,7 +24,12 @@ test.sequential('login', async () => {
 	await expect(umbreld.registerAndLogin()).resolves.toBe(true)
 })
 
-test.sequential('notifications.get() lists nothing on a fresh install', async () => {
+test.sequential('notifications.get() lists only the onboarding notification on a fresh install', async () => {
+	await expect(umbreld.client.notifications.get.query()).resolves.toMatchObject(['onboarding-complete'])
+})
+
+test.sequential('notifications.clear(notification) clears the onboarding notification', async () => {
+	await umbreld.client.notifications.clear.mutate('onboarding-complete')
 	await expect(umbreld.client.notifications.get.query()).resolves.toMatchObject([])
 })
 
@@ -71,8 +76,13 @@ test.sequential('account-scoped notifications are private and independently clea
 		password: memberPassword,
 	})
 	umbreld.setAuthToken(memberToken)
-	await expect(umbreld.client.notifications.get.query()).resolves.toEqual(['member-cloud-notification'])
+	// A new member starts with their own scoped onboarding notification
+	await expect(umbreld.client.notifications.get.query()).resolves.toEqual([
+		'member-cloud-notification',
+		'onboarding-complete',
+	])
 	await expect(umbreld.client.notifications.clear.mutate('member-cloud-notification')).resolves.toBe(true)
+	await expect(umbreld.client.notifications.clear.mutate('onboarding-complete')).resolves.toBe(true)
 	await expect(umbreld.client.notifications.get.query()).resolves.toEqual([])
 
 	const ownerToken = await umbreld.client.user.login.mutate({

@@ -21,7 +21,7 @@ import {getDeviceNameFromPath} from '@/features/backups/utils/backup-location-he
 import {CloudBreakDiagram} from '@/features/files/components/cloud-break-diagram'
 import {useHomePath} from '@/features/files/hooks/use-home-path'
 import {cloudAccountBrand} from '@/features/files/utils/cloud'
-import {useNotifications} from '@/hooks/use-notifications'
+import {ONBOARDING_COMPLETE_NOTIFICATION, useNotifications} from '@/hooks/use-notifications'
 import {cn} from '@/lib/utils'
 import {SettingsListIcon} from '@/routes/settings/_components/list-row'
 import {suppliedSettingsIcons} from '@/routes/settings/_components/settings-taxonomy'
@@ -257,8 +257,12 @@ export function Notifications() {
 		onError: thunderboltActionError,
 	})
 
-	// Separate umbrelos-updated notification from others
-	const standardNotifications = notifications.filter((n) => n !== 'umbrelos-updated')
+	// Separate notifications handled elsewhere from the ones rendered here as
+	// alerts: umbrelos-updated opens What's New below, onboarding-complete is
+	// the welcome desktop's
+	const standardNotifications = notifications.filter(
+		(n) => n !== 'umbrelos-updated' && n !== ONBOARDING_COMPLETE_NOTIFICATION,
+	)
 	const showWhatsNew = notifications.includes('umbrelos-updated')
 
 	// Navigate to whats-new dialog when the umbrelos-updated notification is present

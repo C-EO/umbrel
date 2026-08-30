@@ -2,14 +2,22 @@
 
 import {act} from 'react'
 import {createRoot} from 'react-dom/client'
-import {afterEach, expect, test, vi} from 'vitest'
+import {afterEach, beforeEach, expect, test, vi} from 'vitest'
 
 import {useGpuForUi} from './use-gpu'
 
-const {useQuery} = vi.hoisted(() => ({useQuery: vi.fn()}))
+const {useQuery, useInfoQuery, useUserQuery} = vi.hoisted(() => ({
+	useQuery: vi.fn(),
+	useInfoQuery: vi.fn(),
+	useUserQuery: vi.fn(),
+}))
 
 vi.mock('@/trpc/trpc', () => ({
-	trpcReact: {system: {gpuUsage: {useQuery}}},
+	trpcReact: {
+		system: {gpuUsage: {useQuery}},
+		hardware: {gpu: {getInfo: {useQuery: useInfoQuery}}},
+		user: {get: {useQuery: useUserQuery}},
+	},
 }))
 
 vi.mock('react-i18next', () => ({
@@ -18,6 +26,10 @@ vi.mock('react-i18next', () => ({
 }))
 
 afterEach(() => vi.resetAllMocks())
+beforeEach(() => {
+	useInfoQuery.mockReturnValue({data: undefined})
+	useUserQuery.mockReturnValue({data: {role: 'owner'}})
+})
 ;(globalThis as {IS_REACT_ACT_ENVIRONMENT?: boolean}).IS_REACT_ACT_ENVIRONMENT = true
 
 let current!: ReturnType<typeof useGpuForUi>
@@ -88,5 +100,40 @@ test('does not advertise a GPU tab when no devices are available', () => {
 	const view = renderGpuHook()
 	expect(view.result().hasGpu).toBe(false)
 	expect(view.result().apps).toStrictEqual([])
+	view.unmount()
+})
+
+test('lays out the GPU card from the controller list before the first usage sample arrives', () => {
+	useQuery.mockReturnValue({isLoading: true, data: undefined})
+	useInfoQuery.mockReturnValue({data: {gpus: [{vendor: 'NVIDIA', model: 'RTX 4090'}]}})
+
+	const view = renderGpuHook(true)
+	// Presence never goes stale on its own; the usage poll picks up hotplug
+	const [, infoOptions] = useInfoQuery.mock.lastCall!
+	expect(infoOptions).toMatchObject({retry: false, staleTime: Infinity, enabled: true})
+	expect(view.result()).toMatchObject({isLoading: true, hasGpu: true, value: '–'})
+	view.unmount()
+})
+
+test('once usage samples arrive they decide presence, not the controller list', () => {
+	useQuery.mockReturnValue({
+		isLoading: false,
+		data: {totalUsed: null, memoryUsed: 0, system: 0, systemMemoryUsed: 0, apps: [], devices: []},
+	})
+	useInfoQuery.mockReturnValue({data: {gpus: [{vendor: 'NVIDIA', model: 'RTX 4090'}]}})
+
+	const view = renderGpuHook()
+	expect(view.result().hasGpu).toBe(false)
+	view.unmount()
+})
+
+test('members skip the owner-only controller list and wait for the usage sample', () => {
+	useQuery.mockReturnValue({isLoading: true, data: undefined})
+	useUserQuery.mockReturnValue({data: {role: 'member'}})
+
+	const view = renderGpuHook()
+	const [, infoOptions] = useInfoQuery.mock.lastCall!
+	expect(infoOptions).toMatchObject({enabled: false})
+	expect(view.result()).toMatchObject({isLoading: true, hasGpu: false})
 	view.unmount()
 })

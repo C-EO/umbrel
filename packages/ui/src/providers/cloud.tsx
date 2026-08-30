@@ -94,19 +94,16 @@ export function CloudActivityProvider({children}: {children: React.ReactNode}) {
 		[queryClient],
 	)
 
-	const lastActivityRef = useRef(new Map<string, CloudSyncActivity>())
 	const activeIdsRef = useRef(new Set<string>())
 	useEffect(() => {
 		applyActivitySnapshot([])
 		knownCloudsRef.current.clear()
-		lastActivityRef.current.clear()
 		activeIdsRef.current.clear()
 		void reconcileActivity()
 	}, [applyActivitySnapshot, currentAccount?.userId, reconcileActivity])
 
 	useEffect(() => {
 		const currentIds = new Set(activities.map(({syncId}) => syncId))
-		for (const activity of activities) lastActivityRef.current.set(activity.syncId, activity)
 
 		const endedIds = [...activeIdsRef.current].filter((id) => !currentIds.has(id))
 		activeIdsRef.current = currentIds
@@ -137,16 +134,9 @@ export function CloudActivityProvider({children}: {children: React.ReactNode}) {
 				const known = knownCloudsRef.current.get(id)
 				if (known?.mode === 'one-time' && !remainingIds.has(id)) {
 					if (!wasSyncRemovedByUser(id)) {
-						const files = lastActivityRef.current.get(id)?.transferredFiles
-						toast.success(
-							files
-								? t('files-cloud.downloaded-toast-files', {folder: cloudSyncName(known), count: files})
-								: t('files-cloud.downloaded-toast', {folder: cloudSyncName(known)}),
-							{area: 'files'},
-						)
+						toast.success(t('files-cloud.downloaded-toast', {folder: cloudSyncName(known)}), {area: 'files'})
 					}
 					knownCloudsRef.current.delete(id)
-					lastActivityRef.current.delete(id)
 				}
 			}
 		})()
