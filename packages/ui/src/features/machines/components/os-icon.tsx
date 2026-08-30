@@ -4,8 +4,8 @@ import {cn} from '@/lib/utils'
 
 // The retro-monitor machine icon sets: one image per display state, served
 // from public/ (umbreld's CSP disallows data: URIs, so these must never be
-// inlined). Keyed by catalog familyId; Windows Server reuses the Windows 11
-// art, and custom ISOs plus anything unknown fall back to the generic disc set.
+// inlined). Keyed by catalog familyId; custom ISOs plus anything unknown fall
+// back to the generic disc set.
 const machineIconSets: Record<string, string> = {
 	ubuntu: 'machine-ubuntu',
 	fedora: 'machine-fedora',
@@ -13,7 +13,7 @@ const machineIconSets: Record<string, string> = {
 	alpine: 'machine-alpine',
 	android: 'machine-android',
 	'windows-11': 'machine-windows-11',
-	'windows-server': 'machine-windows-11',
+	'windows-server': 'machine-windows-server',
 	'windows-7': 'machine-windows-7',
 	'windows-xp': 'machine-windows-xp',
 	'windows-98': 'machine-windows-98',
