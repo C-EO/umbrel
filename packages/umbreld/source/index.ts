@@ -24,6 +24,7 @@ import Machines from './modules/machines/machines.js'
 import LanIngress from './modules/lan-ingress/lan-ingress.js'
 import Auth from './modules/auth/auth.js'
 import Mcp, {type McpStoreSettings} from './modules/mcp/mcp.js'
+import Photos from './modules/photos/photos.js'
 
 import type {CloudStore} from './modules/files/cloud-types.js'
 
@@ -176,6 +177,7 @@ export default class Umbreld {
 	lanIngress: LanIngress
 	auth: Auth
 	mcp: Mcp
+	photos: Photos
 	isBackupRestoreFirstStart = false
 
 	constructor({
@@ -209,6 +211,7 @@ export default class Umbreld {
 		this.lanIngress = new LanIngress(this)
 		this.auth = new Auth(this)
 		this.mcp = new Mcp(this)
+		this.photos = new Photos(this)
 	}
 
 	async start() {
@@ -316,6 +319,7 @@ export default class Umbreld {
 		// Account deletion spans several modules. Retry any cleanup that was
 		// interrupted after the member was durably marked as deleted.
 		await this.user.finishPendingDeletions()
+		await this.photos.start().catch((error) => this.logger.error('Failed to start Photos', error))
 
 		// Apps bind their declared host ports first. Machines then reconcile
 		// autostart domains and can report a precise port conflict for restored
@@ -374,6 +378,7 @@ export default class Umbreld {
 				this.machines.stop(),
 				this.auth.stop(),
 				this.mcp.stop(),
+				this.photos.stop(),
 			])
 			return true
 		} catch (error) {

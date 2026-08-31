@@ -6,6 +6,7 @@ import compressible from 'compressible'
 import fse from 'fs-extra'
 import mime from 'mime-types'
 import nodePath from 'node:path'
+import {Readable} from 'node:stream'
 import {pipeline} from 'node:stream/promises'
 
 import {$} from 'execa'
@@ -77,6 +78,47 @@ export default class Archive {
 		}
 
 		// We convert any finalize rejection to a stream error so callers can handle it.
+		archive.finalize().catch((error) => archive.emit('error', error))
+		return archive
+	}
+
+	// Photos selections may span unrelated folders. Flatten those files into
+	// one archive and disambiguate repeated basenames without exposing source
+	// directory structure.
+	async createFlatFileZipStream(systemPaths: string[]) {
+		const archive = archiver('zip')
+		const usedNames = new Set<string>()
+		for (const systemPath of systemPaths) {
+			const status = await fse.stat(systemPath)
+			if (!status.isFile()) throw new Error('photos archive entries must be files')
+			const name = uniqueArchiveName(nodePath.basename(systemPath), usedNames)
+			archive.file(systemPath, {name, ...(this.#shouldSkipCompression(systemPath) ? {store: true} : {})})
+		}
+		archive.finalize().catch((error) => archive.emit('error', error))
+		return archive
+	}
+
+	// Photos selections can span folders, but every byte must remain tied to a
+	// descriptor opened and authorized for this account. Each lazy source holds
+	// only its own descriptor while Archiver consumes it, avoiding both path
+	// reopen races and an O(selection) descriptor burst.
+	async createAuthorizedFlatFileZipStream(virtualPaths: string[], userId: string) {
+		const archive = archiver('zip')
+		const usedNames = new Set<string>()
+		for (const virtualPath of virtualPaths) {
+			const name = uniqueArchiveName(nodePath.posix.basename(virtualPath), usedNames)
+			const source = Readable.from(
+				(async function* (umbreld: Umbreld) {
+					const file = await umbreld.files.openFileForRead(virtualPath, userId)
+					try {
+						for await (const chunk of file.handle.createReadStream({autoClose: false})) yield chunk
+					} finally {
+						await file.handle.close().catch(() => {})
+					}
+				})(this.#umbreld),
+			)
+			archive.append(source, {name, ...(this.#shouldSkipCompression(virtualPath) ? {store: true} : {})})
+		}
 		archive.finalize().catch((error) => archive.emit('error', error))
 		return archive
 	}
@@ -179,5 +221,20 @@ export default class Archive {
 
 		// Return virtual path of the unarchived files
 		return this.#umbreld.files.systemToVirtualPath(targetDirectory)
+	}
+}
+
+function uniqueArchiveName(name: string, usedNames: Set<string>) {
+	if (!usedNames.has(name)) {
+		usedNames.add(name)
+		return name
+	}
+	const extension = nodePath.extname(name)
+	const stem = nodePath.basename(name, extension)
+	for (let suffix = 2; ; suffix++) {
+		const candidate = `${stem} (${suffix})${extension}`
+		if (usedNames.has(candidate)) continue
+		usedNames.add(candidate)
+		return candidate
 	}
 }

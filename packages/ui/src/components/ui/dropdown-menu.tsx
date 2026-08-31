@@ -174,7 +174,7 @@ function DropdownMenuSeparator({
 	ref?: React.Ref<React.ComponentRef<typeof DropdownMenuPrimitive.Separator>>
 }) {
 	return (
-		<DropdownMenuPrimitive.Separator ref={ref} className={cn('-mx-2.5 my-2.5 h-px bg-white/5', className)} {...props} />
+		<DropdownMenuPrimitive.Separator ref={ref} className={cn('-mx-1 my-1 h-px bg-white/5', className)} {...props} />
 	)
 }
 

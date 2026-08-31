@@ -1,7 +1,12 @@
-import {expect, beforeAll, afterAll, test} from 'vitest'
+import nodePath from 'node:path'
+import {createHash} from 'node:crypto'
+import {link, lstat, rename} from 'node:fs/promises'
+
+import {expect, beforeAll, afterAll, test, vi} from 'vitest'
 import fse from 'fs-extra'
 import {$} from 'execa'
 import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 
 let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
 
@@ -113,6 +118,254 @@ test('trash() successfully moves a file to trash', async () => {
 	await fse.remove(testDirectory)
 	await fse.remove(trashSystemPath)
 	await fse.remove(metaPath)
+})
+
+test('trash() restores an atomically claimed file when its expected revision does not match', async () => {
+	const systemPath = `${umbreld.instance.dataDirectory}/home/replaced-photo.jpg`
+	await fse.writeFile(systemPath, 'replacement bytes')
+
+	await expect(
+		umbreld.instance.files.trash('/Home/replaced-photo.jpg', OWNER_USER_ID, {
+			inode: 'not-the-replacement',
+			size: 17,
+			modifiedNs: '0',
+			ctimeNs: '0',
+		}),
+	).rejects.toThrow('[source-changed]')
+
+	await expect(fse.readFile(systemPath, 'utf8')).resolves.toBe('replacement bytes')
+	expect((await fse.readdir(nodePath.dirname(systemPath))).some((name) => name.endsWith('.umbrel-trash'))).toBe(false)
+})
+
+test('trash() moves the exact atomically claimed revision', async () => {
+	const systemPath = `${umbreld.instance.dataDirectory}/home/revision-photo.jpg`
+	const trashSystemPath = `${umbreld.instance.dataDirectory}/trash/revision-photo.jpg`
+	await fse.writeFile(systemPath, 'expected bytes')
+	const stats = await lstat(systemPath, {bigint: true})
+
+	await expect(
+		umbreld.instance.files.trash('/Home/revision-photo.jpg', OWNER_USER_ID, {
+			inode: stats.ino.toString(),
+			size: Number(stats.size),
+			modifiedNs: stats.mtimeNs.toString(),
+			ctimeNs: stats.ctimeNs.toString(),
+		}),
+	).resolves.toBe('/Trash/revision-photo.jpg')
+
+	await expect(fse.pathExists(systemPath)).resolves.toBe(false)
+	await expect(fse.readFile(trashSystemPath, 'utf8')).resolves.toBe('expected bytes')
+	await fse.remove(trashSystemPath)
+	await fse.remove(`${umbreld.instance.dataDirectory}/trash-meta/revision-photo.jpg.json`)
+})
+
+test('recoverTrashClaim() restores an interrupted revision claim without overwriting', async () => {
+	const originalSystemPath = `${umbreld.instance.dataDirectory}/home/interrupted-photo.jpg`
+	const claimId = createHash('sha256').update(originalSystemPath).digest('hex').slice(0, 32)
+	const claimSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.umbrel-trash`
+	const manifestSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.json.umbrel-trash`
+	await fse.writeFile(originalSystemPath, 'claimed bytes')
+	const stats = await lstat(originalSystemPath, {bigint: true})
+	await fse.writeJson(manifestSystemPath, {
+		version: 1,
+		originalSystemPath,
+		revision: {
+			inode: stats.ino.toString(),
+			size: Number(stats.size),
+			modifiedNs: stats.mtimeNs.toString(),
+			ctimeNs: stats.ctimeNs.toString(),
+		},
+	})
+	await rename(originalSystemPath, claimSystemPath)
+
+	await expect(umbreld.instance.files.recoverTrashClaim('/Home/interrupted-photo.jpg', OWNER_USER_ID)).resolves.toBe(
+		true,
+	)
+	await expect(fse.readFile(originalSystemPath, 'utf8')).resolves.toBe('claimed bytes')
+	await expect(fse.pathExists(claimSystemPath)).resolves.toBe(false)
+	await expect(fse.pathExists(manifestSystemPath)).resolves.toBe(false)
+	await fse.remove(originalSystemPath)
+})
+
+test('trash() replaces an incomplete claim manifest atomically', async () => {
+	const originalSystemPath = `${umbreld.instance.dataDirectory}/home/incomplete-manifest.jpg`
+	const trashSystemPath = `${umbreld.instance.dataDirectory}/trash/incomplete-manifest.jpg`
+	const claimId = createHash('sha256').update(originalSystemPath).digest('hex').slice(0, 32)
+	const manifestSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.json.umbrel-trash`
+	await fse.writeFile(originalSystemPath, 'original bytes')
+	await fse.writeFile(manifestSystemPath, '')
+	const stats = await lstat(originalSystemPath, {bigint: true})
+	const revision = {
+		inode: stats.ino.toString(),
+		size: Number(stats.size),
+		modifiedNs: stats.mtimeNs.toString(),
+		ctimeNs: stats.ctimeNs.toString(),
+	}
+
+	await expect(umbreld.instance.files.trash('/Home/incomplete-manifest.jpg', OWNER_USER_ID, revision)).resolves.toBe(
+		'/Trash/incomplete-manifest.jpg',
+	)
+	await expect(fse.pathExists(manifestSystemPath)).resolves.toBe(false)
+
+	await fse.remove(trashSystemPath)
+	await fse.remove(`${umbreld.instance.dataDirectory}/trash-meta/incomplete-manifest.jpg.json`)
+})
+
+test('recoverTrashClaim() keeps its journal until the index observes the restored file', async () => {
+	const originalSystemPath = `${umbreld.instance.dataDirectory}/home/interrupted-index-update.jpg`
+	const claimId = createHash('sha256').update(originalSystemPath).digest('hex').slice(0, 32)
+	const claimSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.umbrel-trash`
+	const manifestSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.json.umbrel-trash`
+	await fse.writeFile(claimSystemPath, 'claimed bytes')
+	const stats = await lstat(claimSystemPath, {bigint: true})
+	await fse.writeJson(manifestSystemPath, {
+		version: 1,
+		originalSystemPath,
+		revision: {
+			inode: stats.ino.toString(),
+			size: Number(stats.size),
+			modifiedNs: stats.mtimeNs.toString(),
+			ctimeNs: stats.ctimeNs.toString(),
+		},
+	})
+	const movePath = vi
+		.spyOn(umbreld.instance.files.fileIndex, 'movePathRequired')
+		.mockRejectedValueOnce(new Error('[file-index-unavailable]'))
+
+	await expect(
+		umbreld.instance.files.recoverTrashClaim('/Home/interrupted-index-update.jpg', OWNER_USER_ID),
+	).rejects.toThrow('[file-index-unavailable]')
+	await expect(fse.readFile(originalSystemPath, 'utf8')).resolves.toBe('claimed bytes')
+	await expect(fse.pathExists(claimSystemPath)).resolves.toBe(false)
+	await expect(fse.pathExists(manifestSystemPath)).resolves.toBe(true)
+
+	await expect(
+		umbreld.instance.files.recoverTrashClaim('/Home/interrupted-index-update.jpg', OWNER_USER_ID),
+	).resolves.toBe(true)
+	expect(movePath).toHaveBeenCalledTimes(2)
+	await expect(fse.pathExists(manifestSystemPath)).resolves.toBe(false)
+	movePath.mockRestore()
+	await fse.remove(originalSystemPath)
+})
+
+test('recoverTrashClaim() never mistakes a replacement for a restored claim', async () => {
+	const originalSystemPath = `${umbreld.instance.dataDirectory}/home/replaced-after-claim.jpg`
+	const trashSystemPath = `${umbreld.instance.dataDirectory}/trash/replaced-after-claim.jpg`
+	const claimId = createHash('sha256').update(originalSystemPath).digest('hex').slice(0, 32)
+	const claimSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.umbrel-trash`
+	const manifestSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.json.umbrel-trash`
+	await fse.writeFile(originalSystemPath, 'claimed bytes')
+	const stats = await lstat(originalSystemPath, {bigint: true})
+	await fse.writeJson(manifestSystemPath, {
+		version: 1,
+		originalSystemPath,
+		revision: {
+			inode: stats.ino.toString(),
+			size: Number(stats.size),
+			modifiedNs: stats.mtimeNs.toString(),
+			ctimeNs: stats.ctimeNs.toString(),
+		},
+	})
+	await rename(originalSystemPath, claimSystemPath)
+	await rename(claimSystemPath, trashSystemPath)
+	await fse.writeFile(originalSystemPath, 'replacement bytes')
+
+	await expect(umbreld.instance.files.recoverTrashClaim('/Home/replaced-after-claim.jpg', OWNER_USER_ID)).resolves.toBe(
+		false,
+	)
+	await expect(fse.readFile(originalSystemPath, 'utf8')).resolves.toBe('replacement bytes')
+	await expect(fse.readFile(trashSystemPath, 'utf8')).resolves.toBe('claimed bytes')
+	await expect(fse.pathExists(manifestSystemPath)).resolves.toBe(false)
+
+	await fse.remove(originalSystemPath)
+	await fse.remove(trashSystemPath)
+})
+
+test('recoverTrashClaim() completes an interrupted hard-link restoration', async () => {
+	const originalSystemPath = `${umbreld.instance.dataDirectory}/home/interrupted-hard-link.jpg`
+	const claimId = createHash('sha256').update(originalSystemPath).digest('hex').slice(0, 32)
+	const claimSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.umbrel-trash`
+	const manifestSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.json.umbrel-trash`
+	await fse.writeFile(claimSystemPath, 'claimed bytes')
+	const stats = await lstat(claimSystemPath, {bigint: true})
+	await fse.writeJson(manifestSystemPath, {
+		version: 1,
+		originalSystemPath,
+		revision: {
+			inode: stats.ino.toString(),
+			size: Number(stats.size),
+			modifiedNs: stats.mtimeNs.toString(),
+			ctimeNs: stats.ctimeNs.toString(),
+		},
+	})
+	await link(claimSystemPath, originalSystemPath)
+
+	await expect(
+		umbreld.instance.files.recoverTrashClaim('/Home/interrupted-hard-link.jpg', OWNER_USER_ID),
+	).resolves.toBe(true)
+	await expect(fse.readFile(originalSystemPath, 'utf8')).resolves.toBe('claimed bytes')
+	await expect(fse.pathExists(claimSystemPath)).resolves.toBe(false)
+	await expect(fse.pathExists(manifestSystemPath)).resolves.toBe(false)
+	await fse.remove(originalSystemPath)
+})
+
+test('trash() serializes concurrent claims for the same revision', async () => {
+	const originalSystemPath = `${umbreld.instance.dataDirectory}/home/concurrent-photo.jpg`
+	const trashSystemPath = `${umbreld.instance.dataDirectory}/trash/concurrent-photo.jpg`
+	await fse.writeFile(originalSystemPath, 'claimed once')
+	const stats = await lstat(originalSystemPath, {bigint: true})
+	const revision = {
+		inode: stats.ino.toString(),
+		size: Number(stats.size),
+		modifiedNs: stats.mtimeNs.toString(),
+		ctimeNs: stats.ctimeNs.toString(),
+	}
+
+	const results = await Promise.allSettled([
+		umbreld.instance.files.trash('/Home/concurrent-photo.jpg', OWNER_USER_ID, revision),
+		umbreld.instance.files.trash('/Home/concurrent-photo.jpg', OWNER_USER_ID, revision),
+	])
+	expect(results.filter(({status}) => status === 'fulfilled')).toHaveLength(1)
+	expect(results.filter(({status}) => status === 'rejected')).toHaveLength(1)
+	await expect(fse.readFile(trashSystemPath, 'utf8')).resolves.toBe('claimed once')
+	expect((await fse.readdir(nodePath.dirname(originalSystemPath))).some((name) => name.endsWith('.umbrel-trash'))).toBe(
+		false,
+	)
+
+	await fse.remove(trashSystemPath)
+	await fse.remove(`${umbreld.instance.dataDirectory}/trash-meta/concurrent-photo.jpg.json`)
+})
+
+test('recoverTrashClaim() preserves both files when the original name is occupied', async () => {
+	const originalSystemPath = `${umbreld.instance.dataDirectory}/home/interrupted-conflict.jpg`
+	const claimId = createHash('sha256').update(originalSystemPath).digest('hex').slice(0, 32)
+	const claimSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.umbrel-trash`
+	const manifestSystemPath = `${umbreld.instance.dataDirectory}/home/.${claimId}.json.umbrel-trash`
+	await fse.writeFile(claimSystemPath, 'claimed bytes')
+	const stats = await lstat(claimSystemPath, {bigint: true})
+	await fse.writeJson(manifestSystemPath, {
+		version: 1,
+		originalSystemPath,
+		revision: {
+			inode: stats.ino.toString(),
+			size: Number(stats.size),
+			modifiedNs: stats.mtimeNs.toString(),
+			ctimeNs: stats.ctimeNs.toString(),
+		},
+	})
+	await fse.writeFile(originalSystemPath, 'replacement bytes')
+
+	await expect(umbreld.instance.files.recoverTrashClaim('/Home/interrupted-conflict.jpg', OWNER_USER_ID)).resolves.toBe(
+		true,
+	)
+	await expect(fse.readFile(originalSystemPath, 'utf8')).resolves.toBe('replacement bytes')
+	await expect(fse.readFile(`${umbreld.instance.dataDirectory}/trash/interrupted-conflict.jpg`, 'utf8')).resolves.toBe(
+		'claimed bytes',
+	)
+	await expect(fse.pathExists(claimSystemPath)).resolves.toBe(false)
+	await expect(fse.pathExists(manifestSystemPath)).resolves.toBe(false)
+	await fse.remove(originalSystemPath)
+	await fse.remove(`${umbreld.instance.dataDirectory}/trash/interrupted-conflict.jpg`)
+	await fse.remove(`${umbreld.instance.dataDirectory}/trash-meta/interrupted-conflict.jpg.json`)
 })
 
 test('trash() successfully moves a directory with contents to trash', async () => {

@@ -121,6 +121,15 @@ export function Dock() {
 					<DockItem
 						iconSize={iconSize}
 						iconSizeZoomed={iconSizeZoomed}
+						to={systemAppsKeyed['UMBREL_photos'].systemAppTo}
+						open={pathname.startsWith(systemAppsKeyed['UMBREL_photos'].systemAppTo)}
+						bg={systemAppsKeyed['UMBREL_photos'].icon}
+						label={systemAppsKeyed['UMBREL_photos'].name}
+						mouseX={mouseX}
+					/>
+					<DockItem
+						iconSize={iconSize}
+						iconSizeZoomed={iconSizeZoomed}
 						to={systemAppsKeyed['UMBREL_app-store'].systemAppTo}
 						open={
 							pathname.startsWith(systemAppsKeyed['UMBREL_app-store'].systemAppTo) ||
@@ -200,6 +209,12 @@ export function DockPreview() {
 				iconSizeZoomed={iconSizeZoomed}
 			/>
 			<DockItem
+				bg={systemAppsKeyed['UMBREL_photos'].icon}
+				mouseX={mouseX}
+				iconSize={iconSize}
+				iconSizeZoomed={iconSizeZoomed}
+			/>
+			<DockItem
 				bg={systemAppsKeyed['UMBREL_app-store'].icon}
 				mouseX={mouseX}
 				iconSize={iconSize}
@@ -227,9 +242,16 @@ export function DockPreview() {
 	)
 }
 
-export function DockSpacer({className}: {className?: string}) {
+// How much of the bottom of the screen the dock takes, in px: what content
+// that runs beneath it must leave clear to scroll fully into view
+export function useDockClearance() {
 	const {dockHeight} = useDockDimensions()
-	return <div className={cn('w-full shrink-0', className)} style={{height: dockHeight + DOCK_BOTTOM_PADDING_PX}} />
+	return dockHeight + DOCK_BOTTOM_PADDING_PX
+}
+
+export function DockSpacer({className}: {className?: string}) {
+	const height = useDockClearance()
+	return <div className={cn('w-full shrink-0', className)} style={{height}} />
 }
 
 export function DockBottomPositioner({children}: {children: React.ReactNode}) {

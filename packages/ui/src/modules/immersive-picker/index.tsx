@@ -170,7 +170,7 @@ export function AppDropdown({
 				/>
 				{appResults.length === 0 && <div className='text-14 text-white/50'>{t('no-results-found')}</div>}
 				{appResults.length > 0 && (
-					<ScrollArea className='relative -mx-2.5 flex h-full flex-col px-2.5'>
+					<ScrollArea className='relative -mx-1 flex h-full flex-col px-1'>
 						{appResults.map((app, i) => (
 							<DropdownMenuCheckboxItem
 								key={app.id}

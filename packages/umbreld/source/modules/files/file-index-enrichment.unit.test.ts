@@ -1,5 +1,5 @@
 import {execFile} from 'node:child_process'
-import {lstat, mkdtemp, rm} from 'node:fs/promises'
+import {lstat, mkdtemp, rm, writeFile} from 'node:fs/promises'
 import {tmpdir} from 'node:os'
 import nodePath from 'node:path'
 import {promisify} from 'node:util'
@@ -8,10 +8,22 @@ import {afterEach, expect, test, vi} from 'vitest'
 
 import {execa} from 'execa'
 
-import {THUMBNAIL_HEIGHT, THUMBNAIL_QUALITY, THUMBNAIL_WIDTH} from './thumbnail-support.js'
 import {
+	THUMBNAIL_HEIGHT,
+	THUMBNAIL_QUALITY,
+	THUMBNAIL_VARIANTS,
+	THUMBNAIL_WIDTH,
+	parseThumbnailFilename,
+	thumbnailFilename,
+	type ThumbnailVariant,
+} from './thumbnail-support.js'
+import {
+	decodeExifUserComment,
 	enrichmentQueueConcurrency,
+	extractMediaMetadata,
+	extractThumbnailTint,
 	generateThumbnailFile,
+	generateThumbnailFiles,
 	hashFileRevision,
 	THUMBNAIL_GENERATION_TIMEOUT_MS,
 } from './file-index-enrichment.js'
@@ -20,6 +32,97 @@ vi.mock('execa')
 
 const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
+const metadataSeparator = '\u001f'
+
+type PhotoIdentifyMetadata = {
+	width: string
+	height: string
+	orientation: string
+	originalDate: string
+	originalOffset: string
+	digitizedDate: string
+	digitizedOffset: string
+	dateTime: string
+	dateTimeOffset: string
+	make: string
+	model: string
+	lens: string
+	focalLength: string
+	aperture: string
+	exposure: string
+	photographicSensitivity: string
+	legacyIso: string
+	latitude: string
+	latitudeRef: string
+	longitude: string
+	longitudeRef: string
+	altitude: string
+	altitudeRef: string
+	projection: string
+	exifContentIdentifier: string
+	makerContentIdentifier: string
+	xmpContentIdentifier: string
+	userCommentMarker: string
+}
+
+function photoIdentifyMetadata(overrides: Partial<PhotoIdentifyMetadata> = {}) {
+	const metadata: PhotoIdentifyMetadata = {
+		width: '4032',
+		height: '3024',
+		orientation: '',
+		originalDate: '',
+		originalOffset: '',
+		digitizedDate: '',
+		digitizedOffset: '',
+		dateTime: '',
+		dateTimeOffset: '',
+		make: '',
+		model: '',
+		lens: '',
+		focalLength: '',
+		aperture: '',
+		exposure: '',
+		photographicSensitivity: '',
+		legacyIso: '',
+		latitude: '',
+		latitudeRef: '',
+		longitude: '',
+		longitudeRef: '',
+		altitude: '',
+		altitudeRef: '',
+		projection: '',
+		exifContentIdentifier: '',
+		makerContentIdentifier: '',
+		xmpContentIdentifier: '',
+		userCommentMarker: '',
+		...overrides,
+	}
+	return {stdout: Object.values(metadata).join(metadataSeparator)}
+}
+
+function exifUserCommentProfile(marker: Buffer, payload: Buffer) {
+	const value = Buffer.concat([marker, payload])
+	const profile = Buffer.alloc(6 + 44 + value.length)
+	profile.write('Exif\0\0', 0, 'binary')
+	const tiff = 6
+	profile.write('II', tiff, 'ascii')
+	profile.writeUInt16LE(42, tiff + 2)
+	profile.writeUInt32LE(8, tiff + 4)
+	profile.writeUInt16LE(1, tiff + 8)
+	profile.writeUInt16LE(0x8769, tiff + 10)
+	profile.writeUInt16LE(4, tiff + 12)
+	profile.writeUInt32LE(1, tiff + 14)
+	profile.writeUInt32LE(26, tiff + 18)
+	profile.writeUInt32LE(0, tiff + 22)
+	profile.writeUInt16LE(1, tiff + 26)
+	profile.writeUInt16LE(0x9286, tiff + 28)
+	profile.writeUInt16LE(7, tiff + 30)
+	profile.writeUInt32LE(value.length, tiff + 32)
+	profile.writeUInt32LE(44, tiff + 36)
+	profile.writeUInt32LE(0, tiff + 40)
+	value.copy(profile, tiff + 44)
+	return profile
+}
 
 afterEach(async () => {
 	vi.restoreAllMocks()
@@ -37,7 +140,7 @@ test.each([
 	expect(enrichmentQueueConcurrency(parallelism)).toStrictEqual({background, onDemand})
 })
 
-test('auto-orients before applying the thumbnail optimization', async () => {
+test('auto-orients before applying short-edge sizing without upscaling', async () => {
 	await generateThumbnailFile('/home/photo.jpg', '/data/thumbnail.webp')
 
 	expect(execa).toHaveBeenCalledOnce()
@@ -50,12 +153,72 @@ test('auto-orients before applying the thumbnail optimization', async () => {
 	expect(arguments_.slice(arguments_.indexOf('/home/photo.jpg[0]'))).toStrictEqual([
 		'/home/photo.jpg[0]',
 		'-auto-orient',
+		'(',
+		'+clone',
 		'-thumbnail',
-		`${THUMBNAIL_WIDTH}x${THUMBNAIL_HEIGHT}`,
+		`${THUMBNAIL_WIDTH}x${THUMBNAIL_HEIGHT}^>`,
 		'-quality',
 		String(THUMBNAIL_QUALITY),
+		'-write',
 		'webp:/data/thumbnail.webp',
+		'+delete',
+		')',
+		'null:',
 	])
+})
+
+test('writes every requested rendition from one oriented ImageMagick decode', async () => {
+	const outputs = (Object.keys(THUMBNAIL_VARIANTS) as ThumbnailVariant[]).map((variant) => ({
+		variant,
+		destination: `/data/${variant}.webp`,
+	}))
+	await generateThumbnailFiles('/home/photo.jpg', outputs)
+
+	expect(execa).toHaveBeenCalledOnce()
+	const arguments_ = vi.mocked(execa).mock.calls[0][1] as string[]
+	expect(arguments_.filter((argument) => argument === '/home/photo.jpg[0]')).toHaveLength(1)
+	expect(arguments_.filter((argument) => argument === '-auto-orient')).toHaveLength(1)
+	expect(arguments_.filter((argument) => argument === '+clone')).toHaveLength(outputs.length)
+	for (const {variant, destination} of outputs) {
+		const definition = THUMBNAIL_VARIANTS[variant]
+		expect(arguments_).toContain(`${definition.width}x${definition.height}^>`)
+		expect(arguments_).toContain(`${definition.format}:${destination}`)
+	}
+})
+
+test('passes a held source descriptor to media subprocesses', async () => {
+	await generateThumbnailFile('/home/member/photo.jpg', '/data/thumbnail.webp', 'preview-192-webp-v1', 42)
+
+	const arguments_ = vi.mocked(execa).mock.calls[0][1] as string[]
+	expect(arguments_).toContain('/dev/fd/3[0]')
+	expect(execa).toHaveBeenCalledWith(
+		'convert',
+		expect.any(Array),
+		expect.objectContaining({stdio: ['ignore', 'pipe', 'pipe', 42]}),
+	)
+})
+
+test('preserves the video coder when a held descriptor hides the source extension', async () => {
+	await generateThumbnailFile('/home/member/video.mkv', '/data/thumbnail.webp', 'preview-192-webp-v1', 42)
+
+	const arguments_ = vi.mocked(execa).mock.calls[0][1] as string[]
+	expect(arguments_).toContain('MKV:/dev/fd/3[0]')
+})
+
+test.each(Object.entries(THUMBNAIL_VARIANTS))(
+	'uses the registered dimensions and quality for %s',
+	async (variant, definition) => {
+		await generateThumbnailFile('/home/photo.jpg', '/data/thumbnail.webp', variant as ThumbnailVariant)
+
+		const arguments_ = vi.mocked(execa).mock.calls[0][1] as string[]
+		expect(arguments_).toContain(`${definition.width}x${definition.height}^>`)
+		expect(arguments_).toContain(String(definition.quality))
+	},
+)
+
+test.each(Object.keys(THUMBNAIL_VARIANTS))('round-trips the versioned %s artifact name', (variant) => {
+	const identity = {kind: 'content' as const, key: 'ab'.repeat(32), variant: variant as ThumbnailVariant}
+	expect(parseThumbnailFilename(thumbnailFilename(identity))).toStrictEqual(identity)
 })
 
 test.each([
@@ -97,7 +260,221 @@ test('rejects a FIFO thumbnail source without blocking its hash lane', async () 
 			inode: stats.ino.toString(),
 			size: Number(stats.size),
 			modifiedNs: stats.mtimeNs.toString(),
-			ctimeNs: stats.ctimeNs.toString(),
 		}),
 	).rejects.toThrow('File revision no longer matches the index')
+})
+
+test('extracts oriented photo metadata, capture offset, GPS, and Apple live identifier', async () => {
+	const directory = await mkdtemp(nodePath.join(tmpdir(), 'umbrel-photo-metadata-'))
+	temporaryDirectories.push(directory)
+	const photo = nodePath.join(directory, 'IMG_0001.heic')
+	await writeFile(photo, 'photo')
+	vi.mocked(execa).mockResolvedValueOnce(
+		photoIdentifyMetadata({
+			orientation: 'RightTop',
+			originalDate: '2025:08:21 14:03:04',
+			originalOffset: '+02:30',
+			make: 'Apple',
+			model: 'iPhone 16 Pro',
+			lens: 'iPhone lens',
+			focalLength: '24/1',
+			aperture: '18/10',
+			exposure: '1/125',
+			photographicSensitivity: '100',
+			latitude: '13/1, 45/1, 0/1',
+			latitudeRef: 'N',
+			longitude: '100/1, 30/1, 0/1',
+			longitudeRef: 'E',
+			altitude: '125/2',
+			altitudeRef: '0',
+			makerContentIdentifier: 'live-photo-id',
+		}) as never,
+	)
+
+	await expect(extractMediaMetadata(photo)).resolves.toMatchObject({
+		kind: 'photo',
+		width: 3024,
+		height: 4032,
+		takenAtOffsetMinutes: 150,
+		cameraMake: 'Apple',
+		cameraModel: 'iPhone 16 Pro',
+		focalLength: '24mm',
+		aperture: 'ƒ/1.8',
+		exposure: '1/125',
+		iso: 100,
+		latitude: 13.75,
+		longitude: 100.5,
+		altitude: 62.5,
+		liveIdentifier: 'live-photo-id',
+	})
+	expect(execa).toHaveBeenCalledWith('identify', expect.arrayContaining(['-limit', 'memory', '-limit', 'time']), {
+		detached: true,
+		timeout: THUMBNAIL_GENERATION_TIMEOUT_MS,
+		killSignal: 'SIGKILL',
+	})
+})
+
+test.each([
+	['modern ISO', {photographicSensitivity: '640'}, 640],
+	['legacy ISO', {legacyIso: '320'}, 320],
+	['modern ISO precedence', {photographicSensitivity: '800', legacyIso: '200'}, 800],
+])('extracts %s', async (_name, values, expected) => {
+	vi.mocked(execa).mockResolvedValueOnce(photoIdentifyMetadata(values) as never)
+	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({iso: expected})
+})
+
+test.each([
+	[
+		'DateTimeOriginal and its offset',
+		{
+			originalDate: '2024:01:02 03:04:05',
+			originalOffset: '+02:30',
+			digitizedDate: '2023:01:02 03:04:05',
+			digitizedOffset: '-04:00',
+			dateTime: '2022:01:02 03:04:05',
+			dateTimeOffset: '+05:00',
+		},
+		Date.UTC(2024, 0, 2, 0, 34, 5),
+		150,
+	],
+	[
+		'DateTimeDigitized and its offset',
+		{digitizedDate: '2023:02:03 04:05:06', digitizedOffset: '-04:00', dateTime: '2022:01:02 03:04:05'},
+		Date.UTC(2023, 1, 3, 8, 5, 6),
+		-240,
+	],
+	[
+		'DateTime and its offset',
+		{dateTime: '2022:03:04 05:06:07', dateTimeOffset: '+05:45'},
+		Date.UTC(2022, 2, 3, 23, 21, 7),
+		345,
+	],
+	[
+		'a capture date without an offset as UTC',
+		{originalDate: '2021:04:05 06:07:08'},
+		Date.UTC(2021, 3, 5, 6, 7, 8),
+		undefined,
+	],
+] as const)('selects %s', async (_name, values, takenAt, offsetMinutes) => {
+	vi.mocked(execa).mockResolvedValueOnce(photoIdentifyMetadata(values) as never)
+	const metadata = await extractMediaMetadata('/home/photo.jpg')
+	expect(metadata.takenAt).toBe(takenAt)
+	expect(metadata.takenAtOffsetMinutes).toBe(offsetMinutes)
+})
+
+test('falls through an invalid higher-priority photo date without borrowing its offset', async () => {
+	vi.mocked(execa).mockResolvedValueOnce(
+		photoIdentifyMetadata({
+			originalDate: '2024:02:30 12:00:00',
+			originalOffset: '+09:00',
+			digitizedDate: '2023:05:06 07:08:09',
+			digitizedOffset: '-03:00',
+		}) as never,
+	)
+	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({
+		takenAt: Date.UTC(2023, 4, 6, 10, 8, 9),
+		takenAtOffsetMinutes: -180,
+	})
+})
+
+test.each([
+	['above sea level', '125/2', '0', 62.5],
+	['below sea level', '125/2', '1', -62.5],
+])('extracts GPS altitude %s', async (_name, altitude, altitudeRef, expected) => {
+	vi.mocked(execa).mockResolvedValueOnce(
+		photoIdentifyMetadata({
+			latitude: '13/1, 45/1, 0/1',
+			latitudeRef: 'N',
+			longitude: '100/1, 30/1, 0/1',
+			longitudeRef: 'E',
+			altitude,
+			altitudeRef,
+		}) as never,
+	)
+	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({altitude: expected})
+})
+
+test('extracts and normalizes ASCII EXIF UserComment metadata', async () => {
+	vi.mocked(execa)
+		.mockResolvedValueOnce(photoIdentifyMetadata({userCommentMarker: 'ASCII'}) as never)
+		.mockResolvedValueOnce({
+			stdout: exifUserCommentProfile(Buffer.from('ASCII\0\0\0', 'binary'), Buffer.from('  Alpine sunrise  \0')),
+		} as never)
+
+	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({userComment: 'Alpine sunrise'})
+	expect(execa).toHaveBeenCalledTimes(2)
+})
+
+test.each([
+	[
+		'Unicode with a BOM',
+		exifUserCommentProfile(
+			Buffer.from('UNICODE\0', 'binary'),
+			Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Cafe\u0301 東京の夜\0', 'utf16le')]),
+		),
+		'Café 東京の夜',
+	],
+	['empty ASCII', exifUserCommentProfile(Buffer.from('ASCII\0\0\0', 'binary'), Buffer.from('   \0')), undefined],
+	['missing', Buffer.from('not an EXIF profile'), undefined],
+	[
+		'malformed Unicode',
+		exifUserCommentProfile(Buffer.from('UNICODE\0', 'binary'), Buffer.from([0xff, 0xfe, 0x00])),
+		undefined,
+	],
+	[
+		'unknown character set',
+		exifUserCommentProfile(Buffer.from('UNKNOWN\0', 'binary'), Buffer.from('comment')),
+		undefined,
+	],
+] as const)('decodes %s UserComment safely', (_name, profile, expected) => {
+	expect(decodeExifUserComment(profile)).toBe(expected)
+})
+
+test('extracts descriptor-backed video metadata without passing an ImageMagick coder to ffprobe', async () => {
+	const directory = await mkdtemp(nodePath.join(tmpdir(), 'umbrel-video-metadata-'))
+	temporaryDirectories.push(directory)
+	const video = nodePath.join(directory, 'IMG_0001.mov')
+	await writeFile(video, 'video')
+	vi.mocked(execa).mockResolvedValueOnce({
+		stdout: JSON.stringify({
+			streams: [
+				{
+					codec_type: 'video',
+					width: 1920,
+					height: 1080,
+					duration: 'N/A',
+					side_data_list: [{rotation: 90}],
+					tags: {
+						rotate: '0',
+						creation_time: '2025-08-21T12:00:00Z',
+						projection: 'equirectangular',
+						'com.apple.quicktime.content.identifier': 'live-photo-id',
+					},
+				},
+			],
+			format: {duration: '3.25'},
+		}),
+	} as never)
+
+	await expect(extractMediaMetadata(video, 42)).resolves.toMatchObject({
+		kind: 'video',
+		subKind: 'spherical',
+		width: 1080,
+		height: 1920,
+		durationMs: 3250,
+		liveIdentifier: 'live-photo-id',
+	})
+	expect(execa).toHaveBeenCalledWith('ffprobe', expect.arrayContaining(['/dev/fd/3']), {
+		detached: true,
+		timeout: THUMBNAIL_GENERATION_TIMEOUT_MS,
+		killSignal: 'SIGKILL',
+		stdio: ['ignore', 'pipe', 'pipe', 42],
+	})
+	const arguments_ = vi.mocked(execa).mock.calls[0][1] as string[]
+	expect(arguments_).not.toContain('MOV:/dev/fd/3')
+})
+
+test('packs the average thumbnail colour as 0xRRGGBB', async () => {
+	vi.mocked(execa).mockResolvedValueOnce({stdout: '18,52,86'} as never)
+	await expect(extractThumbnailTint('/data/thumbnail.webp')).resolves.toBe(0x123456)
 })

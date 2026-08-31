@@ -73,6 +73,23 @@ test('owns crawling, SQLite, and search in a dedicated worker', async () => {
 	})
 })
 
+test('routes the complete Photos repository surface through the worker boundary', async () => {
+	const {index} = await fixture()
+	await index.start()
+	await index.reconcileRoot('/Home', 'photos-worker')
+	await index.initializePhotos('owner')
+
+	await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'ready', total: 0})
+	await expect(index.photosSummary('owner')).resolves.toMatchObject({counts: {items: 0}})
+	const album = await index.photosCreateAlbum('owner', 'Worker album')
+	await expect(index.photosListAlbums('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, name: 'Worker album'}),
+	)
+	await expect(index.photosListSources('owner')).resolves.toContainEqual(
+		expect.objectContaining({type: 'umbrel', stats: {photos: 0, videos: 0, sizeBytes: 0}}),
+	)
+})
+
 test('keeps the main event loop responsive during CPU-heavy fuzzy searches', async () => {
 	const {dataDirectory, index, root} = await fixture()
 	await index.start()
@@ -163,6 +180,10 @@ class FakeWorker extends EventEmitter {
 		this.emit('exit', 1)
 	}
 
+	photosChanged(accountIds = ['Alice']) {
+		this.emitMessage({type: 'photos-change', accountIds})
+	}
+
 	async terminate() {
 		this.emit('exit', 0)
 		return 0
@@ -172,6 +193,22 @@ class FakeWorker extends EventEmitter {
 		this.emit('message', message)
 	}
 }
+
+test('forwards Photos library changes from the worker to the main process', async () => {
+	const dataDirectory = await temporary.create()
+	const worker = new FakeWorker(1)
+	const onPhotosChange = vi.fn()
+	const index = new FileIndex(
+		{dataDirectory, logger, hiddenFiles: [], hiddenExtensions: [], onPhotosChange},
+		{createWorker: () => worker as unknown as Worker},
+	)
+	indexes.push(index)
+	await index.start()
+
+	worker.photosChanged()
+	expect(onPhotosChange).toHaveBeenCalledOnce()
+	expect(onPhotosChange).toHaveBeenCalledWith(['Alice'])
+})
 
 test('compacts watcher bursts and restores state after an unexpected worker exit', async () => {
 	const dataDirectory = await temporary.create()
@@ -196,6 +233,7 @@ test('compacts watcher bursts and restores state after an unexpected worker exit
 	await index.setRoots([root])
 	index.startBackgroundReconciliation()
 	await index.start()
+	await index.initializePhotos('owner')
 
 	workers[0].messages.length = 0
 	index.noteWatcherChanges(
@@ -231,6 +269,11 @@ test('compacts watcher bursts and restores state after an unexpected worker exit
 		expect.arrayContaining([
 			expect.objectContaining({type: 'request', method: 'setRoots', args: [[root]]}),
 			expect.objectContaining({type: 'request', method: 'start'}),
+			expect.objectContaining({
+				type: 'request',
+				method: 'enableThumbnailVariants',
+				args: [['preview-192-webp-v1', 'preview-512-webp-v2', 'preview-1280-webp-v2']],
+			}),
 			{type: 'notification', method: 'startBackgroundReconciliation', args: []},
 		]),
 	)
@@ -290,6 +333,7 @@ test('does not dispatch public work until worker initialization completes', asyn
 	const starting = index.start()
 	await vi.waitFor(() => expect(worker.messages).toContainEqual(expect.objectContaining({method: 'setRoots'})))
 	await expect(index.searchCandidates('/Home', 'photo', 10)).rejects.toThrow('File index worker is unavailable')
+	await expect(index.movePathRequired('/home/source', '/home/destination')).rejects.toThrow('[file-index-unavailable]')
 	await expect(index.ensureThumbnail('/data/photo.jpg')).rejects.toThrow('File index worker is unavailable')
 	await expect(index.getExistingThumbnail('/data/photo.jpg')).resolves.toBeUndefined()
 	index.scheduleFullReconciliation('boot-race')

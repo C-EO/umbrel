@@ -26,7 +26,7 @@ beforeEach(async () => {
 })
 
 const guestThumbnailDir = '/home/umbrel/umbrel/thumbnails'
-const variant = 'preview-112-webp-v1'
+const variant = 'preview-192-webp-v1'
 
 async function createThumbnail(virtualPath: string) {
 	const fixturePath = nodePath.resolve(__dirname, 'fixtures', 'thumbnails', 'master-lossless-image.png')

@@ -284,6 +284,93 @@ export const fileIndexMigrations: FileIndexMigration[] = [
 			`)
 		},
 	},
+	{
+		version: 8,
+		up: (database) => {
+			database.exec(`
+				DELETE FROM thumbnail_variants WHERE variant = 'preview-112-webp-v1';
+				DELETE FROM transient_thumbnail_variants WHERE variant = 'preview-112-webp-v1';
+
+				CREATE TABLE media_metadata (
+					content_id INTEGER PRIMARY KEY REFERENCES contents(id) ON DELETE CASCADE,
+					state TEXT NOT NULL CHECK (state IN ('pending', 'ready', 'failed')),
+					kind TEXT CHECK (kind IN ('photo', 'video')),
+					sub_kind TEXT CHECK (sub_kind IN ('live', 'panorama', 'screenshot', 'spherical')),
+					taken_at INTEGER,
+					taken_at_offset_minutes INTEGER,
+					created_at INTEGER,
+					width INTEGER,
+					height INTEGER,
+					duration_ms INTEGER,
+					tint INTEGER,
+					camera_make TEXT,
+					camera_model TEXT,
+					lens TEXT,
+					focal_length TEXT,
+					aperture TEXT,
+					exposure TEXT,
+					iso INTEGER,
+					latitude REAL,
+					longitude REAL,
+					live_identifier TEXT,
+					search_text TEXT NOT NULL DEFAULT '',
+					failure_count INTEGER NOT NULL DEFAULT 0,
+					retry_at INTEGER,
+					last_error TEXT,
+					updated_at INTEGER NOT NULL
+				);
+				CREATE INDEX media_metadata_pending_work
+					ON media_metadata(content_id) WHERE state = 'pending';
+				CREATE INDEX media_metadata_failed_work
+					ON media_metadata(retry_at, content_id) WHERE state = 'failed';
+				CREATE INDEX media_metadata_by_live_identifier
+					ON media_metadata(live_identifier, kind) WHERE live_identifier IS NOT NULL;
+
+				CREATE VIRTUAL TABLE media_metadata_fts USING fts5(
+					search_text,
+					content = 'media_metadata',
+					content_rowid = 'content_id',
+					tokenize = 'trigram',
+					detail = 'none'
+				);
+				CREATE TRIGGER media_metadata_fts_insert AFTER INSERT ON media_metadata BEGIN
+					INSERT INTO media_metadata_fts(rowid, search_text) VALUES (new.content_id, new.search_text);
+				END;
+				CREATE TRIGGER media_metadata_fts_delete AFTER DELETE ON media_metadata BEGIN
+					INSERT INTO media_metadata_fts(media_metadata_fts, rowid, search_text)
+					VALUES ('delete', old.content_id, old.search_text);
+				END;
+				CREATE TRIGGER media_metadata_fts_update AFTER UPDATE OF search_text ON media_metadata
+				WHEN old.search_text IS NOT new.search_text BEGIN
+					INSERT INTO media_metadata_fts(media_metadata_fts, rowid, search_text)
+					VALUES ('delete', old.content_id, old.search_text);
+					INSERT INTO media_metadata_fts(rowid, search_text) VALUES (new.content_id, new.search_text);
+				END;
+			`)
+		},
+	},
+	{
+		version: 9,
+		up: (database) => {
+			database.exec(`
+				ALTER TABLE entries ADD COLUMN birthtime_ms INTEGER;
+				ALTER TABLE media_metadata ADD COLUMN altitude REAL;
+				ALTER TABLE media_metadata ADD COLUMN user_comment TEXT;
+				UPDATE media_metadata SET state = 'pending', retry_at = NULL, last_error = NULL, updated_at = 0;
+			`)
+		},
+	},
+	{
+		version: 10,
+		up: (database) => {
+			database.exec(`
+				DELETE FROM thumbnail_variants
+				WHERE variant IN ('preview-512-webp-v1', 'preview-1280-webp-v1');
+				DELETE FROM transient_thumbnail_variants
+				WHERE variant IN ('preview-512-webp-v1', 'preview-1280-webp-v1');
+			`)
+		},
+	},
 ]
 
 export const FILE_INDEX_SCHEMA_VERSION = fileIndexMigrations.at(-1)?.version ?? 0

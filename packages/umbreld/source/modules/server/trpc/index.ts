@@ -20,6 +20,7 @@ import shortcuts from '../../shortcuts/routes.js'
 import machines from '../../machines/routes.js'
 import lanIngress from '../../lan-ingress/routes.js'
 import mcp from '../../mcp/routes.js'
+import photos from '../../photos/routes.js'
 
 import {type WebSocketServer} from 'ws'
 import type Umbreld from '../../../index.js'
@@ -42,6 +43,7 @@ const appRouter = router({
 	machines,
 	lanIngress,
 	mcp,
+	photos,
 })
 
 export type AppRouter = typeof appRouter

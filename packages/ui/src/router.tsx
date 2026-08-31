@@ -11,6 +11,7 @@ import {ErrorBoundaryCardFallback} from '@/components/ui/error-boundary-card-fal
 import {appStoreRoutes} from '@/features/app-store/routes'
 import {filesRoutes} from '@/features/files/routes'
 import {machinesConsoleRoutes, machinesRoutes} from '@/features/machines/routes'
+import {photosRoutes} from '@/features/photos/routes'
 import {DesktopContextMenu} from '@/modules/desktop/desktop-context-menu'
 
 import {ErrorBoundaryPageFallback} from './components/ui/error-boundary-page-fallback'
@@ -98,6 +99,7 @@ export const router = createBrowserRouter([
 				Component: SheetLayout,
 				children: [
 					...filesRoutes,
+					...photosRoutes,
 					// The root desktop tree already mounts AvailableAppsProvider, so
 					// app-store routes consume it without nesting another provider
 					...appStoreRoutes,

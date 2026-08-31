@@ -2,6 +2,8 @@ import {motion, useWillChange} from 'motion/react'
 import {Children, isValidElement, useEffect, useRef, useState} from 'react'
 import {RiCloseLine} from 'react-icons/ri'
 
+import {cn} from '@/lib/utils'
+
 // Animation configurations
 const spring = {
 	type: 'spring' as const,
@@ -23,6 +25,8 @@ const islandSizes = {
 	},
 }
 
+export type IslandSizes = typeof islandSizes
+
 interface IslandProps {
 	id: string
 	children: React.ReactNode
@@ -32,6 +36,16 @@ interface IslandProps {
 	forceExpanded?: boolean
 	// Initial state only: pass false to appear minimized until the user taps it.
 	defaultExpanded?: boolean
+	// Per-island size presets; defaults to the standard sizes above
+	sizes?: IslandSizes
+	// Re-expands the island whenever this value changes (new work arriving)
+	expandKey?: unknown
+	// An automatic expansion (appearing, or expandKey changing) settles back
+	// into the pill after this many ms. The user's own taps never settle, and
+	// touching the island cancels a pending one.
+	minimizeAfter?: number
+	// Extra classes for the expanded pill only (e.g. a glass surface)
+	expandedClassName?: string
 }
 
 interface IslandChildProps {
@@ -46,10 +60,22 @@ export const IslandExpanded = ({children}: IslandChildProps) => {
 	return <>{children}</>
 }
 
-export const Island = ({children, onClose, nonDismissable, forceExpanded, defaultExpanded = true}: IslandProps) => {
+export const Island = ({
+	children,
+	onClose,
+	nonDismissable,
+	forceExpanded,
+	defaultExpanded = true,
+	sizes,
+	expandKey,
+	minimizeAfter,
+	expandedClassName,
+}: IslandProps) => {
 	const [isExpanded, setIsExpanded] = useState(defaultExpanded)
 	const islandRef = useRef<HTMLDivElement>(null)
 	const willChange = useWillChange()
+	const minimizeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+	const hasAppearedRef = useRef(false)
 
 	// Force expansion when forceExpanded prop is true
 	useEffect(() => {
@@ -57,6 +83,21 @@ export const Island = ({children, onClose, nonDismissable, forceExpanded, defaul
 			setIsExpanded(true)
 		}
 	}, [forceExpanded])
+
+	// Automatic expansions — appearing, and every expandKey change — settle
+	// back into the pill after minimizeAfter, unless the user engages first
+	// (see handlePointerDown). The user's own taps never settle.
+	useEffect(() => {
+		if (forceExpanded) return
+		const appearing = !hasAppearedRef.current
+		hasAppearedRef.current = true
+		if (!appearing) setIsExpanded(true)
+		else if (!defaultExpanded) return
+		if (minimizeAfter === undefined) return
+		const timer = setTimeout(() => setIsExpanded(false), minimizeAfter)
+		minimizeTimerRef.current = timer
+		return () => clearTimeout(timer)
+	}, [defaultExpanded, expandKey, forceExpanded, minimizeAfter])
 
 	// Minimize when clicking anywhere outside the island. Uses a window-level listener
 	// so clicks pass through naturally to the dock, dialogs, and other UI — no blocking backdrop needed.
@@ -84,11 +125,13 @@ export const Island = ({children, onClose, nonDismissable, forceExpanded, defaul
 
 	const handlePointerDown = (e: React.PointerEvent) => {
 		e.stopPropagation()
+		// The user is engaging: a pending auto-settle would yank the island away
+		clearTimeout(minimizeTimerRef.current)
 	}
 
 	// Use forceExpanded to prevent minimizing, or use internal state
 	const effectiveExpanded = forceExpanded || isExpanded
-	const size = effectiveExpanded ? islandSizes.expanded : islandSizes.minimized
+	const size = (sizes ?? islandSizes)[effectiveExpanded ? 'expanded' : 'minimized']
 
 	// Find and render the appropriate child component
 	const childArray = Children.toArray(children)
@@ -99,7 +142,13 @@ export const Island = ({children, onClose, nonDismissable, forceExpanded, defaul
 		<div className='flex justify-center md:block'>
 			<motion.div
 				ref={islandRef}
-				className='relative bg-black text-white shadow-floating-island'
+				// The viewport cap keeps wide presets (Photos uploads) on-screen on
+				// phones; overflow-hidden keeps content inside the pill while the
+				// expand/minimize spring is still in flight
+				className={cn(
+					'relative max-w-[calc(100vw-16px)] overflow-hidden bg-black text-white shadow-floating-island',
+					effectiveExpanded && expandedClassName,
+				)}
 				style={{
 					// TODO: debug using var in color-mix on macOS safari
 					// backgroundColor: 'color-mix(in srgb, #000000 95%, rgb(var(--color-brand)) 5%)',

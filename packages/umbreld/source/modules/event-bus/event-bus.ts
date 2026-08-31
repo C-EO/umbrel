@@ -59,6 +59,7 @@ export const events = [
 	'raid:status-change',
 	'notifications:change',
 	'hardware:thunderbolt:devices-change',
+	'photos:change',
 ] as const satisfies readonly (keyof EventTypes)[]
 
 // Statically define event types
@@ -118,6 +119,9 @@ export type EventTypes = {
 	// Fires when the user-visible Thunderbolt device state changes
 	// e.g. connect/disconnect or an authorization/trust change
 	'hardware:thunderbolt:devices-change': undefined
+	// Fires when Photos data changes. Account ids let subscriptions discard
+	// unrelated activity before clients learn that it happened.
+	'photos:change': {accountIds: string[]}
 }
 
 export default class EventBus {

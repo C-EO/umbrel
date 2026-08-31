@@ -1,4 +1,5 @@
 import {once} from 'node:events'
+import {readFile, writeFile} from 'node:fs/promises'
 import type {AddressInfo} from 'node:net'
 
 import cookieParser from 'cookie-parser'
@@ -10,7 +11,7 @@ import type Umbreld from '../../index.js'
 import {OWNER_ACCOUNT_ID} from '../auth/auth.js'
 import UploadDiskPreflight from '../server/upload-disk-preflight.js'
 import temporaryDirectory from '../utilities/temporary-directory.js'
-import fileApi from './api.js'
+import fileApi, {publishUploadWithoutReplacing} from './api.js'
 
 describe('file API authentication boundaries', () => {
 	const directory = temporaryDirectory()
@@ -105,5 +106,36 @@ describe('file API authentication boundaries', () => {
 
 		expect(response.statusCode).toBe(400)
 		expect(JSON.parse(response.body)).toEqual({error: '[cloud-read-only]'})
+	})
+
+	test('publishes without clobbering when the destination filesystem has no hard links', async () => {
+		const testDirectory = await directory.create()
+		const temporaryPath = `${testDirectory}/upload.tmp`
+		const destinationPath = `${testDirectory}/photo.jpg`
+		await writeFile(temporaryPath, 'photo bytes')
+		const unsupportedLink = async () => {
+			throw Object.assign(new Error('hard links unsupported'), {code: 'EOPNOTSUPP'})
+		}
+
+		await publishUploadWithoutReplacing(temporaryPath, destinationPath, {createLink: unsupportedLink})
+
+		await expect(readFile(destinationPath, 'utf8')).resolves.toBe('photo bytes')
+		await expect(readFile(temporaryPath)).rejects.toMatchObject({code: 'ENOENT'})
+	})
+
+	test('the hard-link fallback never replaces an existing destination', async () => {
+		const testDirectory = await directory.create()
+		const temporaryPath = `${testDirectory}/upload.tmp`
+		const destinationPath = `${testDirectory}/photo.jpg`
+		await Promise.all([writeFile(temporaryPath, 'new bytes'), writeFile(destinationPath, 'existing bytes')])
+		const unsupportedLink = async () => {
+			throw Object.assign(new Error('hard links unsupported'), {code: 'EOPNOTSUPP'})
+		}
+
+		await expect(
+			publishUploadWithoutReplacing(temporaryPath, destinationPath, {createLink: unsupportedLink}),
+		).rejects.toMatchObject({code: 'EEXIST'})
+		await expect(readFile(destinationPath, 'utf8')).resolves.toBe('existing bytes')
+		await expect(readFile(temporaryPath, 'utf8')).resolves.toBe('new bytes')
 	})
 })

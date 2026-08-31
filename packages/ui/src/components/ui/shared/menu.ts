@@ -34,7 +34,7 @@ export const contextMenuClasses = {
 
 const dropdownItemClass = cn(menuItemClass, 'umbrel-material-menu-item')
 export const dropdownClasses = {
-	content: cn(menuContentClass, materialSurfaceClasses.dropdown, 'p-2.5'),
+	content: cn(menuContentClass, materialSurfaceClasses.dropdown),
 	item: {
 		root: dropdownItemClass,
 	},

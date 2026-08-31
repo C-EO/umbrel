@@ -51,6 +51,7 @@ const AREA_ICONS = {
 	'app-store': '/assets/dock/dock-app-store.webp',
 	'live-usage': '/assets/dock/dock-live-usage.webp',
 	machines: '/assets/dock/dock-machines.webp',
+	photos: '/assets/dock/dock-photos.webp',
 	widgets: '/assets/dock/dock-widgets.png',
 	umbrelos: '/assets/umbrel-ios.png',
 } as const

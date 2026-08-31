@@ -55,7 +55,7 @@ test('keeps authorization in the facade and delegates on-demand generation to th
 		`/api/files/thumbnail/content-${THUMBNAIL_VARIANT}-${reference.key}.webp?path=%2FHome%2Fphoto.png`,
 	)
 	expect(files.virtualToSystemPath).toHaveBeenCalledWith('/Home/photo.png', 'alice')
-	expect(fileIndex.ensureThumbnail).toHaveBeenCalledWith(nodePath.join(root, 'photo.png'))
+	expect(fileIndex.ensureThumbnail).toHaveBeenCalledWith(nodePath.join(root, 'photo.png'), THUMBNAIL_VARIANT)
 })
 
 test('returns only ready index-owned thumbnails for directory listings', async () => {

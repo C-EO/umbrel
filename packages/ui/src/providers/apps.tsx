@@ -37,6 +37,13 @@ export const systemApps = [
 		systemAppTo: '/files',
 	},
 	{
+		id: 'UMBREL_photos',
+		name: 'Photos',
+		icon: '/assets/dock/dock-photos.webp',
+		systemApp: true,
+		systemAppTo: '/photos',
+	},
+	{
 		id: 'UMBREL_settings',
 		name: 'Settings',
 		icon: '/assets/dock/dock-settings.webp',

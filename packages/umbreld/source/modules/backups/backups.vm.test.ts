@@ -208,6 +208,7 @@ NODE
 
 		const files = await umbreld.client.backups.listBackupFiles.query({backupId: backups[0].id})
 		expect(files).toContain('umbrel.yaml')
+		expect(files).toContain('umbrel.db')
 		expect(files).toContain('app-data')
 		expect(files).toContain('home')
 		expect(files).toContain('secrets')

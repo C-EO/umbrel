@@ -36,6 +36,8 @@ export function SheetLayout() {
 	// Desktop Files manages its own viewport-relative heights (sidebar reaches
 	// below the dock line), so the dock spacer would only add phantom scroll
 	const isFilesRoute = /^\/files(\/|$)/.test(location.pathname)
+	const isPhotosRoute = /^\/photos(\/|$)/.test(location.pathname)
+	const isFullHeightFeatureRoute = isFilesRoute || isPhotosRoute
 
 	// The Sheet layout persists between Files, App Store, and Settings. Clear a
 	// stale outer offset before paint when entering Settings. Desktop Settings
@@ -58,7 +60,10 @@ export function SheetLayout() {
 				<SheetStickyHeaderProvider scrollElement={scrollElement}>
 					{/* NOTE: If you change these width/max-width values, also update the
 					   text editor width in features/files/components/file-viewer/text-viewer/index.tsx
-					   which derives its sizing from these same breakpoints. */}
+					   which derives its sizing from these same breakpoints. Photos listings
+					   counter the desktop right padding below to run to the sheet's edge
+					   (features/photos/components/listing/surface.tsx): keep those in
+					   step too. */}
 					<SheetContent
 						side='bottom-zoom'
 						className='mx-auto h-[calc(100dvh-var(--sheet-top))] max-w-[1320px] md:w-[calc(100vw-25px-25px)] lg:h-[calc(100dvh-60px)] lg:w-[calc(100vw-60px-60px)]'
@@ -80,7 +85,7 @@ export function SheetLayout() {
 						<SheetStickyHeaderTarget />
 						<ScrollArea
 							className='umbrel-window-surface-top h-full'
-							fade={!isFilesRoute}
+							fade={!isFullHeightFeatureRoute}
 							viewportRef={setScrollViewport}
 							viewportClassName={cn(
 								isSettingsRoute && 'lg:!overflow-hidden lg:[&>div]:!h-full',
@@ -96,7 +101,7 @@ export function SheetLayout() {
 									'flex flex-col gap-5 px-3 pt-6 md:px-[40px] md:pt-12',
 									isSettingsRoute
 										? 'lg:h-full lg:min-h-0 lg:gap-0 lg:pt-0 xl:px-[60px]'
-										: isFilesRoute
+										: isFullHeightFeatureRoute
 											? 'xl:px-[60px]'
 											: 'xl:px-[70px]',
 								)}
@@ -104,7 +109,12 @@ export function SheetLayout() {
 								<Suspense fallback={<SheetTitle className='sr-only'>{t('loading')}</SheetTitle>}>
 									<Outlet />
 								</Suspense>
-								<DockSpacer className={cn('mt-4', (isSettingsRoute || isFilesRoute) && 'lg:hidden')} />
+								{/* Photos runs beneath the dock on every size and keeps the dock's
+								    clearance inside its own scrollers, so a spacer here would only
+								    hold its listings short of the sheet's bottom edge */}
+								<DockSpacer
+									className={cn('mt-4', (isSettingsRoute || isFilesRoute) && 'lg:hidden', isPhotosRoute && 'hidden')}
+								/>
 							</div>
 						</ScrollArea>
 					</SheetContent>

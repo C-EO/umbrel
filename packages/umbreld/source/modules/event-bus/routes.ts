@@ -20,6 +20,7 @@ const memberAllowedEvents = new Set<(typeof events)[number]>([
 	'apps:member-shares:change',
 	// Payload-free ping; members refetch their own account-filtered list
 	'notifications:change',
+	'photos:change',
 ])
 
 export default router({
@@ -56,6 +57,11 @@ export default router({
 					}
 
 					for await (let event of eventStream) {
+						if (input.event === 'photos:change') {
+							const change = event as EventTypes['photos:change']
+							if (!change.accountIds.includes(userId)) continue
+							if (isMember) event = {accountIds: [userId]} as EventTypes['photos:change']
+						}
 						// Reformat the files:watcher:change event so it's suitable to be consumed by the client
 						if (input.event === 'files:watcher:change') {
 							// Clone event to avoid mutating the original event object

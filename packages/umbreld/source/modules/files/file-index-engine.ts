@@ -8,13 +8,23 @@ import {fuzzy} from 'fast-fuzzy'
 import fse from 'fs-extra'
 import PQueue from 'p-queue'
 
+import {migratePhotos} from '../photos/migrations.js'
+import PhotosRepository from '../photos/repository.js'
+import type {PhotoFilter, PhotoScopeMode} from '../photos/types.js'
 import FileIndexEnrichment, {
 	BACKGROUND_QUIET_PERIOD_MS,
 	type FileIndexEnrichmentRuntime,
+	type PublishedFileRevision,
 	type ThumbnailReference,
 } from './file-index-enrichment.js'
 import {FILE_INDEX_SCHEMA_VERSION, foldSearchName, migrateFileIndex} from './file-index/migrations.js'
-import {supportsThumbnail, type ThumbnailIdentityKind} from './thumbnail-support.js'
+import {
+	FILES_THUMBNAIL_VARIANT,
+	PHOTOS_THUMBNAIL_VARIANTS,
+	supportsThumbnail,
+	type ThumbnailIdentityKind,
+	type ThumbnailVariant,
+} from './thumbnail-support.js'
 
 type Database = DatabaseTypes.Database
 
@@ -35,6 +45,9 @@ const MAX_SHORT_QUERY_CANDIDATES = 1_000
 const FTS_CANDIDATES_PER_RESULT = 4
 const MAX_FTS_CANDIDATES = 10_000
 const MAX_RARE_TRIGRAMS = 6
+const PHOTOS_ONLY_THUMBNAIL_VARIANT_SET = new Set<ThumbnailVariant>(
+	PHOTOS_THUMBNAIL_VARIANTS.filter((variant) => variant !== FILES_THUMBNAIL_VARIANT),
+)
 
 export type FileIndexLogger = {
 	log(message?: string): void
@@ -68,6 +81,7 @@ type EntryWrite = {
 	type: EntryType
 	size: number
 	modifiedMs: number
+	birthtimeMs: number | null
 	device: string
 	inode: string
 	modifiedNs: string
@@ -129,6 +143,7 @@ export type FileIndexEngineOptions = {
 	logger: FileIndexLogger
 	isHidden: (name: string) => boolean
 	onAvailabilityChange?: (available: boolean) => void
+	onPhotosChange?: (accountIds: string[]) => void
 	reconciliationIntervalMs?: number
 	recoveryRetryMs?: number
 	watcherBulkThreshold?: number
@@ -162,6 +177,7 @@ type EntryRow = {
 	type: EntryType
 	size: number
 	modified_ms: number
+	birthtime_ms: number | null
 	device: string
 	inode: string
 	modified_ns: string
@@ -248,6 +264,7 @@ function unreadableReconciliationError(root: RootState, unreadablePaths: Map<str
 
 export default class FileIndexEngine {
 	readonly databasePath: string
+	readonly umbrelDatabasePath: string
 	readonly logger: FileIndexLogger
 
 	#database?: Database
@@ -256,6 +273,7 @@ export default class FileIndexEngine {
 	#started = false
 	#stopping = false
 	#roots = new Map<string, RootState>()
+	#rootsConfigured = false
 	#rootScans = new Map<string, RootReconciliation>()
 	#activeRootSnapshot?: ActiveRootSnapshot
 	#pendingLiveWork: PendingLiveWork[] = []
@@ -267,9 +285,17 @@ export default class FileIndexEngine {
 	#recoveryAttempt?: Promise<void>
 	#recoveryAttempts = 0
 	#artifactRecoveryBarrierRequired = false
+	#photosAvailable = false
+	#photosRecoveryTimer?: ReturnType<typeof setTimeout>
+	#photosRecoveryAttempt?: Promise<void>
+	#photosRecoveryAttempts = 0
+	#photos = new PhotosRepository()
 
 	#isHidden: (name: string) => boolean
 	#onAvailabilityChange?: (available: boolean) => void
+	#onPhotosChange?: (accountIds: string[]) => void
+	#photosChangeTimer?: ReturnType<typeof setTimeout>
+	#photosChangedAccountIds = new Set<string>()
 	#reconciliationIntervalMs: number
 	#recoveryRetryMs: number
 	#watcherBulkThreshold: number
@@ -282,6 +308,7 @@ export default class FileIndexEngine {
 		logger,
 		isHidden,
 		onAvailabilityChange,
+		onPhotosChange,
 		reconciliationIntervalMs = DEFAULT_RECONCILIATION_INTERVAL_MS,
 		recoveryRetryMs = DEFAULT_RECOVERY_RETRY_MS,
 		watcherBulkThreshold = DEFAULT_WATCHER_BULK_THRESHOLD,
@@ -289,10 +316,12 @@ export default class FileIndexEngine {
 		walkTree = walkFileTree,
 		enrichmentRuntime,
 	}: FileIndexEngineOptions) {
-		this.databasePath = nodePath.join(dataDirectory, 'file-index', 'index.sqlite3')
+		this.databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
+		this.umbrelDatabasePath = nodePath.join(dataDirectory, 'umbrel.db')
 		this.logger = logger
 		this.#isHidden = isHidden
 		this.#onAvailabilityChange = onAvailabilityChange
+		this.#onPhotosChange = onPhotosChange
 		this.#reconciliationIntervalMs = reconciliationIntervalMs
 		this.#recoveryRetryMs = recoveryRetryMs
 		this.#watcherBulkThreshold = watcherBulkThreshold
@@ -303,7 +332,33 @@ export default class FileIndexEngine {
 				dataDirectory,
 				logger,
 				withDatabase: (operation, priority) => this.#mutate(operation, priority),
+				photosAvailable: () => this.#photosAvailable,
 				onStalePath: (systemPath) => this.reconcilePath(systemPath),
+				onContentAttached: async (entryId, hash) => {
+					if (!this.#photosAvailable) return
+					const accountIds = await this.#mutate((database) => {
+						this.#photos.attachContentHash(database, entryId, hash)
+						const entry = database.prepare('SELECT content_id FROM entries WHERE id = ?').get(entryId) as
+							| {content_id: number | null}
+							| undefined
+						if (entry?.content_id) this.#photos.refreshLivePairs(database, entry.content_id)
+						return this.#photos.accountIdsForEntry(database, entryId)
+					})
+					this.#notifyPhotosChanged(accountIds)
+				},
+				onMediaMetadataReady: async (contentId) => {
+					if (!this.#photosAvailable) return
+					const accountIds = await this.#mutate((database) => {
+						this.#photos.refreshLivePairs(database, contentId)
+						return this.#photos.accountIdsForContent(database, contentId)
+					})
+					this.#notifyPhotosChanged(accountIds)
+				},
+				onThumbnailReady: async (contentId) => {
+					if (!this.#photosAvailable) return
+					const accountIds = await this.#mutate((database) => this.#photos.accountIdsForContent(database, contentId))
+					this.#notifyPhotosChanged(accountIds)
+				},
 			},
 			enrichmentRuntime,
 		)
@@ -389,6 +444,11 @@ export default class FileIndexEngine {
 				`Unsupported file index schema v${this.#schemaVersion}; expected v${FILE_INDEX_SCHEMA_VERSION}`,
 			)
 		}
+		this.#photosAvailable = false
+		await this.#openUmbrelDatabase().catch((error) => {
+			this.logger.error('Umbrel database is unavailable; file indexing will continue without Photos', error)
+			this.#schedulePhotosRecovery()
+		})
 		this.#database.exec(`
 			CREATE TEMP TABLE reconciliation_seen (
 				root_id INTEGER NOT NULL,
@@ -440,10 +500,69 @@ export default class FileIndexEngine {
 		`)
 	}
 
+	async #openUmbrelDatabase() {
+		await fse.ensureDir(nodePath.dirname(this.umbrelDatabasePath))
+		let umbrelDatabase: Database | undefined
+		let attached = false
+		try {
+			umbrelDatabase = new BetterSqlite3(this.umbrelDatabasePath, {timeout: 5000})
+			migratePhotos(umbrelDatabase)
+			umbrelDatabase.close()
+			umbrelDatabase = undefined
+			this.#requireDatabase().prepare('ATTACH DATABASE ? AS umbrel').run(this.umbrelDatabasePath)
+			attached = true
+			const sync = this.#requireDatabase().transaction(() => this.#syncPhotosState(this.#requireDatabase()))
+			sync.immediate()
+			this.#photosAvailable = true
+			this.#photosRecoveryAttempts = 0
+		} catch (error) {
+			this.#photosAvailable = false
+			try {
+				umbrelDatabase?.close()
+			} catch {}
+			if (attached) {
+				try {
+					this.#requireDatabase().exec('DETACH DATABASE umbrel')
+				} catch {}
+			}
+			throw error
+		}
+	}
+
+	#schedulePhotosRecovery() {
+		if (this.#stopping || !this.#started || this.#photosAvailable || this.#photosRecoveryTimer) return
+		const delay = Math.min(this.#recoveryRetryMs * 2 ** this.#photosRecoveryAttempts, MAX_RECOVERY_RETRY_MS)
+		this.#photosRecoveryAttempts++
+		this.#photosRecoveryTimer = setTimeout(() => {
+			this.#photosRecoveryTimer = undefined
+			const recovery = this.#mutate(async () => {
+				if (this.#photosAvailable || this.#stopping) return
+				await this.#openUmbrelDatabase()
+			})
+				.then(async () => {
+					if (!this.#photosAvailable || this.#stopping) return
+					await this.#enrichment.enableThumbnailVariants(PHOTOS_THUMBNAIL_VARIANTS)
+					this.logger.log('Recovered Photos library database')
+					this.#notifyPhotosChanged(
+						[...this.#roots.values()].filter(({kind}) => kind === 'home').map(({ownerId}) => ownerId),
+					)
+				})
+				.catch((error) => {
+					this.logger.error('Photos library database is still unavailable', error)
+					this.#schedulePhotosRecovery()
+				})
+				.finally(() => {
+					if (this.#photosRecoveryAttempt === recovery) this.#photosRecoveryAttempt = undefined
+				})
+			this.#photosRecoveryAttempt = recovery
+		}, delay)
+	}
+
 	#closeDatabase() {
 		try {
 			this.#database?.close()
 		} catch {}
+		this.#photosAvailable = false
 	}
 
 	async #quarantineDatabase(reason = 'corrupt') {
@@ -462,6 +581,7 @@ export default class FileIndexEngine {
 	}
 
 	async setRoots(roots: FileIndexRoot[]) {
+		this.#rootsConfigured = true
 		const previous = this.#roots
 		const changedRoots: string[] = []
 		this.#roots = new Map(
@@ -509,12 +629,16 @@ export default class FileIndexEngine {
 	}
 
 	async removeRoot(virtualPath: string) {
+		const removedRoot = this.#roots.get(virtualPath)
 		this.#roots.delete(virtualPath)
 		if (!this.#available) return
 		await this.#mutate((database) => {
 			const remove = database.transaction(() => {
 				run(database, 'DELETE FROM index_roots WHERE virtual_path = ?', virtualPath)
 				run(database, 'DELETE FROM reconciliation_seen WHERE root_id NOT IN (SELECT id FROM index_roots)')
+				if (this.#photosAvailable && removedRoot?.kind === 'home') {
+					this.#photos.removeAccount(database, removedRoot.ownerId)
+				}
 			})
 			remove.immediate()
 		}, 10)
@@ -524,14 +648,20 @@ export default class FileIndexEngine {
 		const roots = [...this.#roots.values()]
 		await this.#mutate((database) => {
 			const sync = database.transaction(() => {
-				const existingRows = all(database, 'SELECT virtual_path FROM index_roots') as Array<{
+				const existingRows = all(database, 'SELECT virtual_path, owner_id, kind FROM index_roots') as Array<{
 					virtual_path: string
+					owner_id: string
+					kind: FileIndexRoot['kind']
 				}>
 				const desiredPaths = new Set(roots.map(({virtualPath}) => virtualPath))
+				const desiredHomeOwners = new Set(roots.filter(({kind}) => kind === 'home').map(({ownerId}) => ownerId))
 
 				for (const row of existingRows) {
 					if (!desiredPaths.has(row.virtual_path)) {
 						run(database, 'DELETE FROM index_roots WHERE virtual_path = ?', row.virtual_path)
+						if (this.#photosAvailable && row.kind === 'home' && !desiredHomeOwners.has(row.owner_id)) {
+							this.#photos.removeAccount(database, row.owner_id)
+						}
 					}
 				}
 
@@ -558,10 +688,26 @@ export default class FileIndexEngine {
 					)
 				}
 				run(database, 'DELETE FROM reconciliation_seen WHERE root_id NOT IN (SELECT id FROM index_roots)')
+				if (this.#photosAvailable) this.#syncPhotosState(database)
 			})
 			sync.immediate()
 		}, 10)
 		await this.#loadRootState()
+	}
+
+	#syncPhotosState(database: Database) {
+		if (this.#rootsConfigured) {
+			const activeAccounts = new Set(
+				[...this.#roots.values()].filter(({kind}) => kind === 'home').map(({ownerId}) => ownerId),
+			)
+			const storedAccounts = database.prepare('SELECT DISTINCT account_id FROM umbrel.photos_sources').all() as Array<{
+				account_id: string
+			}>
+			for (const {account_id: accountId} of storedAccounts) {
+				if (!activeAccounts.has(accountId)) this.#photos.removeAccount(database, accountId)
+			}
+		}
+		return this.#photos.syncAll(database)
 	}
 
 	async #loadRootState() {
@@ -764,6 +910,7 @@ export default class FileIndexEngine {
 			await this.#mutate((database) => {
 				this.#throwIfRootScanCancelled(root)
 				const finishScan = database.transaction(() => {
+					if (this.#photosAvailable) this.#photos.detachUnseen(database, root.id!)
 					run(
 						database,
 						`DELETE FROM entries
@@ -776,6 +923,9 @@ export default class FileIndexEngine {
 							)`,
 						root.id,
 					)
+					if (this.#photosAvailable && root.kind === 'home') {
+						this.#photos.refreshLivePairsForAccount(database, root.ownerId)
+					}
 					run(database, 'DELETE FROM reconciliation_seen')
 					run(
 						database,
@@ -808,6 +958,7 @@ export default class FileIndexEngine {
 				root.lastError = undefined
 				this.logger.log(`Reconciled '${root.virtualPath}' in ${completedAt - startedAt}ms (${indexedEntries} entries)`)
 			}
+			if (root.kind === 'home') this.#notifyPhotosChanged([root.ownerId])
 		} catch (error) {
 			if (!(error instanceof ScanCancelledError) && this.#roots.get(root.virtualPath) === root) {
 				await this.#degradeRoot(root, error)
@@ -923,11 +1074,13 @@ export default class FileIndexEngine {
 		const orderedEvents = events.toSorted(
 			(left, right) => Number(left.type === 'delete') - Number(right.type === 'delete'),
 		)
+		const createdPaths = orderedEvents.filter(({type}) => type === 'create').map(({path}) => path)
 		for (let offset = 0; offset < orderedEvents.length; offset += MAX_LIVE_WORK_PER_SCAN_BATCH) {
 			const batch = orderedEvents.slice(offset, offset + MAX_LIVE_WORK_PER_SCAN_BATCH)
 			void this.#scheduleLiveWork(
 				async () => {
 					for (const {path: systemPath, type} of batch) {
+						if (type === 'delete') await this.#reuseWatcherMove(systemPath, createdPaths, 5)
 						// A newly visible directory may already contain files (for example,
 						// an atomic move into the watched root). Use the existing coalesced
 						// root snapshot rather than maintaining a second subtree crawler.
@@ -944,6 +1097,49 @@ export default class FileIndexEngine {
 				batch.length,
 			).catch((error) => this.logger.error(`Failed to process file event batch for '${root.virtualPath}'`, error))
 		}
+	}
+
+	async #reuseWatcherMove(sourceSystemPath: string, createdSystemPaths: string[], priority: number) {
+		const root = this.#rootForSystemPath(sourceSystemPath)
+		if (!root?.id || createdSystemPaths.length === 0) return
+		const sourceRelativePath = relativePathWithin(root.systemPath, sourceSystemPath)
+		const candidateRelativePaths = createdSystemPaths
+			.filter((path) => this.#rootForSystemPath(path) === root)
+			.map((path) => relativePathWithin(root.systemPath, path))
+		if (candidateRelativePaths.length === 0) return
+		await this.#mutate((database) => {
+			const source = database
+				.prepare('SELECT device, inode FROM entries WHERE root_id = ? AND relative_path = ?')
+				.get(root.id, sourceRelativePath) as {device: string; inode: string} | undefined
+			if (!source) return
+			const placeholders = candidateRelativePaths.map(() => '?').join(', ')
+			const destination = database
+				.prepare(
+					`SELECT relative_path FROM entries
+					WHERE root_id = ? AND device = ? AND inode = ?
+						AND relative_path IN (${placeholders}) AND relative_path IS NOT ? AND hidden = 0
+					ORDER BY relative_path LIMIT 1`,
+				)
+				.get(root.id, source.device, source.inode, ...candidateRelativePaths, sourceRelativePath) as
+				| {relative_path: string}
+				| undefined
+			if (!destination) return
+			const preserve = database.transaction(() => {
+				reuseMovedContent(database, root.id!, sourceRelativePath, root.id!, destination.relative_path)
+				if (this.#photosAvailable) {
+					this.#photos.moveItems(
+						database,
+						{accountId: root.ownerId, rootVirtualPath: root.virtualPath, relativePath: sourceRelativePath},
+						{
+							accountId: root.ownerId,
+							rootVirtualPath: root.virtualPath,
+							relativePath: destination.relative_path,
+						},
+					)
+				}
+			})
+			preserve.immediate()
+		}, priority)
 	}
 
 	noteWatcherBurst(virtualPath: string) {
@@ -990,6 +1186,39 @@ export default class FileIndexEngine {
 		// Reconcile the live destination before dropping the stale source path.
 		try {
 			await this.reconcilePath(destinationSystemPath)
+			const sourceRoot = this.#rootForSystemPath(sourceSystemPath)
+			const destinationRoot = this.#rootForSystemPath(destinationSystemPath)
+			if (sourceRoot?.kind === 'home' && destinationRoot?.kind === 'home' && sourceRoot.id && destinationRoot.id) {
+				await this.#mutate((database) => {
+					const move = database.transaction(() => {
+						const sourceRelativePath = relativePathWithin(sourceRoot.systemPath, sourceSystemPath)
+						const destinationRelativePath = relativePathWithin(destinationRoot.systemPath, destinationSystemPath)
+						reuseMovedContent(
+							database,
+							sourceRoot.id!,
+							sourceRelativePath,
+							destinationRoot.id!,
+							destinationRelativePath,
+						)
+						if (this.#photosAvailable) {
+							return this.#photos.moveItems(
+								database,
+								{
+									accountId: sourceRoot.ownerId,
+									rootVirtualPath: sourceRoot.virtualPath,
+									relativePath: sourceRelativePath,
+								},
+								{
+									accountId: destinationRoot.ownerId,
+									rootVirtualPath: destinationRoot.virtualPath,
+									relativePath: destinationRelativePath,
+								},
+							)
+						}
+					})
+					move.immediate()
+				})
+			}
 		} finally {
 			await this.removePath(sourceSystemPath)
 		}
@@ -1057,6 +1286,7 @@ export default class FileIndexEngine {
 			type,
 			size: Number(stats.size),
 			modifiedMs: identity.modifiedMs,
+			birthtimeMs: identity.birthtimeMs,
 			device: identity.device,
 			inode: identity.inode,
 			modifiedNs: identity.modifiedNs,
@@ -1087,15 +1317,24 @@ export default class FileIndexEngine {
 			(database) => this.#applyPathMutation(database, {type: 'delete', rootId, relativePath}),
 			priority,
 		)
+		if (root.kind === 'home') this.#notifyPhotosChanged([root.ownerId])
 		this.#enrichment.kick()
 	}
 
 	#applyPathMutation(database: Database, mutation: PathMutation) {
+		const photosChangedAccountIds = new Set<string>()
 		const apply = database.transaction((mutation: PathMutation) => {
 			if (mutation.type === 'delete') {
+				const root = this.#photosAvailable
+					? (database.prepare('SELECT owner_id, kind FROM index_roots WHERE id = ?').get(mutation.rootId) as
+							| {owner_id: string; kind: string}
+							| undefined)
+					: undefined
+				if (this.#photosAvailable) this.#photos.detachPath(database, mutation.rootId, mutation.relativePath)
 				if (mutation.relativePath === '') {
 					run(database, 'DELETE FROM entries WHERE root_id = ?', mutation.rootId)
 					run(database, 'DELETE FROM reconciliation_seen WHERE root_id = ?', mutation.rootId)
+					if (root?.kind === 'home') this.#photos.refreshLivePairsForAccount(database, root.owner_id)
 					return
 				}
 				// SQLite's default binary ordering places every `path/...`
@@ -1131,15 +1370,16 @@ export default class FileIndexEngine {
 					prefix,
 					prefixEnd,
 				)
+				if (root?.kind === 'home') this.#photos.refreshLivePairsForAccount(database, root.owner_id)
 				return
 			}
 
 			const writeStatement = database.prepare(`
 				INSERT INTO entries(
 						root_id, relative_path, name, search_name, search_name_folded,
-						type, size, modified_ms, device, inode, modified_ns, ctime_ns,
+						type, size, modified_ms, birthtime_ms, device, inode, modified_ns, ctime_ns,
 						thumbnail_identity_kind, hash_retry_at, observed_at, hidden
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 					ON CONFLICT(root_id, relative_path) DO UPDATE SET
 						name = excluded.name,
 						search_name = excluded.search_name,
@@ -1147,6 +1387,7 @@ export default class FileIndexEngine {
 						type = excluded.type,
 						size = excluded.size,
 						modified_ms = excluded.modified_ms,
+						birthtime_ms = excluded.birthtime_ms,
 						device = excluded.device,
 						inode = excluded.inode,
 						modified_ns = excluded.modified_ns,
@@ -1155,30 +1396,27 @@ export default class FileIndexEngine {
 						content_id = CASE
 							WHEN excluded.thumbnail_identity_kind = 'content'
 								AND entries.thumbnail_identity_kind = 'content'
-								AND entries.inode IS excluded.inode
-								AND entries.size IS excluded.size
-								AND entries.modified_ns IS excluded.modified_ns
-								AND entries.ctime_ns IS excluded.ctime_ns
+				AND entries.inode IS excluded.inode
+				AND entries.size IS excluded.size
+				AND entries.modified_ns IS excluded.modified_ns
 							THEN entries.content_id
 							ELSE NULL
 						END,
 						hash_failure_count = CASE
 							WHEN excluded.thumbnail_identity_kind = 'content'
 								AND entries.thumbnail_identity_kind = 'content'
-								AND entries.inode IS excluded.inode
-								AND entries.size IS excluded.size
-								AND entries.modified_ns IS excluded.modified_ns
-								AND entries.ctime_ns IS excluded.ctime_ns
+				AND entries.inode IS excluded.inode
+				AND entries.size IS excluded.size
+				AND entries.modified_ns IS excluded.modified_ns
 							THEN entries.hash_failure_count
 							ELSE 0
 						END,
 						hash_retry_at = CASE
 							WHEN entries.thumbnail_identity_kind = 'content'
 								AND excluded.thumbnail_identity_kind = 'content'
-								AND entries.inode IS excluded.inode
-								AND entries.size IS excluded.size
-								AND entries.modified_ns IS excluded.modified_ns
-								AND entries.ctime_ns IS excluded.ctime_ns
+				AND entries.inode IS excluded.inode
+				AND entries.size IS excluded.size
+				AND entries.modified_ns IS excluded.modified_ns
 							THEN entries.hash_retry_at
 							ELSE excluded.hash_retry_at
 						END,
@@ -1188,7 +1426,6 @@ export default class FileIndexEngine {
 								AND entries.inode IS excluded.inode
 								AND entries.size IS excluded.size
 								AND entries.modified_ns IS excluded.modified_ns
-								AND entries.ctime_ns IS excluded.ctime_ns
 							THEN entries.hash_error
 							ELSE NULL
 						END,
@@ -1204,6 +1441,7 @@ export default class FileIndexEngine {
 						OR entries.type IS NOT excluded.type
 						OR entries.size IS NOT excluded.size
 						OR entries.modified_ms IS NOT excluded.modified_ms
+						OR entries.birthtime_ms IS NOT excluded.birthtime_ms
 						OR entries.device IS NOT excluded.device
 						OR entries.inode IS NOT excluded.inode
 						OR entries.modified_ns IS NOT excluded.modified_ns
@@ -1226,7 +1464,7 @@ export default class FileIndexEngine {
 			for (const entry of mutation.entries) {
 				markSeenStatement?.run(entry.rootId, entry.relativePath)
 				const observationCutoff = entry.observedAt === null ? null : entry.observedAt - TRANSIENT_OBSERVATION_REFRESH_MS
-				writeStatement.run(
+				const result = writeStatement.run(
 					entry.rootId,
 					entry.relativePath,
 					entry.name,
@@ -1235,6 +1473,7 @@ export default class FileIndexEngine {
 					entry.type,
 					entry.size,
 					entry.modifiedMs,
+					entry.birthtimeMs,
 					entry.device,
 					entry.inode,
 					entry.modifiedNs,
@@ -1246,9 +1485,18 @@ export default class FileIndexEngine {
 					observationCutoff,
 					observationCutoff,
 				)
+				if (result.changes > 0 && this.#photosAvailable) {
+					if (this.#photos.syncEntry(database, entry)) {
+						const owner = database.prepare('SELECT owner_id FROM index_roots WHERE id = ?').get(entry.rootId) as
+							| {owner_id: string}
+							| undefined
+						if (owner) photosChangedAccountIds.add(owner.owner_id)
+					}
+				}
 			}
 		})
 		apply.immediate(mutation)
+		this.#notifyPhotosChanged(photosChangedAccountIds)
 	}
 
 	async getEntryByVirtualPath(virtualPath: string): Promise<IndexedEntry | undefined> {
@@ -1279,20 +1527,159 @@ export default class FileIndexEngine {
 		return row ? indexedEntry(row) : undefined
 	}
 
-	async ensureThumbnail(systemPath: string): Promise<ThumbnailReference> {
+	async ensureThumbnail(systemPath: string, variant?: ThumbnailVariant): Promise<ThumbnailReference> {
 		if (!supportsThumbnail(nodePath.basename(systemPath))) throw new Error('Unsupported or missing thumbnail source')
 		const stats = await lstat(systemPath).catch(() => undefined)
 		if (!stats?.isFile()) throw new Error('Unsupported or missing thumbnail source')
 		await this.reconcilePath(systemPath)
 		const entry = await this.getEntryBySystemPath(systemPath)
 		if (!entry?.thumbnailEligible || entry.type !== 'file') throw new Error('Unsupported or missing thumbnail source')
-		return this.#enrichment.ensureThumbnail(entry.id)
+		return this.#enrichment.ensureThumbnail(entry.id, variant)
 	}
 
-	async getExistingThumbnail(systemPath: string): Promise<ThumbnailReference | undefined> {
+	async photosRegisterUpload(
+		accountId: string,
+		systemPath: string,
+		hash: Buffer,
+		expectedRevision: PublishedFileRevision,
+		albumId?: string,
+	) {
+		this.#requirePhotos()
+		await this.reconcilePath(systemPath)
+		const entry = await this.getEntryBySystemPath(systemPath)
+		if (!entry?.thumbnailEligible || entry.type !== 'file') throw new Error('Uploaded Photos item was not indexed')
+		await this.#enrichment.attachKnownContentHash(entry.id, hash, expectedRevision)
+		return this.#mutate((database) => {
+			const register = database.transaction(() =>
+				this.#photos.registerUpload(this.#photosDatabase(database), accountId, entry.id, albumId),
+			)
+			return register.immediate()
+		})
+	}
+
+	async photosPrepareUpload(accountId: string, hash: Buffer, albumId?: string) {
+		this.#requirePhotos()
+		return this.#mutate((database) => {
+			const prepare = database.transaction(() =>
+				this.#photos.prepareUpload(this.#photosDatabase(database), accountId, hash, albumId),
+			)
+			return prepare.immediate()
+		})
+	}
+
+	async getExistingThumbnail(systemPath: string, variant?: ThumbnailVariant): Promise<ThumbnailReference | undefined> {
 		const entry = await this.#currentThumbnailEntry(systemPath)
 		if (!entry) return
-		return this.#enrichment.getExistingThumbnail(entry.id)
+		return this.#enrichment.getExistingThumbnail(entry.id, variant)
+	}
+
+	async enableThumbnailVariants(variants: ThumbnailVariant[]) {
+		const availableVariants = this.#photosAvailable
+			? variants
+			: variants.filter((variant) => !PHOTOS_ONLY_THUMBNAIL_VARIANT_SET.has(variant))
+		await this.#enrichment.enableThumbnailVariants(availableVariants)
+	}
+
+	async initializePhotos(accountId?: string) {
+		this.#requirePhotos()
+		const result = await this.#mutate((database) => {
+			const sync = database.transaction(() => this.#photos.syncAll(database, accountId))
+			return sync.immediate()
+		})
+		await this.#enrichment.enableThumbnailVariants(PHOTOS_THUMBNAIL_VARIANTS)
+		return result
+	}
+
+	async photosSummary(accountId: string) {
+		return this.#mutate((database) => this.#photos.summary(this.#photosDatabase(database), accountId))
+	}
+
+	async photosIndexingState(accountId: string) {
+		return this.#mutate((database) => this.#photos.indexingState(this.#photosDatabase(database), accountId))
+	}
+
+	async photosListItems(accountId: string, filter: PhotoFilter, cursor: string | undefined, limit: number) {
+		return this.#mutate((database) =>
+			this.#photos.listItems(this.#photosDatabase(database), accountId, filter, cursor, limit),
+		)
+	}
+
+	async photosGetItem(accountId: string, id: string) {
+		return this.#mutate((database) => this.#photos.getItem(this.#photosDatabase(database), accountId, id))
+	}
+
+	async photosNeighbors(accountId: string, id: string, filter: PhotoFilter) {
+		return this.#mutate((database) => this.#photos.neighbors(this.#photosDatabase(database), accountId, id, filter))
+	}
+
+	async photosSetFavorite(accountId: string, ids: string[], favorite: boolean) {
+		return this.#mutate((database) =>
+			this.#photos.setFavorite(this.#photosDatabase(database), accountId, ids, favorite),
+		)
+	}
+
+	async photosSetDeleted(accountId: string, ids: string[], deleted: boolean) {
+		return this.#mutate((database) => this.#photos.setDeleted(this.#photosDatabase(database), accountId, ids, deleted))
+	}
+
+	async photosResolveItems(accountId: string, ids: string[]) {
+		return this.#mutate((database) => this.#photos.resolveItems(this.#photosDatabase(database), accountId, ids))
+	}
+
+	async photosResolveDeletedItems(accountId: string, ids?: string[]) {
+		return this.#mutate((database) => this.#photos.resolveDeletedItems(this.#photosDatabase(database), accountId, ids))
+	}
+
+	async photosResolveLiveCompanion(accountId: string, id: string) {
+		return this.#mutate((database) => this.#photos.resolveLiveCompanion(this.#photosDatabase(database), accountId, id))
+	}
+
+	async photosDeleteItems(accountId: string, ids: string[], includeLiveCompanions = true) {
+		return this.#mutate((database) =>
+			this.#photos.deleteItems(this.#photosDatabase(database), accountId, ids, includeLiveCompanions),
+		)
+	}
+
+	async photosListAlbums(accountId: string) {
+		return this.#mutate((database) => this.#photos.listAlbums(this.#photosDatabase(database), accountId))
+	}
+
+	async photosCreateAlbum(accountId: string, name: string, ids?: string[]) {
+		return this.#mutate((database) => this.#photos.createAlbum(this.#photosDatabase(database), accountId, name, ids))
+	}
+
+	async photosRenameAlbum(accountId: string, id: string, name: string) {
+		return this.#mutate((database) => this.#photos.renameAlbum(this.#photosDatabase(database), accountId, id, name))
+	}
+
+	async photosSetAlbumCover(accountId: string, id: string, itemId?: string) {
+		return this.#mutate((database) => this.#photos.setAlbumCover(this.#photosDatabase(database), accountId, id, itemId))
+	}
+
+	async photosDeleteAlbum(accountId: string, id: string) {
+		return this.#mutate((database) => this.#photos.deleteAlbum(this.#photosDatabase(database), accountId, id))
+	}
+
+	async photosAddAlbumItems(accountId: string, id: string, ids: string[]) {
+		return this.#mutate((database) => this.#photos.addAlbumItems(this.#photosDatabase(database), accountId, id, ids))
+	}
+
+	async photosRemoveAlbumItems(accountId: string, id: string, ids: string[]) {
+		return this.#mutate((database) => this.#photos.removeAlbumItems(this.#photosDatabase(database), accountId, id, ids))
+	}
+
+	async photosListSources(accountId: string) {
+		return this.#mutate((database) => this.#photos.listSources(this.#photosDatabase(database), accountId))
+	}
+
+	async photosUpdateSource(accountId: string, id: string, scope?: {mode: PhotoScopeMode; paths: string[]}) {
+		return this.#mutate((database) => this.#photos.updateSource(this.#photosDatabase(database), accountId, id, scope))
+	}
+
+	async photosRemoveSource(accountId: string, id: string, keepItems: boolean) {
+		return this.#mutate((database) =>
+			this.#photos.removeSource(this.#photosDatabase(database), accountId, id, keepItems),
+		)
 	}
 
 	async matchesThumbnail(systemPath: string, kind: string, key: string, variant: string) {
@@ -1331,9 +1718,7 @@ export default class FileIndexEngine {
 			entry.inode !== identity.inode ||
 			entry.size !== Number(stats.size) ||
 			entry.modifiedNs !== identity.modifiedNs ||
-			(entry.thumbnailIdentityKind === 'content'
-				? entry.ctimeNs !== identity.ctimeNs
-				: entry.device !== identity.device)
+			(entry.thumbnailIdentityKind === 'transient' && entry.device !== identity.device)
 		if (revisionChanged) {
 			void this.reconcilePath(systemPath).catch((error) =>
 				this.logger.error(`Failed to refresh thumbnail source '${systemPath}'`, error),
@@ -1398,6 +1783,8 @@ export default class FileIndexEngine {
 			uniqueContents: 0,
 			readyThumbnails: 0,
 			thumbnailFailures: 0,
+			readyMedia: 0,
+			mediaFailures: 0,
 		}
 		if (this.#available) {
 			const row = get(this.#requireDatabase(), 'SELECT COUNT(*) AS count FROM entries') as {count: number}
@@ -1407,6 +1794,7 @@ export default class FileIndexEngine {
 
 		return {
 			available: this.#available,
+			photosAvailable: this.#photosAvailable,
 			schemaVersion: this.#schemaVersion,
 			entryCount,
 			enrichment,
@@ -1459,10 +1847,31 @@ export default class FileIndexEngine {
 		return this.#database
 	}
 
+	#requirePhotos() {
+		if (!this.#photosAvailable) throw new Error('Photos library is unavailable')
+	}
+
+	#photosDatabase(database: Database) {
+		this.#requirePhotos()
+		return database
+	}
+
 	#setAvailable(available: boolean) {
 		if (this.#available === available) return
 		this.#available = available
 		this.#onAvailabilityChange?.(available)
+	}
+
+	#notifyPhotosChanged(accountIds: Iterable<string>) {
+		if (!this.#photosAvailable || !this.#onPhotosChange || this.#stopping) return
+		for (const accountId of accountIds) this.#photosChangedAccountIds.add(accountId)
+		if (this.#photosChangedAccountIds.size === 0 || this.#photosChangeTimer) return
+		this.#photosChangeTimer = setTimeout(() => {
+			this.#photosChangeTimer = undefined
+			const changedAccountIds = [...this.#photosChangedAccountIds]
+			this.#photosChangedAccountIds.clear()
+			this.#onPhotosChange?.(changedAccountIds)
+		}, 250)
 	}
 
 	async stop() {
@@ -1470,9 +1879,14 @@ export default class FileIndexEngine {
 		this.#stopping = true
 		if (this.#reconciliationTimer) clearTimeout(this.#reconciliationTimer)
 		if (this.#recoveryTimer) clearTimeout(this.#recoveryTimer)
+		if (this.#photosRecoveryTimer) clearTimeout(this.#photosRecoveryTimer)
+		if (this.#photosChangeTimer) clearTimeout(this.#photosChangeTimer)
 		this.#reconciliationTimer = undefined
 		this.#recoveryTimer = undefined
+		this.#photosRecoveryTimer = undefined
+		this.#photosChangeTimer = undefined
 		await this.#recoveryAttempt
+		await this.#photosRecoveryAttempt
 		await this.#enrichment.stop()
 		await this.#scanQueue.onIdle()
 		await this.#mutationQueue.onIdle()
@@ -1485,6 +1899,50 @@ export default class FileIndexEngine {
 		this.#setAvailable(false)
 		this.#started = false
 	}
+}
+
+function reuseMovedContent(
+	database: Database,
+	sourceRootId: number,
+	sourceRelativePath: string,
+	destinationRootId: number,
+	destinationRelativePath: string,
+) {
+	const sourcePrefix = `${sourceRelativePath}/`
+	const destinationPrefix = `${destinationRelativePath}/`
+	database
+		.prepare(
+			`UPDATE entries AS destination SET
+				content_id = source.content_id,
+				hash_failure_count = source.hash_failure_count,
+				hash_retry_at = source.hash_retry_at,
+				hash_error = source.hash_error
+			FROM entries AS source
+			WHERE source.root_id = ?
+				AND (source.relative_path = ? OR (source.relative_path >= ? AND source.relative_path < ?))
+				AND destination.root_id = ?
+				AND destination.relative_path = CASE
+					WHEN source.relative_path = ? THEN ?
+					ELSE ? || substr(source.relative_path, length(?) + 1)
+				END
+				AND source.thumbnail_identity_kind = 'content'
+				AND destination.thumbnail_identity_kind = 'content'
+				AND source.content_id IS NOT NULL
+				AND destination.inode = source.inode
+				AND destination.size = source.size
+				AND destination.modified_ns = source.modified_ns`,
+		)
+		.run(
+			sourceRootId,
+			sourceRelativePath,
+			sourcePrefix,
+			`${sourceRelativePath}0`,
+			destinationRootId,
+			sourceRelativePath,
+			destinationRelativePath,
+			destinationPrefix,
+			sourcePrefix,
+		)
 }
 
 function queryTrigrams(query: string) {
@@ -1756,6 +2214,7 @@ function fileIdentity(stats: FileStats) {
 			modifiedNs: stats.mtimeNs.toString(),
 			ctimeNs: stats.ctimeNs.toString(),
 			modifiedMs: Number(stats.mtimeNs / 1_000_000n),
+			birthtimeMs: stats.birthtimeNs > 0n ? Number(stats.birthtimeNs / 1_000_000n) : null,
 		}
 	}
 
@@ -1765,6 +2224,7 @@ function fileIdentity(stats: FileStats) {
 		modifiedNs: BigInt(Math.round(stats.mtimeMs * 1_000_000)).toString(),
 		ctimeNs: BigInt(Math.round(stats.ctimeMs * 1_000_000)).toString(),
 		modifiedMs: Math.trunc(stats.mtimeMs),
+		birthtimeMs: Number.isFinite(stats.birthtimeMs) && stats.birthtimeMs > 0 ? Math.trunc(stats.birthtimeMs) : null,
 	}
 }
 
@@ -1793,6 +2253,7 @@ function indexedEntry(row: EntryRow): IndexedEntry {
 		type: row.type,
 		size: Number(row.size),
 		modifiedMs: Number(row.modified_ms),
+		birthtimeMs: row.birthtime_ms === null ? null : Number(row.birthtime_ms),
 		device: row.device,
 		inode: row.inode,
 		modifiedNs: row.modified_ns,

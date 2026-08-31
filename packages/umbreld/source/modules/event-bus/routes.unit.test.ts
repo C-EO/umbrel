@@ -53,3 +53,28 @@ test('Cloud subscriptions discard another account wake-up before yielding', asyn
 	expect(stream).toHaveBeenCalledWith('files:cloud-progress', {signal: undefined})
 	await iterator.return?.()
 })
+
+test('Photos subscriptions expose only the requesting account activity to members', async () => {
+	const stream = vi.fn(() =>
+		(async function* () {
+			yield {accountIds: ['0']}
+			yield {accountIds: ['0', 'Bob', 'Alice']}
+		})(),
+	)
+	const umbreld = {
+		auth: {validatePrincipal: vi.fn(async () => {})},
+		eventBus: {stream},
+	} as unknown as Umbreld
+	const context = {
+		umbreld,
+		transport: 'ws',
+		principal: {sessionId: 'member-session', accountId: 'Alice', actor: 'account'},
+		logger: {verbose: vi.fn(), error: vi.fn()},
+		dangerouslyBypassAuthentication: false,
+	} as unknown as Context
+
+	const subscription = await routes.createCaller(context).listen({event: 'photos:change'})
+	const iterator = subscription[Symbol.asyncIterator]()
+	await expect(iterator.next()).resolves.toEqual({done: false, value: {accountIds: ['Alice']}})
+	await iterator.return?.()
+})

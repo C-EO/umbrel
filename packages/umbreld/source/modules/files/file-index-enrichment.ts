@@ -1,5 +1,5 @@
 import {constants as fsConstants} from 'node:fs'
-import {mkdir, open, opendir} from 'node:fs/promises'
+import {lstat, mkdir, open, opendir} from 'node:fs/promises'
 import {availableParallelism as nodeAvailableParallelism} from 'node:os'
 import nodePath from 'node:path'
 import {createHash, randomUUID} from 'node:crypto'
@@ -10,15 +10,18 @@ import {execa} from 'execa'
 import fse from 'fs-extra'
 import PQueue from 'p-queue'
 
+import {photoKind, type PhotoKind, type PhotoSubKind} from '../photos/types.js'
+import {foldSearchName} from './file-index/migrations.js'
 import {
+	FILES_THUMBNAIL_VARIANT,
+	PHOTOS_THUMBNAIL_VARIANTS,
 	THUMBNAIL_FORMAT,
-	THUMBNAIL_HEIGHT,
-	THUMBNAIL_QUALITY,
-	THUMBNAIL_VARIANT,
-	THUMBNAIL_WIDTH,
+	THUMBNAIL_VARIANTS,
+	isThumbnailVariant,
 	thumbnailSystemPath,
 	type ThumbnailIdentity,
 	type ThumbnailIdentityKind,
+	type ThumbnailVariant,
 } from './thumbnail-support.js'
 
 type Database = DatabaseTypes.Database
@@ -30,6 +33,19 @@ const THUMBNAIL_RETRY_BASE_MS = 60_000
 const MAX_RETRY_MS = 24 * 60 * 60 * 1000
 const IDLE_RECHECK_MS = 60_000
 const INFRASTRUCTURE_RETRY_MS = 60_000
+const ALL_THUMBNAIL_VARIANTS = Object.keys(THUMBNAIL_VARIANTS) as ThumbnailVariant[]
+const PHOTOS_ONLY_VARIANT_SET = new Set<ThumbnailVariant>(
+	PHOTOS_THUMBNAIL_VARIANTS.filter((variant) => variant !== FILES_THUMBNAIL_VARIANT),
+)
+const IMAGE_MAGICK_VIDEO_CODERS = new Map([
+	['.3gp', '3GP'],
+	['.avi', 'AVI'],
+	['.m4v', 'M4V'],
+	['.mkv', 'MKV'],
+	['.mov', 'MOV'],
+	['.mp4', 'MP4'],
+	['.webm', 'WEBM'],
+])
 const ARTIFACT_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000
 const ARTIFACT_MAINTENANCE_BATCH_SIZE = 256
 const ORPHAN_SWEEP_BATCH_SIZE = 256
@@ -48,19 +64,23 @@ export type ContentFingerprint = {
 	inode: string
 	size: number
 	modifiedNs: string
-	ctimeNs: string
 }
+
+export type PublishedFileRevision = ContentFingerprint & {ctimeNs: string}
 
 export type ThumbnailReference = {
 	kind: ThumbnailIdentityKind
 	key: string
-	variant: typeof THUMBNAIL_VARIANT
+	variant: ThumbnailVariant
 	format: typeof THUMBNAIL_FORMAT
 }
+
+export type ThumbnailOutput = {destination: string; variant: ThumbnailVariant}
 
 type EntryCandidate = ContentFingerprint & {
 	id: number
 	device: string
+	ctimeNs: string
 	systemPath: string
 	thumbnailIdentityKind: ThumbnailIdentityKind
 }
@@ -73,10 +93,36 @@ type ContentCandidate = {
 	fingerprint: ContentFingerprint
 }
 
+type ContentThumbnailCandidate = ContentCandidate & {variant: ThumbnailVariant}
+
+export type MediaMetadata = {
+	kind: PhotoKind
+	subKind?: PhotoSubKind
+	takenAt?: number
+	takenAtOffsetMinutes?: number
+	createdAt?: number
+	width: number
+	height: number
+	durationMs?: number
+	tint?: number
+	cameraMake?: string
+	cameraModel?: string
+	lens?: string
+	focalLength?: string
+	aperture?: string
+	exposure?: string
+	iso?: number
+	latitude?: number
+	longitude?: number
+	altitude?: number
+	userComment?: string
+	liveIdentifier?: string
+}
+
 type OrphanedContent = {id: number; key: string}
 type OrphanedContentRow = {id: number; hash: string}
 type OrphanMaintenance = {processed: boolean; orphans: OrphanedContent[]}
-type ReadyThumbnail = {contentId: number; key: string}
+type ReadyThumbnail = {contentId: number; key: string; variant: ThumbnailVariant}
 
 export type FileIndexEnrichmentLogger = {
 	log(message?: string): void
@@ -88,12 +134,19 @@ export type FileIndexEnrichmentOptions = {
 	dataDirectory: string
 	logger: FileIndexEnrichmentLogger
 	withDatabase: <T>(operation: (database: Database) => T, priority?: number) => Promise<T>
+	photosAvailable: () => boolean
 	onStalePath: (systemPath: string) => Promise<void>
+	onContentAttached?: (entryId: number, hash: Buffer) => Promise<void>
+	onMediaMetadataReady?: (contentId: number) => Promise<void>
+	onThumbnailReady?: (contentId: number, variant: ThumbnailVariant) => void
 }
 
 export type FileIndexEnrichmentRuntime = {
 	hashFile?: typeof hashFileRevision
 	generateThumbnail?: typeof generateThumbnailFile
+	generateThumbnails?: typeof generateThumbnailFiles
+	extractMediaMetadata?: typeof extractMediaMetadata
+	extractThumbnailTint?: typeof extractThumbnailTint
 	thumbnailIsUsable?: typeof thumbnailArtifactIsUsable
 	remove?: typeof fse.remove
 	orphanGcMaxDeferralMs?: number
@@ -121,16 +174,24 @@ export default class FileIndexEnrichment {
 	readonly logger: FileIndexEnrichmentLogger
 
 	#withDatabase: FileIndexEnrichmentOptions['withDatabase']
+	#photosAvailable: () => boolean
 	#onStalePath: (systemPath: string) => Promise<void>
+	#onContentAttached?: (entryId: number, hash: Buffer) => Promise<void>
+	#onMediaMetadataReady?: (contentId: number) => Promise<void>
+	#onThumbnailReady?: (contentId: number, variant: ThumbnailVariant) => void
 	#hashFile: typeof hashFileRevision
 	#generateThumbnail: typeof generateThumbnailFile
+	#generateThumbnails: typeof generateThumbnailFiles
+	#extractMediaMetadata: typeof extractMediaMetadata
+	#extractThumbnailTint: typeof extractThumbnailTint
 	#thumbnailIsUsable: typeof thumbnailArtifactIsUsable
 	#remove: typeof fse.remove
 	#orphanGcMaxDeferralMs: number
 	#backgroundConcurrency: number
 	#backgroundQueue: PQueue
 	#onDemandQueue: PQueue
-	#onDemandOperations = new Map<number, Promise<ThumbnailReference>>()
+	#onDemandOperations = new Map<string, Promise<ThumbnailReference>>()
+	#contentOperations = new Map<number, Promise<ContentCandidate>>()
 	#started = false
 	#stopping = false
 	#backgroundEnabled = false
@@ -139,21 +200,35 @@ export default class FileIndexEnrichment {
 	#timer?: ReturnType<typeof setTimeout>
 	#activeHashEntries = new Set<number>()
 	#activeThumbnailContents = new Set<number>()
+	#activeMediaContents = new Set<number>()
 	#maintenanceActive = false
 	#orphanSweepCursor?: number
-	#thumbnailVerificationCursor?: number
+	#thumbnailVerificationCursor?: {variant: string; contentId: number}
 	#thumbnailVerificationCompletedAt = 0
 	#artifactFiles?: AsyncGenerator<string>
 	#artifactMaintenanceCompletedAt = 0
 	#destructiveArtifactMaintenanceAllowed = false
 	#directoryPublication = new Map<string, Promise<void>>()
 	#artifactOperations = new Map<string, Promise<void>>()
+	#enabledThumbnailVariants = new Set<ThumbnailVariant>([FILES_THUMBNAIL_VARIANT])
 
 	constructor(
-		{dataDirectory, logger, withDatabase, onStalePath}: FileIndexEnrichmentOptions,
+		{
+			dataDirectory,
+			logger,
+			withDatabase,
+			photosAvailable,
+			onStalePath,
+			onContentAttached,
+			onMediaMetadataReady,
+			onThumbnailReady,
+		}: FileIndexEnrichmentOptions,
 		{
 			hashFile = hashFileRevision,
 			generateThumbnail = generateThumbnailFile,
+			generateThumbnails,
+			extractMediaMetadata: extractMedia = extractMediaMetadata,
+			extractThumbnailTint: extractTint = extractThumbnailTint,
 			thumbnailIsUsable = thumbnailArtifactIsUsable,
 			remove = fse.remove,
 			orphanGcMaxDeferralMs = ORPHAN_GC_MAX_DEFERRAL_MS,
@@ -164,9 +239,24 @@ export default class FileIndexEnrichment {
 		this.thumbnailDirectory = nodePath.join(dataDirectory, 'thumbnails')
 		this.logger = logger
 		this.#withDatabase = withDatabase
+		this.#photosAvailable = photosAvailable
 		this.#onStalePath = onStalePath
+		this.#onContentAttached = onContentAttached
+		this.#onMediaMetadataReady = onMediaMetadataReady
+		this.#onThumbnailReady = onThumbnailReady
 		this.#hashFile = hashFile
 		this.#generateThumbnail = generateThumbnail
+		this.#generateThumbnails =
+			generateThumbnails ??
+			(generateThumbnail === generateThumbnailFile
+				? generateThumbnailFiles
+				: async (systemPath, outputs, sourceFileDescriptor) => {
+						for (const output of outputs) {
+							await generateThumbnail(systemPath, output.destination, output.variant, sourceFileDescriptor)
+						}
+					})
+		this.#extractMediaMetadata = extractMedia
+		this.#extractThumbnailTint = extractTint
 		this.#thumbnailIsUsable = thumbnailIsUsable
 		this.#remove = remove
 		this.#orphanGcMaxDeferralMs = orphanGcMaxDeferralMs
@@ -188,8 +278,10 @@ export default class FileIndexEnrichment {
 		this.#directoryPublication.clear()
 		this.#artifactOperations.clear()
 		this.#onDemandOperations.clear()
+		this.#contentOperations.clear()
 		this.#activeHashEntries.clear()
 		this.#activeThumbnailContents.clear()
+		this.#activeMediaContents.clear()
 		this.#maintenanceActive = false
 		this.#backgroundQueued = 0
 		this.#wakeRequested = false
@@ -200,6 +292,59 @@ export default class FileIndexEnrichment {
 
 	startBackground() {
 		this.#backgroundEnabled = true
+		this.kick()
+	}
+
+	async enableThumbnailVariants(variants: readonly ThumbnailVariant[]) {
+		const requested = [...new Set(variants)]
+		if (requested.length === 0) return
+		await this.#withDatabase((database) => {
+			const insert = database.prepare(
+				`INSERT INTO thumbnail_variants(content_id, variant, state, failure_count, updated_at)
+				SELECT id, ?, 'pending', 0, ? FROM contents WHERE true
+				ON CONFLICT(content_id, variant) DO NOTHING`,
+			)
+			const insertPhotos = requested.some((variant) => PHOTOS_ONLY_VARIANT_SET.has(variant))
+				? database.prepare(
+						`INSERT INTO thumbnail_variants(content_id, variant, state, failure_count, updated_at)
+						SELECT contents.id, ?, 'pending', 0, ? FROM contents
+						WHERE EXISTS (
+							SELECT 1 FROM entries
+							JOIN index_roots ON index_roots.id = entries.root_id
+							WHERE entries.content_id = contents.id AND index_roots.kind = 'home'
+						) ON CONFLICT(content_id, variant) DO NOTHING`,
+					)
+				: undefined
+			const register = database.transaction(() => {
+				// Reconcile every requested variant against the database even when it
+				// is already enabled in memory. This matters when an OTA changes the
+				// default Files size: the new default starts enabled, but existing
+				// content has rows only for the old variant.
+				for (const variant of requested) {
+					;(PHOTOS_ONLY_VARIANT_SET.has(variant) ? insertPhotos! : insert).run(variant, Date.now())
+				}
+				if (!insertPhotos) return
+				const contentRows = database
+					.prepare(
+						`SELECT DISTINCT contents.id, entries.name FROM contents
+						JOIN entries ON entries.content_id = contents.id
+						JOIN index_roots ON index_roots.id = entries.root_id
+						WHERE index_roots.kind = 'home'
+							AND NOT EXISTS (SELECT 1 FROM media_metadata WHERE media_metadata.content_id = contents.id)`,
+					)
+					.all() as Array<{id: number; name: string}>
+				const insertMedia = database.prepare(
+					`INSERT INTO media_metadata(content_id, state, kind, failure_count, updated_at)
+					VALUES (?, 'pending', ?, 0, ?) ON CONFLICT(content_id) DO NOTHING`,
+				)
+				for (const row of contentRows) {
+					const kind = photoKind(row.name)
+					if (kind) insertMedia.run(row.id, kind, Date.now())
+				}
+			})
+			register.immediate()
+		}, ON_DEMAND_DATABASE_PRIORITY)
+		for (const variant of requested) this.#enabledThumbnailVariants.add(variant)
 		this.kick()
 	}
 
@@ -236,9 +381,13 @@ export default class FileIndexEnrichment {
 			})
 	}
 
-	async ensureThumbnail(entryId: number): Promise<ThumbnailReference> {
+	async ensureThumbnail(
+		entryId: number,
+		variant: ThumbnailVariant = FILES_THUMBNAIL_VARIANT,
+	): Promise<ThumbnailReference> {
 		if (!this.#started || this.#stopping) throw new Error('File enrichment is unavailable')
-		const existing = this.#onDemandOperations.get(entryId)
+		const operationKey = `${entryId}:${variant}`
+		const existing = this.#onDemandOperations.get(operationKey)
 		if (existing) return existing
 		const operation = this.#onDemandQueue.add(async () => {
 			if (this.#stopping) throw new Error('File enrichment is unavailable')
@@ -247,11 +396,11 @@ export default class FileIndexEnrichment {
 					const candidate = await this.#entryCandidate(entryId, ON_DEMAND_DATABASE_PRIORITY)
 					if (!candidate) throw new Error('Unsupported or missing thumbnail source')
 					if (candidate.thumbnailIdentityKind === 'transient') {
-						return await this.#ensureTransientThumbnail(candidate)
+						return await this.#ensureTransientThumbnail(candidate, variant)
 					}
 					const content = await this.#ensureEntryContent(entryId, true, candidate)
-					await this.#ensureContentThumbnail(content, true)
-					return contentThumbnailReference(content.hash)
+					await this.#ensureContentThumbnail(content, variant, true)
+					return contentThumbnailReference(content.hash, variant)
 				} catch (error) {
 					if (!(error instanceof StaleFileRevisionError) || attempt > 0) throw error
 					const candidate = await this.#entryCandidate(entryId, ON_DEMAND_DATABASE_PRIORITY)
@@ -261,19 +410,73 @@ export default class FileIndexEnrichment {
 			}
 			throw new StaleFileRevisionError('File kept changing during thumbnail generation')
 		}) as Promise<ThumbnailReference>
-		this.#onDemandOperations.set(entryId, operation)
+		this.#onDemandOperations.set(operationKey, operation)
 		try {
 			return await operation
 		} finally {
-			if (this.#onDemandOperations.get(entryId) === operation) this.#onDemandOperations.delete(entryId)
+			if (this.#onDemandOperations.get(operationKey) === operation) this.#onDemandOperations.delete(operationKey)
 		}
 	}
 
-	async getExistingThumbnail(entryId: number): Promise<ThumbnailReference | undefined> {
+	async attachKnownContentHash(entryId: number, hash: Buffer, expectedRevision?: PublishedFileRevision) {
+		if (hash.length !== 32) throw new TypeError('BLAKE3 digest must be 32 bytes')
+		const expectedHash = hash.toString('hex')
+		let candidate: EntryCandidate | undefined
+		if (expectedRevision) {
+			candidate = await this.#entryCandidate(entryId, ON_DEMAND_DATABASE_PRIORITY)
+			if (
+				!candidate ||
+				candidate.thumbnailIdentityKind !== 'content' ||
+				!samePublishedRevision(candidate, expectedRevision)
+			) {
+				throw new StaleFileRevisionError('Published upload revision does not match the index')
+			}
+			await assertPublishedRevision(candidate.systemPath, expectedRevision)
+		}
+		const ready = await this.#contentForEntry(entryId, ON_DEMAND_DATABASE_PRIORITY)
+		if (ready) {
+			if (ready.hash !== expectedHash) throw new StaleFileRevisionError('Indexed content hash does not match upload')
+			if (expectedRevision) await assertPublishedRevision(candidate!.systemPath, expectedRevision)
+			return ready
+		}
+		const existing = this.#contentOperations.get(entryId)
+		if (existing) {
+			const content = await existing
+			if (content.hash !== expectedHash) throw new StaleFileRevisionError('Indexed content hash does not match upload')
+			if (expectedRevision) await assertPublishedRevision(candidate!.systemPath, expectedRevision)
+			return content
+		}
+		candidate ??= await this.#entryCandidate(entryId, ON_DEMAND_DATABASE_PRIORITY)
+		if (!candidate || candidate.thumbnailIdentityKind !== 'content') {
+			throw new Error('Unsupported or missing thumbnail source')
+		}
+		await assertContentRevision(candidate.systemPath, candidate)
+		const operation = this.#attachEntryContent(candidate, hash, ON_DEMAND_DATABASE_PRIORITY, expectedRevision)
+		this.#contentOperations.set(entryId, operation)
+		try {
+			const content = await operation
+			if (expectedRevision) {
+				try {
+					await assertPublishedRevision(candidate.systemPath, expectedRevision)
+				} catch (error) {
+					await this.#onStalePath(candidate.systemPath).catch(() => {})
+					throw error
+				}
+			}
+			return content
+		} finally {
+			if (this.#contentOperations.get(entryId) === operation) this.#contentOperations.delete(entryId)
+		}
+	}
+
+	async getExistingThumbnail(
+		entryId: number,
+		variant: ThumbnailVariant = FILES_THUMBNAIL_VARIANT,
+	): Promise<ThumbnailReference | undefined> {
 		const candidate = await this.#entryCandidate(entryId, ON_DEMAND_DATABASE_PRIORITY)
 		if (!candidate) return
 		if (candidate.thumbnailIdentityKind === 'transient') {
-			return this.#getExistingTransientThumbnail(candidate)
+			return this.#getExistingTransientThumbnail(candidate, variant)
 		}
 		const content = await this.#contentForEntry(entryId, ON_DEMAND_DATABASE_PRIORITY)
 		if (!content) return
@@ -285,33 +488,33 @@ export default class FileIndexEnrichment {
 							`SELECT 1 FROM thumbnail_variants
 							WHERE content_id = ? AND variant = ? AND state = 'ready'`,
 						)
-						.get(content.id, THUMBNAIL_VARIANT),
+						.get(content.id, variant),
 				),
 			ON_DEMAND_DATABASE_PRIORITY,
 		)
 		if (!ready) return
 
-		const systemPath = thumbnailSystemPath(this.thumbnailDirectory, contentIdentity(content.hash))
+		const systemPath = thumbnailSystemPath(this.thumbnailDirectory, contentIdentity(content.hash, variant))
 		if (!(await this.#thumbnailIsUsable(systemPath))) {
-			await this.#markThumbnailPending([content.id], ON_DEMAND_DATABASE_PRIORITY)
+			await this.#markThumbnailPending([{contentId: content.id, variant}], ON_DEMAND_DATABASE_PRIORITY)
 			this.kick()
 			return
 		}
 
-		return contentThumbnailReference(content.hash)
+		return contentThumbnailReference(content.hash, variant)
 	}
 
 	async matchesThumbnail(entryId: number, kind: string, key: string, variant: string) {
-		if (variant !== THUMBNAIL_VARIANT) return false
+		if (!isThumbnailVariant(variant)) return false
 		const candidate = await this.#entryCandidate(entryId, ON_DEMAND_DATABASE_PRIORITY)
 		if (!candidate || candidate.thumbnailIdentityKind !== kind) return false
 		if (kind === 'transient') {
 			if (transientArtifactKey(candidate) !== key) return false
-			return Boolean(await this.#getExistingTransientThumbnail(candidate))
+			return Boolean(await this.#getExistingTransientThumbnail(candidate, variant))
 		}
 		const content = await this.#contentForEntry(entryId, ON_DEMAND_DATABASE_PRIORITY)
 		if (!content || content.hash !== key) return false
-		return Boolean(await this.getExistingThumbnail(entryId))
+		return Boolean(await this.getExistingThumbnail(entryId, variant))
 	}
 
 	async status() {
@@ -327,7 +530,9 @@ export default class FileIndexEnrichment {
 						(SELECT COUNT(*) FROM thumbnail_variants WHERE state = 'ready') +
 							(SELECT COUNT(*) FROM transient_thumbnail_variants WHERE state = 'ready') AS ready_thumbnails,
 						(SELECT COUNT(*) FROM thumbnail_variants WHERE state = 'failed') +
-							(SELECT COUNT(*) FROM transient_thumbnail_variants WHERE state = 'failed') AS thumbnail_failures
+							(SELECT COUNT(*) FROM transient_thumbnail_variants WHERE state = 'failed') AS thumbnail_failures,
+						(SELECT COUNT(*) FROM media_metadata WHERE state = 'ready') AS ready_media,
+						(SELECT COUNT(*) FROM media_metadata WHERE state = 'failed') AS media_failures
 					FROM entries`,
 				)
 				.get() as Record<string, number>
@@ -339,6 +544,8 @@ export default class FileIndexEnrichment {
 				uniqueContents: Number(row.unique_contents),
 				readyThumbnails: Number(row.ready_thumbnails),
 				thumbnailFailures: Number(row.thumbnail_failures),
+				readyMedia: Number(row.ready_media),
+				mediaFailures: Number(row.media_failures),
 			}
 		}, ON_DEMAND_DATABASE_PRIORITY)
 	}
@@ -388,7 +595,7 @@ export default class FileIndexEnrichment {
 				const ownsContentReservation = !this.#activeThumbnailContents.has(content.id)
 				if (ownsContentReservation) this.#activeThumbnailContents.add(content.id)
 				try {
-					await this.#ensureContentThumbnail(content, false)
+					await this.#ensureContentThumbnail(content, FILES_THUMBNAIL_VARIANT, false)
 				} finally {
 					if (ownsContentReservation) this.#activeThumbnailContents.delete(content.id)
 				}
@@ -409,11 +616,33 @@ export default class FileIndexEnrichment {
 			return
 		}
 
+		const media = await this.#nextContentNeedingMetadata()
+		if (media) {
+			let retryDelay = 0
+			try {
+				await this.#ensureMediaMetadata(media, false)
+			} catch (error) {
+				if (error instanceof StaleFileRevisionError) {
+					await this.#onStalePath(media.systemPath).catch((refreshError) => {
+						retryDelay = INFRASTRUCTURE_RETRY_MS
+						this.logger.error(`Failed to refresh stale media source '${media.systemPath}'`, refreshError)
+					})
+				} else {
+					if (!(error instanceof PersistedEnrichmentFailure)) retryDelay = INFRASTRUCTURE_RETRY_MS
+					this.logger.error(`Failed to extract media metadata for '${media.systemPath}'`, error)
+				}
+			} finally {
+				this.#activeMediaContents.delete(media.id)
+			}
+			this.#schedule(retryDelay)
+			return
+		}
+
 		const content = await this.#nextContentNeedingThumbnail()
 		if (content) {
 			let retryDelay = 0
 			try {
-				await this.#ensureContentThumbnail(content, false).catch(async (error) => {
+				await this.#ensureContentThumbnail(content, content.variant, false).catch(async (error) => {
 					if (error instanceof StaleFileRevisionError) {
 						await this.#onStalePath(content.systemPath).catch((refreshError) => {
 							retryDelay = INFRASTRUCTURE_RETRY_MS
@@ -512,15 +741,175 @@ export default class FileIndexEnrichment {
 		}, BACKGROUND_DATABASE_PRIORITY)
 	}
 
+	async #nextContentNeedingMetadata() {
+		return this.#withDatabase((database) => {
+			const excluded = [...this.#activeMediaContents]
+			const exclusion =
+				excluded.length > 0 ? `AND media_metadata.content_id NOT IN (${excluded.map(() => '?').join(', ')})` : ''
+			const select = (state: 'pending' | 'failed') =>
+				database
+					.prepare(
+						`SELECT contents.id, entries.id AS entry_id, hex(contents.blake3) AS hash,
+							entries.device, entries.inode, entries.size, entries.modified_ns,
+							entries.ctime_ns, entries.thumbnail_identity_kind,
+							index_roots.system_path AS root_system_path, entries.relative_path
+						FROM media_metadata INDEXED BY ${state === 'pending' ? 'media_metadata_pending_work' : 'media_metadata_failed_work'}
+						JOIN contents ON contents.id = media_metadata.content_id
+						JOIN entries INDEXED BY entries_by_content ON entries.content_id = media_metadata.content_id
+						JOIN index_roots ON index_roots.id = entries.root_id
+						WHERE media_metadata.state = '${state}'
+							${state === 'failed' ? 'AND media_metadata.retry_at <= ?' : ''}
+							${exclusion}
+						ORDER BY ${state === 'failed' ? 'media_metadata.retry_at,' : ''} media_metadata.content_id, entries.id
+						LIMIT 1`,
+					)
+					.get(...(state === 'failed' ? [Date.now()] : []), ...excluded) as ContentCandidateRow | undefined
+			const row = select('pending') ?? select('failed')
+			if (!row) return
+			const candidate = contentCandidate(row)
+			this.#activeMediaContents.add(candidate.id)
+			return candidate
+		}, BACKGROUND_DATABASE_PRIORITY)
+	}
+
+	async #ensureMediaMetadata(content: ContentCandidate, onDemand: boolean) {
+		const priority = onDemand ? ON_DEMAND_DATABASE_PRIORITY : BACKGROUND_DATABASE_PRIORITY
+		const current = await this.#withDatabase(
+			(database) =>
+				database.prepare('SELECT state, retry_at FROM media_metadata WHERE content_id = ?').get(content.id) as
+					| {state: 'pending' | 'ready' | 'failed'; retry_at: number | null}
+					| undefined,
+			priority,
+		)
+		if (!current || current.state === 'ready') return
+		if (!onDemand && current.state === 'failed' && current.retry_at !== null && current.retry_at > Date.now()) return
+
+		const attemptedEntries = new Set<number>()
+		while (true) {
+			attemptedEntries.add(content.entryId)
+			let source: Awaited<ReturnType<typeof open>> | undefined
+			try {
+				source = await openContentRevision(content.systemPath, content.fingerprint)
+				const metadata = await this.#extractMediaMetadata(content.systemPath, source.fd)
+				let tint = metadata.tint
+				if (tint === undefined) {
+					const existingPreview = thumbnailSystemPath(
+						this.thumbnailDirectory,
+						contentIdentity(content.hash, 'preview-192-webp-v1'),
+					)
+					if (await this.#thumbnailIsUsable(existingPreview)) {
+						tint = await this.#extractThumbnailTint(existingPreview).catch((error) => {
+							this.logger.error(`Failed to extract thumbnail tint from '${existingPreview}'`, error)
+							return undefined
+						})
+					}
+				}
+				await assertHandleContentRevision(source, content.fingerprint)
+				await this.#withDatabase((database) => {
+					const source = database
+						.prepare(
+							`SELECT 1 FROM entries WHERE content_id = ? AND inode = ? AND size = ?
+							AND modified_ns = ?`,
+						)
+						.get(content.id, content.fingerprint.inode, content.fingerprint.size, content.fingerprint.modifiedNs)
+					if (!source) throw new StaleFileRevisionError('File changed while extracting media metadata')
+					database
+						.prepare(
+							`UPDATE media_metadata SET state = 'ready', kind = ?, sub_kind = ?, taken_at = ?,
+							taken_at_offset_minutes = ?, created_at = ?, width = ?, height = ?, duration_ms = ?, tint = COALESCE(?, tint),
+							camera_make = ?, camera_model = ?, lens = ?, focal_length = ?, aperture = ?, exposure = ?,
+							iso = ?, latitude = ?, longitude = ?, altitude = ?, user_comment = ?, live_identifier = ?, search_text = ?,
+							failure_count = 0, retry_at = NULL,
+							last_error = NULL, updated_at = ? WHERE content_id = ?`,
+						)
+						.run(
+							metadata.kind,
+							metadata.subKind ?? null,
+							metadata.takenAt,
+							metadata.takenAtOffsetMinutes ?? null,
+							metadata.createdAt,
+							metadata.width,
+							metadata.height,
+							metadata.durationMs ?? null,
+							tint ?? null,
+							metadata.cameraMake ?? null,
+							metadata.cameraModel ?? null,
+							metadata.lens ?? null,
+							metadata.focalLength ?? null,
+							metadata.aperture ?? null,
+							metadata.exposure ?? null,
+							metadata.iso ?? null,
+							metadata.latitude ?? null,
+							metadata.longitude ?? null,
+							metadata.altitude ?? null,
+							metadata.userComment ?? null,
+							metadata.liveIdentifier ?? null,
+							foldSearchName(
+								[metadata.cameraMake, metadata.cameraModel, metadata.userComment].filter(Boolean).join(' '),
+							),
+							Date.now(),
+							content.id,
+						)
+				}, priority)
+				await this.#onMediaMetadataReady?.(content.id)
+				return
+			} catch (error) {
+				const referenceFailure = referenceFailureKind(error) ?? (await contentReferenceFailure(error, content))
+				if (referenceFailure) {
+					if (referenceFailure === 'stale') await this.#onStalePath(content.systemPath).catch(() => {})
+					const alternative = await this.#nextContentReference(content.id, attemptedEntries, priority)
+					if (alternative) {
+						content = alternative
+						continue
+					}
+					if (referenceFailure === 'stale')
+						throw new StaleFileRevisionError('No current metadata source remains', {cause: error})
+				}
+				await this.#recordMediaMetadataFailure(content.id, error, priority)
+				throw new PersistedEnrichmentFailure(error)
+			} finally {
+				await source?.close().catch(() => {})
+			}
+		}
+	}
+
+	async #recordMediaMetadataFailure(contentId: number, error: unknown, priority: number) {
+		await this.#withDatabase((database) => {
+			const current = database
+				.prepare('SELECT failure_count FROM media_metadata WHERE content_id = ?')
+				.get(contentId) as {failure_count: number} | undefined
+			if (!current) return
+			const failureCount = Number(current.failure_count) + 1
+			database
+				.prepare(
+					`UPDATE media_metadata SET state = 'failed', failure_count = ?, retry_at = ?, last_error = ?, updated_at = ?
+					WHERE content_id = ?`,
+				)
+				.run(
+					failureCount,
+					Date.now() + retryDelay(THUMBNAIL_RETRY_BASE_MS, failureCount),
+					errorMessage(error),
+					Date.now(),
+					contentId,
+				)
+		}, priority)
+	}
+
 	async #nextAttemptAt() {
 		return this.#withDatabase((database) => {
+			const variants = [...this.#enabledThumbnailVariants]
 			const excludedEntryIds = [...this.#activeHashEntries]
 			const excludedContentIds = [...this.#activeThumbnailContents]
+			const excludedMediaIds = [...this.#activeMediaContents]
 			const hashExclusion =
 				excludedEntryIds.length > 0 ? `AND id NOT IN (${excludedEntryIds.map(() => '?').join(', ')})` : ''
 			const thumbnailExclusion =
 				excludedContentIds.length > 0
 					? `AND failed.content_id NOT IN (${excludedContentIds.map(() => '?').join(', ')})`
+					: ''
+			const mediaExclusion =
+				excludedMediaIds.length > 0
+					? `AND failed_media.content_id NOT IN (${excludedMediaIds.map(() => '?').join(', ')})`
 					: ''
 			const row = database
 				.prepare(
@@ -537,9 +926,18 @@ export default class FileIndexEnrichment {
 						SELECT attempt_at FROM (
 							SELECT retry_at AS attempt_at
 							FROM thumbnail_variants AS failed INDEXED BY thumbnail_variants_failed_work
-							WHERE variant = ? AND state = 'failed'
+							WHERE variant IN (${variants.map(() => '?').join(', ')}) AND state = 'failed'
 								AND EXISTS (SELECT 1 FROM entries WHERE entries.content_id = failed.content_id)
 								${thumbnailExclusion}
+							ORDER BY retry_at, content_id LIMIT 1
+						)
+						UNION ALL
+						SELECT attempt_at FROM (
+							SELECT retry_at AS attempt_at
+							FROM media_metadata AS failed_media INDEXED BY media_metadata_failed_work
+							WHERE state = 'failed'
+								AND EXISTS (SELECT 1 FROM entries WHERE entries.content_id = failed_media.content_id)
+								${mediaExclusion}
 							ORDER BY retry_at, content_id LIMIT 1
 						)
 						UNION ALL
@@ -547,7 +945,13 @@ export default class FileIndexEnrichment {
 						FROM content_gc_candidates
 					)`,
 				)
-				.get(...excludedEntryIds, THUMBNAIL_VARIANT, ...excludedContentIds, this.#orphanGcMaxDeferralMs) as {
+				.get(
+					...excludedEntryIds,
+					...variants,
+					...excludedContentIds,
+					...excludedMediaIds,
+					this.#orphanGcMaxDeferralMs,
+				) as {
 				attempt_at: number | null
 			}
 			return row.attempt_at === null ? undefined : Number(row.attempt_at)
@@ -558,6 +962,18 @@ export default class FileIndexEnrichment {
 		const priority = onDemand ? ON_DEMAND_DATABASE_PRIORITY : BACKGROUND_DATABASE_PRIORITY
 		const ready = await this.#contentForEntry(entryId, priority)
 		if (ready) return ready
+		const existing = this.#contentOperations.get(entryId)
+		if (existing) return existing
+		const operation = this.#createEntryContent(entryId, priority, knownCandidate)
+		this.#contentOperations.set(entryId, operation)
+		try {
+			return await operation
+		} finally {
+			if (this.#contentOperations.get(entryId) === operation) this.#contentOperations.delete(entryId)
+		}
+	}
+
+	async #createEntryContent(entryId: number, priority: number, knownCandidate?: EntryCandidate) {
 		const candidate = knownCandidate ?? (await this.#entryCandidate(entryId, priority))
 		if (!candidate) throw new Error('Unsupported or missing thumbnail source')
 
@@ -570,8 +986,19 @@ export default class FileIndexEnrichment {
 			throw new PersistedEnrichmentFailure(error)
 		}
 
-		return this.#withDatabase((database) => {
+		return this.#attachEntryContent(candidate, hash, priority)
+	}
+
+	async #attachEntryContent(
+		candidate: EntryCandidate,
+		hash: Buffer,
+		priority: number,
+		expectedRevision?: PublishedFileRevision,
+	) {
+		const content = await this.#withDatabase((database) => {
 			const attach = database.transaction(() => {
+				const kind = photoKind(candidate.systemPath)
+				if (!kind) throw new Error('Unsupported media source')
 				database
 					.prepare('INSERT INTO contents(blake3, size, created_at) VALUES (?, ?, ?) ON CONFLICT(blake3) DO NOTHING')
 					.run(hash, candidate.size, Date.now())
@@ -579,22 +1006,50 @@ export default class FileIndexEnrichment {
 					id: number
 					hash: string
 				}
-				database
-					.prepare(
-						`INSERT INTO thumbnail_variants(content_id, variant, state, failure_count, updated_at)
+				const insertVariant = database.prepare(
+					`INSERT INTO thumbnail_variants(content_id, variant, state, failure_count, updated_at)
 						VALUES (?, ?, 'pending', 0, ?)
 						ON CONFLICT(content_id, variant) DO NOTHING`,
+				)
+				const photosEntry =
+					this.#photosAvailable() &&
+					Boolean(
+						database
+							.prepare(
+								`SELECT 1 FROM entries
+							JOIN index_roots ON index_roots.id = entries.root_id
+							WHERE entries.id = ? AND index_roots.kind = 'home'`,
+							)
+							.get(candidate.id),
 					)
-					.run(content.id, THUMBNAIL_VARIANT, Date.now())
+				for (const variant of this.#enabledThumbnailVariants) {
+					if (!PHOTOS_ONLY_VARIANT_SET.has(variant) || photosEntry) insertVariant.run(content.id, variant, Date.now())
+				}
+				if (photosEntry)
+					database
+						.prepare(
+							`INSERT INTO media_metadata(content_id, state, kind, failure_count, updated_at)
+						VALUES (?, 'pending', ?, 0, ?)
+						ON CONFLICT(content_id) DO NOTHING`,
+						)
+						.run(content.id, kind, Date.now())
 				const result = database
 					.prepare(
 						`UPDATE entries SET
 							content_id = ?,
 							hash_failure_count = 0, hash_retry_at = NULL, hash_error = NULL
 						WHERE id = ? AND thumbnail_identity_kind = 'content' AND content_id IS NULL
-							AND inode = ? AND size = ? AND modified_ns = ? AND ctime_ns = ?`,
+							AND inode = ? AND size = ? AND modified_ns = ?
+							${expectedRevision ? 'AND ctime_ns = ?' : ''}`,
 					)
-					.run(content.id, candidate.id, candidate.inode, candidate.size, candidate.modifiedNs, candidate.ctimeNs)
+					.run(
+						content.id,
+						candidate.id,
+						candidate.inode,
+						candidate.size,
+						candidate.modifiedNs,
+						...(expectedRevision ? [expectedRevision.ctimeNs] : []),
+					)
 				if (result.changes === 0) throw new StaleFileRevisionError('File changed while hashing')
 				return {
 					...content,
@@ -606,6 +1061,8 @@ export default class FileIndexEnrichment {
 			})
 			return attach.immediate()
 		}, priority)
+		await this.#onContentAttached?.(candidate.id, hash)
+		return content
 	}
 
 	async #recordHashFailure(candidate: EntryCandidate, error: unknown, priority: number) {
@@ -619,7 +1076,7 @@ export default class FileIndexEnrichment {
 				.prepare(
 					`UPDATE entries SET hash_failure_count = ?, hash_retry_at = ?, hash_error = ?
 					WHERE id = ? AND thumbnail_identity_kind = 'content'
-						AND inode = ? AND size = ? AND modified_ns = ? AND ctime_ns = ?`,
+						AND inode = ? AND size = ? AND modified_ns = ?`,
 				)
 				.run(
 					failureCount,
@@ -629,19 +1086,19 @@ export default class FileIndexEnrichment {
 					candidate.inode,
 					candidate.size,
 					candidate.modifiedNs,
-					candidate.ctimeNs,
 				)
 		}, priority)
 	}
 
 	async #nextContentNeedingThumbnail() {
 		return this.#withDatabase((database) => {
+			const variants = [...this.#enabledThumbnailVariants]
 			const excludedIds = [...this.#activeThumbnailContents]
 			const exclusion =
 				excludedIds.length > 0
 					? `AND thumbnail_variants.content_id NOT IN (${excludedIds.map(() => '?').join(', ')})`
 					: ''
-			const select = (state: 'pending' | 'failed') => {
+			const select = (state: 'pending' | 'failed', variant: ThumbnailVariant) => {
 				const workIndex = state === 'pending' ? 'thumbnail_variants_pending_work' : 'thumbnail_variants_failed_work'
 				const retryPredicate = state === 'pending' ? '' : 'AND thumbnail_variants.retry_at <= ?'
 				const workOrder =
@@ -651,114 +1108,198 @@ export default class FileIndexEnrichment {
 				return database
 					.prepare(
 						`SELECT contents.id, entries.id AS entry_id, hex(contents.blake3) AS hash,
-						entries.device, entries.inode, entries.size, entries.modified_ns,
-						entries.ctime_ns, entries.thumbnail_identity_kind,
-						index_roots.system_path AS root_system_path, entries.relative_path
-					FROM thumbnail_variants INDEXED BY ${workIndex}
-					JOIN contents ON contents.id = thumbnail_variants.content_id
-					JOIN entries INDEXED BY entries_by_content ON entries.content_id = thumbnail_variants.content_id
-					JOIN index_roots ON index_roots.id = entries.root_id
-					WHERE thumbnail_variants.variant = ? AND thumbnail_variants.state = '${state}'
-						${retryPredicate}
-						${exclusion}
-					ORDER BY ${workOrder}
-					LIMIT 1`,
+							thumbnail_variants.variant,
+							entries.device, entries.inode, entries.size, entries.modified_ns,
+							entries.ctime_ns, entries.thumbnail_identity_kind,
+							index_roots.system_path AS root_system_path, entries.relative_path
+						FROM thumbnail_variants INDEXED BY ${workIndex}
+						JOIN contents ON contents.id = thumbnail_variants.content_id
+						JOIN entries INDEXED BY entries_by_content ON entries.content_id = thumbnail_variants.content_id
+						JOIN index_roots ON index_roots.id = entries.root_id
+						WHERE thumbnail_variants.variant = ? AND thumbnail_variants.state = '${state}'
+							${retryPredicate}
+							${exclusion}
+						ORDER BY ${workOrder}
+						LIMIT 1`,
 					)
-					.get(THUMBNAIL_VARIANT, ...(state === 'failed' ? [Date.now()] : []), ...excludedIds) as
-					| ContentCandidateRow
+					.get(variant, ...(state === 'failed' ? [Date.now()] : []), ...excludedIds) as
+					| ContentThumbnailCandidateRow
 					| undefined
 			}
-			const row = select('pending') ?? select('failed')
+			const row =
+				variants.map((variant) => select('pending', variant)).find(Boolean) ??
+				variants.map((variant) => select('failed', variant)).find(Boolean)
 			if (!row) return
-			const candidate = contentCandidate(row)
+			const candidate: ContentThumbnailCandidate = {...contentCandidate(row), variant: row.variant}
 			this.#activeThumbnailContents.add(candidate.id)
 			return candidate
 		}, BACKGROUND_DATABASE_PRIORITY)
 	}
 
-	async #ensureContentThumbnail(content: ContentCandidate, onDemand: boolean) {
-		const priority = onDemand ? ON_DEMAND_DATABASE_PRIORITY : BACKGROUND_DATABASE_PRIORITY
-		const identity = contentIdentity(content.hash)
-		await this.#withArtifactOperation(identity, async () => {
-			const destination = thumbnailSystemPath(this.thumbnailDirectory, identity)
-			const existing = await this.#withDatabase(
-				(database) =>
-					database
-						.prepare('SELECT state, retry_at FROM thumbnail_variants WHERE content_id = ? AND variant = ?')
-						.get(content.id, THUMBNAIL_VARIANT) as
-						| {state: 'pending' | 'ready' | 'failed'; retry_at: number | null}
-						| undefined,
-				priority,
-			)
-			if (existing?.state === 'ready' && (await this.#thumbnailIsUsable(destination))) return
-			if (!onDemand && existing?.state === 'failed' && existing.retry_at !== null && existing.retry_at > Date.now()) {
-				return
-			}
-
-			const attemptedEntries = new Set<number>()
-			while (true) {
-				attemptedEntries.add(content.entryId)
-				const temporary = `${destination}.tmp-${randomUUID()}.${THUMBNAIL_FORMAT}`
-				try {
-					await this.#ensureArtifactDirectory(nodePath.dirname(destination))
-					await assertContentRevision(content.systemPath, content.fingerprint)
-					if (!(await this.#thumbnailIsUsable(destination))) {
-						await this.#remove(destination).catch(() => {})
-						await this.#generateThumbnail(content.systemPath, temporary)
-						await assertContentRevision(content.systemPath, content.fingerprint)
-						await syncThumbnailArtifact(temporary)
-						await fse.move(temporary, destination, {overwrite: false}).catch(async (error) => {
-							if (!(await this.#thumbnailIsUsable(destination))) throw error
-							await this.#remove(temporary).catch(() => {})
-						})
-						await syncThumbnailArtifact(destination)
-						await syncDirectory(nodePath.dirname(destination))
-					}
-					await this.#markThumbnailReady(content, priority)
-					return
-				} catch (error) {
-					await this.#remove(temporary).catch(() => {})
-					const referenceFailure = await contentReferenceFailure(error, content)
-					if (referenceFailure) {
-						if (referenceFailure === 'stale') {
-							await this.#onStalePath(content.systemPath).catch((refreshError) =>
-								this.logger.error(`Failed to refresh stale thumbnail source '${content.systemPath}'`, refreshError),
-							)
-						}
-						const alternative = await this.#nextContentReference(content.id, attemptedEntries, priority)
-						if (alternative) {
-							content = alternative
-							continue
-						}
-						if (referenceFailure === 'stale') {
-							throw new StaleFileRevisionError('No current source remains for thumbnail content', {cause: error})
-						}
-					}
-					await this.#recordThumbnailFailure(content.id, error, priority)
-					throw new PersistedEnrichmentFailure(error)
-				}
-			}
+	async #thumbnailVariantsForContent(contentId: number, requested: ThumbnailVariant, priority: number) {
+		const rows = await this.#withDatabase(
+			(database) =>
+				database
+					.prepare('SELECT variant, state, retry_at FROM thumbnail_variants WHERE content_id = ?')
+					.all(contentId) as Array<{
+					variant: string
+					state: 'pending' | 'ready' | 'failed'
+					retry_at: number | null
+				}>,
+			priority,
+		)
+		const stateByVariant = new Map(rows.map((row) => [row.variant, row]))
+		const now = Date.now()
+		return ALL_THUMBNAIL_VARIANTS.filter((variant) => {
+			if (variant === requested) return true
+			if (!this.#enabledThumbnailVariants.has(variant)) return false
+			const row = stateByVariant.get(variant)
+			return row?.state === 'pending' || (row?.state === 'failed' && (row.retry_at ?? 0) <= now)
 		})
 	}
 
-	async #markThumbnailReady(content: ContentCandidate, priority: number) {
+	async #ensureContentThumbnail(content: ContentCandidate, variant: ThumbnailVariant, onDemand: boolean) {
+		const priority = onDemand ? ON_DEMAND_DATABASE_PRIORITY : BACKGROUND_DATABASE_PRIORITY
+		const variants = await this.#thumbnailVariantsForContent(content.id, variant, priority)
+		await this.#withArtifactOperations(
+			variants.map((candidate) => contentIdentity(content.hash, candidate)),
+			async () => {
+				const states = new Map(
+					(
+						await this.#withDatabase(
+							(database) =>
+								database
+									.prepare('SELECT variant, state, retry_at FROM thumbnail_variants WHERE content_id = ?')
+									.all(content.id) as Array<{
+									variant: ThumbnailVariant
+									state: 'pending' | 'ready' | 'failed'
+									retry_at: number | null
+								}>,
+							priority,
+						)
+					).map((row) => [row.variant, row]),
+				)
+				const work: Array<{variant: ThumbnailVariant; destination: string}> = []
+				for (const candidate of variants) {
+					const destination = thumbnailSystemPath(this.thumbnailDirectory, contentIdentity(content.hash, candidate))
+					const existing = states.get(candidate)
+					if (existing?.state === 'ready' && (await this.#thumbnailIsUsable(destination))) continue
+					if (
+						!onDemand &&
+						existing?.state === 'failed' &&
+						existing.retry_at !== null &&
+						existing.retry_at > Date.now()
+					) {
+						continue
+					}
+					work.push({variant: candidate, destination})
+				}
+				if (work.length === 0) return
+
+				const attemptedEntries = new Set<number>()
+				while (true) {
+					attemptedEntries.add(content.entryId)
+					const outputs = work.map((output) => ({
+						...output,
+						temporary: `${output.destination}.tmp-${randomUUID()}.${THUMBNAIL_FORMAT}`,
+					}))
+					let source: Awaited<ReturnType<typeof open>> | undefined
+					try {
+						for (const directory of new Set(outputs.map(({destination}) => nodePath.dirname(destination)))) {
+							await this.#ensureArtifactDirectory(directory)
+						}
+						const missing: typeof outputs = []
+						for (const output of outputs) {
+							if (await this.#thumbnailIsUsable(output.destination)) continue
+							await this.#remove(output.destination).catch(() => {})
+							missing.push(output)
+						}
+						if (missing.length > 0) {
+							source = await openContentRevision(content.systemPath, content.fingerprint)
+							await this.#generateThumbnails(
+								content.systemPath,
+								missing.map(({temporary, variant}) => ({destination: temporary, variant})),
+								source.fd,
+							)
+							await assertHandleContentRevision(source, content.fingerprint)
+							for (const output of missing) {
+								await syncThumbnailArtifact(output.temporary)
+								await fse.move(output.temporary, output.destination, {overwrite: false}).catch(async (error) => {
+									if (!(await this.#thumbnailIsUsable(output.destination))) throw error
+									await this.#remove(output.temporary).catch(() => {})
+								})
+								await syncThumbnailArtifact(output.destination)
+							}
+							for (const directory of new Set(missing.map(({destination}) => nodePath.dirname(destination)))) {
+								await syncDirectory(directory)
+							}
+						}
+						const tintOutput = outputs.find(({variant}) => variant === FILES_THUMBNAIL_VARIANT)
+						if (tintOutput) {
+							await this.#recordThumbnailTint(content.id, tintOutput.destination, priority)
+						}
+						await this.#markThumbnailsReady(
+							content,
+							outputs.map(({variant}) => variant),
+							priority,
+						)
+						for (const output of outputs) {
+							this.#onThumbnailReady?.(content.id, output.variant)
+						}
+						return
+					} catch (error) {
+						await Promise.all(outputs.map(({temporary}) => this.#remove(temporary).catch(() => {})))
+						const referenceFailure = await contentReferenceFailure(error, content)
+						if (referenceFailure) {
+							if (referenceFailure === 'stale') {
+								await this.#onStalePath(content.systemPath).catch((refreshError) =>
+									this.logger.error(`Failed to refresh stale thumbnail source '${content.systemPath}'`, refreshError),
+								)
+							}
+							const alternative = await this.#nextContentReference(content.id, attemptedEntries, priority)
+							if (alternative) {
+								content = alternative
+								continue
+							}
+							if (referenceFailure === 'stale') {
+								throw new StaleFileRevisionError('No current source remains for thumbnail content', {cause: error})
+							}
+						}
+						for (const output of outputs) {
+							await this.#recordThumbnailFailure(content.id, output.variant, error, priority)
+						}
+						throw new PersistedEnrichmentFailure(error)
+					} finally {
+						await source?.close().catch(() => {})
+					}
+				}
+			},
+		)
+	}
+
+	async #recordThumbnailTint(contentId: number, thumbnailPath: string, priority: number) {
+		try {
+			const tint = await this.#extractThumbnailTint(thumbnailPath)
+			await this.#withDatabase((database) => {
+				database.prepare('UPDATE media_metadata SET tint = COALESCE(tint, ?) WHERE content_id = ?').run(tint, contentId)
+			}, priority)
+		} catch (error) {
+			this.logger.error(`Failed to extract thumbnail tint from '${thumbnailPath}'`, error)
+		}
+	}
+
+	async #markThumbnailsReady(content: ContentCandidate, variants: ThumbnailVariant[], priority: number) {
 		await this.#withDatabase((database) => {
-			const current = database
-				.prepare(
-					`SELECT 1 FROM entries
+			const mark = database.transaction(() => {
+				const current = database
+					.prepare(
+						`SELECT 1 FROM entries
 					WHERE content_id = ? AND thumbnail_identity_kind = 'content'
-						AND inode = ? AND size = ? AND modified_ns = ? AND ctime_ns = ?`,
-				)
-				.get(
-					content.id,
-					content.fingerprint.inode,
-					content.fingerprint.size,
-					content.fingerprint.modifiedNs,
-					content.fingerprint.ctimeNs,
-				)
-			if (!current) throw new StaleFileRevisionError('File changed while generating thumbnail')
-			database
-				.prepare(
+						AND inode = ? AND size = ? AND modified_ns = ?`,
+					)
+					.get(content.id, content.fingerprint.inode, content.fingerprint.size, content.fingerprint.modifiedNs)
+				if (!current) throw new StaleFileRevisionError('File changed while generating thumbnail')
+				const ready = database.prepare(
 					`INSERT INTO thumbnail_variants(
 						content_id, variant, state, failure_count, retry_at, last_error, created_at, updated_at
 					) VALUES (?, ?, 'ready', 0, NULL, NULL, ?, ?)
@@ -766,12 +1307,15 @@ export default class FileIndexEnrichment {
 						state = 'ready', failure_count = 0, retry_at = NULL,
 						last_error = NULL, created_at = excluded.created_at, updated_at = excluded.updated_at`,
 				)
-				.run(content.id, THUMBNAIL_VARIANT, Date.now(), Date.now())
+				const now = Date.now()
+				for (const variant of variants) ready.run(content.id, variant, now, now)
+			})
+			mark.immediate()
 		}, priority)
 	}
 
-	async #ensureTransientThumbnail(candidate: EntryCandidate): Promise<ThumbnailReference> {
-		const identity = transientIdentity(candidate)
+	async #ensureTransientThumbnail(candidate: EntryCandidate, variant: ThumbnailVariant): Promise<ThumbnailReference> {
+		const identity = transientIdentity(candidate, variant)
 		await this.#withArtifactOperation(identity, async () => {
 			const destination = thumbnailSystemPath(this.thumbnailDirectory, identity)
 			const existing = await this.#withDatabase(
@@ -781,9 +1325,7 @@ export default class FileIndexEnrichment {
 							`SELECT artifact_key, state FROM transient_thumbnail_variants
 							WHERE entry_id = ? AND variant = ?`,
 						)
-						.get(candidate.id, THUMBNAIL_VARIANT) as
-						| {artifact_key: string; state: 'pending' | 'ready' | 'failed'}
-						| undefined,
+						.get(candidate.id, variant) as {artifact_key: string; state: 'pending' | 'ready' | 'failed'} | undefined,
 				ON_DEMAND_DATABASE_PRIORITY,
 			)
 			if (
@@ -795,13 +1337,14 @@ export default class FileIndexEnrichment {
 			}
 
 			const temporary = `${destination}.tmp-${randomUUID()}.${THUMBNAIL_FORMAT}`
+			let source: Awaited<ReturnType<typeof open>> | undefined
 			try {
 				await this.#ensureArtifactDirectory(nodePath.dirname(destination))
-				await assertTransientRevision(candidate.systemPath, candidate)
+				source = await openTransientRevision(candidate.systemPath, candidate)
 				if (!(await this.#thumbnailIsUsable(destination))) {
 					await this.#remove(destination).catch(() => {})
-					await this.#generateThumbnail(candidate.systemPath, temporary)
-					await assertTransientRevision(candidate.systemPath, candidate)
+					await this.#generateThumbnail(candidate.systemPath, temporary, variant, source.fd)
+					await assertHandleTransientRevision(source, candidate)
 					await syncThumbnailArtifact(temporary)
 					await fse.move(temporary, destination, {overwrite: false}).catch(async (error) => {
 						if (!(await this.#thumbnailIsUsable(destination))) throw error
@@ -810,19 +1353,24 @@ export default class FileIndexEnrichment {
 					await syncThumbnailArtifact(destination)
 					await syncDirectory(nodePath.dirname(destination))
 				}
-				await this.#markTransientThumbnailReady(candidate, identity.key)
+				await this.#markTransientThumbnailReady(candidate, variant, identity.key)
 			} catch (error) {
 				await this.#remove(temporary).catch(() => {})
 				if (error instanceof StaleFileRevisionError) throw error
-				await this.#recordTransientThumbnailFailure(candidate, identity.key, error)
+				await this.#recordTransientThumbnailFailure(candidate, variant, identity.key, error)
 				throw new PersistedEnrichmentFailure(error)
+			} finally {
+				await source?.close().catch(() => {})
 			}
 		})
-		return transientThumbnailReference(transientArtifactKey(candidate))
+		return transientThumbnailReference(transientArtifactKey(candidate), variant)
 	}
 
-	async #getExistingTransientThumbnail(candidate: EntryCandidate): Promise<ThumbnailReference | undefined> {
-		const identity = transientIdentity(candidate)
+	async #getExistingTransientThumbnail(
+		candidate: EntryCandidate,
+		variant: ThumbnailVariant,
+	): Promise<ThumbnailReference | undefined> {
+		const identity = transientIdentity(candidate, variant)
 		const ready = await this.#withDatabase(
 			(database) =>
 				Boolean(
@@ -831,7 +1379,7 @@ export default class FileIndexEnrichment {
 							`SELECT 1 FROM transient_thumbnail_variants
 							WHERE entry_id = ? AND variant = ? AND artifact_key = ? AND state = 'ready'`,
 						)
-						.get(candidate.id, THUMBNAIL_VARIANT, identity.key),
+						.get(candidate.id, variant, identity.key),
 				),
 			ON_DEMAND_DATABASE_PRIORITY,
 		)
@@ -844,15 +1392,15 @@ export default class FileIndexEnrichment {
 							`UPDATE transient_thumbnail_variants SET state = 'pending', updated_at = ?
 							WHERE entry_id = ? AND variant = ? AND artifact_key = ?`,
 						)
-						.run(Date.now(), candidate.id, THUMBNAIL_VARIANT, identity.key),
+						.run(Date.now(), candidate.id, variant, identity.key),
 				ON_DEMAND_DATABASE_PRIORITY,
 			)
 			return
 		}
-		return transientThumbnailReference(identity.key)
+		return transientThumbnailReference(identity.key, variant)
 	}
 
-	async #markTransientThumbnailReady(candidate: EntryCandidate, artifactKey: string) {
+	async #markTransientThumbnailReady(candidate: EntryCandidate, variant: ThumbnailVariant, artifactKey: string) {
 		await this.#withDatabase((database) => {
 			const publish = database.transaction(() => {
 				const current = database
@@ -872,13 +1420,18 @@ export default class FileIndexEnrichment {
 							artifact_key = excluded.artifact_key, state = 'ready', failure_count = 0,
 							last_error = NULL, created_at = excluded.created_at, updated_at = excluded.updated_at`,
 					)
-					.run(candidate.id, THUMBNAIL_VARIANT, artifactKey, Date.now(), Date.now())
+					.run(candidate.id, variant, artifactKey, Date.now(), Date.now())
 			})
 			publish.immediate()
 		}, ON_DEMAND_DATABASE_PRIORITY)
 	}
 
-	async #recordTransientThumbnailFailure(candidate: EntryCandidate, artifactKey: string, error: unknown) {
+	async #recordTransientThumbnailFailure(
+		candidate: EntryCandidate,
+		variant: ThumbnailVariant,
+		artifactKey: string,
+		error: unknown,
+	) {
 		await this.#withDatabase((database) => {
 			const record = database.transaction(() => {
 				const current = database
@@ -894,7 +1447,7 @@ export default class FileIndexEnrichment {
 						`SELECT failure_count FROM transient_thumbnail_variants
 						WHERE entry_id = ? AND variant = ? AND artifact_key = ?`,
 					)
-					.get(candidate.id, THUMBNAIL_VARIANT, artifactKey) as {failure_count: number} | undefined
+					.get(candidate.id, variant, artifactKey) as {failure_count: number} | undefined
 				database
 					.prepare(
 						`INSERT INTO transient_thumbnail_variants(
@@ -907,7 +1460,7 @@ export default class FileIndexEnrichment {
 					)
 					.run(
 						candidate.id,
-						THUMBNAIL_VARIANT,
+						variant,
 						artifactKey,
 						Number(existing?.failure_count ?? 0) + 1,
 						errorMessage(error),
@@ -950,7 +1503,7 @@ export default class FileIndexEnrichment {
 	}
 
 	async #withArtifactOperation<T>(identity: ThumbnailIdentity, operation: () => Promise<T>): Promise<T> {
-		const key = `${identity.kind}:${identity.key}`
+		const key = `${identity.kind}:${identity.variant}:${identity.key}`
 		const previous = this.#artifactOperations.get(key) ?? Promise.resolve()
 		let release!: () => void
 		const turn = new Promise<void>((resolve) => (release = resolve))
@@ -963,6 +1516,21 @@ export default class FileIndexEnrichment {
 			release()
 			if (this.#artifactOperations.get(key) === tail) this.#artifactOperations.delete(key)
 		}
+	}
+
+	async #withArtifactOperations<T>(identities: ThumbnailIdentity[], operation: () => Promise<T>): Promise<T> {
+		const unique = [
+			...new Map(
+				identities.map((identity) => [`${identity.kind}:${identity.variant}:${identity.key}`, identity] as const),
+			).entries(),
+		]
+			.toSorted(([left], [right]) => left.localeCompare(right))
+			.map(([, identity]) => identity)
+		const acquire = (index: number): Promise<T> => {
+			const identity = unique[index]
+			return identity ? this.#withArtifactOperation(identity, () => acquire(index + 1)) : operation()
+		}
+		return acquire(0)
 	}
 
 	async #nextContentReference(contentId: number, excludedEntryIds: Set<number>, priority: number) {
@@ -987,11 +1555,11 @@ export default class FileIndexEnrichment {
 		}, priority)
 	}
 
-	async #recordThumbnailFailure(contentId: number, error: unknown, priority: number) {
+	async #recordThumbnailFailure(contentId: number, variant: ThumbnailVariant, error: unknown, priority: number) {
 		await this.#withDatabase((database) => {
 			const existing = database
 				.prepare('SELECT failure_count FROM thumbnail_variants WHERE content_id = ? AND variant = ?')
-				.get(contentId, THUMBNAIL_VARIANT) as {failure_count: number} | undefined
+				.get(contentId, variant) as {failure_count: number} | undefined
 			const failureCount = Number(existing?.failure_count ?? 0) + 1
 			database
 				.prepare(
@@ -1005,7 +1573,7 @@ export default class FileIndexEnrichment {
 				)
 				.run(
 					contentId,
-					THUMBNAIL_VARIANT,
+					variant,
 					failureCount,
 					Date.now() + retryDelay(THUMBNAIL_RETRY_BASE_MS, failureCount),
 					errorMessage(error),
@@ -1135,13 +1703,15 @@ export default class FileIndexEnrichment {
 
 	async #removeOrphanedArtifacts(orphans: OrphanedContent[]) {
 		await inConcurrentChunks(orphans, ARTIFACT_IO_CONCURRENCY, async (orphan) => {
-			const identity = contentIdentity(orphan.key)
-			await this.#withArtifactOperation(identity, async () => {
-				if ((await this.#trackedContentHashes([orphan.key])).has(orphan.key)) return
-				await this.#remove(thumbnailSystemPath(this.thumbnailDirectory, identity)).catch((error) =>
-					this.logger.error(`Failed to remove orphaned thumbnail '${orphan.key}'`, error),
-				)
-			})
+			for (const variant of ALL_THUMBNAIL_VARIANTS) {
+				const identity = contentIdentity(orphan.key, variant)
+				await this.#withArtifactOperation(identity, async () => {
+					if ((await this.#trackedContentHashes([orphan.key])).has(orphan.key)) return
+					await this.#remove(thumbnailSystemPath(this.thumbnailDirectory, identity)).catch((error) =>
+						this.logger.error(`Failed to remove orphaned thumbnail '${orphan.key}'`, error),
+					)
+				})
+			}
 		})
 	}
 
@@ -1165,9 +1735,9 @@ export default class FileIndexEnrichment {
 						database
 							.prepare(
 								`SELECT DISTINCT artifact_key FROM transient_thumbnail_variants
-								WHERE variant = ? AND artifact_key IN (${placeholders})`,
+									WHERE artifact_key IN (${placeholders})`,
 							)
-							.all(THUMBNAIL_VARIANT, ...keys) as Array<{artifact_key: string}>
+							.all(...keys) as Array<{artifact_key: string}>
 					).map(({artifact_key}) => artifact_key),
 				)
 				return {processed: true, keys: keys.filter((key) => !tracked.has(key))}
@@ -1178,13 +1748,15 @@ export default class FileIndexEnrichment {
 
 	async #removeTransientArtifacts(keys: string[]) {
 		await inConcurrentChunks(keys, ARTIFACT_IO_CONCURRENCY, async (key) => {
-			const identity: ThumbnailIdentity = {kind: 'transient', key}
-			await this.#withArtifactOperation(identity, async () => {
-				if ((await this.#trackedTransientArtifactKeys([key])).has(key)) return
-				await this.#remove(thumbnailSystemPath(this.thumbnailDirectory, identity)).catch((error) =>
-					this.logger.error(`Failed to remove unused transient thumbnail '${key}'`, error),
-				)
-			})
+			for (const variant of ALL_THUMBNAIL_VARIANTS) {
+				const identity: ThumbnailIdentity = {kind: 'transient', key, variant}
+				await this.#withArtifactOperation(identity, async () => {
+					if ((await this.#trackedTransientArtifactKeys([key])).has(key)) return
+					await this.#remove(thumbnailSystemPath(this.thumbnailDirectory, identity)).catch((error) =>
+						this.logger.error(`Failed to remove unused transient thumbnail '${key}'`, error),
+					)
+				})
+			}
 		})
 	}
 
@@ -1193,18 +1765,21 @@ export default class FileIndexEnrichment {
 			this.#thumbnailVerificationCursor !== undefined ||
 			Date.now() - this.#thumbnailVerificationCompletedAt >= ARTIFACT_MAINTENANCE_INTERVAL_MS
 		) {
-			if (this.#thumbnailVerificationCursor === undefined) this.#thumbnailVerificationCursor = 0
+			if (this.#thumbnailVerificationCursor === undefined) {
+				this.#thumbnailVerificationCursor = {variant: '', contentId: 0}
+			}
 			const ready = await this.#nextReadyThumbnails(this.#thumbnailVerificationCursor)
 			if (ready.length > 0) {
-				this.#thumbnailVerificationCursor = ready.at(-1)!.contentId
-				const missing: number[] = []
+				const last = ready.at(-1)!
+				this.#thumbnailVerificationCursor = {variant: last.variant, contentId: last.contentId}
+				const missing: Array<{contentId: number; variant: ThumbnailVariant}> = []
 				await inConcurrentChunks(ready, ARTIFACT_IO_CONCURRENCY, async (thumbnail) => {
 					if (
 						!(await this.#thumbnailIsUsable(
-							thumbnailSystemPath(this.thumbnailDirectory, contentIdentity(thumbnail.key)),
+							thumbnailSystemPath(this.thumbnailDirectory, contentIdentity(thumbnail.key, thumbnail.variant)),
 						))
 					) {
-						missing.push(thumbnail.contentId)
+						missing.push({contentId: thumbnail.contentId, variant: thumbnail.variant})
 					}
 				})
 				await this.#markThumbnailPending(missing, BACKGROUND_DATABASE_PRIORITY)
@@ -1281,40 +1856,55 @@ export default class FileIndexEnrichment {
 		)
 	}
 
-	async #nextReadyThumbnails(afterContentId: number) {
+	async #nextReadyThumbnails(after: {variant: string; contentId: number}) {
 		return this.#withDatabase((database) => {
 			const rows = database
 				.prepare(
-					`SELECT thumbnail_variants.content_id, hex(contents.blake3) AS hash
-					FROM thumbnail_variants
-					JOIN contents ON contents.id = thumbnail_variants.content_id
-					WHERE thumbnail_variants.variant = ? AND thumbnail_variants.state = 'ready'
-						AND thumbnail_variants.content_id > ?
-					ORDER BY thumbnail_variants.content_id
-					LIMIT ?`,
+					`SELECT thumbnail_variants.content_id, thumbnail_variants.variant, hex(contents.blake3) AS hash
+						FROM thumbnail_variants
+						JOIN contents ON contents.id = thumbnail_variants.content_id
+						WHERE thumbnail_variants.variant IN (${ALL_THUMBNAIL_VARIANTS.map(() => '?').join(', ')})
+							AND thumbnail_variants.state = 'ready'
+							AND (thumbnail_variants.variant > ? OR
+								(thumbnail_variants.variant = ? AND thumbnail_variants.content_id > ?))
+						ORDER BY thumbnail_variants.variant, thumbnail_variants.content_id
+						LIMIT ?`,
 				)
-				.all(THUMBNAIL_VARIANT, afterContentId, ARTIFACT_MAINTENANCE_BATCH_SIZE) as Array<{
+				.all(
+					...ALL_THUMBNAIL_VARIANTS,
+					after.variant,
+					after.variant,
+					after.contentId,
+					ARTIFACT_MAINTENANCE_BATCH_SIZE,
+				) as Array<{
 				content_id: number
+				variant: ThumbnailVariant
 				hash: string
 			}>
 			return rows.map(
-				(row) => ({contentId: Number(row.content_id), key: row.hash.toLowerCase()}) satisfies ReadyThumbnail,
+				(row) =>
+					({
+						contentId: Number(row.content_id),
+						key: row.hash.toLowerCase(),
+						variant: row.variant,
+					}) satisfies ReadyThumbnail,
 			)
 		}, BACKGROUND_DATABASE_PRIORITY)
 	}
 
-	async #markThumbnailPending(contentIds: number[], priority: number) {
-		if (contentIds.length === 0) return
+	async #markThumbnailPending(references: Array<{contentId: number; variant: ThumbnailVariant}>, priority: number) {
+		if (references.length === 0) return
 		await this.#withDatabase((database) => {
-			const placeholders = contentIds.map(() => '?').join(', ')
-			database
-				.prepare(
-					`UPDATE thumbnail_variants SET
+			const update = database.prepare(
+				`UPDATE thumbnail_variants SET
 						state = 'pending', failure_count = 0, retry_at = NULL,
 						last_error = NULL, created_at = NULL, updated_at = ?
-					WHERE variant = ? AND content_id IN (${placeholders})`,
-				)
-				.run(Date.now(), THUMBNAIL_VARIANT, ...contentIds)
+					WHERE content_id = ? AND variant = ?`,
+			)
+			const mark = database.transaction(() => {
+				for (const {contentId, variant} of references) update.run(Date.now(), contentId, variant)
+			})
+			mark.immediate()
 		}, priority)
 	}
 
@@ -1341,17 +1931,32 @@ export default class FileIndexEnrichment {
 			const rows = database
 				.prepare(
 					`SELECT DISTINCT artifact_key FROM transient_thumbnail_variants
-					WHERE variant = ? AND artifact_key IN (${placeholders})`,
+						WHERE artifact_key IN (${placeholders})`,
 				)
-				.all(THUMBNAIL_VARIANT, ...unique) as Array<{artifact_key: string}>
+				.all(...unique) as Array<{artifact_key: string}>
 			return new Set(rows.map(({artifact_key}) => artifact_key))
 		}, BACKGROUND_DATABASE_PRIORITY)
 	}
 
 	async #thumbnailIdentityIsTracked(identity: ThumbnailIdentity) {
-		return identity.kind === 'content'
-			? (await this.#trackedContentHashes([identity.key])).has(identity.key)
-			: (await this.#trackedTransientArtifactKeys([identity.key])).has(identity.key)
+		return this.#withDatabase((database) => {
+			if (identity.kind === 'content') {
+				return Boolean(
+					database
+						.prepare(
+							`SELECT 1 FROM thumbnail_variants
+							JOIN contents ON contents.id = thumbnail_variants.content_id
+							WHERE contents.blake3 = ? AND thumbnail_variants.variant = ?`,
+						)
+						.get(Buffer.from(identity.key, 'hex'), identity.variant),
+				)
+			}
+			return Boolean(
+				database
+					.prepare('SELECT 1 FROM transient_thumbnail_variants WHERE artifact_key = ? AND variant = ?')
+					.get(identity.key, identity.variant),
+			)
+		}, BACKGROUND_DATABASE_PRIORITY)
 	}
 }
 
@@ -1368,6 +1973,7 @@ type EntryCandidateRow = {
 }
 
 type ContentCandidateRow = Omit<EntryCandidateRow, 'id'> & {id: number; entry_id: number; hash: string}
+type ContentThumbnailCandidateRow = ContentCandidateRow & {variant: ThumbnailVariant}
 
 function entryCandidate(row: EntryCandidateRow): EntryCandidate {
 	return {
@@ -1392,7 +1998,6 @@ function contentCandidate(row: ContentCandidateRow): ContentCandidate {
 			inode: row.inode,
 			size: Number(row.size),
 			modifiedNs: row.modified_ns,
-			ctimeNs: row.ctime_ns,
 		},
 	}
 }
@@ -1413,9 +2018,34 @@ export async function hashFileRevision(systemPath: string, expected: ContentFing
 }
 
 async function assertContentRevision(systemPath: string, expected: ContentFingerprint) {
+	const handle = await openContentRevision(systemPath, expected)
+	await handle.close()
+}
+
+async function openContentRevision(systemPath: string, expected: ContentFingerprint) {
 	const handle = await open(systemPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK)
 	try {
 		await assertHandleContentRevision(handle, expected)
+		return handle
+	} catch (error) {
+		await handle.close().catch(() => {})
+		throw error
+	}
+}
+
+async function assertPublishedRevision(systemPath: string, expected: PublishedFileRevision) {
+	const handle = await open(systemPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK)
+	try {
+		const stats = await handle.stat({bigint: true})
+		if (
+			!stats.isFile() ||
+			stats.ino.toString() !== expected.inode ||
+			Number(stats.size) !== expected.size ||
+			stats.mtimeNs.toString() !== expected.modifiedNs ||
+			stats.ctimeNs.toString() !== expected.ctimeNs
+		) {
+			throw new StaleFileRevisionError('Published upload revision no longer matches the file')
+		}
 	} finally {
 		await handle.close()
 	}
@@ -1427,28 +2057,42 @@ async function assertHandleContentRevision(handle: Awaited<ReturnType<typeof ope
 		!stats.isFile() ||
 		stats.ino.toString() !== expected.inode ||
 		Number(stats.size) !== expected.size ||
-		stats.mtimeNs.toString() !== expected.modifiedNs ||
-		stats.ctimeNs.toString() !== expected.ctimeNs
+		stats.mtimeNs.toString() !== expected.modifiedNs
 	) {
 		throw new StaleFileRevisionError('File revision no longer matches the index')
 	}
 }
 
-async function assertTransientRevision(systemPath: string, expected: EntryCandidate) {
+function samePublishedRevision(left: EntryCandidate, right: PublishedFileRevision) {
+	return (
+		left.inode === right.inode &&
+		left.size === right.size &&
+		left.modifiedNs === right.modifiedNs &&
+		left.ctimeNs === right.ctimeNs
+	)
+}
+
+async function openTransientRevision(systemPath: string, expected: EntryCandidate) {
 	const handle = await open(systemPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK)
 	try {
-		const stats = await handle.stat({bigint: true})
-		if (
-			!stats.isFile() ||
-			stats.dev.toString() !== expected.device ||
-			stats.ino.toString() !== expected.inode ||
-			Number(stats.size) !== expected.size ||
-			stats.mtimeNs.toString() !== expected.modifiedNs
-		) {
-			throw new StaleFileRevisionError('File revision no longer matches the index')
-		}
-	} finally {
-		await handle.close()
+		await assertHandleTransientRevision(handle, expected)
+		return handle
+	} catch (error) {
+		await handle.close().catch(() => {})
+		throw error
+	}
+}
+
+async function assertHandleTransientRevision(handle: Awaited<ReturnType<typeof open>>, expected: EntryCandidate) {
+	const stats = await handle.stat({bigint: true})
+	if (
+		!stats.isFile() ||
+		stats.dev.toString() !== expected.device ||
+		stats.ino.toString() !== expected.inode ||
+		Number(stats.size) !== expected.size ||
+		stats.mtimeNs.toString() !== expected.modifiedNs
+	) {
+		throw new StaleFileRevisionError('File revision no longer matches the index')
 	}
 }
 
@@ -1471,10 +2115,49 @@ function referenceFailureKind(error: unknown): 'stale' | 'unreadable' | undefine
 	if (code === 'EACCES' || code === 'EPERM' || code === 'EIO') return 'unreadable'
 }
 
-export async function generateThumbnailFile(systemPath: string, destination: string) {
-	const conversion = execa(
-		'convert',
+export async function extractMediaMetadata(systemPath: string, sourceFileDescriptor?: number): Promise<MediaMetadata> {
+	const kind = photoKind(systemPath)
+	if (!kind) throw new Error('Unsupported media source')
+	if (kind === 'video') return extractVideoMetadata(systemPath, sourceFileDescriptor)
+	return extractPhotoMetadata(systemPath, sourceFileDescriptor)
+}
+
+async function extractPhotoMetadata(systemPath: string, sourceFileDescriptor?: number): Promise<MediaMetadata> {
+	const separator = '\u001f'
+	const properties = [
+		'%w',
+		'%h',
+		'%[orientation]',
+		'%[EXIF:DateTimeOriginal]',
+		'%[EXIF:OffsetTimeOriginal]',
+		'%[EXIF:DateTimeDigitized]',
+		'%[EXIF:OffsetTimeDigitized]',
+		'%[EXIF:DateTime]',
+		'%[EXIF:OffsetTime]',
+		'%[EXIF:Make]',
+		'%[EXIF:Model]',
+		'%[EXIF:LensModel]',
+		'%[EXIF:FocalLength]',
+		'%[EXIF:FNumber]',
+		'%[EXIF:ExposureTime]',
+		'%[EXIF:PhotographicSensitivity]',
+		'%[EXIF:ISOSpeedRatings]',
+		'%[EXIF:GPSLatitude]',
+		'%[EXIF:GPSLatitudeRef]',
+		'%[EXIF:GPSLongitude]',
+		'%[EXIF:GPSLongitudeRef]',
+		'%[EXIF:GPSAltitude]',
+		'%[EXIF:GPSAltitudeRef]',
+		'%[xmp:GPano:ProjectionType]',
+		'%[EXIF:ContentIdentifier]',
+		'%[MakerNotes:ContentIdentifier]',
+		'%[xmp:ContentIdentifier]',
+		'%[EXIF:UserComment]',
+	]
+	const {stdout} = await runBoundedMediaProcess(
+		'identify',
 		[
+			'-quiet',
 			'-limit',
 			'memory',
 			String(THUMBNAIL_MEMORY_LIMIT_BYTES),
@@ -1490,24 +2173,430 @@ export async function generateThumbnailFile(systemPath: string, destination: str
 			'-limit',
 			'time',
 			String(Math.ceil(THUMBNAIL_GENERATION_TIMEOUT_MS / 1000)),
-			`${escapeImageMagickInputPath(systemPath)}[0]`,
-			'-auto-orient',
-			'-thumbnail',
-			`${THUMBNAIL_WIDTH}x${THUMBNAIL_HEIGHT}`,
-			'-quality',
-			String(THUMBNAIL_QUALITY),
-			`${THUMBNAIL_FORMAT}:${destination}`,
+			'-format',
+			properties.join(separator),
+			`${escapeImageMagickInputPath(imageMagickMediaProcessInput(systemPath, sourceFileDescriptor))}[0]`,
 		],
-		{detached: true, timeout: THUMBNAIL_GENERATION_TIMEOUT_MS, killSignal: 'SIGKILL'},
+		sourceFileDescriptor,
 	)
-	try {
-		await conversion
-	} catch (error) {
-		if ((error as {timedOut?: boolean}).timedOut && conversion.pid !== undefined) {
-			killProcessGroup(conversion.pid)
-		}
-		throw error
+	const [
+		widthValue,
+		heightValue,
+		orientation,
+		originalDate,
+		originalOffset,
+		digitizedDate,
+		digitizedOffset,
+		dateTime,
+		dateTimeOffset,
+		make,
+		model,
+		lens,
+		focalLength,
+		aperture,
+		exposure,
+		photographicSensitivity,
+		legacyIso,
+		latitude,
+		latitudeRef,
+		longitude,
+		longitudeRef,
+		altitude,
+		altitudeRef,
+		projection,
+		exifContentIdentifier,
+		makerContentIdentifier,
+		xmpContentIdentifier,
+		userCommentMarker,
+	] = stdout.split(separator).map(cleanMetadataValue)
+	const liveIdentifier = exifContentIdentifier ?? makerContentIdentifier ?? xmpContentIdentifier
+	let width = positiveInteger(widthValue)
+	let height = positiveInteger(heightValue)
+	if (['LeftTop', 'RightTop', 'RightBottom', 'LeftBottom'].includes(orientation ?? ''))
+		[width, height] = [height, width]
+	const takenDate = selectPhotoTakenDate([
+		[originalDate, originalOffset],
+		[digitizedDate, digitizedOffset],
+		[dateTime, dateTimeOffset],
+	])
+	const location = parseGps(latitude, latitudeRef, longitude, longitudeRef, altitude, altitudeRef)
+	const iso = optionalPositiveInteger(photographicSensitivity) ?? optionalPositiveInteger(legacyIso)
+	const userComment = userCommentMarker
+		? await extractExifUserComment(systemPath, sourceFileDescriptor).catch(() => undefined)
+		: undefined
+	const subKind: PhotoSubKind | undefined =
+		projection?.toLowerCase() === 'equirectangular'
+			? 'spherical'
+			: width / Math.max(1, height) >= 2
+				? 'panorama'
+				: undefined
+	return {
+		kind: 'photo',
+		...(subKind ? {subKind} : {}),
+		...(takenDate ? {takenAt: takenDate.takenAt} : {}),
+		...(takenDate?.offsetMinutes === undefined ? {} : {takenAtOffsetMinutes: takenDate.offsetMinutes}),
+		...(takenDate ? {createdAt: takenDate.takenAt} : {}),
+		width,
+		height,
+		...(make ? {cameraMake: make} : {}),
+		...(model ? {cameraModel: model} : {}),
+		...(lens ? {lens} : {}),
+		...(focalLength ? {focalLength: formatFocalLength(focalLength)} : {}),
+		...(aperture ? {aperture: formatAperture(aperture)} : {}),
+		...(exposure ? {exposure: formatExposure(exposure)} : {}),
+		...(iso === undefined ? {} : {iso}),
+		...(location ?? {}),
+		...(userComment ? {userComment} : {}),
+		...(liveIdentifier ? {liveIdentifier} : {}),
 	}
+}
+
+async function extractVideoMetadata(systemPath: string, sourceFileDescriptor?: number): Promise<MediaMetadata> {
+	const {stdout} = await runBoundedMediaProcess(
+		'ffprobe',
+		[
+			'-v',
+			'error',
+			'-show_entries',
+			'stream=codec_type,width,height,duration:stream_tags=rotate,creation_time,projection,com.apple.quicktime.content.identifier:stream_side_data=rotation:format=duration:format_tags=creation_time,projection,com.apple.quicktime.content.identifier',
+			'-of',
+			'json',
+			mediaProcessInput(systemPath, sourceFileDescriptor),
+		],
+		sourceFileDescriptor,
+	)
+	const probe = JSON.parse(stdout) as {
+		streams?: Array<{
+			codec_type?: string
+			width?: number
+			height?: number
+			duration?: string
+			tags?: Record<string, string>
+			side_data_list?: Array<{rotation?: number | string}>
+		}>
+		format?: {duration?: string; tags?: Record<string, string>}
+	}
+	const stream = probe.streams?.find(({codec_type}) => codec_type === 'video')
+	if (!stream?.width || !stream.height) throw new Error('Video has no decodable video stream')
+	const sideDataRotation = stream.side_data_list?.map(({rotation}) => Number(rotation)).find(Number.isFinite)
+	const rotation = sideDataRotation ?? Number(stream.tags?.rotate ?? 0)
+	const rotated = Math.abs(rotation) % 180 === 90
+	const width = rotated ? stream.height : stream.width
+	const height = rotated ? stream.width : stream.height
+	const durationSeconds = [stream.duration, probe.format?.duration].map(Number).find(Number.isFinite)
+	const creationTime = stream.tags?.creation_time ?? probe.format?.tags?.creation_time
+	const parsedCreationTime = creationTime ? Date.parse(creationTime) : Number.NaN
+	const projection = stream.tags?.projection ?? probe.format?.tags?.projection
+	const liveIdentifier =
+		stream.tags?.['com.apple.quicktime.content.identifier'] ??
+		probe.format?.tags?.['com.apple.quicktime.content.identifier']
+	return {
+		kind: 'video',
+		...(projection?.toLowerCase().includes('equirect') ? {subKind: 'spherical' as const} : {}),
+		...(Number.isFinite(parsedCreationTime) ? {takenAt: parsedCreationTime, createdAt: parsedCreationTime} : {}),
+		width,
+		height,
+		...(durationSeconds === undefined ? {} : {durationMs: Math.max(0, Math.round(durationSeconds * 1000))}),
+		...(liveIdentifier ? {liveIdentifier} : {}),
+	}
+}
+
+function cleanMetadataValue(value: string) {
+	const cleaned = value.trim()
+	return !cleaned || cleaned === 'undefined' ? undefined : cleaned
+}
+
+function positiveInteger(value: string | number | undefined) {
+	const parsed = Math.round(Number(value))
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
+}
+
+function optionalPositiveInteger(value: string | number | undefined) {
+	const parsed = Math.round(Number(value))
+	return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined
+}
+
+function parseOffsetMinutes(value: string | undefined) {
+	const match = /^([+-])(\d{2}):(\d{2})$/.exec(value ?? '')
+	if (!match) return
+	const minutes = Number(match[2]) * 60 + Number(match[3])
+	return match[1] === '-' ? -minutes : minutes
+}
+
+function parseExifDate(value: string | undefined, offset: string | undefined) {
+	const match = /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(value ?? '')
+	if (!match) return
+	const [year, month, day, hour, minute, second] = match.slice(1).map(Number)
+	const localTime = Date.UTC(year!, month! - 1, day, hour, minute, second)
+	const localDate = new Date(localTime)
+	if (
+		localDate.getUTCFullYear() !== year ||
+		localDate.getUTCMonth() !== month! - 1 ||
+		localDate.getUTCDate() !== day ||
+		localDate.getUTCHours() !== hour ||
+		localDate.getUTCMinutes() !== minute ||
+		localDate.getUTCSeconds() !== second
+	)
+		return
+	const offsetMinutes = parseOffsetMinutes(offset)
+	return {takenAt: localTime - (offsetMinutes ?? 0) * 60_000, offsetMinutes}
+}
+
+function selectPhotoTakenDate(candidates: Array<[string | undefined, string | undefined]>) {
+	for (const [date, offset] of candidates) {
+		const parsed = parseExifDate(date, offset)
+		if (parsed) return parsed
+	}
+}
+
+function parseRational(value: string | undefined) {
+	if (!value) return
+	const [numerator, denominator = '1'] = value.split('/')
+	const parsed = Number(numerator) / Number(denominator)
+	return Number.isFinite(parsed) ? parsed : undefined
+}
+
+function parseDms(value: string | undefined) {
+	if (!value) return
+	const parts = value.split(/,\s*/).map(parseRational)
+	if (parts.some((part) => part === undefined)) return
+	return parts[0]! + parts[1]! / 60 + parts[2]! / 3600
+}
+
+function parseGps(
+	latitudeValue: string | undefined,
+	latitudeRef: string | undefined,
+	longitudeValue: string | undefined,
+	longitudeRef: string | undefined,
+	altitudeValue: string | undefined,
+	altitudeRef: string | undefined,
+) {
+	const latitude = parseDms(latitudeValue)
+	const longitude = parseDms(longitudeValue)
+	if (latitude === undefined || longitude === undefined) return
+	const altitude = parseGpsAltitude(altitudeValue, altitudeRef)
+	return {
+		latitude: latitudeRef?.toUpperCase() === 'S' ? -latitude : latitude,
+		longitude: longitudeRef?.toUpperCase() === 'W' ? -longitude : longitude,
+		...(altitude === undefined ? {} : {altitude}),
+	}
+}
+
+function parseGpsAltitude(value: string | undefined, reference: string | undefined) {
+	const altitude = parseRational(value)
+	if (altitude === undefined) return
+	const numericReference = parseRational(reference)
+	if (numericReference === 1 || /below/i.test(reference ?? '')) return -Math.abs(altitude)
+	if (numericReference === 0 || /above/i.test(reference ?? '')) return Math.abs(altitude)
+	return altitude
+}
+
+async function extractExifUserComment(systemPath: string, sourceFileDescriptor?: number) {
+	const stdout = await runBoundedMediaProcessBuffer(
+		'convert',
+		[
+			'-quiet',
+			'-limit',
+			'memory',
+			String(THUMBNAIL_MEMORY_LIMIT_BYTES),
+			'-limit',
+			'map',
+			String(THUMBNAIL_MAP_LIMIT_BYTES),
+			'-limit',
+			'disk',
+			String(THUMBNAIL_DISK_LIMIT_BYTES),
+			'-limit',
+			'thread',
+			String(THUMBNAIL_THREAD_LIMIT),
+			'-limit',
+			'time',
+			String(Math.ceil(THUMBNAIL_GENERATION_TIMEOUT_MS / 1000)),
+			`${escapeImageMagickInputPath(imageMagickMediaProcessInput(systemPath, sourceFileDescriptor))}[0]`,
+			'exif:-',
+		],
+		sourceFileDescriptor,
+	)
+	return decodeExifUserComment(stdout)
+}
+
+export function decodeExifUserComment(profile: Buffer) {
+	const exifHeader = Buffer.from('Exif\0\0', 'binary')
+	const header = profile.indexOf(exifHeader)
+	if (header < 0) return
+	const tiffStart = header + exifHeader.length
+	if (tiffStart + 8 > profile.length) return
+	const byteOrder = profile.subarray(tiffStart, tiffStart + 2).toString('ascii')
+	if (byteOrder !== 'II' && byteOrder !== 'MM') return
+	const littleEndian = byteOrder === 'II'
+	const readUInt16 = (offset: number) =>
+		littleEndian ? profile.readUInt16LE(tiffStart + offset) : profile.readUInt16BE(tiffStart + offset)
+	const readUInt32 = (offset: number) =>
+		littleEndian ? profile.readUInt32LE(tiffStart + offset) : profile.readUInt32BE(tiffStart + offset)
+	const inBounds = (offset: number, length: number) =>
+		Number.isSafeInteger(offset) && offset >= 0 && length >= 0 && tiffStart + offset + length <= profile.length
+	if (!inBounds(0, 8) || readUInt16(2) !== 42) return
+
+	const queue = [readUInt32(4)]
+	const visited = new Set<number>()
+	while (queue.length > 0 && visited.size < 16) {
+		const ifdOffset = queue.shift()!
+		if (visited.has(ifdOffset) || !inBounds(ifdOffset, 2)) continue
+		visited.add(ifdOffset)
+		const count = readUInt16(ifdOffset)
+		if (count > 4096 || !inBounds(ifdOffset + 2, count * 12 + 4)) continue
+		for (let index = 0; index < count; index++) {
+			const entryOffset = ifdOffset + 2 + index * 12
+			const tag = readUInt16(entryOffset)
+			const type = readUInt16(entryOffset + 2)
+			const valueCount = readUInt32(entryOffset + 4)
+			const bytesPerValue = new Map([
+				[1, 1],
+				[2, 1],
+				[3, 2],
+				[4, 4],
+				[5, 8],
+				[7, 1],
+				[9, 4],
+				[10, 8],
+			]).get(type)
+			if (!bytesPerValue || valueCount > profile.length) continue
+			const valueLength = valueCount * bytesPerValue
+			const valueOffset = valueLength <= 4 ? entryOffset + 8 : readUInt32(entryOffset + 8)
+			if (!inBounds(valueOffset, valueLength)) continue
+			if (tag === 0x9286 && type === 7) {
+				return decodeExifUserCommentValue(
+					profile.subarray(tiffStart + valueOffset, tiffStart + valueOffset + valueLength),
+					littleEndian,
+				)
+			}
+			if (tag === 0x8769 && (type === 3 || type === 4) && valueCount > 0) {
+				queue.push(type === 3 ? readUInt16(valueOffset) : readUInt32(valueOffset))
+			}
+		}
+		const nextOffset = readUInt32(ifdOffset + 2 + count * 12)
+		if (nextOffset > 0) queue.push(nextOffset)
+	}
+}
+
+function decodeExifUserCommentValue(value: Buffer, littleEndian: boolean) {
+	if (value.length < 8) return
+	const marker = value.subarray(0, 8).toString('binary')
+	const payload = value.subarray(8)
+	let decoded: string
+	try {
+		if (marker === 'ASCII\0\0\0') {
+			if (payload.some((byte) => byte > 0x7f)) return
+			decoded = payload.toString('ascii')
+		} else if (marker === 'UNICODE\0') {
+			let encoding: 'utf-16le' | 'utf-16be' = littleEndian ? 'utf-16le' : 'utf-16be'
+			let text = payload
+			if (payload[0] === 0xff && payload[1] === 0xfe) {
+				encoding = 'utf-16le'
+				text = payload.subarray(2)
+			} else if (payload[0] === 0xfe && payload[1] === 0xff) {
+				encoding = 'utf-16be'
+				text = payload.subarray(2)
+			}
+			while (text.length >= 2 && text.at(-1) === 0 && text.at(-2) === 0) text = text.subarray(0, -2)
+			if (text.length % 2 !== 0) return
+			decoded = new TextDecoder(encoding, {fatal: true}).decode(text)
+		} else {
+			// JIS and the all-zero marker do not identify a reliable encoding.
+			return
+		}
+	} catch {
+		return
+	}
+	const normalized = decoded.replace(/\0+$/u, '').normalize('NFC').trim()
+	if (!normalized || normalized.includes('\0') || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(normalized))
+		return
+	return normalized
+}
+
+function formatFocalLength(value: string) {
+	const parsed = parseRational(value)
+	return parsed === undefined ? value : `${Number(parsed.toFixed(1))}mm`
+}
+
+function formatAperture(value: string) {
+	const parsed = parseRational(value)
+	return parsed === undefined ? value : `ƒ/${Number(parsed.toFixed(1))}`
+}
+
+function formatExposure(value: string) {
+	const parsed = parseRational(value)
+	if (parsed === undefined || parsed <= 0) return value
+	if (parsed >= 1) return `${Number(parsed.toFixed(1))}s`
+	return `1/${Math.round(1 / parsed)}`
+}
+
+export async function generateThumbnailFile(
+	systemPath: string,
+	destination: string,
+	variant: ThumbnailVariant = FILES_THUMBNAIL_VARIANT,
+	sourceFileDescriptor?: number,
+) {
+	return generateThumbnailFiles(systemPath, [{destination, variant}], sourceFileDescriptor)
+}
+
+export async function generateThumbnailFiles(
+	systemPath: string,
+	outputs: ThumbnailOutput[],
+	sourceFileDescriptor?: number,
+) {
+	if (outputs.length === 0) return
+	const arguments_ = [
+		'-limit',
+		'memory',
+		String(THUMBNAIL_MEMORY_LIMIT_BYTES),
+		'-limit',
+		'map',
+		String(THUMBNAIL_MAP_LIMIT_BYTES),
+		'-limit',
+		'disk',
+		String(THUMBNAIL_DISK_LIMIT_BYTES),
+		'-limit',
+		'thread',
+		String(THUMBNAIL_THREAD_LIMIT),
+		'-limit',
+		'time',
+		String(Math.ceil(THUMBNAIL_GENERATION_TIMEOUT_MS / 1000)),
+		`${escapeImageMagickInputPath(imageMagickMediaProcessInput(systemPath, sourceFileDescriptor))}[0]`,
+		'-auto-orient',
+	]
+	for (const {destination, variant} of outputs) {
+		const definition = THUMBNAIL_VARIANTS[variant]
+		arguments_.push(
+			'(',
+			'+clone',
+			'-thumbnail',
+			`${definition.width}x${definition.height}^>`,
+			'-quality',
+			String(definition.quality),
+			'-write',
+			`${definition.format}:${destination}`,
+			'+delete',
+			')',
+		)
+	}
+	arguments_.push('null:')
+	await runBoundedMediaProcess('convert', arguments_, sourceFileDescriptor)
+}
+
+export async function extractThumbnailTint(thumbnailPath: string) {
+	const {stdout} = await execa('convert', [
+		escapeImageMagickInputPath(thumbnailPath),
+		'-resize',
+		'1x1!',
+		'-format',
+		'%[fx:round(255*r)],%[fx:round(255*g)],%[fx:round(255*b)]',
+		'info:',
+	])
+	const channels = stdout.split(',').map(Number)
+	if (channels.length !== 3 || channels.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)) {
+		throw new Error('ImageMagick returned an invalid thumbnail tint')
+	}
+	return (channels[0]! << 16) | (channels[1]! << 8) | channels[2]!
 }
 
 function escapeImageMagickInputPath(systemPath: string) {
@@ -1539,6 +2628,54 @@ function killProcessGroup(pid: number) {
 		process.kill(-pid, 'SIGKILL')
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+	}
+}
+
+function mediaProcessInput(systemPath: string, sourceFileDescriptor?: number) {
+	return sourceFileDescriptor === undefined ? systemPath : '/dev/fd/3'
+}
+
+function imageMagickMediaProcessInput(systemPath: string, sourceFileDescriptor?: number) {
+	const input = mediaProcessInput(systemPath, sourceFileDescriptor)
+	if (sourceFileDescriptor === undefined) return input
+	// ImageMagick can sniff still-image formats from a pathless descriptor, but
+	// video containers need an explicit coder once the filename extension is no
+	// longer present. The supported video extensions match ImageMagick's coder
+	// names on umbrelOS.
+	const videoCoder = IMAGE_MAGICK_VIDEO_CODERS.get(nodePath.extname(systemPath).toLowerCase())
+	return `${videoCoder ? `${videoCoder}:` : ''}${input}`
+}
+
+async function runBoundedMediaProcess(command: string, arguments_: string[], sourceFileDescriptor?: number) {
+	const process = execa(command, arguments_, {
+		detached: true,
+		timeout: THUMBNAIL_GENERATION_TIMEOUT_MS,
+		killSignal: 'SIGKILL',
+		...(sourceFileDescriptor === undefined ? {} : {stdio: ['ignore', 'pipe', 'pipe', sourceFileDescriptor]}),
+	})
+	try {
+		return await process
+	} catch (error) {
+		if ((error as {timedOut?: boolean}).timedOut && process.pid !== undefined) killProcessGroup(process.pid)
+		throw error
+	}
+}
+
+async function runBoundedMediaProcessBuffer(command: string, arguments_: string[], sourceFileDescriptor?: number) {
+	const process = execa(command, arguments_, {
+		detached: true,
+		timeout: THUMBNAIL_GENERATION_TIMEOUT_MS,
+		killSignal: 'SIGKILL',
+		encoding: null,
+		maxBuffer: 1024 * 1024,
+		...(sourceFileDescriptor === undefined ? {} : {stdio: ['ignore', 'pipe', 'pipe', sourceFileDescriptor]}),
+	})
+	try {
+		const {stdout} = await process
+		return Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout)
+	} catch (error) {
+		if ((error as {timedOut?: boolean}).timedOut && process.pid !== undefined) killProcessGroup(process.pid)
+		throw error
 	}
 }
 
@@ -1588,8 +2725,8 @@ function errorMessage(error: unknown) {
 	return error instanceof Error ? error.message : String(error)
 }
 
-function contentIdentity(key: string): ThumbnailIdentity {
-	return {kind: 'content', key}
+function contentIdentity(key: string, variant: ThumbnailVariant): ThumbnailIdentity {
+	return {kind: 'content', key, variant}
 }
 
 function transientArtifactKey(candidate: EntryCandidate) {
@@ -1606,27 +2743,27 @@ function transientArtifactKey(candidate: EntryCandidate) {
 		.digest('hex')
 }
 
-function transientIdentity(candidate: EntryCandidate): ThumbnailIdentity {
-	return {kind: 'transient', key: transientArtifactKey(candidate)}
+function transientIdentity(candidate: EntryCandidate, variant: ThumbnailVariant): ThumbnailIdentity {
+	return {kind: 'transient', key: transientArtifactKey(candidate), variant}
 }
 
-function contentThumbnailReference(key: string): ThumbnailReference {
-	return {kind: 'content', key, variant: THUMBNAIL_VARIANT, format: THUMBNAIL_FORMAT}
+function contentThumbnailReference(key: string, variant: ThumbnailVariant): ThumbnailReference {
+	return {kind: 'content', key, variant, format: THUMBNAIL_FORMAT}
 }
 
-function transientThumbnailReference(key: string): ThumbnailReference {
-	return {kind: 'transient', key, variant: THUMBNAIL_VARIANT, format: THUMBNAIL_FORMAT}
+function transientThumbnailReference(key: string, variant: ThumbnailVariant): ThumbnailReference {
+	return {kind: 'transient', key, variant, format: THUMBNAIL_FORMAT}
 }
 
 function storedThumbnailIdentity(thumbnailDirectory: string, systemPath: string): ThumbnailIdentity | undefined {
 	const parts = nodePath.relative(thumbnailDirectory, systemPath).split(nodePath.sep)
 	if (parts.length !== 4 || (parts[0] !== 'content' && parts[0] !== 'transient')) return
-	if (parts[1] !== THUMBNAIL_VARIANT) return
+	if (!isThumbnailVariant(parts[1])) return
 	const match = /^([a-f0-9]{64})\.webp$/.exec(parts[3])
 	if (!match) return
 	const key = match[1]
 	if (parts[2] !== key.slice(0, 2)) return
-	return {kind: parts[0], key}
+	return {kind: parts[0], key, variant: parts[1]}
 }
 
 async function isRecentTemporaryArtifact(systemPath: string) {

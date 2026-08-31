@@ -58,24 +58,13 @@ export const useNavigate = () => {
 		}
 	}
 
-	const navigateToItem = (item: FileSystemItem) => {
-		// if the item is a directory, navigate to it
-		if (item.type === 'directory') {
-			return navigateToDirectory(item.path)
-		}
-
-		// for files we navigate to their parent directory and trigger the viewer
-		// if a viewer is available
+	// Show a file where it lives: its parent directory with the file selected,
+	// without opening the viewer (e.g. "Show in Files" from Photos)
+	const revealItem = (item: FileSystemItem) => {
 		const lastSlash = item.path.lastIndexOf('/')
 		const parentDirectory = lastSlash === 0 ? '' : item.path.slice(0, lastSlash)
 
 		navigateToDirectory(parentDirectory)
-
-		if (getFileViewer(item)) {
-			// open viewer via global store (the Files feature will render the viewer
-			// component once it sees `viewerItem` being set)
-			setViewerItem(item)
-		}
 
 		// TODO: This is a hack since we set selected items to []
 		// on path change in packages/ui/src/features/files/index.tsx
@@ -84,6 +73,23 @@ export const useNavigate = () => {
 		setTimeout(() => {
 			setSelectedItems([item])
 		}, 500)
+	}
+
+	const navigateToItem = (item: FileSystemItem) => {
+		// if the item is a directory, navigate to it
+		if (item.type === 'directory') {
+			return navigateToDirectory(item.path)
+		}
+
+		// for files we navigate to their parent directory with the file selected
+		// and trigger the viewer if a viewer is available
+		revealItem(item)
+
+		if (getFileViewer(item)) {
+			// open viewer via global store (the Files feature will render the viewer
+			// component once it sees `viewerItem` being set)
+			setViewerItem(item)
+		}
 	}
 
 	// The current account's home and trash roots (owner: /Home and /Trash,
@@ -125,6 +131,7 @@ export const useNavigate = () => {
 	return {
 		navigateToDirectory,
 		navigateToItem,
+		revealItem,
 		currentPath,
 		// Expose the UI path for components that need UI-space comparisons (e.g., isActive)
 		uiPath,

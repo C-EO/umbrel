@@ -9,6 +9,7 @@ import {BetaPill} from '@/components/ui/beta-pill'
 import {Button} from '@/components/ui/button'
 import {ButtonLink} from '@/components/ui/button-link'
 import {Card} from '@/components/ui/card'
+import {SearchField} from '@/components/ui/edge-controls'
 import {Separator} from '@/components/ui/separator'
 import {SETTINGS_SYSTEM_CARDS_ID} from '@/constants'
 import {getDeviceHealth} from '@/features/storage/hooks/use-storage'
@@ -29,7 +30,7 @@ import {CpuTemperatureCardContent} from './cpu-temperature-card-content'
 import {ListRowMobile, ListRowSwitchIndicator} from './list-row'
 import {MemoryCardContent} from './memory-card-content'
 import {createSettingsCatalog, getSettingsPage, SettingsPageItem} from './settings-catalog'
-import {SettingsItemsGroup, SettingsSearch} from './settings-page-controls'
+import {SettingsItemsGroup} from './settings-page-controls'
 import {useSettingsFilterLabels} from './settings-taxonomy'
 import {SettingsAccountAvatar} from './shared'
 import {StorageCardContent} from './storage-card-content'
@@ -242,7 +243,7 @@ export function SettingsContentMobile({isMember = false}: {isMember?: boolean}) 
 			)}
 
 			<div data-testid='mobile-settings-controls' className='-mx-3 -mb-4 flex items-center px-3 py-3'>
-				<SettingsSearch
+				<SearchField
 					value={searchQuery}
 					onChange={setSearchQuery}
 					label={t('search')}

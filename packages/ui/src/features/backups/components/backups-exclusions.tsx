@@ -141,7 +141,7 @@ export function BackupsExclusions({showTitle = false}: {showTitle?: boolean}) {
 											return <div className='px-2 text-14 text-white/50'>{t('no-results-found')}</div>
 										}
 										return (
-											<ScrollArea className='relative -mx-2.5 flex h-full flex-col px-2.5'>
+											<ScrollArea className='relative -mx-1 flex h-full flex-col px-1'>
 												{results.map((app) => (
 													<DropdownMenuItem
 														key={app.id}

@@ -46,7 +46,12 @@ async function expectEventually(path: string, present: boolean) {
 
 describe('durable file index', () => {
 	test('stores derived state outside watched roots and converges direct mutation hints', async () => {
-		await expect(umbreld.vm.sshAsRoot(`test -f '${umbreld.vm.dataDirectory}/file-index/index.sqlite3'`)).resolves.toBe(
+		await expect(umbreld.vm.sshAsRoot(`test -f '${umbreld.vm.dataDirectory}/file-index/index.db'`)).resolves.toBe('')
+		await expect(umbreld.vm.sshAsRoot(`test -f '${umbreld.vm.dataDirectory}/umbrel.db'`)).resolves.toBe('')
+		await expect(
+			umbreld.vm.sshAsRoot(`test ! -e '${umbreld.vm.dataDirectory}/file-index/index.sqlite3'`),
+		).resolves.toBe('')
+		await expect(umbreld.vm.sshAsRoot(`test ! -e '${umbreld.vm.dataDirectory}/photos/photos.sqlite3'`)).resolves.toBe(
 			'',
 		)
 

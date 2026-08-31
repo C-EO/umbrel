@@ -1,6 +1,8 @@
+import nodePath from 'node:path'
 import {setTimeout} from 'node:timers/promises'
 
 import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from 'vitest'
+import fse from 'fs-extra'
 import pRetry from 'p-retry'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
@@ -34,6 +36,8 @@ describe.sequential('Backup restore on current install', () => {
 	let syncId: string
 	let cloudLastSuccessfulAt: number
 	let restoredMcpToken: string
+	let restoredPhotoId: string
+	let restoredPhotoAlbumId: string
 	const cloudDestination = '/Home/current-restore-cloud'
 	const restoredMcpPermissions = {
 		apps: [] as string[],
@@ -101,12 +105,44 @@ describe.sequential('Backup restore on current install', () => {
 		restoredMcpToken = mcpCredential.token
 		await umbreld.client.mcp.setPermissions.mutate(restoredMcpPermissions)
 
+		const photo = await fse.readFile(
+			nodePath.resolve(__dirname, '../files/fixtures/thumbnails/master-lossless-image.png'),
+		)
+		await expect(
+			umbreld.api.post('photos/upload?name=backup-state.png', {body: photo, responseType: 'json'}),
+		).resolves.toMatchObject({body: {status: 'imported'}})
+		await pRetry(
+			async () => expect(await umbreld.client.photos.library.status.query()).toMatchObject({phase: 'ready'}),
+			{retries: 240, factor: 1, minTimeout: 250, maxTimeout: 250},
+		)
+		const photoPage = await umbreld.client.photos.items.list.query({filter: {query: 'backup-state'}, limit: 10})
+		restoredPhotoId = photoPage.items[0]!.id
+		await umbreld.client.photos.items.setFavorite.mutate({ids: [restoredPhotoId], favorite: true})
+		const photoAlbum = await umbreld.client.photos.albums.create.mutate({
+			name: 'Restored album',
+			ids: [restoredPhotoId],
+		})
+		restoredPhotoAlbumId = photoAlbum.id
+		await umbreld.client.photos.items.delete.mutate({ids: [restoredPhotoId]})
+
 		repositoryId = await umbreld.client.backups.createRepository.mutate({
 			path: externalPath,
 			password: repositoryPassword,
 		})
 		await expect(umbreld.client.backups.backup.mutate({repositoryId})).resolves.toBe(true)
 		await expect(umbreld.client.backups.listBackups.query({repositoryId})).resolves.toHaveLength(1)
+		const snapshot = await latestBackup(umbreld, repositoryId)
+		const backupFiles = await umbreld.client.backups.listBackupFiles.query({backupId: snapshot.id})
+		expect(backupFiles).toContain('umbrel.db')
+		expect(backupFiles).toContain('umbrel.db-wal')
+		expect(backupFiles).toContain('umbrel.db-shm')
+		expect(backupFiles).not.toContain('file-index')
+		expect(backupFiles).not.toContain('thumbnails')
+
+		// Diverge durable Photos state after the snapshot so restore must recover it.
+		await umbreld.client.photos.items.restore.mutate({ids: [restoredPhotoId]})
+		await umbreld.client.photos.items.setFavorite.mutate({ids: [restoredPhotoId], favorite: false})
+		await umbreld.client.photos.albums.delete.mutate({id: restoredPhotoAlbumId})
 
 		const runningMachine = (await umbreld.client.machines.list.query()).find(({id}) => id === machineId)
 		expect(runningMachine?.state).toBe('running')
@@ -166,6 +202,24 @@ describe.sequential('Backup restore on current install', () => {
 		await expect(
 			umbreld.vm.sshAsRoot(`test -f /home/umbrel/umbrel/machines/${machineId}/disk.qcow2 && echo restored`),
 		).resolves.toBe('restored')
+
+		await pRetry(
+			async () => expect(await umbreld.client.photos.library.status.query()).toMatchObject({phase: 'ready'}),
+			{retries: 240, factor: 1, minTimeout: 250, maxTimeout: 250},
+		)
+		await expect(
+			umbreld.client.photos.items.list.query({filter: {deleted: true, query: 'backup-state'}, limit: 10}),
+		).resolves.toMatchObject({
+			total: 1,
+			items: [expect.objectContaining({id: restoredPhotoId, isFavorite: true})],
+		})
+		await expect(umbreld.client.photos.albums.list.query()).resolves.toContainEqual(
+			expect.objectContaining({id: restoredPhotoAlbumId, name: 'Restored album'}),
+		)
+		await umbreld.client.photos.items.restore.mutate({ids: [restoredPhotoId]})
+		await expect(umbreld.client.photos.albums.list.query()).resolves.toContainEqual(
+			expect.objectContaining({id: restoredPhotoAlbumId, count: 1, coverId: restoredPhotoId}),
+		)
 
 		const restoredCloud = await waitForSync(
 			umbreld.client,

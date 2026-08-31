@@ -9,7 +9,18 @@ import {
 	type SearchCandidate,
 	type WatcherChange,
 } from './file-index-engine.js'
-import type {ThumbnailReference} from './file-index-enrichment.js'
+import type {PublishedFileRevision, ThumbnailReference} from './file-index-enrichment.js'
+import {PHOTOS_THUMBNAIL_VARIANTS, type ThumbnailVariant} from './thumbnail-support.js'
+import type {
+	PhotoAlbum,
+	PhotoFilter,
+	PhotoIndexingState,
+	PhotoItem,
+	PhotoItemDetail,
+	PhotoScopeMode,
+	PhotoSource,
+	PhotoSummary,
+} from '../photos/types.js'
 import {
 	deserializeError,
 	type FileIndexNotificationMethod,
@@ -38,6 +49,7 @@ export type FileIndexOptions = {
 	recoveryRetryMs?: number
 	watcherBulkThreshold?: number
 	batchSize?: number
+	onPhotosChange?: (accountIds: string[]) => void
 }
 
 export type FileIndexRuntime = {
@@ -84,6 +96,8 @@ export default class FileIndex {
 	#started = false
 	#stopping = false
 	#backgroundReconciliationStarted = false
+	#enabledThumbnailVariants = new Set<ThumbnailVariant>()
+	#onPhotosChange?: (accountIds: string[]) => void
 
 	constructor(
 		{
@@ -95,6 +109,7 @@ export default class FileIndex {
 			recoveryRetryMs,
 			watcherBulkThreshold = DEFAULT_WATCHER_BULK_THRESHOLD,
 			batchSize,
+			onPhotosChange,
 		}: FileIndexOptions,
 		{
 			createWorker = (url, options) => new Worker(url, options),
@@ -104,7 +119,7 @@ export default class FileIndex {
 		}: FileIndexRuntime = {},
 	) {
 		this.logger = logger
-		this.databasePath = nodePath.join(dataDirectory, 'file-index', 'index.sqlite3')
+		this.databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
 		this.#workerData = {
 			dataDirectory,
 			hiddenFiles: [...hiddenFiles],
@@ -119,6 +134,7 @@ export default class FileIndex {
 		this.#workerBootTimeoutMs = workerBootTimeoutMs
 		this.#workerShutdownTimeoutMs = workerShutdownTimeoutMs
 		this.#watcherBulkThreshold = watcherBulkThreshold
+		this.#onPhotosChange = onPhotosChange
 	}
 
 	get available() {
@@ -176,6 +192,9 @@ export default class FileIndex {
 					})
 					await this.#requestFor(worker, generation, 'setRoots', [[...this.#roots.values()]])
 					await this.#requestFor(worker, generation, 'start', [])
+					if (this.#enabledThumbnailVariants.size > 0) {
+						await this.#requestFor(worker, generation, 'enableThumbnailVariants', [[...this.#enabledThumbnailVariants]])
+					}
 				})(),
 				this.#workerBootTimeoutMs,
 				'File index worker startup timed out',
@@ -206,6 +225,9 @@ export default class FileIndex {
 				return
 			case 'availability':
 				this.#available = message.available
+				return
+			case 'photos-change':
+				this.#onPhotosChange?.(message.accountIds)
 				return
 			case 'response': {
 				const pending = this.#pendingRequests.get(message.id)
@@ -333,13 +355,145 @@ export default class FileIndex {
 		await this.#request('reconcileRoot', [virtualPath, reason])
 	}
 
-	async ensureThumbnail(systemPath: string) {
-		return this.#request<ThumbnailReference>('ensureThumbnail', [systemPath])
+	async ensureThumbnail(systemPath: string, variant?: ThumbnailVariant) {
+		return this.#request<ThumbnailReference>('ensureThumbnail', [systemPath, variant])
 	}
 
-	async getExistingThumbnail(systemPath: string) {
+	async photosRegisterUpload(
+		accountId: string,
+		systemPath: string,
+		hash: Buffer,
+		expectedRevision: PublishedFileRevision,
+		albumId?: string,
+	) {
+		return this.#request<{status: 'imported'; itemId: string; uploadedItemId: string}>('photosRegisterUpload', [
+			accountId,
+			systemPath,
+			hash,
+			expectedRevision,
+			albumId,
+		])
+	}
+
+	async photosPrepareUpload(accountId: string, hash: Buffer, albumId?: string) {
+		return this.#request<{status: 'new'} | {status: 'duplicate'; itemId: string}>('photosPrepareUpload', [
+			accountId,
+			hash,
+			albumId,
+		])
+	}
+
+	async getExistingThumbnail(systemPath: string, variant?: ThumbnailVariant) {
 		if (!this.#workerReady) return
-		return this.#request<ThumbnailReference | undefined>('getExistingThumbnail', [systemPath])
+		return this.#request<ThumbnailReference | undefined>('getExistingThumbnail', [systemPath, variant])
+	}
+
+	async enableThumbnailVariants(variants: ThumbnailVariant[]) {
+		for (const variant of variants) this.#enabledThumbnailVariants.add(variant)
+		if (!this.#workerReady) return
+		await this.#request('enableThumbnailVariants', [variants])
+	}
+
+	async initializePhotos(accountId?: string) {
+		for (const variant of PHOTOS_THUMBNAIL_VARIANTS) this.#enabledThumbnailVariants.add(variant)
+		return this.#request<boolean>('initializePhotos', [accountId])
+	}
+
+	async photosSummary(accountId: string) {
+		return this.#request<PhotoSummary>('photosSummary', [accountId])
+	}
+
+	async photosIndexingState(accountId: string) {
+		return this.#request<PhotoIndexingState>('photosIndexingState', [accountId])
+	}
+
+	async photosListItems(accountId: string, filter: PhotoFilter, cursor: string | undefined, limit: number) {
+		return this.#request<{items: PhotoItem[]; total?: number; nextCursor?: string}>('photosListItems', [
+			accountId,
+			filter,
+			cursor,
+			limit,
+		])
+	}
+
+	async photosGetItem(accountId: string, id: string) {
+		return this.#request<PhotoItemDetail | undefined>('photosGetItem', [accountId, id])
+	}
+
+	async photosNeighbors(accountId: string, id: string, filter: PhotoFilter) {
+		return this.#request<{prevId?: string; nextId?: string} | undefined>('photosNeighbors', [accountId, id, filter])
+	}
+
+	async photosSetFavorite(accountId: string, ids: string[], favorite: boolean) {
+		return this.#request<number>('photosSetFavorite', [accountId, ids, favorite])
+	}
+
+	async photosSetDeleted(accountId: string, ids: string[], deleted: boolean) {
+		return this.#request<number>('photosSetDeleted', [accountId, ids, deleted])
+	}
+
+	async photosResolveItems(accountId: string, ids: string[]) {
+		return this.#request<Array<{id: string; path: string}>>('photosResolveItems', [accountId, ids])
+	}
+
+	async photosResolveDeletedItems(accountId: string, ids?: string[]) {
+		return this.#request<
+			Array<{
+				id: string
+				path?: string
+				revision?: PublishedFileRevision
+				recoverOnly?: true
+				pendingRevision?: true
+			}>
+		>('photosResolveDeletedItems', [accountId, ids])
+	}
+
+	async photosResolveLiveCompanion(accountId: string, id: string) {
+		return this.#request<{id: string; path: string} | undefined>('photosResolveLiveCompanion', [accountId, id])
+	}
+
+	async photosDeleteItems(accountId: string, ids: string[], includeLiveCompanions = true) {
+		return this.#request<number>('photosDeleteItems', [accountId, ids, includeLiveCompanions])
+	}
+
+	async photosListAlbums(accountId: string) {
+		return this.#request<PhotoAlbum[]>('photosListAlbums', [accountId])
+	}
+
+	async photosCreateAlbum(accountId: string, name: string, ids?: string[]) {
+		return this.#request<PhotoAlbum>('photosCreateAlbum', [accountId, name, ids])
+	}
+
+	async photosRenameAlbum(accountId: string, id: string, name: string) {
+		return this.#request<number>('photosRenameAlbum', [accountId, id, name])
+	}
+
+	async photosSetAlbumCover(accountId: string, id: string, itemId?: string) {
+		return this.#request<number>('photosSetAlbumCover', [accountId, id, itemId])
+	}
+
+	async photosDeleteAlbum(accountId: string, id: string) {
+		return this.#request<number>('photosDeleteAlbum', [accountId, id])
+	}
+
+	async photosAddAlbumItems(accountId: string, id: string, ids: string[]) {
+		return this.#request<number>('photosAddAlbumItems', [accountId, id, ids])
+	}
+
+	async photosRemoveAlbumItems(accountId: string, id: string, ids: string[]) {
+		return this.#request<number>('photosRemoveAlbumItems', [accountId, id, ids])
+	}
+
+	async photosListSources(accountId: string) {
+		return this.#request<PhotoSource[]>('photosListSources', [accountId])
+	}
+
+	async photosUpdateSource(accountId: string, id: string, scope?: {mode: PhotoScopeMode; paths: string[]}) {
+		return this.#request<PhotoSource | undefined>('photosUpdateSource', [accountId, id, scope])
+	}
+
+	async photosRemoveSource(accountId: string, id: string, keepItems: boolean) {
+		return this.#request<boolean>('photosRemoveSource', [accountId, id, keepItems])
 	}
 
 	async matchesThumbnail(systemPath: string, kind: string, key: string, variant: string) {
@@ -368,6 +522,11 @@ export default class FileIndex {
 
 	async movePath(sourceSystemPath: string, destinationSystemPath: string) {
 		if (!this.#workerReady) return
+		await this.#request('movePath', [sourceSystemPath, destinationSystemPath])
+	}
+
+	async movePathRequired(sourceSystemPath: string, destinationSystemPath: string) {
+		if (!this.#workerReady) throw new Error('[file-index-unavailable]')
 		await this.#request('movePath', [sourceSystemPath, destinationSystemPath])
 	}
 

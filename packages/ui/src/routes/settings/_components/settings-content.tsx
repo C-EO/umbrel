@@ -11,6 +11,7 @@ import {Button} from '@/components/ui/button'
 import {ButtonLink} from '@/components/ui/button-link'
 import {Card} from '@/components/ui/card'
 import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
+import {SearchField} from '@/components/ui/edge-controls'
 import {IconButtonLink} from '@/components/ui/icon-button-link'
 import {Separator} from '@/components/ui/separator'
 import {Switch} from '@/components/ui/switch'
@@ -35,7 +36,7 @@ import {CpuTemperatureCardContent} from './cpu-temperature-card-content'
 import {ListRow} from './list-row'
 import {MemoryCardContent} from './memory-card-content'
 import {createSettingsCatalog, getSettingsPage, SettingsPageItem} from './settings-catalog'
-import {SettingsFilterPills, SettingsItemsGroup, SettingsSearch} from './settings-page-controls'
+import {SettingsFilterPills, SettingsItemsGroup} from './settings-page-controls'
 import {SettingsFilterId, useSettingsFilterLabels} from './settings-taxonomy'
 import {SettingsAccountAvatar} from './shared'
 import {SoftwareUpdateListRow} from './software-update-list-row'
@@ -477,7 +478,7 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 								onSelect={handleFilterSelect}
 							/>
 						)}
-						<SettingsSearch value={searchQuery} onChange={handleSearchChange} label={t('search')} />
+						<SearchField value={searchQuery} onChange={handleSearchChange} label={t('search')} />
 					</div>
 
 					<FadeScroller

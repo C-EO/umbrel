@@ -5,17 +5,18 @@ import fse from 'fs-extra'
 import type Umbreld from '../../index.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 import {
+	FILES_THUMBNAIL_VARIANT,
 	parseThumbnailFilename,
 	supportsThumbnail,
 	thumbnailFilename,
 	thumbnailSystemPath,
-	THUMBNAIL_VARIANT,
+	type ThumbnailVariant,
 } from './thumbnail-support.js'
 
 type ThumbnailReference = {
 	kind: 'content' | 'transient'
 	key: string
-	variant: typeof THUMBNAIL_VARIANT
+	variant: ThumbnailVariant
 	format: string
 }
 
@@ -48,15 +49,19 @@ export default class Thumbnails {
 		return `/api/files/thumbnail/${thumbnailFilename(reference)}?path=${encodeURIComponent(virtualPath)}`
 	}
 
-	async getThumbnailOnDemand(virtualPath: string, userId: string = OWNER_USER_ID) {
+	async getThumbnailOnDemand(
+		virtualPath: string,
+		userId: string = OWNER_USER_ID,
+		variant: ThumbnailVariant = FILES_THUMBNAIL_VARIANT,
+	) {
 		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, userId)
-		const reference = await this.#umbreld.files.fileIndex.ensureThumbnail(systemPath)
+		const reference = await this.#umbreld.files.fileIndex.ensureThumbnail(systemPath, variant)
 		return this.thumbnailUrl(reference, systemPath)
 	}
 
-	async getExistingThumbnail(systemPath: string) {
+	async getExistingThumbnail(systemPath: string, variant: ThumbnailVariant = FILES_THUMBNAIL_VARIANT) {
 		if (!supportsThumbnail(nodePath.basename(systemPath))) return
-		const reference = await this.#umbreld.files.fileIndex.getExistingThumbnail(systemPath)
+		const reference = await this.#umbreld.files.fileIndex.getExistingThumbnail(systemPath, variant)
 		return reference ? this.thumbnailUrl(reference, systemPath) : undefined
 	}
 

@@ -16,36 +16,8 @@ import {
 	LISTING_FADE_TOP_PX,
 } from '@/features/files/utils/get-grid-column-count'
 import {getItemKey} from '@/features/files/utils/get-item-key'
+import {useContainerSize} from '@/hooks/use-container-size'
 import {useIsMobile} from '@/hooks/use-is-mobile'
-
-// Measures the content-box dimensions of a container element using clientWidth/clientHeight.
-// These properties are immune to ancestor CSS transforms (unlike getBoundingClientRect which
-// AutoSizer uses internally), fixing a bug where the sheet's zoom-in animation caused
-// AutoSizer to measure scaled-down dimensions on first open.
-const useContainerSize = (ref: React.RefObject<HTMLDivElement | null>) => {
-	const [size, setSize] = useState({width: 0, height: 0})
-
-	useEffect(() => {
-		const el = ref.current
-		if (!el) return
-
-		const measure = () => {
-			const style = getComputedStyle(el)
-			const w = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)
-			const h = el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
-			setSize((prev) => (prev.width === w && prev.height === h ? prev : {width: w, height: h}))
-		}
-
-		measure()
-
-		const observer = new ResizeObserver(measure)
-		observer.observe(el)
-
-		return () => observer.disconnect()
-	}, [ref])
-
-	return size
-}
 
 // Hook to detect scroll in react-window components so we can apply custom fade styling
 const useScrollFade = () => {

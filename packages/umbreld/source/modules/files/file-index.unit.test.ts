@@ -1,11 +1,12 @@
 import nodePath from 'node:path'
-import {appendFile, chmod, link, lstat, symlink, utimes, writeFile} from 'node:fs/promises'
+import {appendFile, chmod, link, lstat, readFile, symlink, utimes, writeFile} from 'node:fs/promises'
 
 import BetterSqlite3 from 'better-sqlite3'
 import fse from 'fs-extra'
 import pRetry from 'p-retry'
 import {afterEach, describe, expect, test, vi} from 'vitest'
 
+import {migratePhotos} from '../photos/migrations.js'
 import temporaryDirectory from '../utilities/temporary-directory.js'
 import FileIndex, {
 	walkFileTree,
@@ -20,7 +21,12 @@ import {
 	type FileIndexMigration,
 } from './file-index/migrations.js'
 import {THUMBNAIL_GENERATION_TIMEOUT_MS} from './file-index-enrichment.js'
-import {THUMBNAIL_VARIANT, thumbnailSystemPath, type ThumbnailIdentity} from './thumbnail-support.js'
+import {
+	PHOTOS_THUMBNAIL_VARIANTS,
+	THUMBNAIL_VARIANT,
+	thumbnailSystemPath,
+	type ThumbnailIdentity,
+} from './thumbnail-support.js'
 
 const temporary = temporaryDirectory()
 const indexes: FileIndex[] = []
@@ -29,6 +35,16 @@ const logger = {
 	log: vi.fn(),
 	verbose: vi.fn(),
 	error: vi.fn(),
+}
+
+async function contentRevision(systemPath: string) {
+	const stats = await lstat(systemPath, {bigint: true})
+	return {
+		inode: stats.ino.toString(),
+		size: Number(stats.size),
+		modifiedNs: stats.mtimeNs.toString(),
+		ctimeNs: stats.ctimeNs.toString(),
+	}
 }
 
 afterEach(async () => {
@@ -42,7 +58,7 @@ async function fixture(
 	options: Partial<
 		Pick<
 			FileIndexEngineOptions,
-			'reconciliationIntervalMs' | 'watcherBulkThreshold' | 'batchSize' | 'enrichmentRuntime'
+			'reconciliationIntervalMs' | 'watcherBulkThreshold' | 'batchSize' | 'enrichmentRuntime' | 'onPhotosChange'
 		>
 	> = {},
 ) {
@@ -55,10 +71,25 @@ async function fixture(
 	const index = new FileIndex({
 		dataDirectory,
 		logger,
-		isHidden: (name) => name.startsWith('.') || name.endsWith('.umbrel-upload'),
+		isHidden: (name) => name.startsWith('.') || name.endsWith('.umbrel-upload') || name.endsWith('.umbrel-trash'),
 		walkTree,
 		...engineOptions,
-		enrichmentRuntime: {availableParallelism: 1, ...enrichmentRuntime},
+		enrichmentRuntime: {
+			availableParallelism: 1,
+			extractMediaMetadata: async (systemPath) => ({
+				kind: ['.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi', '.3gp'].includes(
+					nodePath.extname(systemPath).toLowerCase(),
+				)
+					? 'video'
+					: 'photo',
+				takenAt: 1,
+				createdAt: 1,
+				width: 1,
+				height: 1,
+			}),
+			extractThumbnailTint: async () => 0x112233,
+			...enrichmentRuntime,
+		},
 	})
 	indexes.push(index)
 	await index.start()
@@ -78,6 +109,16 @@ async function candidateNames(index: FileIndex, query: string, maxResults = 100)
 	return (await index.searchCandidates('/Home', query, maxResults)).map(({name}) => name).sort()
 }
 
+test('uses one durable Umbrel database and a separate disposable file index', async () => {
+	const {index, dataDirectory} = await fixture()
+	expect(index.databasePath).toBe(nodePath.join(dataDirectory, 'file-index', 'index.db'))
+	expect(index.umbrelDatabasePath).toBe(nodePath.join(dataDirectory, 'umbrel.db'))
+	await expect(fse.pathExists(index.databasePath)).resolves.toBe(true)
+	await expect(fse.pathExists(index.umbrelDatabasePath)).resolves.toBe(true)
+	await expect(fse.pathExists(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))).resolves.toBe(false)
+	await expect(fse.pathExists(nodePath.join(dataDirectory, 'photos', 'photos.sqlite3'))).resolves.toBe(false)
+})
+
 function noteWatcherChanges(index: FileIndex, paths: string[], type: WatcherChange['type'] = 'create') {
 	index.noteWatcherChanges(
 		'/Home',
@@ -86,7 +127,7 @@ function noteWatcherChanges(index: FileIndex, paths: string[], type: WatcherChan
 }
 
 function contentIdentity(key: string): ThumbnailIdentity {
-	return {kind: 'content', key}
+	return {kind: 'content', key, variant: THUMBNAIL_VARIANT}
 }
 
 describe('file index migrations', () => {
@@ -123,7 +164,14 @@ describe('file index migrations', () => {
 			'hash_retry_at',
 			'hash_error',
 			'observed_at',
+			'birthtime_ms',
 		])
+		expect(
+			database
+				.prepare('PRAGMA table_info(media_metadata)')
+				.all()
+				.map((column: any) => column.name),
+		).toEqual(expect.arrayContaining(['altitude', 'user_comment']))
 		expect(
 			database
 				.prepare(
@@ -243,6 +291,7 @@ describe('file index migrations', () => {
 			hash_retry_at: null,
 			hash_error: null,
 			observed_at: null,
+			birthtime_ms: null,
 		})
 		expect(
 			database.prepare(`SELECT rowid FROM entry_names_fts WHERE entry_names_fts MATCH '"rep"'`).all(),
@@ -306,7 +355,9 @@ describe('file index migrations', () => {
 			hash_error: null,
 			observed_at: null,
 		})
-		expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toStrictEqual({count: 7})
+		expect(database.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get()).toStrictEqual({
+			count: FILE_INDEX_SCHEMA_VERSION,
+		})
 		expect(
 			database
 				.prepare('PRAGMA table_info(entries)')
@@ -330,6 +381,87 @@ describe('file index migrations', () => {
 			variant: THUMBNAIL_VARIANT,
 			state: 'pending',
 		})
+		database.close()
+	})
+
+	test('retires the old Files preview when migrating to the shared Photos preview', async () => {
+		const database = new BetterSqlite3(':memory:')
+		await migrateFileIndex(database, fileIndexMigrations.slice(0, 7))
+		const content = database
+			.prepare('INSERT INTO contents(blake3, size, created_at) VALUES (?, 5, 1)')
+			.run(Buffer.alloc(32, 0xb2))
+		database
+			.prepare(
+				`INSERT INTO thumbnail_variants(content_id, variant, state, updated_at)
+				VALUES (?, 'preview-112-webp-v1', 'ready', 1)`,
+			)
+			.run(content.lastInsertRowid)
+		database
+			.prepare(
+				`INSERT INTO index_roots(
+					virtual_path, system_path, owner_id, kind, search_enabled, created_at, updated_at
+				) VALUES ('/Home', '/data/home', 'owner', 'home', 1, 1, 1)`,
+			)
+			.run()
+		const entry = database
+			.prepare(
+				`INSERT INTO entries(
+					root_id, relative_path, name, type, size, modified_ms, hidden, thumbnail_identity_kind
+				) VALUES (1, 'photo.jpg', 'photo.jpg', 'file', 5, 1, 0, 'transient')`,
+			)
+			.run()
+		database
+			.prepare(
+				`INSERT INTO transient_thumbnail_variants(
+					entry_id, variant, artifact_key, state, updated_at
+				) VALUES (?, 'preview-112-webp-v1', ?, 'ready', 1)`,
+			)
+			.run(entry.lastInsertRowid, 'ab'.repeat(32))
+
+		await expect(migrateFileIndex(database)).resolves.toBe(FILE_INDEX_SCHEMA_VERSION)
+		expect(database.prepare('SELECT variant, state FROM thumbnail_variants').get()).toBeUndefined()
+		expect(database.prepare('SELECT variant, state FROM transient_thumbnail_variants').get()).toBeUndefined()
+		database.close()
+	})
+
+	test('invalidates long-edge Photos variants while preserving the 192px rendition', async () => {
+		const database = new BetterSqlite3(':memory:')
+		await migrateFileIndex(database, fileIndexMigrations.slice(0, 9))
+		const content = database
+			.prepare('INSERT INTO contents(blake3, size, created_at) VALUES (?, 5, 1)')
+			.run(Buffer.alloc(32, 0xb4))
+		const insert = database.prepare(
+			`INSERT INTO thumbnail_variants(content_id, variant, state, updated_at)
+			VALUES (?, ?, 'ready', 1)`,
+		)
+		for (const variant of ['preview-192-webp-v1', 'preview-512-webp-v1', 'preview-1280-webp-v1']) {
+			insert.run(content.lastInsertRowid, variant)
+		}
+
+		await expect(migrateFileIndex(database)).resolves.toBe(FILE_INDEX_SCHEMA_VERSION)
+		expect(database.prepare('SELECT variant FROM thumbnail_variants ORDER BY variant').all()).toStrictEqual([
+			{variant: 'preview-192-webp-v1'},
+		])
+		database.close()
+	})
+
+	test('requeues existing media metadata when adding new EXIF fields', async () => {
+		const database = new BetterSqlite3(':memory:')
+		await migrateFileIndex(database, fileIndexMigrations.slice(0, 8))
+		const content = database
+			.prepare('INSERT INTO contents(blake3, size, created_at) VALUES (?, 5, 1)')
+			.run(Buffer.alloc(32, 0xb3))
+		database
+			.prepare(
+				`INSERT INTO media_metadata(content_id, state, kind, width, height, failure_count, updated_at)
+				VALUES (?, 'ready', 'photo', 100, 50, 0, 1)`,
+			)
+			.run(content.lastInsertRowid)
+
+		await expect(migrateFileIndex(database)).resolves.toBe(FILE_INDEX_SCHEMA_VERSION)
+		expect(
+			database.prepare('SELECT state, retry_at, last_error, altitude, user_comment FROM media_metadata').get(),
+		).toStrictEqual({state: 'pending', retry_at: null, last_error: null, altitude: null, user_comment: null})
 		database.close()
 	})
 
@@ -445,6 +577,7 @@ test('indexes accurate metadata and never follows symlinks', async () => {
 		type: 'file',
 		size: 5,
 		modifiedMs: Math.trunc(stats.mtimeMs),
+		birthtimeMs: Math.trunc(stats.birthtimeMs),
 		hidden: false,
 	})
 	await expect(index.getEntryByVirtualPath('/Home/folder')).resolves.toMatchObject({type: 'directory'})
@@ -463,7 +596,7 @@ test('does not rewrite unchanged entries during reconciliation', async () => {
 	await writeFile(file, 'stable')
 	await index.reconcileRoot('/Home', 'initial')
 
-	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.sqlite3')
+	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
 	const database = new BetterSqlite3(databasePath)
 	database.exec(`
 		CREATE TABLE entry_update_audit(entry_id INTEGER NOT NULL);
@@ -507,13 +640,13 @@ test('records stable file identities and invalidates content hashes only when th
 	await Promise.all([writeFile(image, 'image'), writeFile(unsupported, 'notes')])
 	await index.reconcileRoot('/Home', 'initial')
 
-	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.sqlite3')
+	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
 	let database = new BetterSqlite3(databasePath)
 	const imageStats = await lstat(image, {bigint: true})
 	expect(
 		database
 			.prepare(
-				`SELECT device, inode, modified_ns, ctime_ns, thumbnail_identity_kind, content_id
+				`SELECT device, inode, modified_ns, ctime_ns, birthtime_ms, thumbnail_identity_kind, content_id
 				FROM entries WHERE relative_path = 'photo.png'`,
 			)
 			.get(),
@@ -522,6 +655,7 @@ test('records stable file identities and invalidates content hashes only when th
 		inode: imageStats.ino.toString(),
 		modified_ns: imageStats.mtimeNs.toString(),
 		ctime_ns: imageStats.ctimeNs.toString(),
+		birthtime_ms: Number(imageStats.birthtimeNs / 1_000_000n),
 		thumbnail_identity_kind: 'content',
 		content_id: null,
 	})
@@ -547,15 +681,14 @@ test('records stable file identities and invalidates content hashes only when th
 	})
 	database.close()
 
-	// ctime catches metadata-only replacement/change cases that inode, size and
-	// mtime alone can miss.
+	// Permission-only ctime changes are recorded but do not invalidate a content
+	// hash. Managed-file revisions deliberately use inode, size, and mtime.
 	await chmod(image, 0o600)
 	await index.reconcileRoot('/Home', 'changed-ctime')
 	database = new BetterSqlite3(databasePath)
 	expect(database.prepare("SELECT content_id FROM entries WHERE relative_path = 'photo.png'").get()).toStrictEqual({
-		content_id: null,
+		content_id: content.id,
 	})
-	database.prepare("UPDATE entries SET content_id = ? WHERE relative_path = 'photo.png'").run(content.id)
 	database.close()
 
 	const future = new Date(Date.now() + 10_000)
@@ -564,6 +697,18 @@ test('records stable file identities and invalidates content hashes only when th
 	database = new BetterSqlite3(databasePath)
 	expect(database.prepare("SELECT content_id FROM entries WHERE relative_path = 'photo.png'").get()).toStrictEqual({
 		content_id: null,
+	})
+	database.close()
+
+	const liveImage = nodePath.join(homeDirectory, 'live-photo.png')
+	await writeFile(liveImage, 'live')
+	await index.reconcilePath(liveImage)
+	const liveStats = await lstat(liveImage, {bigint: true})
+	database = new BetterSqlite3(databasePath)
+	expect(
+		database.prepare("SELECT birthtime_ms FROM entries WHERE relative_path = 'live-photo.png'").get(),
+	).toStrictEqual({
+		birthtime_ms: Number(liveStats.birthtimeNs / 1_000_000n),
 	})
 	database.close()
 })
@@ -595,13 +740,1402 @@ test('hashes and generates a content-addressed thumbnail on demand', async () =>
 
 	const thumbnail = thumbnailSystemPath(nodePath.join(dataDirectory, 'thumbnails'), reference)
 	await expect(fse.readFile(thumbnail, 'utf8')).resolves.toBe('thumbnail')
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT COUNT(*) AS count FROM contents').get()).toStrictEqual({count: 1})
 	expect(database.prepare('SELECT COUNT(*) AS count FROM thumbnail_variants').get()).toStrictEqual({count: 1})
 	expect(database.prepare('SELECT content_id FROM entries WHERE relative_path = ?').get('photo.png')).toMatchObject({
 		content_id: expect.any(Number),
 	})
 	database.close()
+})
+
+test('shares one content hash across every requested thumbnail size', async () => {
+	const digest = Buffer.alloc(32, 0xac)
+	const hashFile = vi.fn(async () => digest)
+	const generateThumbnail = vi.fn(async (_source: string, destination: string, variant = THUMBNAIL_VARIANT) => {
+		await fse.outputFile(destination, variant)
+	})
+	const {index, homeDirectory, dataDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {hashFile, generateThumbnail},
+	})
+	const image = nodePath.join(homeDirectory, 'photo.png')
+	await writeFile(image, 'image')
+
+	const references = await Promise.all([
+		index.ensureThumbnail(image, 'preview-192-webp-v1'),
+		index.ensureThumbnail(image, 'preview-512-webp-v2'),
+		index.ensureThumbnail(image, 'preview-1280-webp-v2'),
+	])
+
+	expect(hashFile).toHaveBeenCalledOnce()
+	expect(generateThumbnail).toHaveBeenCalledTimes(3)
+	expect(new Set(references.map(({key}) => key))).toStrictEqual(new Set([digest.toString('hex')]))
+	expect(new Set(references.map(({variant}) => variant))).toStrictEqual(
+		new Set(['preview-192-webp-v1', 'preview-512-webp-v2', 'preview-1280-webp-v2']),
+	)
+	for (const reference of references) {
+		await expect(
+			fse.readFile(thumbnailSystemPath(nodePath.join(dataDirectory, 'thumbnails'), reference), 'utf8'),
+		).resolves.toBe(reference.variant)
+	}
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
+	expect(database.prepare('SELECT COUNT(*) AS count FROM contents').get()).toStrictEqual({count: 1})
+	expect(database.prepare('SELECT COUNT(*) AS count FROM thumbnail_variants').get()).toStrictEqual({count: 3})
+	database.close()
+})
+
+test('backfills newly enabled thumbnail sizes without rehashing content', async () => {
+	const hashFile = vi.fn(async () => Buffer.alloc(32, 0xad))
+	const generateThumbnail = vi.fn(async (_source: string, destination: string, variant = THUMBNAIL_VARIANT) => {
+		await fse.outputFile(destination, variant)
+	})
+	const {index, homeDirectory} = await fixture(undefined, {enrichmentRuntime: {hashFile, generateThumbnail}})
+	const image = nodePath.join(homeDirectory, 'photo.png')
+	await writeFile(image, 'image')
+	await index.ensureThumbnail(image)
+
+	await index.enableThumbnailVariants(['preview-512-webp-v2', 'preview-1280-webp-v2'])
+	index.startBackgroundReconciliation()
+	await pRetry(
+		async () => {
+			await expect(index.status()).resolves.toMatchObject({enrichment: {readyThumbnails: 3}})
+		},
+		{retries: 100, minTimeout: 10, maxTimeout: 20},
+	)
+
+	expect(hashFile).toHaveBeenCalledOnce()
+	expect(generateThumbnail).toHaveBeenCalledTimes(3)
+})
+
+test('backfills a requested Photos variant that is already enabled in memory', async () => {
+	const hashFile = vi.fn(async () => Buffer.alloc(32, 0xae))
+	const generateThumbnail = vi.fn(async (_source: string, destination: string, variant = THUMBNAIL_VARIANT) => {
+		await fse.outputFile(destination, variant)
+	})
+	const {index, homeDirectory, dataDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {hashFile, generateThumbnail},
+	})
+	const image = nodePath.join(homeDirectory, 'photo.png')
+	await writeFile(image, 'image')
+	await index.ensureThumbnail(image)
+	await index.enableThumbnailVariants(['preview-192-webp-v1', 'preview-512-webp-v2', 'preview-1280-webp-v2'])
+	index.startBackgroundReconciliation()
+	await pRetry(
+		async () => {
+			await expect(index.status()).resolves.toMatchObject({enrichment: {readyThumbnails: 3}})
+		},
+		{retries: 100, minTimeout: 10, maxTimeout: 20},
+	)
+	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
+	let database = new BetterSqlite3(databasePath)
+	const contentId = (database.prepare('SELECT id FROM contents').get() as {id: number}).id
+	database
+		.prepare("DELETE FROM thumbnail_variants WHERE content_id = ? AND variant = 'preview-192-webp-v1'")
+		.run(contentId)
+	database.close()
+	await fse.remove(
+		thumbnailSystemPath(nodePath.join(dataDirectory, 'thumbnails'), {
+			kind: 'content',
+			key: Buffer.alloc(32, 0xae).toString('hex'),
+			variant: 'preview-192-webp-v1',
+		}),
+	)
+	generateThumbnail.mockClear()
+
+	// Registration must reconcile persisted rows even when every requested
+	// variant is already enabled in memory.
+	await index.enableThumbnailVariants(['preview-192-webp-v1', 'preview-512-webp-v2', 'preview-1280-webp-v2'])
+	index.startBackgroundReconciliation()
+	await pRetry(
+		async () => {
+			database = new BetterSqlite3(databasePath, {readonly: true})
+			const rows = database
+				.prepare(
+					`SELECT variant, state FROM thumbnail_variants
+					WHERE variant IN ('preview-192-webp-v1', 'preview-512-webp-v2', 'preview-1280-webp-v2')
+					ORDER BY variant`,
+				)
+				.all()
+			database.close()
+			expect(rows).toStrictEqual([
+				{variant: 'preview-1280-webp-v2', state: 'ready'},
+				{variant: 'preview-192-webp-v1', state: 'ready'},
+				{variant: 'preview-512-webp-v2', state: 'ready'},
+			])
+		},
+		{retries: 100, minTimeout: 10, maxTimeout: 20},
+	)
+
+	expect(hashFile).toHaveBeenCalledOnce()
+	expect(generateThumbnail).toHaveBeenCalledOnce()
+})
+
+test('generates all pending Photos renditions together for one content decode', async () => {
+	const generateThumbnails = vi.fn(async (_source: string, outputs: Array<{destination: string; variant: string}>) => {
+		await Promise.all(outputs.map(({destination}) => fse.outputFile(destination, 'thumbnail')))
+	})
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0xa8),
+			generateThumbnails,
+			extractMediaMetadata: async () => ({kind: 'photo' as const, width: 3000, height: 2000}),
+		},
+	})
+	await writeFile(nodePath.join(homeDirectory, 'batched.jpg'), 'photo')
+	await index.reconcileRoot('/Home', 'batched-renditions')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	expect(generateThumbnails).toHaveBeenCalledOnce()
+	expect(generateThumbnails.mock.calls[0]?.[1].map(({variant}) => variant)).toStrictEqual([
+		'preview-192-webp-v1',
+		'preview-512-webp-v2',
+		'preview-1280-webp-v2',
+	])
+})
+
+test('does not generate Photos-only variants or metadata for non-Photos roots', async () => {
+	const {index, root, rootDirectory, dataDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x44),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	const appsDirectory = nodePath.join(rootDirectory, 'apps')
+	await fse.outputFile(nodePath.join(appsDirectory, 'private-app-image.jpg'), 'app image')
+	await index.setRoots([
+		root,
+		{virtualPath: '/Apps', systemPath: appsDirectory, ownerId: 'owner', kind: 'apps', searchEnabled: false},
+	])
+	await index.reconcileRoot('/Apps', 'non-photos-variants')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
+	await pRetry(
+		() => {
+			const database = new BetterSqlite3(databasePath, {readonly: true})
+			try {
+				expect(
+					database.prepare("SELECT content_id FROM entries WHERE relative_path = 'private-app-image.jpg'").get(),
+				).toMatchObject({
+					content_id: expect.any(Number),
+				})
+			} finally {
+				database.close()
+			}
+		},
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
+	const database = new BetterSqlite3(databasePath, {readonly: true})
+	expect(database.prepare('SELECT variant FROM thumbnail_variants ORDER BY variant').all()).toStrictEqual([
+		{variant: 'preview-192-webp-v1'},
+	])
+	expect(database.prepare('SELECT COUNT(*) AS count FROM media_metadata').get()).toStrictEqual({count: 0})
+	database.close()
+})
+
+test('serves an account-scoped Photos library from indexed media and durable state', async () => {
+	const generateThumbnail = vi.fn(async (_source: string, destination: string) => {
+		await fse.outputFile(destination, 'thumbnail')
+	})
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, nodePath.basename(systemPath).startsWith('video') ? 2 : 1),
+			generateThumbnail,
+			extractMediaMetadata: async (systemPath) => ({
+				kind: nodePath.basename(systemPath).startsWith('video') ? 'video' : 'photo',
+				takenAt: nodePath.basename(systemPath).startsWith('video') ? 1_000 : 2_000,
+				createdAt: 500,
+				width: 1920,
+				height: 1080,
+				...(nodePath.basename(systemPath).startsWith('video') ? {durationMs: 10_000} : {subKind: 'panorama' as const}),
+			}),
+		},
+	})
+	await Promise.all([
+		writeFile(nodePath.join(homeDirectory, 'photo.jpg'), 'photo'),
+		writeFile(nodePath.join(homeDirectory, 'video.mp4'), 'video'),
+	])
+	await index.reconcileRoot('/Home', 'photos-library')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await expect(index.photosSummary('owner')).resolves.toMatchObject({
+		counts: {items: 2, favorites: 0, photos: 1, videos: 1, deleted: 0},
+		sizeBytes: 10,
+		bySubKind: {panorama: 1},
+	})
+	const page = await index.photosListItems('owner', {}, undefined, 10)
+	expect(page.total).toBe(2)
+	expect(page.items.map(({kind}) => kind)).toStrictEqual(['photo', 'video'])
+	const photo = page.items[0]
+	await expect(index.photosGetItem('another-account', photo.id)).resolves.toBeUndefined()
+	await index.photosSetFavorite('owner', [photo.id], true)
+	const album = await index.photosCreateAlbum('owner', 'Trip', [photo.id])
+	await expect(index.photosGetItem('owner', photo.id)).resolves.toMatchObject({
+		isFavorite: true,
+		albums: [{id: album.id, name: 'Trip'}],
+	})
+	await index.photosSetDeleted('owner', [photo.id], true)
+	await expect(index.photosSummary('owner')).resolves.toMatchObject({
+		counts: {items: 1, favorites: 0, photos: 0, videos: 1, deleted: 1},
+	})
+})
+
+test('coalesces Photos discovery and enrichment changes into library notifications', async () => {
+	const onPhotosChange = vi.fn()
+	const {index, homeDirectory} = await fixture(undefined, {
+		onPhotosChange,
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x41),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	await writeFile(nodePath.join(homeDirectory, 'notified.jpg'), 'photo')
+	await index.reconcileRoot('/Home', 'photos-notification')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await pRetry(() => expect(onPhotosChange).toHaveBeenCalled(), {
+		retries: 50,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	expect(onPhotosChange.mock.calls.length).toBeLessThanOrEqual(2)
+	expect(onPhotosChange.mock.calls.flatMap(([accountIds]) => accountIds)).toContain('owner')
+})
+
+test('keeps owner and member Photos libraries and metadata search isolated by their indexed Home roots', async () => {
+	const {index, root, rootDirectory, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, systemPath.includes('member-home') ? 8 : 7),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => ({
+				kind: 'photo' as const,
+				width: 100,
+				height: 100,
+				userComment: systemPath.includes('member-home') ? 'member alpine secret' : 'owner coastal secret',
+			}),
+		},
+	})
+	const memberHome = nodePath.join(rootDirectory, 'member-home')
+	await Promise.all([
+		fse.outputFile(nodePath.join(homeDirectory, 'owner-private.jpg'), 'owner'),
+		fse.outputFile(nodePath.join(memberHome, 'member-private.jpg'), 'member'),
+	])
+	await index.setRoots([
+		root,
+		{
+			virtualPath: '/Users/alice',
+			systemPath: memberHome,
+			ownerId: 'alice',
+			kind: 'home',
+			searchEnabled: true,
+		},
+	])
+	await Promise.all([
+		index.reconcileRoot('/Home', 'owner-photos'),
+		index.reconcileRoot('/Users/alice', 'member-photos'),
+	])
+	await index.initializePhotos()
+	index.startBackgroundReconciliation()
+	await pRetry(
+		async () => {
+			await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'ready'})
+			await expect(index.photosIndexingState('alice')).resolves.toMatchObject({phase: 'ready'})
+		},
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
+
+	const owner = (await index.photosListItems('owner', {}, undefined, 10)).items[0]!
+	const member = (await index.photosListItems('alice', {}, undefined, 10)).items[0]!
+	await expect(index.photosGetItem('owner', member.id)).resolves.toBeUndefined()
+	await expect(index.photosGetItem('alice', owner.id)).resolves.toBeUndefined()
+	await expect(index.photosResolveItems('owner', [member.id])).resolves.toStrictEqual([])
+	await expect(index.photosResolveItems('alice', [owner.id])).resolves.toStrictEqual([])
+	await expect(index.photosListItems('owner', {query: 'coastal secret'}, undefined, 10)).resolves.toMatchObject({
+		total: 1,
+	})
+	await expect(index.photosListItems('owner', {query: 'alpine secret'}, undefined, 10)).resolves.toMatchObject({
+		total: 0,
+	})
+	await expect(index.photosListItems('alice', {query: 'alpine secret'}, undefined, 10)).resolves.toMatchObject({
+		total: 1,
+	})
+	await expect(index.photosListItems('alice', {query: 'coastal secret'}, undefined, 10)).resolves.toMatchObject({
+		total: 0,
+	})
+	const memberSource = (await index.photosListSources('alice'))[0]!
+	await expect(index.photosUpdateSource('alice', memberSource.id, {mode: 'only', paths: ['/Home']})).rejects.toThrow(
+		'[photos-invalid-scope-path]',
+	)
+	await expect(
+		index.photosUpdateSource('alice', memberSource.id, {mode: 'only', paths: ['/Users/alice']}),
+	).resolves.toMatchObject({scope: {mode: 'only', paths: ['/Users/alice']}})
+	const album = await index.photosCreateAlbum('alice', 'Private', [owner.id, member.id])
+	await expect(index.photosListAlbums('alice')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, count: 1}),
+	)
+	await expect(index.photosSummary('owner')).resolves.toMatchObject({counts: {items: 1}})
+	await expect(index.photosSummary('alice')).resolves.toMatchObject({counts: {items: 1}})
+
+	// Removing a member home is account deletion, not a temporary scan gap:
+	// durable favorites/albums/items must leave with that account while the
+	// owner library remains untouched.
+	await index.photosSetFavorite('alice', [member.id], true)
+	await index.removeRoot('/Users/alice')
+	await expect(index.photosGetItem('alice', member.id)).resolves.toBeUndefined()
+	await expect(index.photosListAlbums('alice')).resolves.toStrictEqual([])
+	await expect(index.photosSummary('owner')).resolves.toMatchObject({counts: {items: 1}})
+})
+
+test('deduplicates Photos by hash after account authorization and uses a stable accessible location', async () => {
+	const duplicateHash = Buffer.alloc(32, 0xd0)
+	const {index, root, rootDirectory, homeDirectory, dataDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => {
+				const name = nodePath.basename(systemPath)
+				if (['canonical.jpg', 'searchable-sunset.jpg', 'member-copy.jpg'].includes(name)) return duplicateHash
+				return Buffer.alloc(32, Number(name[0]))
+			},
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async () => ({kind: 'photo' as const, width: 100, height: 50}),
+		},
+	})
+	const memberHome = nodePath.join(rootDirectory, 'member-hash-home')
+	const canonical = nodePath.join(homeDirectory, 'A', 'canonical.jpg')
+	const searchableDuplicate = nodePath.join(homeDirectory, 'Z', 'searchable-sunset.jpg')
+	await Promise.all([
+		fse.outputFile(canonical, 'duplicate'),
+		fse.outputFile(searchableDuplicate, 'duplicate'),
+		fse.outputFile(nodePath.join(homeDirectory, '1-photo.jpg'), 'one'),
+		fse.outputFile(nodePath.join(homeDirectory, '2-photo.jpg'), 'two'),
+		fse.outputFile(nodePath.join(homeDirectory, '3-photo.jpg'), 'three'),
+		fse.outputFile(nodePath.join(memberHome, 'member-copy.jpg'), 'duplicate'),
+	])
+	await index.setRoots([
+		root,
+		{virtualPath: '/Users/alice', systemPath: memberHome, ownerId: 'alice', kind: 'home', searchEnabled: true},
+	])
+	await Promise.all([
+		index.reconcileRoot('/Home', 'hash-dedup-owner'),
+		index.reconcileRoot('/Users/alice', 'hash-dedup-member'),
+	])
+	await index.initializePhotos()
+	index.startBackgroundReconciliation()
+	await pRetry(
+		async () => {
+			await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'ready'})
+			await expect(index.photosIndexingState('alice')).resolves.toMatchObject({phase: 'ready'})
+		},
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
+
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
+	database
+		.prepare(
+			`UPDATE entries SET birthtime_ms = CASE relative_path
+				WHEN 'A/canonical.jpg' THEN 1000
+				WHEN 'Z/searchable-sunset.jpg' THEN 2000
+				ELSE birthtime_ms END
+			WHERE root_id = (SELECT id FROM index_roots WHERE virtual_path = '/Home')`,
+		)
+		.run()
+	database.close()
+
+	const hashId = duplicateHash.toString('hex')
+	const firstPage = await index.photosListItems('owner', {}, undefined, 2)
+	const secondPage = await index.photosListItems('owner', {}, firstPage.nextCursor, 2)
+	const pagedIds = [...firstPage.items, ...secondPage.items].map(({id}) => id)
+	expect(firstPage.total).toBe(4)
+	expect(secondPage.nextCursor).toBeUndefined()
+	expect(pagedIds).toHaveLength(4)
+	expect(new Set(pagedIds).size).toBe(4)
+	expect(pagedIds.filter((id) => id === hashId)).toHaveLength(1)
+	expect(hashId).toMatch(/^[a-f0-9]{64}$/)
+	await expect(index.photosGetItem('owner', hashId)).resolves.toMatchObject({path: '/Home/A/canonical.jpg'})
+	await expect(index.photosResolveItems('owner', [hashId])).resolves.toStrictEqual([
+		{id: hashId, path: '/Home/A/canonical.jpg'},
+	])
+	await expect(index.photosResolveItems('alice', [hashId])).resolves.toStrictEqual([
+		{id: hashId, path: '/Users/alice/member-copy.jpg'},
+	])
+	await expect(index.photosListItems('owner', {query: 'searchable-sunset'}, undefined, 10)).resolves.toMatchObject({
+		total: 1,
+		items: [{id: hashId}],
+	})
+
+	await index.photosSetFavorite('owner', [hashId], true)
+	const album = await index.photosCreateAlbum('owner', 'One copy', [hashId, hashId])
+	await index.photosSetAlbumCover('owner', album.id, hashId)
+	await expect(index.photosListAlbums('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, count: 1, coverId: hashId}),
+	)
+	await expect(index.photosGetItem('alice', hashId)).resolves.toMatchObject({isFavorite: false})
+	await index.photosSetFavorite('alice', [hashId], true)
+	await expect(index.photosGetItem('owner', hashId)).resolves.toMatchObject({isFavorite: true})
+	await expect(index.photosListAlbums('alice')).resolves.toStrictEqual([])
+
+	await index.photosSetDeleted('owner', [hashId], true)
+	const deletionSet = await index.photosResolveDeletedItems('owner', [hashId])
+	expect(deletionSet.map(({path}) => path)).toStrictEqual(['/Home/A/canonical.jpg', '/Home/Z/searchable-sunset.jpg'])
+	expect(deletionSet.some(({path}) => path === '/Users/alice/member-copy.jpg')).toBe(false)
+	const deletedState = new BetterSqlite3(index.umbrelDatabasePath)
+	expect(
+		deletedState
+			.prepare(
+				`SELECT virtual_path FROM photos_deletion_targets
+				WHERE account_id = ? AND content_hash = ? ORDER BY virtual_path`,
+			)
+			.all('owner', duplicateHash),
+	).toStrictEqual([{virtual_path: '/Home/A/canonical.jpg'}, {virtual_path: '/Home/Z/searchable-sunset.jpg'}])
+	expect(
+		deletedState.prepare('SELECT virtual_path FROM photos_deletion_targets WHERE account_id = ?').all('alice'),
+	).toStrictEqual([])
+	deletedState.close()
+	await index.photosSetDeleted('owner', [hashId], false)
+	const restoredState = new BetterSqlite3(index.umbrelDatabasePath)
+	expect(
+		restoredState.prepare('SELECT * FROM photos_deletion_targets WHERE account_id = ?').all('owner'),
+	).toStrictEqual([])
+	restoredState.close()
+
+	const source = (await index.photosListSources('owner'))[0]!
+	await expect(
+		index.photosListItems('owner', {sourceIds: [source.id], dates: [{from: 900, to: 1_100}]}, undefined, 10),
+	).resolves.toMatchObject({total: 1, items: [{id: hashId, takenAt: 1_000}]})
+	await index.photosUpdateSource('owner', source.id, {mode: 'only', paths: ['/Home/Z']})
+	await expect(
+		index.photosListItems('owner', {sourceIds: [source.id], dates: [{from: 1_900, to: 2_100}]}, undefined, 10),
+	).resolves.toMatchObject({total: 1, items: [{id: hashId, takenAt: 2_000}]})
+	await expect(index.photosGetItem('owner', hashId)).resolves.toMatchObject({path: '/Home/Z/searchable-sunset.jpg'})
+	await index.photosUpdateSource('owner', source.id, {mode: 'everything', paths: []})
+	await fse.remove(canonical)
+	await index.removePath(canonical)
+	await expect(index.photosGetItem('owner', hashId)).resolves.toMatchObject({path: '/Home/Z/searchable-sunset.jpg'})
+})
+
+test('treats an in-place edit as a new hash without transferring state and reconnects an old hash later', async () => {
+	const oldHash = Buffer.alloc(32, 0x31)
+	const newHash = Buffer.alloc(32, 0x32)
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => ((await readFile(systemPath, 'utf8')) === 'old' ? oldHash : newHash),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async () => ({kind: 'photo' as const, width: 100, height: 50}),
+		},
+	})
+	const photo = nodePath.join(homeDirectory, 'edited.jpg')
+	await writeFile(photo, 'old')
+	await index.reconcileRoot('/Home', 'old-content')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const oldId = oldHash.toString('hex')
+	await index.photosSetFavorite('owner', [oldId], true)
+	const album = await index.photosCreateAlbum('owner', 'Original bytes', [oldId])
+
+	await writeFile(photo, 'new bytes with a different revision')
+	await index.reconcilePath(photo)
+	await pRetry(
+		async () =>
+			expect((await index.photosListItems('owner', {}, undefined, 10)).items).toStrictEqual([
+				expect.objectContaining({id: newHash.toString('hex'), isFavorite: false}),
+			]),
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
+	await expect(index.photosGetItem('owner', oldId)).resolves.toBeUndefined()
+	await expect(index.photosListAlbums('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, count: 0}),
+	)
+
+	await writeFile(photo, 'old')
+	await index.reconcilePath(photo)
+	await pRetry(
+		async () => expect(await index.photosGetItem('owner', oldId)).toMatchObject({id: oldId, isFavorite: true}),
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
+	await expect(index.photosListAlbums('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, count: 1}),
+	)
+})
+
+test('keeps filesystem birth-date fallbacks and screenshot classification per entry for duplicate content', async () => {
+	const extractMediaMetadata = vi.fn(async (systemPath: string) => {
+		if (systemPath.includes('Screenshot private'))
+			throw Object.assign(new Error('unreadable duplicate'), {code: 'EACCES'})
+		return {kind: 'photo' as const, width: 100, height: 100}
+	})
+	const {index, root, rootDirectory, homeDirectory, dataDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x61),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata,
+		},
+	})
+	const memberHome = nodePath.join(rootDirectory, 'member-metadata-home')
+	const ownerPhoto = nodePath.join(homeDirectory, 'Screenshot private.png')
+	const memberPhoto = nodePath.join(memberHome, 'ordinary.jpg')
+	await Promise.all([fse.outputFile(ownerPhoto, 'same'), fse.outputFile(memberPhoto, 'same')])
+	await Promise.all([
+		utimes(ownerPhoto, new Date(100_000), new Date(100_000)),
+		utimes(memberPhoto, new Date(200_000), new Date(200_000)),
+	])
+	await index.setRoots([
+		root,
+		{virtualPath: '/Users/alice', systemPath: memberHome, ownerId: 'alice', kind: 'home', searchEnabled: true},
+	])
+	await Promise.all([
+		index.reconcileRoot('/Home', 'owner-metadata'),
+		index.reconcileRoot('/Users/alice', 'member-metadata'),
+	])
+	await index.initializePhotos()
+	index.startBackgroundReconciliation()
+	await pRetry(
+		async () => {
+			await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'ready'})
+			await expect(index.photosIndexingState('alice')).resolves.toMatchObject({phase: 'ready'})
+		},
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
+	database
+		.prepare(
+			`UPDATE entries SET birthtime_ms = CASE
+				WHEN root_id = (SELECT id FROM index_roots WHERE virtual_path = '/Home') THEN 90000
+				ELSE 190000 END
+			WHERE relative_path IN ('Screenshot private.png', 'ordinary.jpg')`,
+		)
+		.run()
+	database.close()
+
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({
+		items: [{takenAt: 90_000, subKind: 'screenshot'}],
+	})
+	await expect(index.photosListItems('alice', {}, undefined, 10)).resolves.toMatchObject({
+		items: [{takenAt: 190_000}],
+	})
+	await expect(index.photosListItems('alice', {subKind: 'screenshot'}, undefined, 10)).resolves.toMatchObject({
+		total: 0,
+	})
+	expect(extractMediaMetadata.mock.calls.map(([path]) => path)).toEqual(
+		expect.arrayContaining([ownerPhoto, memberPhoto]),
+	)
+})
+
+test('orders Photos dates by embedded capture time, filesystem birth time, then modification time', async () => {
+	const {index, homeDirectory, dataDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, nodePath.basename(systemPath).charCodeAt(0)),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => ({
+				kind: 'photo' as const,
+				width: 100,
+				height: 100,
+				...(nodePath.basename(systemPath) === 'embedded.jpg' ? {takenAt: 1_000, createdAt: 1_000} : {}),
+			}),
+		},
+	})
+	const embedded = nodePath.join(homeDirectory, 'embedded.jpg')
+	const birth = nodePath.join(homeDirectory, 'birth.jpg')
+	const modified = nodePath.join(homeDirectory, 'modified.jpg')
+	await Promise.all([writeFile(embedded, 'embedded'), writeFile(birth, 'birth'), writeFile(modified, 'modified')])
+	await utimes(modified, new Date(3_000), new Date(3_000))
+	await index.reconcileRoot('/Home', 'date-fallbacks')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
+	database.prepare("UPDATE entries SET birthtime_ms = 500 WHERE relative_path = 'embedded.jpg'").run()
+	database.prepare("UPDATE entries SET birthtime_ms = 2000 WHERE relative_path = 'birth.jpg'").run()
+	database.prepare("UPDATE entries SET birthtime_ms = NULL WHERE relative_path = 'modified.jpg'").run()
+	database.close()
+	const items = await index.photosListItems('owner', {}, undefined, 10)
+	const byPath = new Map(
+		await Promise.all(items.items.map(async ({id}) => index.photosGetItem('owner', id))).then((details) =>
+			details.map((detail) => [detail!.path, detail!]),
+		),
+	)
+	expect(byPath.get('/Home/embedded.jpg')).toMatchObject({takenAt: 1_000, createdAt: 1_000})
+	expect(byPath.get('/Home/birth.jpg')).toMatchObject({takenAt: 2_000, createdAt: 2_000})
+	expect(byPath.get('/Home/modified.jpg')).toMatchObject({takenAt: 3_000, createdAt: 3_000})
+})
+
+test('preflights Photos upload duplicates without publishing or rereading the file', async () => {
+	const digest = Buffer.alloc(32, 0x71)
+	const hashFile = vi.fn(async () => digest)
+	const {index, homeDirectory, dataDirectory} = await fixture(undefined, {enrichmentRuntime: {hashFile}})
+	const existing = nodePath.join(homeDirectory, 'existing.jpg')
+	const uploaded = nodePath.join(homeDirectory, 'uploaded.jpg')
+	await Promise.all([writeFile(existing, 'same bytes'), writeFile(uploaded, 'same bytes')])
+	await index.reconcileRoot('/Home', 'photos-upload')
+	await index.initializePhotos('owner')
+
+	const existingRevision = await contentRevision(existing)
+	await expect(
+		index.photosRegisterUpload('owner', existing, digest, {...existingRevision, ctimeNs: '0'}),
+	).rejects.toThrow('Published upload revision does not match the index')
+	const first = await index.photosRegisterUpload('owner', existing, digest, existingRevision)
+	await expect(
+		index.photosRegisterUpload('owner', existing, digest, {...existingRevision, ctimeNs: '0'}),
+	).rejects.toThrow('Published upload revision does not match the index')
+	const album = await index.photosCreateAlbum('owner', 'Uploads')
+	const duplicate = await index.photosPrepareUpload('owner', digest, album.id)
+
+	expect(first).toMatchObject({status: 'imported'})
+	expect(duplicate).toMatchObject({status: 'duplicate', itemId: first.itemId})
+	expect(hashFile).not.toHaveBeenCalled()
+	const photos = new BetterSqlite3(nodePath.join(dataDirectory, 'umbrel.db'))
+	expect(
+		photos
+			.prepare('SELECT lower(hex(content_hash)) AS content_hash FROM photos_album_items WHERE album_id = ?')
+			.get(album.id),
+	).toStrictEqual({
+		content_hash: first.itemId,
+	})
+	photos.close()
+})
+
+test('does not deduplicate uploads against deleted or invalidated durable Photos rows', async () => {
+	const oldDigest = Buffer.alloc(32, 0x72)
+	const newDigest = Buffer.alloc(32, 0x73)
+	const {index, homeDirectory, dataDirectory} = await fixture()
+	const changed = nodePath.join(homeDirectory, 'changed.jpg')
+	const deleted = nodePath.join(homeDirectory, 'deleted.jpg')
+	await Promise.all([writeFile(changed, 'old'), writeFile(deleted, 'old')])
+	await index.reconcileRoot('/Home', 'photos-stale-dedupe')
+	await index.initializePhotos('owner')
+	await index.photosRegisterUpload('owner', changed, oldDigest, await contentRevision(changed))
+	await index.photosRegisterUpload('owner', deleted, oldDigest, await contentRevision(deleted))
+
+	// The durable rows survive filesystem churn so favorites/albums can be
+	// reattached after a disposable index rebuild, but stale rows must not
+	// participate in upload dedupe.
+	await writeFile(changed, 'new bytes')
+	await fse.remove(deleted)
+	await index.reconcileRoot('/Home', 'photos-stale-dedupe-changed')
+
+	const changedUpload = nodePath.join(homeDirectory, 'changed-upload.jpg')
+	await writeFile(changedUpload, 'old')
+	await index.reconcileRoot('/Home', 'photos-stale-dedupe-uploads')
+	await expect(index.photosPrepareUpload('owner', oldDigest)).resolves.toStrictEqual({status: 'new'})
+	await expect(
+		index.photosRegisterUpload('owner', changedUpload, oldDigest, await contentRevision(changedUpload)),
+	).resolves.toMatchObject({
+		status: 'imported',
+	})
+	await expect(index.photosPrepareUpload('owner', oldDigest)).resolves.toMatchObject({status: 'duplicate'})
+
+	const photos = new BetterSqlite3(nodePath.join(dataDirectory, 'umbrel.db'))
+	expect(
+		photos
+			.prepare('SELECT 1 AS present FROM photos_content_state WHERE account_id = ? AND content_hash = ?')
+			.get('owner', oldDigest),
+	).toStrictEqual({present: 1})
+	photos.close()
+
+	// Once the changed file is attached to its new bytes, the new digest is
+	// eligible for dedupe again.
+	await expect(
+		index.photosRegisterUpload('owner', changed, newDigest, await contentRevision(changed)),
+	).resolves.toMatchObject({status: 'imported'})
+})
+
+test('pairs live photos, hides their motion companions, and cascades deletion', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, nodePath.basename(systemPath).endsWith('.mov') ? 2 : 1),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => {
+				const video = systemPath.endsWith('.mov')
+				return {
+					kind: video ? ('video' as const) : ('photo' as const),
+					takenAt: 1_000,
+					createdAt: 500,
+					width: 100,
+					height: 50,
+					liveIdentifier: 'apple-live-pair',
+					...(video ? {durationMs: 3_000} : {}),
+				}
+			},
+		},
+	})
+	const photo = nodePath.join(homeDirectory, 'IMG_0001.heic')
+	const motion = nodePath.join(homeDirectory, 'IMG_0001.mov')
+	await Promise.all([writeFile(photo, 'still'), writeFile(motion, 'motion')])
+	await index.reconcileRoot('/Home', 'live-photo')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const page = await index.photosListItems('owner', {}, undefined, 10)
+	expect(page).toMatchObject({total: 1, items: [{kind: 'photo', subKind: 'live', tint: 0x112233}]})
+	await expect(index.photosResolveLiveCompanion('owner', page.items[0]!.id)).resolves.toStrictEqual({
+		id: expect.any(String),
+		path: '/Home/IMG_0001.mov',
+	})
+	await fse.remove(motion)
+	await index.removePath(motion)
+	await expect(index.photosResolveLiveCompanion('owner', page.items[0]!.id)).resolves.toBeUndefined()
+	await expect(index.photosGetItem('owner', page.items[0]!.id)).resolves.not.toMatchObject({subKind: 'live'})
+	await writeFile(motion, 'motion')
+	await index.reconcilePath(motion)
+	index.startBackgroundReconciliation()
+	await pRetry(
+		async () => expect(await index.photosGetItem('owner', page.items[0]!.id)).toMatchObject({subKind: 'live'}),
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
+	await index.photosSetDeleted('owner', [page.items[0]!.id], true)
+	const deletionSet = await index.photosResolveDeletedItems('owner', [page.items[0]!.id])
+	expect(deletionSet).toHaveLength(2)
+	await fse.remove(photo)
+	await index.removePath(photo)
+	await expect(index.photosResolveDeletedItems('owner', [page.items[0]!.id])).resolves.toEqual(
+		expect.arrayContaining(deletionSet.map(({id}) => expect.objectContaining({id}))),
+	)
+})
+
+test('pairs a short same-folder motion clip when Apple identifiers are absent', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, systemPath.toLowerCase().endsWith('.mov') ? 4 : 3),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => ({
+				kind: systemPath.toLowerCase().endsWith('.mov') ? ('video' as const) : ('photo' as const),
+				takenAt: 1_000,
+				createdAt: 500,
+				width: 100,
+				height: 50,
+				...(systemPath.toLowerCase().endsWith('.mov') ? {durationMs: 4_000} : {}),
+			}),
+		},
+	})
+	await Promise.all([
+		fse.outputFile(nodePath.join(homeDirectory, 'Trip', 'IMG_0002.jpg'), 'still'),
+		fse.outputFile(nodePath.join(homeDirectory, 'Trip', 'IMG_0002.MOV'), 'motion'),
+	])
+	await index.reconcileRoot('/Home', 'live-photo-fallback')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const still = (await index.photosListItems('owner', {subKind: 'live'}, undefined, 10)).items[0]!
+	const originalMotion = nodePath.join(homeDirectory, 'Trip', 'IMG_0002.MOV')
+	const movedMotion = nodePath.join(homeDirectory, 'Trip', 'OTHER.MOV')
+	await fse.move(originalMotion, movedMotion)
+	await index.movePath(originalMotion, movedMotion)
+	await expect(index.photosGetItem('owner', still.id)).resolves.not.toMatchObject({subKind: 'live'})
+	await expect(index.photosResolveLiveCompanion('owner', still.id)).resolves.toBeUndefined()
+
+	await fse.move(movedMotion, originalMotion)
+	await index.movePath(movedMotion, originalMotion)
+	await expect(index.photosGetItem('owner', still.id)).resolves.toMatchObject({subKind: 'live'})
+
+	const source = (await index.photosListSources('owner'))[0]!
+	await index.photosUpdateSource('owner', source.id, {mode: 'only', paths: ['/Home/Trip/IMG_0002.jpg']})
+	await expect(index.photosGetItem('owner', still.id)).resolves.not.toMatchObject({subKind: 'live'})
+	await expect(index.photosResolveLiveCompanion('owner', still.id)).resolves.toBeUndefined()
+	await index.photosUpdateSource('owner', source.id, {mode: 'everything', paths: []})
+	await expect(index.photosGetItem('owner', still.id)).resolves.toMatchObject({subKind: 'live'})
+})
+
+test('removes a Photos item when a Files rename makes it hidden', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x41),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	const visible = nodePath.join(homeDirectory, 'visible.jpg')
+	const hidden = nodePath.join(homeDirectory, '.visible.jpg')
+	await writeFile(visible, 'photo')
+	await index.reconcileRoot('/Home', 'visible-photo')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const itemId = (await index.photosListItems('owner', {}, undefined, 10)).items[0]!.id
+
+	await fse.move(visible, hidden)
+	await index.movePath(visible, hidden)
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 0})
+	await expect(index.photosResolveItems('owner', [itemId])).resolves.toStrictEqual([])
+	await index.reconcileRoot('/Home', 'hidden-photo-restart-equivalent')
+	await expect(index.photosGetItem('owner', itemId)).resolves.toBeUndefined()
+})
+
+test('preserves Photos identity and user state across a watcher-reported rename', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x42),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	const before = nodePath.join(homeDirectory, 'Before.jpg')
+	const after = nodePath.join(homeDirectory, 'After.jpg')
+	await writeFile(before, 'photo')
+	await index.reconcileRoot('/Home', 'watcher-rename-before')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const original = (await index.photosListItems('owner', {}, undefined, 10)).items[0]!
+	await index.photosSetFavorite('owner', [original.id], true)
+	const album = await index.photosCreateAlbum('owner', 'Kept', [original.id])
+
+	await fse.move(before, after)
+	index.noteWatcherChanges('/Home', [
+		{path: before, type: 'delete'},
+		{path: after, type: 'create'},
+	])
+	await pRetry(
+		async () =>
+			expect(await index.photosGetItem('owner', original.id)).toMatchObject({
+				id: original.id,
+				path: '/Home/After.jpg',
+				isFavorite: true,
+			}),
+		{retries: 100, minTimeout: 10, maxTimeout: 20},
+	)
+	await expect(index.photosListAlbums('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, count: 1}),
+	)
+})
+
+test('keeps a shared Live Photo companion until the final visible still is deleted', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) =>
+				Buffer.alloc(
+					32,
+					nodePath.basename(systemPath).endsWith('.mov') ? 0x82 : Number(nodePath.basename(systemPath)[0]),
+				),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => {
+				const video = systemPath.endsWith('.mov')
+				return {
+					kind: video ? ('video' as const) : ('photo' as const),
+					takenAt: 1_000,
+					createdAt: 500,
+					width: 100,
+					height: 50,
+					liveIdentifier: 'shared-live-pair',
+					...(video ? {durationMs: 3_000} : {}),
+				}
+			},
+		},
+	})
+	await Promise.all([
+		writeFile(nodePath.join(homeDirectory, '1-still.jpg'), 'one'),
+		writeFile(nodePath.join(homeDirectory, '2-still.jpg'), 'two'),
+		writeFile(nodePath.join(homeDirectory, 'motion.mov'), 'motion'),
+	])
+	await index.reconcileRoot('/Home', 'shared-live-photo')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const stills = (await index.photosListItems('owner', {}, undefined, 10)).items
+	expect(stills).toHaveLength(2)
+	expect(stills.every(({subKind}) => subKind === 'live')).toBe(true)
+	await index.photosSetDeleted('owner', [stills[0]!.id], true)
+	await expect(index.photosResolveLiveCompanion('owner', stills[1]!.id)).resolves.toBeDefined()
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 1})
+
+	await index.photosSetDeleted('owner', [stills[1]!.id], true)
+	await expect(index.photosListItems('owner', {deleted: true}, undefined, 10)).resolves.toMatchObject({total: 2})
+	const database = new BetterSqlite3(index.umbrelDatabasePath)
+	const deletedCompanion = database
+		.prepare(
+			`SELECT motion_state.deleted_at FROM photos_live_pairs AS pair
+			JOIN photos_content_state AS motion_state ON motion_state.account_id = pair.account_id
+				AND motion_state.content_hash = pair.motion_hash
+			WHERE pair.account_id = ? AND pair.still_hash = ?`,
+		)
+		.get('owner', Buffer.from(stills[1]!.id, 'hex')) as {deleted_at: number | null}
+	expect(deletedCompanion.deleted_at).not.toBeNull()
+	database.close()
+	await expect(index.photosResolveDeletedItems('owner', [stills[0]!.id])).resolves.toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({id: stills[0]!.id}),
+			expect.objectContaining({id: Buffer.alloc(32, 0x82).toString('hex')}),
+		]),
+	)
+	await index.photosDeleteItems('owner', [stills[0]!.id], false)
+	await expect(index.photosResolveLiveCompanion('owner', stills[1]!.id)).resolves.toBeDefined()
+})
+
+test('resolves a deleted Photos row after an earlier attempt moved its file', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 19),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async () => ({
+				kind: 'photo' as const,
+				takenAt: 1_000,
+				createdAt: 500,
+				width: 100,
+				height: 50,
+			}),
+		},
+	})
+	const photo = nodePath.join(homeDirectory, 'retry-delete.jpg')
+	await writeFile(photo, 'photo')
+	const revision = await contentRevision(photo)
+	await index.reconcileRoot('/Home', 'deleted-retry')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const item = (await index.photosListItems('owner', {}, undefined, 10)).items[0]!
+	await index.photosSetDeleted('owner', [item.id], true)
+	await expect(index.photosResolveDeletedItems('owner', [item.id])).resolves.toStrictEqual([
+		{id: item.id, path: '/Home/retry-delete.jpg', revision},
+	])
+	const database = new BetterSqlite3(index.databasePath)
+	database.prepare("UPDATE entries SET content_id = NULL WHERE relative_path = 'retry-delete.jpg'").run()
+	database.close()
+	await expect(index.photosResolveDeletedItems('owner', [item.id])).resolves.toStrictEqual([
+		{id: item.id, path: '/Home/retry-delete.jpg', recoverOnly: true},
+		{id: item.id, pendingRevision: true},
+	])
+	await fse.remove(photo)
+	await index.removePath(photo)
+
+	await expect(index.photosResolveDeletedItems('owner', [item.id])).resolves.toStrictEqual([
+		{id: item.id, path: '/Home/retry-delete.jpg', recoverOnly: true},
+	])
+	const warmingDatabase = new BetterSqlite3(index.databasePath)
+	warmingDatabase.prepare("UPDATE index_roots SET state = 'warming' WHERE virtual_path = '/Home'").run()
+	warmingDatabase.close()
+	await expect(index.photosResolveDeletedItems('owner', [item.id])).resolves.toStrictEqual([
+		{id: item.id, path: '/Home/retry-delete.jpg', recoverOnly: true},
+		{id: item.id, pendingRevision: true},
+	])
+})
+
+test('keeps a deleted Live Photo retryable when its still is quarantined internally', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, systemPath.endsWith('.mov') ? 21 : 20),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => ({
+				kind: systemPath.endsWith('.mov') ? ('video' as const) : ('photo' as const),
+				takenAt: 1_000,
+				createdAt: 500,
+				width: 100,
+				height: 50,
+				liveIdentifier: 'quarantined-live-pair',
+				...(systemPath.endsWith('.mov') ? {durationMs: 3_000} : {}),
+			}),
+		},
+	})
+	const still = nodePath.join(homeDirectory, 'IMG_0003.heic')
+	const motion = nodePath.join(homeDirectory, 'IMG_0003.mov')
+	await Promise.all([writeFile(still, 'still'), writeFile(motion, 'motion')])
+	await index.reconcileRoot('/Home', 'quarantined-live-photo')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const item = (await index.photosListItems('owner', {subKind: 'live'}, undefined, 10)).items[0]!
+	await index.photosSetDeleted('owner', [item.id], true)
+	const deletionSet = await index.photosResolveDeletedItems('owner', [item.id])
+	const quarantine = nodePath.join(homeDirectory, 'IMG_0003.heic.test.umbrel-trash')
+	await fse.move(still, quarantine)
+
+	// Parcel can report an atomic rename as one unordered callback. The internal
+	// destination may be tracked as hidden, but must not be reused as an ordinary
+	// Photos rename.
+	index.noteWatcherChanges('/Home', [
+		{path: quarantine, type: 'create'},
+		{path: still, type: 'delete'},
+	])
+	await pRetry(async () => expect(await index.getEntryBySystemPath(still)).toBeUndefined(), {
+		retries: 100,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await expect(index.getEntryBySystemPath(quarantine)).resolves.toMatchObject({hidden: true})
+	await pRetry(
+		async () =>
+			expect(await index.photosResolveDeletedItems('owner', [item.id])).toEqual(
+				expect.arrayContaining(deletionSet.map(({id}) => expect.objectContaining({id}))),
+			),
+		{retries: 100, minTimeout: 10, maxTimeout: 20},
+	)
+})
+
+test('searches Photos filenames and camera metadata through indexed trigrams and short substrings', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, systemPath.includes('sunset') ? 5 : 6),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => ({
+				kind: 'photo' as const,
+				takenAt: systemPath.includes('sunset') ? 2_000 : 1_000,
+				createdAt: 500,
+				width: 100,
+				height: 50,
+				...(systemPath.includes('sunset')
+					? {cameraMake: 'Nikon', cameraModel: 'Z 8', userComment: 'Hidden glacier lagoon'}
+					: {cameraMake: 'Canon'}),
+			}),
+		},
+	})
+	await Promise.all([
+		writeFile(nodePath.join(homeDirectory, 'Iceland sunset.jpg'), 'one'),
+		writeFile(nodePath.join(homeDirectory, 'portrait.jpg'), 'two'),
+	])
+	await index.reconcileRoot('/Home', 'photos-search')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	await expect(index.photosListItems('owner', {query: 'sunset Nikon'}, undefined, 10)).resolves.toMatchObject({
+		total: 1,
+	})
+	await expect(index.photosListItems('owner', {query: 'Z'}, undefined, 10)).resolves.toMatchObject({total: 1})
+	await expect(index.photosListItems('owner', {query: 'glacier'}, undefined, 10)).resolves.toMatchObject({total: 1})
+})
+
+test('returns partial camera metadata, UserComment, and GPS altitude', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x29),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async () => ({
+				kind: 'photo' as const,
+				width: 100,
+				height: 50,
+				cameraMake: 'Leica',
+				iso: 400,
+				latitude: 13.75,
+				longitude: 100.5,
+				altitude: -12.5,
+				userComment: 'Below sea level',
+			}),
+		},
+	})
+	await writeFile(nodePath.join(homeDirectory, 'partial.jpg'), 'photo')
+	await index.reconcileRoot('/Home', 'partial-camera-metadata')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const photo = (await index.photosListItems('owner', {}, undefined, 10)).items[0]!
+	await expect(index.photosGetItem('owner', photo.id)).resolves.toMatchObject({
+		exif: {make: 'Leica', iso: 400, userComment: 'Below sea level'},
+		location: {lat: 13.75, lng: 100.5, altitude: -12.5},
+	})
+})
+
+test('applies Photos source folder scopes to lists, summaries, and source statistics', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, systemPath.includes('Included') ? 9 : 10),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	await Promise.all([
+		fse.outputFile(nodePath.join(homeDirectory, 'Included', 'one.jpg'), 'one'),
+		fse.outputFile(nodePath.join(homeDirectory, 'Excluded', 'two.jpg'), 'two'),
+	])
+	await index.reconcileRoot('/Home', 'source-scope')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const source = (await index.photosListSources('owner'))[0]!
+	const originalItems = (await index.photosListItems('owner', {}, undefined, 10)).items
+	const itemDetails = await Promise.all(originalItems.map(({id}) => index.photosGetItem('owner', id)))
+	const includedItem = itemDetails.find((item) => item?.path === '/Home/Included/one.jpg')!
+	const excludedItem = itemDetails.find((item) => item?.path === '/Home/Excluded/two.jpg')!
+	const album = await index.photosCreateAlbum('owner', 'Scoped', [includedItem.id, excludedItem.id])
+	await index.photosSetAlbumCover('owner', album.id, excludedItem.id)
+
+	await index.photosUpdateSource('owner', source.id, {mode: 'only', paths: ['/Home/Included']})
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 1})
+	await expect(index.photosGetItem('owner', excludedItem.id)).resolves.toBeUndefined()
+	await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'ready', total: 1, completed: 1})
+	await expect(index.photosSummary('owner')).resolves.toMatchObject({counts: {items: 1}})
+	await expect(index.photosListSources('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: source.id, stats: {photos: 1, videos: 0, sizeBytes: 3}}),
+	)
+	await expect(index.photosListAlbums('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, count: 1, coverId: includedItem.id}),
+	)
+	await expect(index.photosSetAlbumCover('owner', album.id, excludedItem.id)).resolves.toBe(0)
+	await index.photosRemoveAlbumItems('owner', album.id, [excludedItem.id])
+	await expect(index.photosAddAlbumItems('owner', album.id, [excludedItem.id])).resolves.toBe(0)
+
+	// A valid scope can exclude every item. The source must remain visible so
+	// the client can edit that scope again, and the update must not report a
+	// false NOT_FOUND after it has already persisted the new setting.
+	await expect(
+		index.photosUpdateSource('owner', source.id, {mode: 'only', paths: ['/Home/Nowhere']}),
+	).resolves.toMatchObject({
+		id: source.id,
+		scope: {mode: 'only', paths: ['/Home/Nowhere']},
+		stats: {photos: 0, videos: 0, sizeBytes: 0},
+	})
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 0})
+
+	await index.photosUpdateSource('owner', source.id, {mode: 'everything-except', paths: ['/Home/Included']})
+	const excluded = await index.photosListItems('owner', {}, undefined, 10)
+	expect(excluded).toMatchObject({total: 1})
+	await expect(index.photosGetItem('owner', excluded.items[0]!.id)).resolves.toMatchObject({
+		path: '/Home/Excluded/two.jpg',
+	})
+
+	await expect(
+		index.photosUpdateSource('owner', source.id, {mode: 'only', paths: ['/Home/Outside/../../External']}),
+	).rejects.toThrow('[photos-invalid-scope-path]')
+
+	await fse.outputFile(nodePath.join(homeDirectory, 'Literal%_Folder', 'literal.jpg'), 'literal')
+	await fse.outputFile(nodePath.join(homeDirectory, 'LiteralXXFolder', 'wildcard.jpg'), 'wildcard')
+	await index.reconcileRoot('/Home', 'literal-source-scope')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await index.photosUpdateSource('owner', source.id, {mode: 'only', paths: ['/Home/Literal%_Folder']})
+	const literalScope = await index.photosListItems('owner', {}, undefined, 10)
+	expect(literalScope).toMatchObject({total: 1})
+	await expect(index.photosGetItem('owner', literalScope.items[0]!.id)).resolves.toMatchObject({
+		path: '/Home/Literal%_Folder/literal.jpg',
+	})
+})
+
+test('paginates and combines Photos filters without duplicates or unstable offsets', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, Number(nodePath.basename(systemPath)[0])),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => {
+				const order = Number(nodePath.basename(systemPath)[0])
+				return {
+					kind: order === 5 ? ('video' as const) : ('photo' as const),
+					takenAt: order * 1_000,
+					createdAt: 500,
+					width: 100,
+					height: 50,
+					...(order === 4 ? {subKind: 'panorama' as const} : {}),
+				}
+			},
+		},
+	})
+	await Promise.all(
+		[1, 2, 3, 4].map((order) => writeFile(nodePath.join(homeDirectory, `${order}-photo.jpg`), String(order))),
+	)
+	await writeFile(nodePath.join(homeDirectory, '5-video.mp4'), '5')
+	await index.reconcileRoot('/Home', 'pagination')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const first = await index.photosListItems('owner', {}, undefined, 2)
+	const second = await index.photosListItems('owner', {}, first.nextCursor, 2)
+	const third = await index.photosListItems('owner', {}, second.nextCursor, 2)
+	expect(first.total).toBe(5)
+	expect(second.total).toBeUndefined()
+	expect([...first.items, ...second.items, ...third.items].map(({id}) => id)).toHaveLength(5)
+	expect(new Set([...first.items, ...second.items, ...third.items].map(({id}) => id)).size).toBe(5)
+	await index.photosSetFavorite('owner', [second.items[0]!.id], true)
+	const album = await index.photosCreateAlbum('owner', 'Filtered', [second.items[0]!.id])
+	await expect(
+		index.photosListItems(
+			'owner',
+			{favorite: true, albumIds: [album.id], dates: [{from: 2_000, to: 5_000}], kind: 'photo'},
+			undefined,
+			10,
+		),
+	).resolves.toMatchObject({total: 1})
+	await expect(index.photosListItems('owner', {kind: 'video'}, undefined, 10)).resolves.toMatchObject({total: 1})
+	await expect(index.photosListItems('owner', {subKind: 'panorama'}, undefined, 10)).resolves.toMatchObject({total: 1})
+})
+
+test('preserves a Photos id, favorite, and album membership across a filesystem move', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x32),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	const source = nodePath.join(homeDirectory, 'Before', 'photo.jpg')
+	const destination = nodePath.join(homeDirectory, 'After', 'renamed.jpg')
+	await fse.outputFile(source, 'photo')
+	await index.reconcileRoot('/Home', 'move-state')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const original = (await index.photosListItems('owner', {}, undefined, 10)).items[0]!
+	await index.photosSetFavorite('owner', [original.id], true)
+	const album = await index.photosCreateAlbum('owner', 'Moves', [original.id])
+	await fse.move(source, destination)
+	await index.movePath(source, destination)
+
+	await expect(index.photosGetItem('owner', original.id)).resolves.toMatchObject({
+		id: original.id,
+		path: '/Home/After/renamed.jpg',
+		isFavorite: true,
+		albums: [{id: album.id, name: 'Moves'}],
+	})
+})
+
+test('reports indexing, enrichment progress, ready, and persistent enrichment failures', async () => {
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x42),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async () => {
+				throw new Error('unsupported image payload')
+			},
+		},
+	})
+	await writeFile(nodePath.join(homeDirectory, 'broken.jpg'), 'broken')
+	await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'indexing'})
+	await index.reconcileRoot('/Home', 'index-state')
+	await index.initializePhotos('owner')
+	await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'enriching', completed: 0, total: 1})
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'degraded'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+})
+
+test('preserves Photos ids and user state when the disposable file index is rebuilt', async () => {
+	const digest = Buffer.alloc(32, 0xae)
+	const runtime = {
+		availableParallelism: 1,
+		hashFile: async () => digest,
+		generateThumbnail: async (_source: string, destination: string) => fse.outputFile(destination, 'thumbnail'),
+		extractMediaMetadata: async () => ({
+			kind: 'photo' as const,
+			takenAt: 2_000,
+			createdAt: 1_000,
+			width: 100,
+			height: 50,
+		}),
+	}
+	const {index, root, homeDirectory, dataDirectory} = await fixture(undefined, {enrichmentRuntime: runtime})
+	await writeFile(nodePath.join(homeDirectory, 'kept.jpg'), 'photo')
+	await index.reconcileRoot('/Home', 'initial')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const original = (await index.photosListItems('owner', {}, undefined, 10)).items[0]
+	await index.photosSetFavorite('owner', [original.id], true)
+	const album = await index.photosCreateAlbum('owner', 'Kept', [original.id])
+
+	await index.stop()
+	await fse.remove(nodePath.join(dataDirectory, 'file-index'))
+	const rebuilt = new FileIndex({dataDirectory, logger, isHidden: () => false, enrichmentRuntime: runtime})
+	indexes.push(rebuilt)
+	await rebuilt.start()
+	await rebuilt.setRoots([root])
+	await rebuilt.reconcileRoot('/Home', 'rebuilt')
+	await rebuilt.initializePhotos('owner')
+	await expect(rebuilt.photosIndexingState('owner')).resolves.toMatchObject({
+		phase: 'enriching',
+		completed: 0,
+		total: 1,
+	})
+	await expect(rebuilt.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 0, items: []})
+	const warmingPhotos = new BetterSqlite3(nodePath.join(dataDirectory, 'umbrel.db'))
+	expect(
+		warmingPhotos
+			.prepare('SELECT is_favorite FROM photos_content_state WHERE account_id = ? AND content_hash = ?')
+			.get('owner', digest),
+	).toStrictEqual({is_favorite: 1})
+	warmingPhotos.close()
+	rebuilt.startBackgroundReconciliation()
+	await pRetry(async () => expect(await rebuilt.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const restored = (await rebuilt.photosListItems('owner', {}, undefined, 10)).items[0]
+	expect(restored).toMatchObject({id: original.id, isFavorite: true})
+	await expect(rebuilt.photosListAlbums('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, count: 1}),
+	)
 })
 
 test('recreates externally removed thumbnail shard directories', async () => {
@@ -694,7 +2228,7 @@ test('backs off persistent runtime artifact-directory failures instead of hot-lo
 		maxTimeout: 20,
 	})
 	await new Promise((resolve) => setTimeout(resolve, 150))
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT state, failure_count FROM thumbnail_variants').get()).toStrictEqual({
 		state: 'failed',
 		failure_count: 1,
@@ -702,7 +2236,11 @@ test('backs off persistent runtime artifact-directory failures instead of hot-lo
 	database.close()
 	expect(generateThumbnail).not.toHaveBeenCalled()
 	expect(
-		logger.error.mock.calls.filter(([message]) => String(message).startsWith(`Failed to enrich '${image}'`)),
+		logger.error.mock.calls.filter(([message]) =>
+			[`Failed to enrich '${image}'`, `Failed to generate thumbnail for '${image}'`].some((prefix) =>
+				String(message).startsWith(prefix),
+			),
+		),
 	).toHaveLength(1)
 })
 
@@ -752,7 +2290,7 @@ test('indexes transient storage files on demand without hashing or crawling the 
 	await expect(index.getEntryBySystemPath(image)).resolves.toMatchObject({name: 'photo.png'})
 	expect(hashFile).not.toHaveBeenCalled()
 	expect(generateThumbnail).toHaveBeenCalledOnce()
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT COUNT(*) AS count FROM contents').get()).toStrictEqual({count: 0})
 	expect(
 		database
@@ -794,7 +2332,7 @@ test('publishes a transient thumbnail only for a stable filesystem fingerprint',
 	await expect(
 		fse.pathExists(thumbnailSystemPath(nodePath.join(dataDirectory, 'thumbnails'), reference)),
 	).resolves.toBe(true)
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT COUNT(*) AS count FROM contents').get()).toStrictEqual({count: 0})
 	expect(database.prepare('SELECT COUNT(*) AS count FROM transient_thumbnail_variants').get()).toStrictEqual({count: 1})
 	database.close()
@@ -825,7 +2363,7 @@ test('refreshes used transient thumbnails and expires entries unused for seven d
 
 	const unusedReference = await index.ensureThumbnail(unused)
 	const retainedReference = await index.ensureThumbnail(retained)
-	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.sqlite3')
+	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
 	const setObservedAt = (relativePath: string, observedAt: number) => {
 		const database = new BetterSqlite3(databasePath)
 		database.prepare('UPDATE entries SET observed_at = ? WHERE relative_path = ?').run(observedAt, relativePath)
@@ -891,7 +2429,7 @@ test('keeps reconciliation non-rejecting when transient expiry fails', async () 
 	})
 	await index.ensureThumbnail(image)
 
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	database.prepare('UPDATE entries SET observed_at = 0 WHERE relative_path = ?').run('expired.png')
 	database.exec(`
 		CREATE TRIGGER reject_transient_expiry BEFORE DELETE ON entries
@@ -1199,7 +2737,7 @@ test('serves on-demand work while a background conversion is still active', asyn
 	const requested = nodePath.join(homeDirectory, 'requested.png')
 	await writeFile(background, 'background')
 	await index.reconcilePath(background)
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	database.prepare('UPDATE entries SET hash_retry_at = 0').run()
 	database.close()
 
@@ -1245,7 +2783,7 @@ test('does not restart background hashing while on-demand work is active', async
 	const background = nodePath.join(homeDirectory, 'background.png')
 	await Promise.all([writeFile(requested, 'requested'), writeFile(background, 'background')])
 	await Promise.all([index.reconcilePath(requested), index.reconcilePath(background)])
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	database.prepare('UPDATE entries SET hash_retry_at = 0').run()
 	database.close()
 
@@ -1288,7 +2826,7 @@ test('shares content and one thumbnail between duplicate files', async () => {
 	expect(hashFile).toHaveBeenCalledTimes(2)
 	expect(generateThumbnail).toHaveBeenCalledOnce()
 
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT COUNT(*) AS count FROM contents').get()).toStrictEqual({count: 1})
 	expect(database.prepare('SELECT COUNT(DISTINCT content_id) AS count FROM entries').get()).toStrictEqual({count: 1})
 	database.close()
@@ -1323,7 +2861,7 @@ test('uses another duplicate when a thumbnail content reference disappears', asy
 	expect(generateThumbnail).toHaveBeenCalledOnce()
 	expect(generateThumbnail.mock.calls[0]?.[0]).toBe(available)
 	await expect(index.getEntryBySystemPath(vanished)).resolves.toBeUndefined()
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT state, failure_count FROM thumbnail_variants').get()).toStrictEqual({
 		state: 'ready',
 		failure_count: 0,
@@ -1368,7 +2906,7 @@ test('does not retry a failed thumbnail for every newly hashed duplicate', async
 
 	expect(hashFile).toHaveBeenCalledTimes(fileCount)
 	expect(generateThumbnail).toHaveBeenCalledOnce()
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT state, failure_count FROM thumbnail_variants').get()).toStrictEqual({
 		state: 'failed',
 		failure_count: 1,
@@ -1394,7 +2932,7 @@ test('hashes each new hard-link entry before deduplicating by its content hash',
 	expect(generateThumbnail).toHaveBeenCalledOnce()
 })
 
-test('rehashes a moved entry and reuses its content-addressed thumbnail', async () => {
+test('preserves a moved entry hash and reuses its content-addressed thumbnail', async () => {
 	const digest = Buffer.alloc(32, 0xf1)
 	const hashFile = vi.fn(async () => digest)
 	const generateThumbnail = vi.fn(async (_source: string, destination: string) => {
@@ -1413,10 +2951,10 @@ test('rehashes a moved entry and reuses its content-addressed thumbnail', async 
 	const after = await index.ensureThumbnail(destination)
 
 	expect(after).toStrictEqual(before)
-	expect(hashFile).toHaveBeenCalledTimes(2)
+	expect(hashFile).toHaveBeenCalledOnce()
 	expect(generateThumbnail).toHaveBeenCalledOnce()
 	await expect(index.getEntryBySystemPath(source)).resolves.toBeUndefined()
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(
 		database.prepare("SELECT content_id FROM entries WHERE relative_path = 'destination.png'").get(),
 	).toMatchObject({
@@ -1484,11 +3022,11 @@ test('processes watcher move destinations before deletions and reuses their cont
 	const after = await index.ensureThumbnail(destination)
 
 	expect(after).toStrictEqual(before)
-	expect(hashFile).toHaveBeenCalledTimes(2)
+	expect(hashFile).toHaveBeenCalledOnce()
 	expect(generateThumbnail).toHaveBeenCalledOnce()
 })
 
-test('defers content GC while a watcher-moved destination is being rehashed in the background', async () => {
+test('keeps watcher-moved content attached while background enrichment is active', async () => {
 	const digest = Buffer.alloc(32, 0xa5)
 	const hashFile = vi.fn(async () => digest)
 	const generateThumbnail = vi.fn(async (_source: string, destination: string) => {
@@ -1517,7 +3055,7 @@ test('defers content GC while a watcher-moved destination is being rehashed in t
 		maxTimeout: 20,
 	})
 
-	expect(hashFile).toHaveBeenCalledTimes(2)
+	expect(hashFile).toHaveBeenCalledOnce()
 	expect(generateThumbnail).toHaveBeenCalledOnce()
 })
 
@@ -1537,7 +3075,7 @@ test('garbage-collects a deferred content candidate after its safety deadline', 
 	const thumbnail = thumbnailSystemPath(nodePath.join(dataDirectory, 'thumbnails'), reference)
 	await writeFile(pending, 'pending')
 	await index.reconcilePath(pending)
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	database.prepare("UPDATE entries SET hash_retry_at = ? WHERE relative_path = 'pending.png'").run(Date.now() + 5_000)
 	database.close()
 	await fse.remove(removed)
@@ -1613,7 +3151,7 @@ test('keeps shared assets until the final indexed content reference is deleted',
 		minTimeout: 10,
 		maxTimeout: 20,
 	})
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT COUNT(*) AS count FROM contents').get()).toStrictEqual({count: 0})
 	expect(database.prepare('SELECT COUNT(*) AS count FROM thumbnail_variants').get()).toStrictEqual({count: 0})
 	database.close()
@@ -1662,7 +3200,7 @@ test('serializes artifact GC with re-adoption of the same content hash', async (
 	await expect(
 		fse.pathExists(thumbnailSystemPath(nodePath.join(dataDirectory, 'thumbnails'), reference)),
 	).resolves.toBe(true)
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT state FROM thumbnail_variants').get()).toStrictEqual({state: 'ready'})
 	database.close()
 	expect(generateThumbnail).toHaveBeenCalledTimes(2)
@@ -1697,6 +3235,13 @@ test('repairs missing and untracked thumbnail artifacts without racing recent te
 		reference.key.slice(2, 4),
 		`${reference.key}.webp`,
 	)
+	const obsoleteLongEdge = nodePath.join(
+		thumbnailDirectory,
+		'content',
+		'preview-512-webp-v1',
+		reference.key.slice(0, 2),
+		`${reference.key}.webp`,
+	)
 	const legacy = nodePath.join(thumbnailDirectory, 'legacy-random-id.webp')
 	const emptyShard = nodePath.join(thumbnailDirectory, 'content', THUMBNAIL_VARIANT, 'ff')
 	await Promise.all([
@@ -1704,6 +3249,7 @@ test('repairs missing and untracked thumbnail artifacts without racing recent te
 		fse.outputFile(temporary, 'temporary'),
 		fse.outputFile(recentTemporary, 'active temporary'),
 		fse.outputFile(oldTwoLevel, 'old-two-level'),
+		fse.outputFile(obsoleteLongEdge, 'obsolete-long-edge'),
 		fse.outputFile(legacy, 'legacy'),
 		fse.ensureDir(emptyShard),
 	])
@@ -1717,6 +3263,7 @@ test('repairs missing and untracked thumbnail artifacts without racing recent te
 			expect(await fse.pathExists(orphan)).toBe(false)
 			expect(await fse.pathExists(temporary)).toBe(false)
 			expect(await fse.pathExists(oldTwoLevel)).toBe(false)
+			expect(await fse.pathExists(obsoleteLongEdge)).toBe(false)
 			expect(await fse.pathExists(legacy)).toBe(false)
 			expect(await fse.pathExists(recentTemporary)).toBe(true)
 			expect(await fse.pathExists(emptyShard)).toBe(true)
@@ -1725,7 +3272,7 @@ test('repairs missing and untracked thumbnail artifacts without racing recent te
 	)
 	expect(generateThumbnail).toHaveBeenCalledTimes(2)
 
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare("SELECT name FROM sqlite_schema WHERE name = 'artifact_gc'").get()).toBeUndefined()
 	expect(database.prepare('SELECT state FROM thumbnail_variants').get()).toStrictEqual({state: 'ready'})
 	database.close()
@@ -1744,7 +3291,7 @@ test('preserves pre-quarantine artifacts until a replacement index finishes rebu
 	await Promise.all([fse.outputFile(image, 'image'), fse.outputFile(thumbnail, 'existing thumbnail')])
 	const databaseDirectory = nodePath.join(dataDirectory, 'file-index')
 	await fse.ensureDir(databaseDirectory)
-	await writeFile(nodePath.join(databaseDirectory, 'index.sqlite3'), 'not a database')
+	await writeFile(nodePath.join(databaseDirectory, 'index.db'), 'not a database')
 
 	let releaseWalk!: () => void
 	let signalWalk!: () => void
@@ -1815,7 +3362,7 @@ test('never publishes an empty thumbnail artifact as ready', async () => {
 	await expect(
 		fse.pathExists(thumbnailSystemPath(thumbnailDirectory, contentIdentity(digest.toString('hex')))),
 	).resolves.toBe(false)
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT state, failure_count FROM thumbnail_variants').get()).toStrictEqual({
 		state: 'failed',
 		failure_count: 1,
@@ -1858,7 +3405,7 @@ test('runs artifact maintenance while an unreadable file is waiting for its hash
 	await writeFile(image, 'unreadable image')
 	await index.reconcilePath(image)
 
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	database.prepare('UPDATE entries SET hash_retry_at = 0').run()
 	database.close()
 	const legacyArtifact = nodePath.join(dataDirectory, 'thumbnails', 'legacy-untracked.webp')
@@ -1923,7 +3470,7 @@ test('persists hash and thumbnail failures and lets an on-demand retry recover i
 	await writeFile(image, 'retry image')
 
 	await expect(index.ensureThumbnail(image)).rejects.toThrow('injected hash read failure')
-	let database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	let database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT hash_failure_count, hash_retry_at, hash_error FROM entries').get()).toMatchObject({
 		hash_failure_count: 1,
 		hash_retry_at: expect.any(Number),
@@ -1932,7 +3479,7 @@ test('persists hash and thumbnail failures and lets an on-demand retry recover i
 	database.close()
 
 	await expect(index.ensureThumbnail(image)).rejects.toThrow('injected convert failure')
-	database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(
 		database.prepare('SELECT state, failure_count, retry_at, last_error FROM thumbnail_variants').get(),
 	).toMatchObject({
@@ -1946,7 +3493,7 @@ test('persists hash and thumbnail failures and lets an on-demand retry recover i
 	await expect(index.ensureThumbnail(image)).resolves.toMatchObject({kind: 'content', key: '81'.repeat(32)})
 	expect(hashFile).toHaveBeenCalledTimes(2)
 	expect(generateThumbnail).toHaveBeenCalledTimes(2)
-	database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(database.prepare('SELECT hash_failure_count, hash_retry_at, hash_error FROM entries').get()).toStrictEqual({
 		hash_failure_count: 0,
 		hash_retry_at: null,
@@ -1974,7 +3521,7 @@ test('backs off artifact-side ENOENT failures instead of treating the source as 
 
 	await expect(index.ensureThumbnail(image)).rejects.toThrow('artifact disappeared during publication')
 
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	expect(
 		database.prepare('SELECT state, failure_count, retry_at, last_error FROM thumbnail_variants').get(),
 	).toMatchObject({
@@ -2004,7 +3551,7 @@ test('wakes for a thumbnail retry before a later unrelated hash retry', async ()
 
 	await expect(index.ensureThumbnail(thumbnailRetry)).rejects.toThrow('injected thumbnail failure')
 	await expect(index.ensureThumbnail(hashRetry)).rejects.toThrow('injected hash failure')
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	const now = Date.now()
 	database.prepare("UPDATE thumbnail_variants SET retry_at = ? WHERE state = 'failed'").run(now + 150)
 	database.prepare("UPDATE entries SET hash_retry_at = ? WHERE relative_path = 'hash-retry.png'").run(now + 2_000)
@@ -2043,7 +3590,7 @@ test('does not poll the retry scheduler while due hash work is already in flight
 	const image = nodePath.join(homeDirectory, 'in-flight-retry.png')
 	await writeFile(image, 'image')
 	await index.reconcilePath(image)
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	database.prepare('UPDATE entries SET hash_retry_at = 0').run()
 	database.close()
 
@@ -2079,7 +3626,7 @@ test('ignores orphaned failed variants when scheduling the next retry wake', asy
 	const pending = nodePath.join(homeDirectory, 'future-hash.png')
 	await writeFile(pending, 'pending')
 	await index.reconcilePath(pending)
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	database.prepare('UPDATE entries SET hash_retry_at = ?').run(Date.now() + 60_000)
 	const orphan = database
 		.prepare('INSERT INTO contents(blake3, size, created_at) VALUES (?, 1, ?) RETURNING id')
@@ -2759,7 +4306,7 @@ test('removes a stale move source even when destination reconciliation fails', a
 	await writeFile(source, 'moved')
 	await index.reconcilePath(source)
 	await fse.move(source, destination)
-	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.sqlite3'))
+	const database = new BetterSqlite3(nodePath.join(dataDirectory, 'file-index', 'index.db'))
 	database.exec(`
 		CREATE TRIGGER reject_move_destination BEFORE INSERT ON entries
 		WHEN NEW.relative_path = 'after.txt'
@@ -3102,8 +4649,17 @@ test('removes populated roots and searches after re-adding them', async () => {
 test('quarantines a corrupt derived database and starts cleanly', async () => {
 	const dataDirectory = await temporary.create()
 	const databaseDirectory = nodePath.join(dataDirectory, 'file-index')
-	const databasePath = nodePath.join(databaseDirectory, 'index.sqlite3')
+	const databasePath = nodePath.join(databaseDirectory, 'index.db')
+	const umbrelDatabasePath = nodePath.join(dataDirectory, 'umbrel.db')
 	await fse.ensureDir(databaseDirectory)
+	const umbrelDatabase = new BetterSqlite3(umbrelDatabasePath)
+	migratePhotos(umbrelDatabase)
+	umbrelDatabase
+		.prepare(
+			"INSERT INTO photos_sources(id, account_id, type, name, created_at) VALUES ('kept', 'owner', 'umbrel', 'Umbrel', 1)",
+		)
+		.run()
+	umbrelDatabase.close()
 	await writeFile(databasePath, 'not a database')
 	const index = new FileIndex({dataDirectory, logger, isHidden: () => false})
 	indexes.push(index)
@@ -3112,13 +4668,18 @@ test('quarantines a corrupt derived database and starts cleanly', async () => {
 
 	await expect(index.status()).resolves.toMatchObject({available: true, schemaVersion: FILE_INDEX_SCHEMA_VERSION})
 	const files = await fse.readdir(databaseDirectory)
-	expect(files.some((name) => name.startsWith('index.sqlite3.corrupt-'))).toBe(true)
+	expect(files.some((name) => name.startsWith('index.db.corrupt-'))).toBe(true)
+	const preservedUmbrelDatabase = new BetterSqlite3(umbrelDatabasePath)
+	expect(preservedUmbrelDatabase.prepare("SELECT id FROM photos_sources WHERE id = 'kept'").get()).toStrictEqual({
+		id: 'kept',
+	})
+	preservedUmbrelDatabase.close()
 })
 
 test('quarantines a newer pre-release schema and starts cleanly', async () => {
 	const dataDirectory = await temporary.create()
 	const databaseDirectory = nodePath.join(dataDirectory, 'file-index')
-	const databasePath = nodePath.join(databaseDirectory, 'index.sqlite3')
+	const databasePath = nodePath.join(databaseDirectory, 'index.db')
 	await fse.ensureDir(databaseDirectory)
 	const database = new BetterSqlite3(databasePath)
 	await migrateFileIndex(database)
@@ -3137,7 +4698,7 @@ test('quarantines a newer pre-release schema and starts cleanly', async () => {
 		entryCount: 0,
 	})
 	const files = await fse.readdir(databaseDirectory)
-	expect(files.some((name) => name.startsWith('index.sqlite3.unsupported-schema-'))).toBe(true)
+	expect(files.some((name) => name.startsWith('index.db.unsupported-schema-'))).toBe(true)
 })
 
 test('recovers from a non-corruption open failure without restarting', async () => {
@@ -3160,4 +4721,174 @@ test('recovers from a non-corruption open failure without restarting', async () 
 		},
 	)
 	expect(logger.log).toHaveBeenCalledWith('Recovered file index database')
+})
+
+test('does not replace the durable Umbrel database when it cannot be opened', async () => {
+	const dataDirectory = await temporary.create()
+	const umbrelDatabasePath = nodePath.join(dataDirectory, 'umbrel.db')
+	await fse.ensureDir(umbrelDatabasePath)
+	await writeFile(nodePath.join(umbrelDatabasePath, 'keep-me'), 'durable state')
+	const index = new FileIndex({dataDirectory, logger, isHidden: () => false, recoveryRetryMs: 60_000})
+	indexes.push(index)
+
+	await index.start()
+
+	await expect(index.status()).resolves.toMatchObject({available: true})
+	await expect(index.photosSummary('owner')).rejects.toThrow('Photos library is unavailable')
+	expect((await fse.stat(umbrelDatabasePath)).isDirectory()).toBe(true)
+	await expect(readFile(nodePath.join(umbrelDatabasePath, 'keep-me'), 'utf8')).resolves.toBe('durable state')
+})
+
+test('preserves and recovers the shared Umbrel database without restarting file indexing', async () => {
+	const rootDirectory = await temporary.create()
+	const dataDirectory = await temporary.create()
+	const homeDirectory = nodePath.join(rootDirectory, 'home')
+	await fse.ensureDir(homeDirectory)
+	const photoPath = nodePath.join(homeDirectory, 'available-to-files.jpg')
+	await fse.outputFile(photoPath, 'image')
+	const umbrelDatabasePath = nodePath.join(dataDirectory, 'umbrel.db')
+	const incompatible = new BetterSqlite3(umbrelDatabasePath)
+	incompatible.exec(`
+		CREATE TABLE schema_migrations(
+			module TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			applied_at INTEGER NOT NULL,
+			PRIMARY KEY(module, version)
+		);
+		INSERT INTO schema_migrations VALUES ('photos', 999, 1);
+		CREATE TABLE durable_probe(value TEXT NOT NULL);
+		INSERT INTO durable_probe VALUES ('preserved');
+	`)
+	incompatible.close()
+
+	const index = new FileIndex({
+		dataDirectory,
+		logger,
+		isHidden: () => false,
+		recoveryRetryMs: 10,
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x51),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	indexes.push(index)
+	await index.start()
+	await index.setRoots([
+		{virtualPath: '/Home', systemPath: homeDirectory, ownerId: 'owner', kind: 'home', searchEnabled: true},
+	])
+	await expect(index.photosSummary('owner')).rejects.toThrow('Photos library is unavailable')
+	await expect(index.status()).resolves.toMatchObject({available: true})
+	await expect(index.enableThumbnailVariants([...PHOTOS_THUMBNAIL_VARIANTS])).resolves.toBeUndefined()
+	await expect(index.ensureThumbnail(photoPath)).resolves.toMatchObject({variant: THUMBNAIL_VARIANT})
+	const repair = new BetterSqlite3(umbrelDatabasePath)
+	expect(repair.prepare('SELECT value FROM durable_probe').get()).toStrictEqual({value: 'preserved'})
+	repair.prepare("DELETE FROM schema_migrations WHERE module = 'photos'").run()
+	repair.close()
+
+	await pRetry(() => index.initializePhotos('owner'), {retries: 100, minTimeout: 10, maxTimeout: 20})
+	await expect(index.photosSummary('owner')).resolves.toMatchObject({counts: {items: 0}})
+	const recoveredPhotos = new BetterSqlite3(umbrelDatabasePath)
+	expect(recoveredPhotos.prepare('SELECT value FROM durable_probe').get()).toStrictEqual({value: 'preserved'})
+	expect(
+		recoveredPhotos
+			.prepare("SELECT hex(content_hash) AS hash FROM photos_content_state WHERE account_id = 'owner'")
+			.get(),
+	).toStrictEqual({hash: Buffer.alloc(32, 0x51).toString('hex').toUpperCase()})
+	recoveredPhotos.close()
+})
+
+test('purges a removed member when the optional Photos database recovers', async () => {
+	const rootDirectory = await temporary.create()
+	const dataDirectory = await temporary.create()
+	const ownerHome = nodePath.join(rootDirectory, 'owner-home')
+	const memberHome = nodePath.join(rootDirectory, 'member-home')
+	await Promise.all([
+		fse.outputFile(nodePath.join(ownerHome, 'owner.jpg'), 'owner'),
+		fse.outputFile(nodePath.join(memberHome, 'member.jpg'), 'member'),
+	])
+	const ownerRoot: FileIndexRoot = {
+		virtualPath: '/Home',
+		systemPath: ownerHome,
+		ownerId: 'owner',
+		kind: 'home',
+		searchEnabled: true,
+	}
+	const memberRoot: FileIndexRoot = {
+		virtualPath: '/Users/alice',
+		systemPath: memberHome,
+		ownerId: 'alice',
+		kind: 'home',
+		searchEnabled: true,
+	}
+	const runtime = {
+		availableParallelism: 1,
+		hashFile: async (path: string) => Buffer.alloc(32, path.includes('member') ? 0x62 : 0x61),
+		generateThumbnail: async (_source: string, destination: string) => fse.outputFile(destination, 'thumbnail'),
+		extractMediaMetadata: async () => ({
+			kind: 'photo' as const,
+			takenAt: 1,
+			createdAt: 1,
+			width: 1,
+			height: 1,
+		}),
+	}
+	const initial = new FileIndex({
+		dataDirectory,
+		logger,
+		isHidden: (name) => name.startsWith('.'),
+		enrichmentRuntime: runtime,
+	})
+	indexes.push(initial)
+	await initial.setRoots([ownerRoot, memberRoot])
+	await initial.start()
+	await Promise.all([initial.reconcileRoot('/Home', 'owner'), initial.reconcileRoot('/Users/alice', 'member')])
+	await initial.initializePhotos()
+	initial.startBackgroundReconciliation()
+	await pRetry(async () => expect(await initial.photosIndexingState('alice')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const memberItem = (await initial.photosListItems('alice', {}, undefined, 10)).items[0]!
+	await initial.photosCreateAlbum('alice', 'Private', [memberItem.id])
+	await initial.stop()
+
+	const umbrelDatabasePath = nodePath.join(dataDirectory, 'umbrel.db')
+	const incompatible = new BetterSqlite3(umbrelDatabasePath)
+	incompatible
+		.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, ?, ?)')
+		.run('photos', 999, Date.now())
+	incompatible.close()
+
+	const recovered = new FileIndex({
+		dataDirectory,
+		logger,
+		isHidden: (name) => name.startsWith('.'),
+		recoveryRetryMs: 10,
+		enrichmentRuntime: runtime,
+	})
+	indexes.push(recovered)
+	await recovered.setRoots([ownerRoot])
+	await recovered.start()
+	await expect(recovered.photosSummary('owner')).rejects.toThrow('Photos library is unavailable')
+	const repair = new BetterSqlite3(umbrelDatabasePath)
+	repair.prepare("DELETE FROM schema_migrations WHERE module = 'photos' AND version = 999").run()
+	repair.close()
+
+	await pRetry(() => recovered.initializePhotos('owner'), {retries: 100, minTimeout: 10, maxTimeout: 20})
+	const photos = new BetterSqlite3(umbrelDatabasePath)
+	expect(photos.prepare("SELECT COUNT(*) AS count FROM photos_sources WHERE account_id = 'alice'").get()).toStrictEqual(
+		{
+			count: 0,
+		},
+	)
+	expect(
+		photos.prepare("SELECT COUNT(*) AS count FROM photos_content_state WHERE account_id = 'alice'").get(),
+	).toStrictEqual({
+		count: 0,
+	})
+	expect(photos.prepare("SELECT COUNT(*) AS count FROM photos_albums WHERE account_id = 'alice'").get()).toStrictEqual({
+		count: 0,
+	})
+	photos.close()
 })

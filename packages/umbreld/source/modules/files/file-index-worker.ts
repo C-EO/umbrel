@@ -1,5 +1,6 @@
 import {parentPort, threadId, workerData} from 'node:worker_threads'
 
+import type {PhotoFilter, PhotoScopeMode} from '../photos/types.js'
 import FileIndexEngine, {type FileIndexRoot, type WatcherChange} from './file-index-engine.js'
 import {
 	isFileIndexRoot,
@@ -10,6 +11,8 @@ import {
 	type FileIndexWorkerInboundMessage,
 	type FileIndexWorkerOutboundMessage,
 } from './file-index-worker-protocol.js'
+import {isThumbnailVariant, type ThumbnailVariant} from './thumbnail-support.js'
+import type {PublishedFileRevision} from './file-index-enrichment.js'
 
 if (!parentPort) throw new Error('File index worker requires a parent port')
 
@@ -30,6 +33,7 @@ const index = new FileIndexEngine({
 	logger,
 	isHidden,
 	onAvailabilityChange: (available) => post({type: 'availability', available}),
+	onPhotosChange: (accountIds) => post({type: 'photos-change', accountIds}),
 	reconciliationIntervalMs: options.reconciliationIntervalMs,
 	recoveryRetryMs: options.recoveryRetryMs,
 	watcherBulkThreshold: options.watcherBulkThreshold,
@@ -58,6 +62,69 @@ function numberArg(args: unknown[], index = 0) {
 	const value = args[index]
 	if (typeof value !== 'number' || !Number.isFinite(value)) throw new TypeError(`Expected number argument ${index}`)
 	return value
+}
+
+function optionalStringArg(args: unknown[], index: number) {
+	const value = args[index]
+	if (value === undefined) return
+	if (typeof value !== 'string') throw new TypeError(`Expected optional string argument ${index}`)
+	return value
+}
+
+function booleanArg(args: unknown[], index: number) {
+	const value = args[index]
+	if (typeof value !== 'boolean') throw new TypeError(`Expected boolean argument ${index}`)
+	return value
+}
+
+function stringsArg(args: unknown[], index: number) {
+	const value = args[index]
+	if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) {
+		throw new TypeError(`Expected string array argument ${index}`)
+	}
+	return value
+}
+
+function optionalStringsArg(args: unknown[], index: number) {
+	return args[index] === undefined ? undefined : stringsArg(args, index)
+}
+
+function thumbnailVariantArg(args: unknown[], index: number): ThumbnailVariant | undefined {
+	const value = args[index]
+	if (value === undefined) return
+	if (typeof value !== 'string' || !isThumbnailVariant(value)) {
+		throw new TypeError(`Expected thumbnail variant argument ${index}`)
+	}
+	return value
+}
+
+function bufferArg(args: unknown[], index: number) {
+	const value = args[index]
+	if (!(value instanceof Uint8Array)) throw new TypeError(`Expected byte array argument ${index}`)
+	return Buffer.from(value)
+}
+
+function contentFingerprintArg(args: unknown[], index: number): PublishedFileRevision {
+	const value = args[index] as Partial<PublishedFileRevision> | undefined
+	if (
+		!value ||
+		typeof value !== 'object' ||
+		typeof value.inode !== 'string' ||
+		typeof value.size !== 'number' ||
+		!Number.isFinite(value.size) ||
+		typeof value.modifiedNs !== 'string' ||
+		typeof value.ctimeNs !== 'string'
+	) {
+		throw new TypeError(`Expected content fingerprint argument ${index}`)
+	}
+	return value as PublishedFileRevision
+}
+
+function objectArg<T>(args: unknown[], index: number): T {
+	const value = args[index]
+	if (!value || typeof value !== 'object' || Array.isArray(value))
+		throw new TypeError(`Expected object argument ${index}`)
+	return value as T
 }
 
 function watcherChangesArg(args: unknown[], index = 1): WatcherChange[] {
@@ -102,9 +169,77 @@ async function request(method: FileIndexRequestMethod, args: unknown[]) {
 		case 'getEntryBySystemPath':
 			return index.getEntryBySystemPath(stringArg(args))
 		case 'ensureThumbnail':
-			return index.ensureThumbnail(stringArg(args))
+			return index.ensureThumbnail(stringArg(args), thumbnailVariantArg(args, 1))
+		case 'photosPrepareUpload':
+			return index.photosPrepareUpload(stringArg(args), bufferArg(args, 1), optionalStringArg(args, 2))
+		case 'photosRegisterUpload':
+			return index.photosRegisterUpload(
+				stringArg(args),
+				stringArg(args, 1),
+				bufferArg(args, 2),
+				contentFingerprintArg(args, 3),
+				optionalStringArg(args, 4),
+			)
 		case 'getExistingThumbnail':
-			return index.getExistingThumbnail(stringArg(args))
+			return index.getExistingThumbnail(stringArg(args), thumbnailVariantArg(args, 1))
+		case 'enableThumbnailVariants': {
+			const variants = stringsArg(args, 0)
+			if (!variants.every(isThumbnailVariant)) throw new TypeError('Expected thumbnail variants')
+			return index.enableThumbnailVariants(variants)
+		}
+		case 'initializePhotos':
+			return index.initializePhotos(optionalStringArg(args, 0))
+		case 'photosSummary':
+			return index.photosSummary(stringArg(args))
+		case 'photosIndexingState':
+			return index.photosIndexingState(stringArg(args))
+		case 'photosListItems':
+			return index.photosListItems(
+				stringArg(args),
+				objectArg<PhotoFilter>(args, 1),
+				optionalStringArg(args, 2),
+				numberArg(args, 3),
+			)
+		case 'photosGetItem':
+			return index.photosGetItem(stringArg(args), stringArg(args, 1))
+		case 'photosNeighbors':
+			return index.photosNeighbors(stringArg(args), stringArg(args, 1), objectArg<PhotoFilter>(args, 2))
+		case 'photosSetFavorite':
+			return index.photosSetFavorite(stringArg(args), stringsArg(args, 1), booleanArg(args, 2))
+		case 'photosSetDeleted':
+			return index.photosSetDeleted(stringArg(args), stringsArg(args, 1), booleanArg(args, 2))
+		case 'photosResolveItems':
+			return index.photosResolveItems(stringArg(args), stringsArg(args, 1))
+		case 'photosResolveDeletedItems':
+			return index.photosResolveDeletedItems(stringArg(args), optionalStringsArg(args, 1))
+		case 'photosResolveLiveCompanion':
+			return index.photosResolveLiveCompanion(stringArg(args), stringArg(args, 1))
+		case 'photosDeleteItems':
+			return index.photosDeleteItems(stringArg(args), stringsArg(args, 1), booleanArg(args, 2))
+		case 'photosListAlbums':
+			return index.photosListAlbums(stringArg(args))
+		case 'photosCreateAlbum':
+			return index.photosCreateAlbum(stringArg(args), stringArg(args, 1), optionalStringsArg(args, 2))
+		case 'photosRenameAlbum':
+			return index.photosRenameAlbum(stringArg(args), stringArg(args, 1), stringArg(args, 2))
+		case 'photosSetAlbumCover':
+			return index.photosSetAlbumCover(stringArg(args), stringArg(args, 1), optionalStringArg(args, 2))
+		case 'photosDeleteAlbum':
+			return index.photosDeleteAlbum(stringArg(args), stringArg(args, 1))
+		case 'photosAddAlbumItems':
+			return index.photosAddAlbumItems(stringArg(args), stringArg(args, 1), stringsArg(args, 2))
+		case 'photosRemoveAlbumItems':
+			return index.photosRemoveAlbumItems(stringArg(args), stringArg(args, 1), stringsArg(args, 2))
+		case 'photosListSources':
+			return index.photosListSources(stringArg(args))
+		case 'photosUpdateSource':
+			return index.photosUpdateSource(
+				stringArg(args),
+				stringArg(args, 1),
+				args[2] === undefined ? undefined : objectArg<{mode: PhotoScopeMode; paths: string[]}>(args, 2),
+			)
+		case 'photosRemoveSource':
+			return index.photosRemoveSource(stringArg(args), stringArg(args, 1), booleanArg(args, 2))
 		case 'matchesThumbnail':
 			return index.matchesThumbnail(stringArg(args), stringArg(args, 1), stringArg(args, 2), stringArg(args, 3))
 		case 'searchCandidates':
@@ -112,6 +247,7 @@ async function request(method: FileIndexRequestMethod, args: unknown[]) {
 		case 'status':
 			return index.status()
 	}
+	throw new TypeError(`Unsupported file index request '${method}'`)
 }
 
 function notification(method: FileIndexNotificationMethod, args: unknown[]) {

@@ -19,6 +19,7 @@ describe('Files visibility policy', () => {
 		expect(files.isHidden('.directory')).toBe(true)
 		expect(files.isHidden('.umbrel-watcher-health-check')).toBe(true)
 		expect(files.isHidden('partial.umbrel-upload')).toBe(true)
+		expect(files.isHidden('claimed.umbrel-trash')).toBe(true)
 	})
 
 	test('does not inherit Cloud-only OS-junk names', () => {

@@ -28,6 +28,7 @@ import {getSystemDiskUsage} from '../system/system.js'
 import UploadDiskPreflight from './upload-disk-preflight.js'
 
 import fileApi from '../files/api.js'
+import photosApi from '../photos/api.js'
 import accountAvatarApi from '../user/avatar-api.js'
 
 // Keep known-size internal uploads from collectively consuming the platform's
@@ -242,6 +243,9 @@ class Server {
 
 		// Every file endpoint is mounted beneath an authentication-first subrouter.
 		this.app.use('/api/files', fileApi(this.umbreld, this.uploadDiskPreflight))
+		// Photos serves account-scoped thumbnails, originals, downloads and uploads
+		// over Files' authorization, enrichment and streaming primitives.
+		this.app.use('/api/photos', photosApi(this.umbreld, this.uploadDiskPreflight))
 		// Account avatars use raw request streams for writes and public,
 		// content-addressed reads for the pre-login account picker.
 		this.app.use('/api/accounts', accountAvatarApi(this.umbreld))

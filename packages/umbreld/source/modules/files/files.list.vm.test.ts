@@ -335,7 +335,7 @@ test('list() keeps Files visibility independent from Cloud junk filtering', asyn
 	// These files typically appear out-of-band (for example over SMB), so seed
 	// both the Files-hidden names and Cloud-only junk names over SSH.
 	await umbreld.vm.ssh(
-		`touch ${guestHome}/visibility-test/{regular.txt,.DS_Store,.directory,.umbrel-watcher-health-check,partial.umbrel-upload,Thumbs.db,desktop.ini,._photo.jpg}`,
+		`touch ${guestHome}/visibility-test/{regular.txt,.DS_Store,.directory,.umbrel-watcher-health-check,partial.umbrel-upload,claimed.umbrel-trash,Thumbs.db,desktop.ini,._photo.jpg}`,
 	)
 
 	// Query the directory listing
@@ -350,6 +350,7 @@ test('list() keeps Files visibility independent from Cloud junk filtering', asyn
 	expect(names).not.toContain('.directory')
 	expect(names).not.toContain('.umbrel-watcher-health-check')
 	expect(names).not.toContain('partial.umbrel-upload')
+	expect(names).not.toContain('claimed.umbrel-trash')
 	expect(names).toEqual(expect.arrayContaining(['regular.txt', 'Thumbs.db', 'desktop.ini', '._photo.jpg']))
 })
 

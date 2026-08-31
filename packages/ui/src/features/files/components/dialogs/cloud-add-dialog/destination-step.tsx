@@ -59,7 +59,7 @@ type Crumb = {path: string; name: string; type: 'directory' | 'external-storage'
 
 // The destination rendered the way the Files path bar draws it: an icon and
 // name per segment with caret separators, minus the navigation
-function DestinationBreadcrumbs({path, homePath}: {path: string; homePath: string}) {
+export function DestinationBreadcrumbs({path, homePath}: {path: string; homePath: string}) {
 	const {t} = useTranslation()
 	const segments = path.split('/').filter(Boolean)
 

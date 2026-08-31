@@ -18,6 +18,8 @@ import {
 	useMachineInstallToasts,
 	useMachinesLiveUpdates,
 } from '@/features/machines/hooks/use-machines'
+import {PhotosUploadIsland} from '@/features/photos/components/upload-island'
+import {usePhotosUploadsFeedback, usePhotosUploadsStatus} from '@/features/photos/hooks/use-upload'
 import {RaidIsland} from '@/features/storage/components/floating-island'
 import {useRaidProgress} from '@/features/storage/hooks/use-raid-progress'
 import {usePendingRaidOperation} from '@/features/storage/providers/pending-operation-context'
@@ -63,6 +65,11 @@ export function FloatingIslandContainer() {
 
 	// Show uploading island if there are any uploads in progress
 	const showUploading = uploadingItems.length > 0
+	// Photos uploads: the queue lives outside the /photos tree so it (and this
+	// island) survive route changes; failure toasts + cache staleness too
+	const photosUploadsStatus = usePhotosUploadsStatus()
+	usePhotosUploadsFeedback()
+	const showPhotosUploads = photosUploadsStatus !== 'idle'
 
 	// Show operations island if there are any operations in progress
 	const showOperations = operations.length > 0
@@ -127,6 +134,11 @@ export function FloatingIslandContainer() {
 				{showUploading && (
 					<motion.div key='upload-island' layout {...commonProps}>
 						<UploadingIsland />
+					</motion.div>
+				)}
+				{showPhotosUploads && (
+					<motion.div key='photos-upload-island' layout {...commonProps}>
+						<PhotosUploadIsland />
 					</motion.div>
 				)}
 				{showOperations && (

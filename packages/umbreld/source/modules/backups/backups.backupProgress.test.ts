@@ -17,10 +17,13 @@ afterAll(async () => {
 })
 
 describe(`backupProgress()`, () => {
-	test('excludes generated machine media and operation state from every snapshot', async () => {
+	test('includes durable Umbrel state while excluding disposable indexes and generated artifacts', async () => {
 		await umbreld.instance.backups.createIgnoreFile()
 		const ignore = await fse.readFile(`${umbreld.instance.dataDirectory}/.kopiaignore`, 'utf8')
 
+		expect(ignore).toContain('file-index')
+		expect(ignore).toContain('thumbnails')
+		expect(ignore).not.toMatch(/^umbrel\.db(?:-wal|-shm)?$/m)
 		expect(ignore).toContain('machines/*/operations')
 		expect(ignore).toContain('machines/*/media')
 	})

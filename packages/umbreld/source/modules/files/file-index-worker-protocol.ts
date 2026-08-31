@@ -24,8 +24,33 @@ export type FileIndexRequestMethod =
 	| 'getEntryByVirtualPath'
 	| 'getEntryBySystemPath'
 	| 'ensureThumbnail'
+	| 'photosPrepareUpload'
+	| 'photosRegisterUpload'
 	| 'getExistingThumbnail'
+	| 'enableThumbnailVariants'
 	| 'matchesThumbnail'
+	| 'initializePhotos'
+	| 'photosSummary'
+	| 'photosIndexingState'
+	| 'photosListItems'
+	| 'photosGetItem'
+	| 'photosNeighbors'
+	| 'photosSetFavorite'
+	| 'photosSetDeleted'
+	| 'photosResolveItems'
+	| 'photosResolveDeletedItems'
+	| 'photosResolveLiveCompanion'
+	| 'photosDeleteItems'
+	| 'photosListAlbums'
+	| 'photosCreateAlbum'
+	| 'photosRenameAlbum'
+	| 'photosSetAlbumCover'
+	| 'photosDeleteAlbum'
+	| 'photosAddAlbumItems'
+	| 'photosRemoveAlbumItems'
+	| 'photosListSources'
+	| 'photosUpdateSource'
+	| 'photosRemoveSource'
 	| 'searchCandidates'
 	| 'status'
 
@@ -60,6 +85,7 @@ export type SerializedError = {
 export type FileIndexWorkerOutboundMessage =
 	| {type: 'ready'; threadId: number}
 	| {type: 'availability'; available: boolean}
+	| {type: 'photos-change'; accountIds: string[]}
 	| {type: 'response'; id: number; result: unknown}
 	| {type: 'response'; id: number; error: SerializedError}
 	| {type: 'log'; level: 'log' | 'verbose' | 'error'; message?: string; error?: SerializedError}

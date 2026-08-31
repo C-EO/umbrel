@@ -452,6 +452,18 @@ test('POST /api/files/upload with collision=keep-both creates uniquely named fil
 	await expect(readGuestFile(`${guestHome}/keep-both-test (2).txt`)).resolves.toBe('new content')
 })
 
+test('POST /api/files/upload atomically keeps both concurrent same-name uploads', async () => {
+	const [first, second] = await Promise.all([
+		umbreld.api.post('files/upload?path=/Home/concurrent-keep-both.txt&collision=keep-both', {body: 'first'}),
+		umbreld.api.post('files/upload?path=/Home/concurrent-keep-both.txt&collision=keep-both', {body: 'second'}),
+	])
+	const paths = [(first.body as unknown as {path: string}).path, (second.body as unknown as {path: string}).path].sort()
+	expect(paths).toEqual(['/Home/concurrent-keep-both (2).txt', '/Home/concurrent-keep-both.txt'])
+	await expect(
+		Promise.all(paths.map((path) => readGuestFile(`${guestHome}/${path.slice('/Home/'.length)}`))),
+	).resolves.toEqual(expect.arrayContaining(['first', 'second']))
+})
+
 test('POST /api/files/upload with collision=keep-both increments number for multiple collisions', async () => {
 	// Create a file and its first duplicate through the upload API
 	await umbreld.api.post('files/upload?path=/Home/multiple-test.txt', {body: 'original content'})

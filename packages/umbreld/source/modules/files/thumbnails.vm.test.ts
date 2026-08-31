@@ -10,7 +10,7 @@ const suiteRoot = '/Home/thumbnail-index-vm'
 const guestHome = '/home/umbrel/umbrel/home'
 const guestSuiteRoot = `${guestHome}/thumbnail-index-vm`
 const guestThumbnailRoot = '/home/umbrel/umbrel/thumbnails'
-const variant = 'preview-112-webp-v1'
+const variant = 'preview-192-webp-v1'
 const thumbnailUrlPattern = new RegExp(`^/api/files/thumbnail/content-${variant}-[a-f0-9]{64}\\.webp\\?path=`, 'i')
 
 describe('content-addressed thumbnail index', () => {
@@ -115,7 +115,7 @@ describe('content-addressed thumbnail index', () => {
 			cd /opt/umbreld
 			node -e '
 				const Database = require("better-sqlite3")
-				const database = new Database("/home/umbrel/umbrel/file-index/index.sqlite3", {readonly: true})
+				const database = new Database("/home/umbrel/umbrel/file-index/index.db", {readonly: true})
 				const row = database.prepare("SELECT entries.thumbnail_identity_kind AS kind, entries.content_id, transient_thumbnail_variants.artifact_key AS key, transient_thumbnail_variants.state FROM entries JOIN index_roots ON index_roots.id = entries.root_id JOIN transient_thumbnail_variants ON transient_thumbnail_variants.entry_id = entries.id WHERE index_roots.virtual_path = ? AND entries.relative_path = ?").get("/External", "transient-thumbnail-vm/photo.png")
 				process.stdout.write(JSON.stringify(row))
 			'
@@ -158,6 +158,16 @@ describe('content-addressed thumbnail index', () => {
 		await uploadFixture(path, 'apple-encoded-image.heic')
 		const url = await umbreld.client.files.getThumbnail.mutate({path})
 		await expect(assetExists(url)).resolves.toBe(true)
+	})
+
+	test('preserves aspect ratio while scaling the short side to 192px', async () => {
+		const path = `${suiteRoot}/formats/landscape.png`
+		const encoded = await umbreld.vm.sshAsRoot('convert -size 300x200 xc:red png:- | base64 -w 0')
+		await upload(path, Buffer.from(encoded, 'base64'))
+
+		const url = await umbreld.client.files.getThumbnail.mutate({path})
+		const dimensions = await umbreld.vm.sshAsRoot(`identify -quiet -format '%wx%h' '${thumbnailSystemPath(url)}[0]'`)
+		expect(dimensions).toBe('288x192')
 	})
 
 	test('treats ImageMagick wildcard syntax in filenames literally', async () => {
@@ -373,7 +383,7 @@ describe('content-addressed thumbnail index', () => {
 			node -e '
 				const Database = require("better-sqlite3")
 				const fs = require("node:fs")
-				const database = new Database("/home/umbrel/umbrel/file-index/index.sqlite3", {readonly: true})
+				const database = new Database("/home/umbrel/umbrel/file-index/index.db", {readonly: true})
 				const stateQuery = database.prepare("SELECT COUNT(*) AS indexed, COALESCE(SUM(entries.content_id IS NOT NULL), 0) AS hashed, COALESCE(SUM(CASE WHEN thumbnail_variants.state = ? THEN 1 ELSE 0 END), 0) AS ready FROM entries JOIN index_roots ON index_roots.id = entries.root_id LEFT JOIN thumbnail_variants ON thumbnail_variants.content_id = entries.content_id AND thumbnail_variants.variant = ? WHERE index_roots.virtual_path = ? AND entries.relative_path LIKE ?")
 				const hashQuery = database.prepare("SELECT lower(hex(contents.blake3)) AS hash FROM entries JOIN index_roots ON index_roots.id = entries.root_id JOIN contents ON contents.id = entries.content_id JOIN thumbnail_variants ON thumbnail_variants.content_id = entries.content_id AND thumbnail_variants.variant = ? AND thumbnail_variants.state = ? WHERE index_roots.virtual_path = ? AND entries.relative_path LIKE ?")
 				const sleep = new Int32Array(new SharedArrayBuffer(4))
@@ -421,7 +431,7 @@ describe('content-addressed thumbnail index', () => {
 				node -e '
 				const Database = require("better-sqlite3")
 				const fs = require("node:fs")
-				const database = new Database("/home/umbrel/umbrel/file-index/index.sqlite3", {readonly: true})
+				const database = new Database("/home/umbrel/umbrel/file-index/index.db", {readonly: true})
 				const stateQuery = database.prepare("SELECT COUNT(*) AS indexed, COALESCE(SUM(entries.content_id IS NOT NULL), 0) AS hashed, COALESCE(SUM(CASE WHEN thumbnail_variants.state = ? THEN 1 ELSE 0 END), 0) AS ready FROM entries JOIN index_roots ON index_roots.id = entries.root_id LEFT JOIN thumbnail_variants ON thumbnail_variants.content_id = entries.content_id AND thumbnail_variants.variant = ? WHERE index_roots.virtual_path = ? AND entries.relative_path LIKE ?")
 				const hashQuery = database.prepare("SELECT lower(hex(contents.blake3)) AS hash FROM entries JOIN index_roots ON index_roots.id = entries.root_id JOIN contents ON contents.id = entries.content_id JOIN thumbnail_variants ON thumbnail_variants.content_id = entries.content_id AND thumbnail_variants.variant = ? AND thumbnail_variants.state = ? WHERE index_roots.virtual_path = ? AND entries.relative_path LIKE ?")
 				const sleep = new Int32Array(new SharedArrayBuffer(4))
