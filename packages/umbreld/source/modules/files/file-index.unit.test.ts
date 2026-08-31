@@ -1357,6 +1357,49 @@ test('keeps filesystem birth-date fallbacks and screenshot classification per en
 	)
 })
 
+test('classifies wide screenshots before panoramas while preserving spherical media', async () => {
+	const contentHashes: Record<string, number> = {
+		'Screenshot wide.jpg': 1,
+		'wide-export.png': 2,
+		'wide-photo.jpg': 3,
+		'Screenshot sphere.jpg': 4,
+	}
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, contentHashes[nodePath.basename(systemPath)]!),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => {
+				const name = nodePath.basename(systemPath)
+				return {
+					kind: 'photo' as const,
+					width: 300,
+					height: 100,
+					subKind: name === 'Screenshot sphere.jpg' ? ('spherical' as const) : ('panorama' as const),
+					...(name === 'wide-export.png' ? {} : {cameraMake: 'Camera', cameraModel: 'Model'}),
+				}
+			},
+		},
+	})
+	await Promise.all(Object.keys(contentHashes).map((name) => writeFile(nodePath.join(homeDirectory, name), name)))
+	await index.reconcileRoot('/Home', 'screenshot-panorama-precedence')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const namesForSubKind = async (subKind: 'panorama' | 'screenshot' | 'spherical') => {
+		const page = await index.photosListItems('owner', {subKind}, undefined, 10)
+		const details = await Promise.all(page.items.map(({id}) => index.photosGetItem('owner', id)))
+		return details.map((item) => item!.fileName).sort()
+	}
+	expect(await namesForSubKind('screenshot')).toStrictEqual(['Screenshot wide.jpg', 'wide-export.png'])
+	expect(await namesForSubKind('panorama')).toStrictEqual(['wide-photo.jpg'])
+	expect(await namesForSubKind('spherical')).toStrictEqual(['Screenshot sphere.jpg'])
+})
+
 test('orders Photos dates by embedded capture time, filesystem birth time, then modification time', async () => {
 	const {index, homeDirectory, dataDirectory} = await fixture(undefined, {
 		enrichmentRuntime: {

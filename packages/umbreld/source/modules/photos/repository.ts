@@ -130,13 +130,14 @@ const PHOTO_LIBRARY_CTE = `
 			COALESCE(canonical_locations.taken_at, canonical_locations.birthtime_ms,
 				canonical_locations.modified_ms) AS logical_taken_at,
 			CASE
-				WHEN live_pair.still_hash IS NOT NULL THEN 'live'
-				WHEN canonical_locations.sub_kind IS NOT NULL THEN canonical_locations.sub_kind
+				WHEN canonical_locations.sub_kind = 'spherical' THEN 'spherical'
+				WHEN live_pair.still_hash IS NOT NULL OR canonical_locations.sub_kind = 'live' THEN 'live'
 				WHEN lower(canonical_locations.name) LIKE 'screenshot%'
 					OR lower(canonical_locations.name) LIKE 'screen shot%'
 					OR (lower(canonical_locations.name) GLOB '*.png'
 						AND canonical_locations.camera_make IS NULL AND canonical_locations.camera_model IS NULL)
 				THEN 'screenshot'
+				WHEN canonical_locations.sub_kind IS NOT NULL THEN canonical_locations.sub_kind
 				ELSE NULL
 			END AS logical_sub_kind
 		FROM canonical_locations
