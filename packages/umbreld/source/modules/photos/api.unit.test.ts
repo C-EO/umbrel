@@ -27,12 +27,14 @@ describe('Photos HTTP account boundaries', () => {
 			writeFile(nodePath.join(directory, 'owner.jpg'), 'owner-original'),
 			writeFile(nodePath.join(directory, 'member.jpg'), 'member-original'),
 			writeFile(nodePath.join(directory, 'member.mov'), 'member-live'),
+			writeFile(nodePath.join(directory, 'member.insv'), 'member-360-video'),
 			writeFile(nodePath.join(directory, 'member.webp'), 'member-thumbnail'),
 		])
 		const principal = (accountId: string) => ({sessionId: accountId, accountId, actor: 'system' as const})
 		const item = (accountId: string, id: string) => {
 			if (accountId === 'owner' && id === 'owner-item') return {id, path: '/Home/owner.jpg'}
 			if (accountId === 'member' && id === 'member-item') return {id, path: '/Users/member/member.jpg'}
+			if (accountId === 'member' && id === 'member-video') return {id, path: '/Users/member/member.insv'}
 		}
 		const umbreld = {
 			auth: {
@@ -61,6 +63,8 @@ describe('Photos HTTP account boundaries', () => {
 						return nodePath.join(directory, 'member.jpg')
 					if (accountId === 'member' && path === '/Users/member/member.mov')
 						return nodePath.join(directory, 'member.mov')
+					if (accountId === 'member' && path === '/Users/member/member.insv')
+						return nodePath.join(directory, 'member.insv')
 					if (accountId === 'member' && path.startsWith('/Users/member/Photos/')) {
 						return nodePath.join(directory, 'member-home', 'Photos', nodePath.basename(path))
 					}
@@ -167,6 +171,14 @@ describe('Photos HTTP account boundaries', () => {
 		expect(response.statusCode).toBe(206)
 		expect(response.headers['content-range']).toBe('bytes 1-3/11')
 		expect(response.body).toBe('emb')
+	})
+
+	test('serves Insta360 originals as MP4-family video', async () => {
+		const response = await got(`${origin}/api/photos/original/member-video`, {
+			headers: {Authorization: 'Bearer member'},
+		})
+		expect(response.headers['content-type']).toBe('video/mp4')
+		expect(response.body).toBe('member-360-video')
 	})
 
 	test('a member cannot combine its item with an owner item in one download', async () => {

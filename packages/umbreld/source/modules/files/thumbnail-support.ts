@@ -1,24 +1,8 @@
 import nodePath from 'node:path'
 
-export const SUPPORTED_THUMBNAIL_EXTENSIONS = new Set([
-	// Image formats
-	'.webp',
-	'.png',
-	'.jpg',
-	'.jpeg',
-	'.gif',
-	'.avif',
-	'.heic',
-	'.heif',
-	// Video formats
-	'.mkv',
-	'.mov',
-	'.mp4',
-	'.m4v',
-	'.3gp',
-	'.avi',
-	'.webm',
-])
+import {PHOTO_EXTENSIONS, VIDEO_EXTENSIONS} from '../photos/types.js'
+
+export const SUPPORTED_THUMBNAIL_EXTENSIONS = new Set([...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS])
 
 export const THUMBNAIL_FORMAT = 'webp'
 

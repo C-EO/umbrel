@@ -214,38 +214,39 @@ const FileItemIconContent = ({
 		)
 	}
 
-	// Unknown file
-	if (
-		!item.type ||
-		!FILE_TYPE_MAP[item.type as keyof typeof FILE_TYPE_MAP] ||
-		!FILE_TYPE_MAP[item.type as keyof typeof FILE_TYPE_MAP].thumbnail
-	) {
-		return <UnknownFileThumbnail type={item.type || ''} className={className} />
-	}
-
-	// Get the thumbnail component
-	const Thumbnail = FILE_TYPE_MAP[item.type as keyof typeof FILE_TYPE_MAP].thumbnail as unknown as React.ComponentType<{
-		className?: string
-	}>
+	const definition = item.type ? FILE_TYPE_MAP[item.type as keyof typeof FILE_TYPE_MAP] : undefined
+	const DefaultThumbnail = definition?.thumbnail as React.ComponentType<{className?: string}> | null | undefined
 
 	// When rendering inside an SVG context, only return SVG-safe elements
 	if (onlySVG) {
-		return <Thumbnail className={className} />
+		return DefaultThumbnail ? (
+			<DefaultThumbnail className={className} />
+		) : (
+			<UnknownFileThumbnail type={item.type || ''} className={className} />
+		)
 	}
 
 	const {extension} = splitFileName(item.name)
+	const fallback = DefaultThumbnail ? (
+		<DefaultThumbnail className={className} />
+	) : (
+		<UnknownFileThumbnail type={item.type || ''} className={className} />
+	)
 	// Image file
 	if (extension && IMAGE_EXTENSIONS_WITH_IMAGE_THUMBNAILS.has(extension.toLowerCase())) {
-		return <ImageThumbnail item={item} fallback={Thumbnail} className={className} />
+		return <ImageThumbnail item={item} fallback={fallback} className={className} />
 	}
 
 	// Video file
 	if (extension && VIDEO_EXTENSIONS_WITH_IMAGE_THUMBNAILS.has(extension.toLowerCase())) {
-		return <VideoThumbnail item={item} fallback={Thumbnail} className={className} />
+		return <VideoThumbnail item={item} fallback={fallback} className={className} />
 	}
 
+	// Unknown file
+	if (!DefaultThumbnail) return <UnknownFileThumbnail type={item.type || ''} className={className} />
+
 	// All other supported file types
-	return <Thumbnail className={className} />
+	return <DefaultThumbnail className={className} />
 }
 
 const FolderIcon = ({
@@ -360,12 +361,12 @@ function useOnDemandThumbnail(item: FileSystemItem) {
 
 const Thumbnail = ({
 	item,
-	fallback: Fallback,
+	fallback,
 	className,
 	overlay,
 }: {
 	item: FileSystemItem
-	fallback: React.ComponentType<{className?: string}>
+	fallback: React.ReactNode
 	className?: string
 	overlay?: React.ReactNode
 }) => {
@@ -391,7 +392,7 @@ const Thumbnail = ({
 			/>
 		) : null
 
-	const content = imageNode ?? <Fallback className={className} />
+	const content = imageNode ?? fallback
 
 	// Only display overlay when we have a real thumbnail to show
 	if (overlay && imageNode) {
@@ -407,11 +408,9 @@ const Thumbnail = ({
 }
 
 // Image thumbnail
-const ImageThumbnail = (props: {
-	item: FileSystemItem
-	fallback: React.ComponentType<{className?: string}>
-	className?: string
-}) => <Thumbnail {...props} />
+const ImageThumbnail = (props: {item: FileSystemItem; fallback: React.ReactNode; className?: string}) => (
+	<Thumbnail {...props} />
+)
 
 // Video thumbnail
 const VideoThumbnail = ({
@@ -420,7 +419,7 @@ const VideoThumbnail = ({
 	className,
 }: {
 	item: FileSystemItem
-	fallback: React.ComponentType<{className?: string}>
+	fallback: React.ReactNode
 	className?: string
 }) => (
 	<Thumbnail

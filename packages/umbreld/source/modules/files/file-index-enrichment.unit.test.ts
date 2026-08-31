@@ -63,6 +63,17 @@ type PhotoIdentifyMetadata = {
 	makerContentIdentifier: string
 	xmpContentIdentifier: string
 	userCommentMarker: string
+	dngDate: string
+	dngMake: string
+	dngModel: string
+	dngLens: string
+	dngFocalLength: string
+	dngAperture: string
+	dngExposure: string
+	dngIso: string
+	dngLatitude: string
+	dngLongitude: string
+	dngAltitude: string
 }
 
 function photoIdentifyMetadata(overrides: Partial<PhotoIdentifyMetadata> = {}) {
@@ -95,6 +106,17 @@ function photoIdentifyMetadata(overrides: Partial<PhotoIdentifyMetadata> = {}) {
 		makerContentIdentifier: '',
 		xmpContentIdentifier: '',
 		userCommentMarker: '',
+		dngDate: '',
+		dngMake: '',
+		dngModel: '',
+		dngLens: '',
+		dngFocalLength: '',
+		dngAperture: '',
+		dngExposure: '',
+		dngIso: '',
+		dngLatitude: '',
+		dngLongitude: '',
+		dngAltitude: '',
 		...overrides,
 	}
 	return {stdout: Object.values(metadata).join(metadataSeparator)}
@@ -198,11 +220,35 @@ test('passes a held source descriptor to media subprocesses', async () => {
 	)
 })
 
-test('preserves the video coder when a held descriptor hides the source extension', async () => {
-	await generateThumbnailFile('/home/member/video.mkv', '/data/thumbnail.webp', 'preview-192-webp-v1', 42)
+test.each([
+	['photo.arw', 'ARW'],
+	['photo.cr2', 'CR2'],
+	['photo.cr3', 'CR3'],
+	['photo.dng', 'DNG'],
+	['photo.nef', 'NEF'],
+	['photo.orf', 'ORF'],
+	['photo.raf', 'RAF'],
+	['photo.rw2', 'RW2'],
+	['video.360', 'MP4'],
+	['video.3gp', '3GP'],
+	['video.3g2', '3G2'],
+	['video.avi', 'AVI'],
+	['video.insv', 'MP4'],
+	['video.m4v', 'M4V'],
+	['video.mkv', 'MKV'],
+	['video.m2ts', 'MPEG'],
+	['video.mov', 'MOV'],
+	['video.mp4', 'MP4'],
+	['video.mpeg', 'MPEG'],
+	['video.mpg', 'MPEG'],
+	['video.mts', 'MPEG'],
+	['video.webm', 'WEBM'],
+	['video.wmv', 'WMV'],
+])('preserves the %s coder when a held descriptor hides the source extension', async (name, coder) => {
+	await generateThumbnailFile(`/home/member/${name}`, '/data/thumbnail.webp', 'preview-192-webp-v1', 42)
 
 	const arguments_ = vi.mocked(execa).mock.calls[0][1] as string[]
-	expect(arguments_).toContain('MKV:/dev/fd/3[0]')
+	expect(arguments_).toContain(`${coder}:/dev/fd/3[0]`)
 })
 
 test.each(Object.entries(THUMBNAIL_VARIANTS))(
@@ -321,6 +367,81 @@ test.each([
 ])('extracts %s', async (_name, values, expected) => {
 	vi.mocked(execa).mockResolvedValueOnce(photoIdentifyMetadata(values) as never)
 	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({iso: expected})
+})
+
+test('falls back to LibRaw DNG metadata for camera RAW photos', async () => {
+	vi.mocked(execa).mockResolvedValueOnce(
+		photoIdentifyMetadata({
+			dngDate: '2008-01-01T15:29:46+02:30',
+			dngMake: 'Sony',
+			dngModel: 'DSLR-A700',
+			dngLens: '20-200mm f/4-6',
+			dngFocalLength: '2e+02 mm',
+			dngAperture: '8',
+			dngExposure: '1/1e+03',
+			dngIso: '2e+02',
+			dngLatitude: `13 deg 45' 0" N`,
+			dngLongitude: `100 deg 30' 0" E`,
+			dngAltitude: '62.5 m',
+		}) as never,
+	)
+
+	await expect(extractMediaMetadata('/home/photo.arw')).resolves.toMatchObject({
+		kind: 'photo',
+		takenAt: Date.parse('2008-01-01T15:29:46+02:30'),
+		takenAtOffsetMinutes: 150,
+		cameraMake: 'Sony',
+		cameraModel: 'DSLR-A700',
+		lens: '20-200mm f/4-6',
+		focalLength: '200mm',
+		aperture: 'ƒ/8',
+		exposure: '1/1000',
+		iso: 200,
+		latitude: 13.75,
+		longitude: 100.5,
+		altitude: 62.5,
+	})
+})
+
+test('ignores LibRaw zero GPS and unknown-lens sentinels', async () => {
+	vi.mocked(execa).mockResolvedValueOnce(
+		photoIdentifyMetadata({
+			dngDate: '2008-02-30T15:29:46+00:00',
+			dngLens: '0-0mm f/0-0',
+			dngLatitude: `0 deg 0' 0" N`,
+			dngLongitude: `0 deg 0' 0" W`,
+			dngAltitude: '0 m',
+		}) as never,
+	)
+
+	const metadata = await extractMediaMetadata('/home/photo.dng')
+	expect(metadata).not.toHaveProperty('takenAt')
+	expect(metadata).not.toHaveProperty('lens')
+	expect(metadata).not.toHaveProperty('latitude')
+	expect(metadata).not.toHaveProperty('longitude')
+})
+
+test('prefers EXIF metadata when a DNG exposes both metadata families', async () => {
+	vi.mocked(execa).mockResolvedValueOnce(
+		photoIdentifyMetadata({
+			originalDate: '2025:08:21 14:03:04',
+			originalOffset: '+02:30',
+			make: 'Apple',
+			model: 'iPhone 16 Pro',
+			photographicSensitivity: '640',
+			dngDate: '2008-01-01T15:29:46+00:00',
+			dngMake: 'Raw make',
+			dngModel: 'Raw model',
+			dngIso: '200',
+		}) as never,
+	)
+
+	await expect(extractMediaMetadata('/home/photo.dng')).resolves.toMatchObject({
+		takenAt: Date.parse('2025-08-21T14:03:04+02:30'),
+		cameraMake: 'Apple',
+		cameraModel: 'iPhone 16 Pro',
+		iso: 640,
+	})
 })
 
 test.each([

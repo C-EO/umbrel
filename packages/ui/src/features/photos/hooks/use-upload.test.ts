@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {photosUploads, splitMediaFiles} from '@/features/photos/hooks/use-upload'
+import {PHOTOS_MEDIA_ACCEPT, photosUploads, splitMediaFiles} from '@/features/photos/hooks/use-upload'
 
 vi.mock('react-i18next', () => ({useTranslation: () => ({t: (key: string) => key})}))
 vi.mock('react-router-dom', () => ({useParams: () => ({})}))
@@ -225,10 +225,14 @@ describe('photosUploads', () => {
 	})
 
 	it('splits photos and videos from everything else, by extension', () => {
+		const supported = [
+			...['jpg', 'jpeg', 'jfif', 'jpe', 'png', 'gif', 'webp', 'avif', 'heic', 'heif'],
+			...['tif', 'tiff', 'bmp', 'dng', 'cr2', 'cr3', 'nef', 'arw', 'raf', 'orf', 'rw2'],
+			...['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', '3gp', '3g2'],
+			...['mts', 'm2ts', 'mpg', 'mpeg', 'wmv', '360', 'insv'],
+		].map((extension, index) => makeFile(`media-${index}.${extension.toUpperCase()}`, 10, ''))
 		const files = [
-			makeFile('IMG_1234.JPG', 10),
-			makeFile('holiday.heic', 10, ''),
-			makeFile('clip.mkv', 10, ''),
+			...supported,
 			makeFile('backup.zip', 10, 'application/zip'),
 			// A photo the picker mislabels still counts; extensionless never does
 			makeFile('scan.png', 10, 'application/octet-stream'),
@@ -236,8 +240,14 @@ describe('photosUploads', () => {
 			makeFile('.heic', 10, ''),
 		]
 		const {media, others} = splitMediaFiles(files)
-		expect(media.map((file) => file.name)).toEqual(['IMG_1234.JPG', 'holiday.heic', 'clip.mkv', 'scan.png'])
+		expect(media.map((file) => file.name)).toEqual([...supported.map((file) => file.name), 'scan.png'])
 		expect(others.map((file) => file.name)).toEqual(['backup.zip', 'README', '.heic'])
+	})
+
+	it('advertises explicit picker filters for formats browsers do not classify consistently', () => {
+		expect(PHOTOS_MEDIA_ACCEPT.split(',')).toEqual(
+			expect.arrayContaining(['image/*', 'video/*', '.dng', '.cr3', '.mts', '.360', '.insv']),
+		)
 	})
 
 	it('cancel aborts and clears the whole run', () => {

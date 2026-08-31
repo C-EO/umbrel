@@ -3,7 +3,7 @@ import {useRef} from 'react'
 import {useTranslation} from 'react-i18next'
 
 import {PillButton} from '@/components/ui/edge-controls'
-import {useUpload} from '@/features/photos/hooks/use-upload'
+import {PHOTOS_MEDIA_ACCEPT, useUpload} from '@/features/photos/hooks/use-upload'
 import {useBreakpoint} from '@/utils/tw'
 
 // The Upload pill: a hidden file picker into the shared upload queue — on an
@@ -31,7 +31,7 @@ export function UploadButton({iconOnly = false}: {iconOnly?: boolean}) {
 				ref={inputRef}
 				type='file'
 				multiple
-				accept='image/*,video/*'
+				accept={PHOTOS_MEDIA_ACCEPT}
 				className='hidden'
 				onChange={(e) => onFiles(e.target.files)}
 			/>

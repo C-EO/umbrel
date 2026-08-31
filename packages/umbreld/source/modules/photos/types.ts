@@ -10,8 +10,46 @@ export type PhotoSubKind = (typeof PHOTO_SUB_KINDS)[number]
 export type PhotoSourceType = (typeof PHOTO_SOURCE_TYPES)[number]
 export type PhotoScopeMode = (typeof PHOTO_SCOPE_MODES)[number]
 
-export const PHOTO_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.heic', '.heif'])
-export const VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.m4v', '.mkv', '.webm', '.avi', '.3gp'])
+export const PHOTO_EXTENSIONS = new Set([
+	'.jpg',
+	'.jpeg',
+	'.jfif',
+	'.jpe',
+	'.png',
+	'.gif',
+	'.webp',
+	'.avif',
+	'.heic',
+	'.heif',
+	'.tif',
+	'.tiff',
+	'.bmp',
+	'.dng',
+	'.cr2',
+	'.cr3',
+	'.nef',
+	'.arw',
+	'.raf',
+	'.orf',
+	'.rw2',
+])
+export const VIDEO_EXTENSIONS = new Set([
+	'.mp4',
+	'.mov',
+	'.m4v',
+	'.mkv',
+	'.webm',
+	'.avi',
+	'.3gp',
+	'.3g2',
+	'.mts',
+	'.m2ts',
+	'.mpg',
+	'.mpeg',
+	'.wmv',
+	'.360',
+	'.insv',
+])
 
 export function photoKind(name: string): PhotoKind | undefined {
 	const extension = nodePath.extname(name).toLowerCase()

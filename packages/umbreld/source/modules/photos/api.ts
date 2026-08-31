@@ -16,12 +16,12 @@ import {pipeline} from 'node:stream/promises'
 
 import express from 'express'
 import fse from 'fs-extra'
-import mime from 'mime-types'
 
 import type Umbreld from '../../index.js'
 import type {Principal} from '../auth/auth.js'
 import {authorizeDashboardRequest, authorizeHttpRequest, authorizePhotoBackupRequest} from '../auth/http-request.js'
 import {receiveUpload} from '../files/api.js'
+import {lookupMimeType} from '../files/mime.js'
 import type UploadDiskPreflight from '../server/upload-disk-preflight.js'
 import type {ThumbnailVariant} from '../files/thumbnail-support.js'
 import {OWNER_USER_ID} from '../user/constants.js'
@@ -253,7 +253,7 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 				response.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.name)}`)
 				response.setHeader('Content-Type', 'application/octet-stream')
 			} else {
-				response.setHeader('Content-Type', mime.lookup(file.name) || 'application/octet-stream')
+				response.setHeader('Content-Type', lookupMimeType(file.name) || 'application/octet-stream')
 			}
 			if (range.partial) {
 				response.status(206)

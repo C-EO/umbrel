@@ -40,14 +40,36 @@ const PHOTOS_ONLY_VARIANT_SET = new Set<ThumbnailVariant>(
 // Every scan-enabled root is indexed, but proactive content I/O is limited to
 // personal Home and Trash roots. Other roots are enriched by Files only when browsed.
 const BACKGROUND_ENRICHMENT_ROOT_SQL = "index_roots.kind IN ('home', 'trash')"
-const IMAGE_MAGICK_VIDEO_CODERS = new Map([
+const IMAGE_MAGICK_MEDIA_CODERS = new Map([
+	// Camera RAW formats need an explicit coder because their container can be
+	// mistaken for TIFF (or only expose a small embedded preview) once the held
+	// source descriptor hides the filename extension.
+	['.arw', 'ARW'],
+	['.cr2', 'CR2'],
+	['.cr3', 'CR3'],
+	['.dng', 'DNG'],
+	['.nef', 'NEF'],
+	['.orf', 'ORF'],
+	['.raf', 'RAF'],
+	['.rw2', 'RW2'],
+	// Video containers also need an explicit ImageMagick coder when read from a
+	// descriptor. MTS/M2TS are MPEG transport streams, while INSV and GoPro 360
+	// files use MP4-family containers.
+	['.360', 'MP4'],
 	['.3gp', '3GP'],
+	['.3g2', '3G2'],
 	['.avi', 'AVI'],
+	['.insv', 'MP4'],
 	['.m4v', 'M4V'],
 	['.mkv', 'MKV'],
+	['.m2ts', 'MPEG'],
 	['.mov', 'MOV'],
 	['.mp4', 'MP4'],
+	['.mpeg', 'MPEG'],
+	['.mpg', 'MPEG'],
+	['.mts', 'MPEG'],
 	['.webm', 'WEBM'],
+	['.wmv', 'WMV'],
 ])
 const ARTIFACT_MAINTENANCE_INTERVAL_MS = 24 * 60 * 60 * 1000
 const ARTIFACT_MAINTENANCE_BATCH_SIZE = 256
@@ -2201,6 +2223,19 @@ async function extractPhotoMetadata(systemPath: string, sourceFileDescriptor?: n
 		'%[MakerNotes:ContentIdentifier]',
 		'%[xmp:ContentIdentifier]',
 		'%[EXIF:UserComment]',
+		// ImageMagick's LibRaw-backed DNG coder exposes camera RAW metadata
+		// through dng:* properties rather than an EXIF profile.
+		'%[dng:create.date]',
+		'%[dng:make]',
+		'%[dng:camera.model.name]',
+		'%[dng:lens]',
+		'%[dng:focal.length]',
+		'%[dng:f.number]',
+		'%[dng:exposure.time]',
+		'%[dng:iso.setting]',
+		'%[dng:gps.latitude]',
+		'%[dng:gps.longitude]',
+		'%[dng:gps.altitude]',
 	]
 	const {stdout} = await runBoundedMediaProcess(
 		'identify',
@@ -2256,19 +2291,42 @@ async function extractPhotoMetadata(systemPath: string, sourceFileDescriptor?: n
 		makerContentIdentifier,
 		xmpContentIdentifier,
 		userCommentMarker,
+		dngDate,
+		dngMake,
+		dngModel,
+		dngLens,
+		dngFocalLength,
+		dngAperture,
+		dngExposure,
+		dngIso,
+		dngLatitude,
+		dngLongitude,
+		dngAltitude,
 	] = stdout.split(separator).map(cleanMetadataValue)
 	const liveIdentifier = exifContentIdentifier ?? makerContentIdentifier ?? xmpContentIdentifier
 	let width = positiveInteger(widthValue)
 	let height = positiveInteger(heightValue)
 	if (['LeftTop', 'RightTop', 'RightBottom', 'LeftBottom'].includes(orientation ?? ''))
 		[width, height] = [height, width]
-	const takenDate = selectPhotoTakenDate([
-		[originalDate, originalOffset],
-		[digitizedDate, digitizedOffset],
-		[dateTime, dateTimeOffset],
-	])
-	const location = parseGps(latitude, latitudeRef, longitude, longitudeRef, altitude, altitudeRef)
-	const iso = optionalPositiveInteger(photographicSensitivity) ?? optionalPositiveInteger(legacyIso)
+	const takenDate =
+		selectPhotoTakenDate([
+			[originalDate, originalOffset],
+			[digitizedDate, digitizedOffset],
+			[dateTime, dateTimeOffset],
+		]) ?? parseIsoPhotoDate(dngDate)
+	const cameraMake = make ?? dngMake
+	const cameraModel = model ?? dngModel
+	const lensModel = lens ?? meaningfulDngLens(dngLens)
+	const focalLengthValue = focalLength ?? meaningfulDngNumber(dngFocalLength?.replace(/\s*mm$/i, ''))
+	const apertureValue = aperture ?? meaningfulDngNumber(dngAperture)
+	const exposureValue = exposure ?? meaningfulDngNumber(dngExposure)
+	const location =
+		parseGps(latitude, latitudeRef, longitude, longitudeRef, altitude, altitudeRef) ??
+		parseDngGps(dngLatitude, dngLongitude, dngAltitude)
+	const iso =
+		optionalPositiveInteger(photographicSensitivity) ??
+		optionalPositiveInteger(legacyIso) ??
+		optionalPositiveInteger(dngIso)
 	const userComment = userCommentMarker
 		? await extractExifUserComment(systemPath, sourceFileDescriptor).catch(() => undefined)
 		: undefined
@@ -2286,12 +2344,12 @@ async function extractPhotoMetadata(systemPath: string, sourceFileDescriptor?: n
 		...(takenDate ? {createdAt: takenDate.takenAt} : {}),
 		width,
 		height,
-		...(make ? {cameraMake: make} : {}),
-		...(model ? {cameraModel: model} : {}),
-		...(lens ? {lens} : {}),
-		...(focalLength ? {focalLength: formatFocalLength(focalLength)} : {}),
-		...(aperture ? {aperture: formatAperture(aperture)} : {}),
-		...(exposure ? {exposure: formatExposure(exposure)} : {}),
+		...(cameraMake ? {cameraMake} : {}),
+		...(cameraModel ? {cameraModel} : {}),
+		...(lensModel ? {lens: lensModel} : {}),
+		...(focalLengthValue ? {focalLength: formatFocalLength(focalLengthValue)} : {}),
+		...(apertureValue ? {aperture: formatAperture(apertureValue)} : {}),
+		...(exposureValue ? {exposure: formatExposure(exposureValue)} : {}),
 		...(iso === undefined ? {} : {iso}),
 		...(location ?? {}),
 		...(userComment ? {userComment} : {}),
@@ -2397,6 +2455,30 @@ function selectPhotoTakenDate(candidates: Array<[string | undefined, string | un
 	}
 }
 
+function parseIsoPhotoDate(value: string | undefined) {
+	const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$/.exec(value ?? '')
+	if (!match) return
+	const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number)
+	const milliseconds = match[7] ? Math.floor(Number(`0.${match[7]}`) * 1000) : 0
+	const localTime = Date.UTC(year!, month! - 1, day, hour, minute, second, milliseconds)
+	const localDate = new Date(localTime)
+	if (
+		localDate.getUTCFullYear() !== year ||
+		localDate.getUTCMonth() !== month! - 1 ||
+		localDate.getUTCDate() !== day ||
+		localDate.getUTCHours() !== hour ||
+		localDate.getUTCMinutes() !== minute ||
+		localDate.getUTCSeconds() !== second
+	)
+		return
+	const zone = match[8]
+	const offsetMinutes = zone?.toUpperCase() === 'Z' ? 0 : parseOffsetMinutes(zone)
+	return {
+		takenAt: localTime - (offsetMinutes ?? 0) * 60_000,
+		offsetMinutes,
+	}
+}
+
 function parseRational(value: string | undefined) {
 	if (!value) return
 	const [numerator, denominator = '1'] = value.split('/')
@@ -2437,6 +2519,45 @@ function parseGpsAltitude(value: string | undefined, reference: string | undefin
 	if (numericReference === 1 || /below/i.test(reference ?? '')) return -Math.abs(altitude)
 	if (numericReference === 0 || /above/i.test(reference ?? '')) return Math.abs(altitude)
 	return altitude
+}
+
+function parseDngCoordinate(value: string | undefined, allowedReferences: string, maximum: number) {
+	const match = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s+deg\s+(\d+(?:\.\d+)?)'\s+(\d+(?:\.\d+)?)"\s*([NSEW])$/i.exec(
+		value ?? '',
+	)
+	if (!match || !allowedReferences.includes(match[4].toUpperCase())) return
+	const minutes = Number(match[2])
+	const seconds = Number(match[3])
+	const coordinate = Math.abs(Number(match[1])) + minutes / 60 + seconds / 3600
+	if (!Number.isFinite(coordinate) || minutes >= 60 || seconds >= 60 || coordinate > maximum) return
+	return ['S', 'W'].includes(match[4].toUpperCase()) ? -coordinate : coordinate
+}
+
+function parseDngGps(
+	latitudeValue: string | undefined,
+	longitudeValue: string | undefined,
+	altitudeValue: string | undefined,
+) {
+	const latitude = parseDngCoordinate(latitudeValue, 'NS', 90)
+	const longitude = parseDngCoordinate(longitudeValue, 'EW', 180)
+	if (latitude === undefined || longitude === undefined || (latitude === 0 && longitude === 0)) return
+	const altitudeMatch = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*m$/i.exec(altitudeValue ?? '')
+	const altitude = altitudeMatch ? Number(altitudeMatch[1]) : undefined
+	return {
+		latitude,
+		longitude,
+		...(altitude === undefined || !Number.isFinite(altitude) ? {} : {altitude}),
+	}
+}
+
+function meaningfulDngLens(value: string | undefined) {
+	if (!value || /^0(?:\.0+)?-0(?:\.0+)?mm\s+f\/0(?:\.0+)?-0(?:\.0+)?$/i.test(value)) return
+	return value
+}
+
+function meaningfulDngNumber(value: string | undefined) {
+	const parsed = parseRational(value)
+	return parsed !== undefined && parsed > 0 ? value : undefined
 }
 
 async function extractExifUserComment(systemPath: string, sourceFileDescriptor?: number) {
@@ -2686,12 +2807,11 @@ function mediaProcessInput(systemPath: string, sourceFileDescriptor?: number) {
 function imageMagickMediaProcessInput(systemPath: string, sourceFileDescriptor?: number) {
 	const input = mediaProcessInput(systemPath, sourceFileDescriptor)
 	if (sourceFileDescriptor === undefined) return input
-	// ImageMagick can sniff still-image formats from a pathless descriptor, but
-	// video containers need an explicit coder once the filename extension is no
-	// longer present. The supported video extensions match ImageMagick's coder
-	// names on umbrelOS.
-	const videoCoder = IMAGE_MAGICK_VIDEO_CODERS.get(nodePath.extname(systemPath).toLowerCase())
-	return `${videoCoder ? `${videoCoder}:` : ''}${input}`
+	// Most still-image formats can be sniffed from a pathless descriptor. Camera
+	// RAW and video formats need an explicit coder to select the full decoder once
+	// the filename extension is no longer present.
+	const coder = IMAGE_MAGICK_MEDIA_CODERS.get(nodePath.extname(systemPath).toLowerCase())
+	return `${coder ? `${coder}:` : ''}${input}`
 }
 
 async function runBoundedMediaProcess(command: string, arguments_: string[], sourceFileDescriptor?: number) {

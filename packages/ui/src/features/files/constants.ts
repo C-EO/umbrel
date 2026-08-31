@@ -89,18 +89,48 @@ export const SORT_BY_OPTIONS = [
 	{sortBy: 'type', labelTKey: 'files-sort.type'},
 ] as const
 
-// ENSURE THESE 2 SETS MATCH THE ONES IN umbreld/source/modules/files/thumbnails.ts
+// Keep these client-side sets aligned with PHOTO_EXTENSIONS and
+// VIDEO_EXTENSIONS in umbreld/source/modules/photos/types.ts.
 export const IMAGE_EXTENSIONS_WITH_IMAGE_THUMBNAILS = new Set([
 	'.jpg',
 	'.jpeg',
+	'.jfif',
+	'.jpe',
 	'.png',
 	'.gif',
 	'.webp',
 	'.avif',
 	'.heic',
 	'.heif',
+	'.tif',
+	'.tiff',
+	'.bmp',
+	'.dng',
+	'.cr2',
+	'.cr3',
+	'.nef',
+	'.arw',
+	'.raf',
+	'.orf',
+	'.rw2',
 ])
-export const VIDEO_EXTENSIONS_WITH_IMAGE_THUMBNAILS = new Set(['.mov', '.mp4', '.3gp', '.mkv', '.avi'])
+export const VIDEO_EXTENSIONS_WITH_IMAGE_THUMBNAILS = new Set([
+	'.mp4',
+	'.mov',
+	'.m4v',
+	'.mkv',
+	'.webm',
+	'.avi',
+	'.3gp',
+	'.3g2',
+	'.mts',
+	'.m2ts',
+	'.mpg',
+	'.mpeg',
+	'.wmv',
+	'.360',
+	'.insv',
+])
 
 export const FILE_TYPE_MAP = {
 	// Folder

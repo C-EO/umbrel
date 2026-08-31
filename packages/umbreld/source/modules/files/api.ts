@@ -8,7 +8,6 @@ import {pipeline} from 'node:stream/promises'
 import {Blake3Hasher} from '@napi-rs/blake-hash'
 import express from 'express'
 import fse from 'fs-extra'
-import mime from 'mime-types'
 import PQueue from 'p-queue'
 
 import type Umbreld from '../../index.js'
@@ -16,6 +15,7 @@ import type {Principal} from '../auth/auth.js'
 import {authorizeDashboardRequest, authorizeHttpRequest} from '../auth/http-request.js'
 import type UploadDiskPreflight from '../server/upload-disk-preflight.js'
 import type {PublishedFileRevision} from './file-index-enrichment.js'
+import {lookupMimeType} from './mime.js'
 
 // Final publication must choose and claim a keep-both name atomically. Umbreld
 // has one upload API process, so this also avoids two concurrent requests
@@ -514,7 +514,7 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 				"sandbox; default-src 'none'; script-src 'none'; object-src 'none'; base-uri 'none'",
 			)
 			response.setHeader('X-Content-Type-Options', 'nosniff')
-			const mimeType = mime.lookup(systemPath)
+			const mimeType = lookupMimeType(systemPath)
 			const isImageEmbed = acceptsEmbeddedSvg(request)
 			// Files are user-controlled but served same-origin, so only low-risk preview types render inline.
 			// All others download, with CSP sandbox and nosniff as defense-in-depth if a browser renders anyway.

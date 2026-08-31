@@ -56,9 +56,36 @@ type Queued = {file: File; albumId?: string}
 // What the library accepts, by extension. This mirrors the server as a
 // client-side courtesy; the server remains authoritative.
 const MEDIA_EXTENSIONS = new Set([
-	...['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'heic', 'heif'],
-	...['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', '3gp'],
+	...[
+		'jpg',
+		'jpeg',
+		'jfif',
+		'jpe',
+		'png',
+		'gif',
+		'webp',
+		'avif',
+		'heic',
+		'heif',
+		'tif',
+		'tiff',
+		'bmp',
+		'dng',
+		'cr2',
+		'cr3',
+		'nef',
+		'arw',
+		'raf',
+		'orf',
+		'rw2',
+	],
+	...['mp4', 'mov', 'm4v', 'mkv', 'webm', 'avi', '3gp', '3g2', 'mts', 'm2ts', 'mpg', 'mpeg', 'wmv', '360', 'insv'],
 ])
+export const PHOTOS_MEDIA_ACCEPT = [
+	'image/*',
+	'video/*',
+	...[...MEDIA_EXTENSIONS].map((extension) => `.${extension}`),
+].join(',')
 const isMedia = (file: File) => {
 	const dot = file.name.lastIndexOf('.')
 	// dot > 0: no extensionless files, and no dotfiles (the walk skips those)

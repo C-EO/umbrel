@@ -140,18 +140,44 @@ describe('content-addressed thumbnail index', () => {
 		})
 	})
 
-	const imageTypes = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'avif', 'heic', 'heif']
-	for (const extension of imageTypes) {
+	const imageTypes = [
+		{extension: 'png'},
+		{extension: 'jpg'},
+		{extension: 'jpeg'},
+		{extension: 'jfif', outputCoder: 'JPEG'},
+		{extension: 'jpe', outputCoder: 'JPEG'},
+		{extension: 'gif'},
+		{extension: 'webp'},
+		{extension: 'avif'},
+		{extension: 'heic'},
+		{extension: 'heif'},
+		{extension: 'tif'},
+		{extension: 'tiff'},
+		{extension: 'bmp'},
+	]
+	for (const {extension, outputCoder} of imageTypes) {
 		test(`generates a real ${extension.toUpperCase()} thumbnail`, async () => {
 			const guestPath = `${guestSuiteRoot}/formats/image.${extension}`
+			const output = outputCoder ? `${outputCoder}:${guestPath}` : guestPath
 			const converted = await umbreld.vm.sshAsRoot(
-				`mkdir -p '${guestSuiteRoot}/formats' && convert '${guestHome}/fixture-masters/master-lossless-image.png' '${guestPath}' && echo yes`,
+				`mkdir -p '${guestSuiteRoot}/formats' && convert '${guestHome}/fixture-masters/master-lossless-image.png' '${output}' && echo yes`,
 			)
 			expect(converted).toBe('yes')
 			const url = await umbreld.client.files.getThumbnail.mutate({path: `${suiteRoot}/formats/image.${extension}`})
 			await expect(assetExists(url)).resolves.toBe(true)
 		})
 	}
+
+	test('ships the LibRaw camera decoders used by enrichment', async () => {
+		const available = await umbreld.vm.sshAsRoot(`
+			formats='ARW CR2 CR3 DNG NEF ORF RAF RW2'
+			for format in $formats; do
+				convert -list format | grep -Eq "^[[:space:]]*$format[[:space:]]+DNG[[:space:]]+r--.*\\([0-9.]+-Release\\)" || exit 1
+			done
+			echo yes
+		`)
+		expect(available).toBe('yes')
+	})
 
 	test('generates a genuine Apple HEIC thumbnail', async () => {
 		const path = `${suiteRoot}/formats/apple.heic`
@@ -192,12 +218,26 @@ describe('content-addressed thumbnail index', () => {
 		}
 	})
 
-	const videoTypes = ['mkv', 'mov', 'mp4', '3gp', 'avi']
-	for (const extension of videoTypes) {
+	const videoTypes = [
+		{extension: 'mkv', encode: '-c:v libx264'},
+		{extension: 'mov', encode: '-c:v libx264'},
+		{extension: 'mp4', encode: '-c:v libx264'},
+		{extension: '3gp', encode: '-c:v libx264'},
+		{extension: 'avi', encode: '-c:v libx264'},
+		{extension: '3g2', encode: '-c:v libx264 -f 3g2'},
+		{extension: 'mts', encode: '-c:v mpeg2video -f mpegts'},
+		{extension: 'm2ts', encode: '-c:v mpeg2video -f mpegts'},
+		{extension: 'mpg', encode: '-c:v mpeg2video -f mpeg'},
+		{extension: 'mpeg', encode: '-c:v mpeg2video -f mpeg'},
+		{extension: 'wmv', encode: '-c:v wmv2 -f asf'},
+		{extension: '360', encode: '-c:v libx264 -f mp4'},
+		{extension: 'insv', encode: '-c:v libx264 -f mp4'},
+	]
+	for (const {extension, encode} of videoTypes) {
 		test(`generates a real ${extension.toUpperCase()} video thumbnail`, async () => {
 			const guestPath = `${guestSuiteRoot}/formats/video.${extension}`
 			const converted = await umbreld.vm.sshAsRoot(
-				`mkdir -p '${guestSuiteRoot}/formats' && ffmpeg -loglevel error -y -i '${guestHome}/fixture-masters/master-lossless-video.mkv' -c:v libx264 '${guestPath}' && echo yes`,
+				`mkdir -p '${guestSuiteRoot}/formats' && ffmpeg -loglevel error -y -i '${guestHome}/fixture-masters/master-lossless-video.mkv' ${encode} '${guestPath}' && echo yes`,
 			)
 			expect(converted).toBe('yes')
 			const url = await umbreld.client.files.getThumbnail.mutate({path: `${suiteRoot}/formats/video.${extension}`})

@@ -20,7 +20,6 @@ import {createHash, randomUUID} from 'node:crypto'
 import type {BigIntStats, Stats} from 'node:fs'
 import {cp, constants, link, lstat, open, rename, unlink, type FileHandle} from 'node:fs/promises'
 
-import mime from 'mime-types'
 import fse from 'fs-extra'
 import {$, execa} from 'execa'
 import {minimatch} from 'minimatch'
@@ -50,6 +49,7 @@ import CloudManager, {
 import {CLOUD_DESTINATION_MISSING_ERROR, isOsJunkBasename, type DestinationRef} from './cloud-types.js'
 import FileIndex, {type FileIndexRoot} from './file-index.js'
 import type {PublishedFileRevision} from './file-index-enrichment.js'
+import {lookupMimeType} from './mime.js'
 
 import type Umbreld from '../../index.js'
 import {OWNER_USER_ID} from '../user/constants.js'
@@ -684,7 +684,7 @@ export default class Files {
 		else if (stats.isBlockDevice()) type = 'block-device'
 		else if (stats.isCharacterDevice()) type = 'character-device'
 		else if (stats.isFIFO()) type = 'fifo'
-		else type = mime.lookup(name) || 'application/octet-stream'
+		else type = lookupMimeType(name) || 'application/octet-stream'
 
 		// Get the size in bytes
 		let size = stats.size
