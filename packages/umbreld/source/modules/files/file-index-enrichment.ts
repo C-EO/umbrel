@@ -38,8 +38,8 @@ const PHOTOS_ONLY_VARIANT_SET = new Set<ThumbnailVariant>(
 	PHOTOS_THUMBNAIL_VARIANTS.filter((variant) => variant !== FILES_THUMBNAIL_VARIANT),
 )
 // Every scan-enabled root is indexed, but proactive content I/O is limited to
-// personal Home roots. Other roots are enriched by Files only when browsed.
-const BACKGROUND_ENRICHMENT_ROOT_SQL = "index_roots.kind = 'home'"
+// personal Home and Trash roots. Other roots are enriched by Files only when browsed.
+const BACKGROUND_ENRICHMENT_ROOT_SQL = "index_roots.kind IN ('home', 'trash')"
 const IMAGE_MAGICK_VIDEO_CODERS = new Map([
 	['.3gp', '3GP'],
 	['.avi', 'AVI'],

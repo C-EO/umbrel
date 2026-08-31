@@ -206,7 +206,7 @@ describe('file index migrations', () => {
 					ORDER BY candidate.hash_retry_at, candidate.id
 					LIMIT 1
 				)
-				WHERE index_roots.kind = 'home'
+				WHERE index_roots.kind IN ('home', 'trash')
 				ORDER BY entries.hash_retry_at, entries.id LIMIT 1`,
 			)
 			.all(Date.now()) as Array<{detail: string}>
@@ -258,7 +258,7 @@ describe('file index migrations', () => {
 							ORDER BY candidate.hash_retry_at, candidate.id
 							LIMIT 1
 						)
-						WHERE index_roots.kind = 'home'
+						WHERE index_roots.kind IN ('home', 'trash')
 						ORDER BY entries.hash_retry_at, entries.id LIMIT 1
 					)
 					UNION ALL
@@ -934,7 +934,7 @@ test('generates all pending Photos renditions together for one content decode', 
 	])
 })
 
-test('background-enriches Home while leaving other indexed roots on demand', async () => {
+test('background-enriches Home and Trash while leaving other indexed roots on demand', async () => {
 	const hashFile = vi.fn(async (systemPath: string) => {
 		const byte = new Map([
 			['included.jpg', 0x41],
@@ -995,17 +995,17 @@ test('background-enriches Home while leaving other indexed roots on demand', asy
 			await expect(index.status()).resolves.toMatchObject({
 				enrichment: {
 					eligibleEntries: 5,
-					hashedEntries: 2,
+					hashedEntries: 3,
 					pendingHashes: 0,
-					readyThumbnails: 6,
-					readyMedia: 2,
+					readyThumbnails: 9,
+					readyMedia: 3,
 				},
 			}),
 		{retries: 200, minTimeout: 10, maxTimeout: 20},
 	)
 	await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'ready', total: 1})
 
-	const backgroundSources = new Set([paths.included, paths.excluded])
+	const backgroundSources = new Set([paths.included, paths.excluded, paths.trash])
 	expect(new Set(hashFile.mock.calls.map(([systemPath]) => systemPath))).toStrictEqual(backgroundSources)
 	expect(new Set(extractMediaMetadata.mock.calls.map(([systemPath]) => systemPath))).toStrictEqual(backgroundSources)
 	expect(new Set(generateThumbnails.mock.calls.map(([systemPath]) => systemPath))).toStrictEqual(backgroundSources)
@@ -1037,25 +1037,17 @@ test('background-enriches Home while leaving other indexed roots on demand', asy
 		{virtual_path: '/Home', relative_path: 'Excluded/excluded.jpg', content_id: expect.any(Number)},
 		{virtual_path: '/Home', relative_path: 'Included/included.jpg', content_id: expect.any(Number)},
 		{virtual_path: '/Machines', relative_path: 'machine-art.jpg', content_id: null},
-		{virtual_path: '/Trash', relative_path: 'trashed.jpg', content_id: null},
+		{virtual_path: '/Trash', relative_path: 'trashed.jpg', content_id: expect.any(Number)},
 	])
 
-	// Browsing excluded roots hashes and renders only the requested Files preview.
-	await expect(index.ensureThumbnail(paths.trash)).resolves.toMatchObject({variant: 'preview-192-webp-v1'})
-	expect(hashFile).toHaveBeenCalledTimes(3)
-	expect(hashFile).toHaveBeenLastCalledWith(paths.trash, expect.anything())
-	expect(generateThumbnails).toHaveBeenCalledTimes(3)
-	expect(generateThumbnails.mock.calls.at(-1)?.[0]).toBe(paths.trash)
-	expect(generateThumbnails.mock.calls.at(-1)?.[1].map(({variant}) => variant)).toStrictEqual(['preview-192-webp-v1'])
-	expect(extractMediaMetadata).toHaveBeenCalledTimes(2)
-
+	// Browsing an Apps image hashes and renders only the requested Files preview.
 	await expect(index.ensureThumbnail(paths.apps)).resolves.toMatchObject({variant: 'preview-192-webp-v1'})
 	expect(hashFile).toHaveBeenCalledTimes(4)
 	expect(hashFile).toHaveBeenLastCalledWith(paths.apps, expect.anything())
 	expect(generateThumbnails).toHaveBeenCalledTimes(4)
 	expect(generateThumbnails.mock.calls.at(-1)?.[0]).toBe(paths.apps)
 	expect(generateThumbnails.mock.calls.at(-1)?.[1].map(({variant}) => variant)).toStrictEqual(['preview-192-webp-v1'])
-	expect(extractMediaMetadata).toHaveBeenCalledTimes(2)
+	expect(extractMediaMetadata).toHaveBeenCalledTimes(3)
 
 	const database = new BetterSqlite3(databasePath, {readonly: true})
 	const appContent = database
