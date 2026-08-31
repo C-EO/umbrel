@@ -12,9 +12,11 @@ import {inferRouterInputs, inferRouterOutputs} from '@trpc/server'
 
 import {finishLogoutOnUnauthorized} from '@/modules/auth/logout'
 import {AUTH_TOKEN_LOCAL_STORAGE_KEY} from '@/modules/auth/shared'
+import {queryClient} from '@/trpc/query-client'
 import {IS_DEV} from '@/utils/misc'
 
 import {httpOnlyPaths, type AppRouter} from '../../../umbreld/source/modules/server/trpc/common'
+import {createReconnectResyncController} from './reconnect-resync'
 
 const {protocol, hostname, port} = location
 
@@ -45,6 +47,25 @@ const webSocketTicketClient = createTRPCClient<AppRouter>({
 	],
 })
 
+// Missed events can leave query data stale, so refetch after reconnecting.
+// Skip external App Store feeds, which intentionally do not refresh mid-session,
+// and appStore.registry, which already refetches on focus and is expensive to rebuild.
+function isExcludedFromReconnectResync(queryKey: readonly unknown[]) {
+	if (queryKey[0] === 'app-store') return true
+	if (Array.isArray(queryKey[0]) && queryKey[0].join('.') === 'appStore.registry') return true
+	return false
+}
+
+// Ignore the initial open. Coalesce reconnect bursts to avoid refetch storms,
+// but always resync after the last connection gap.
+const RECONNECT_RESYNC_COOLDOWN_MS = 5_000
+const reconnectResync = createReconnectResyncController({
+	cooldownMs: RECONNECT_RESYNC_COOLDOWN_MS,
+	onResync: () => {
+		queryClient.invalidateQueries({predicate: (query) => !isExcludedFromReconnectResync(query.queryKey)})
+	},
+})
+
 const wsClient = createWSClient({
 	url: async () => {
 		try {
@@ -69,6 +90,8 @@ const wsClient = createWSClient({
 		intervalMs: 10_000, // must be shorter than the most aggressive home router NAT timeout (~60s)
 		pongTimeoutMs: 3_000, // conservative over trpc default (1s) to avoid false positives
 	},
+	onClose: reconnectResync.onClose,
+	onOpen: reconnectResync.onOpen,
 })
 
 export const links = [
