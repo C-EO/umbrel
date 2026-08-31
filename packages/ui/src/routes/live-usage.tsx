@@ -863,9 +863,6 @@ function UsageAreaChart({data, active, preview}: {data: Array<{value: number}>; 
 			style={{position: 'absolute', bottom: -1, left: '-0.5%', zIndex: 0}}
 			width='101%'
 			height='100%'
-			// The card row animates flex-grow on hover; without debouncing, every
-			// resized frame forces a full recharts re-render across all cards
-			debounce={120}
 		>
 			<AreaChart data={data} margin={{bottom: 0}}>
 				<defs>
