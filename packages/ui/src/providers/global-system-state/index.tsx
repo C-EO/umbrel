@@ -4,6 +4,7 @@ import {useTranslation} from 'react-i18next'
 import {JSONTree} from 'react-json-tree'
 import {usePreviousDistinct} from 'react-use'
 
+import {ConnectionLostScreen} from '@/components/ui/connection-lost-screen'
 import {BareCoverMessage, CoverMessageParagraph} from '@/components/ui/cover-message'
 import {DebugOnlyBare} from '@/components/ui/debug-only'
 import {toast} from '@/components/ui/toast'
@@ -13,7 +14,7 @@ import {RestartingCover, useRestart} from '@/providers/global-system-state/resta
 import {ShuttingDownCover, useShutdown} from '@/providers/global-system-state/shutdown'
 import {RouterError, RouterOutput, trpcReact} from '@/trpc/trpc'
 import {MS_PER_SECOND} from '@/utils/date-time'
-import {assertUnreachable, IS_DEV} from '@/utils/misc'
+import {assertUnreachable} from '@/utils/misc'
 
 import {ResettingCover, useReset} from './reset'
 import {RestoreCover} from './restore'
@@ -120,14 +121,11 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 		retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 5000),
 	})
 
-	if (!IS_DEV) {
-		if (systemStatusQ.error && !triggered && !errorsSuppressedOnly) {
-			// This error should get caught by a parent error boundary component
-			// TODO: figure out what to do about network errors
-			// TODO: Do we need this production-only case at all?
-			throw systemStatusQ.error
-		}
-	}
+	const expectedDowntime = triggered || errorsSuppressedOnly
+	// A retry without cached status briefly becomes pending. Keep the message visible
+	// until status returns, while leaving planned downtime to its existing UI.
+	const connectionLost =
+		!expectedDowntime && (systemStatusQ.isError || (systemStatusQ.isFetched && systemStatusQ.data === undefined))
 
 	// Status is `undefined` upon mount, then updating to the status reported by
 	// the backend, plus when the system reboots, the first status query to fail
@@ -237,6 +235,9 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 	)
 
 	// Covers are shown based on system status; restore behaves like others now
+	if (connectionLost) {
+		return <ConnectionLostScreen error={systemStatusQ.error} onReconnect={() => void systemStatusQ.refetch()} />
+	}
 
 	if (systemStatusQ.isLoading) {
 		return (

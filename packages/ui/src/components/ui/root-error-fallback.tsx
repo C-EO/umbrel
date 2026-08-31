@@ -3,6 +3,7 @@ import {useEffect, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 
 import {Button} from '@/components/ui/button'
+import {ConnectionLostScreen} from '@/components/ui/connection-lost-screen'
 import {downloadLogs} from '@/utils/logs'
 
 function getErrorMessage(error: unknown): string {
@@ -68,6 +69,10 @@ export function RootErrorFallback({error}: {error: unknown}) {
 		return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
 	}, [])
 
+	if (isNetwork) {
+		return <ConnectionLostScreen error={error} onReconnect={() => window.location.reload()} />
+	}
+
 	return (
 		<div className='fixed inset-0 z-50 flex items-center justify-center bg-black'>
 			{/* Self-contained dialog card — mirrors AlertDialogContent styling but without
@@ -75,22 +80,17 @@ export function RootErrorFallback({error}: {error: unknown}) {
 			    bg-dialog-content, shadow-dialog, backdrop-blur) for visual consistency. */}
 			<div className='flex w-full max-w-[calc(100%-40px)] flex-col items-center gap-5 rounded-20 bg-dialog-content/70 p-8 shadow-dialog backdrop-blur-3xl sm:max-w-md'>
 				<div className='flex flex-col items-center gap-1.5'>
-					<h2 className='text-15 leading-tight font-semibold -tracking-4'>
-						{isNetwork ? t('connection-lost') : t('something-went-wrong')}
-					</h2>
-					{isNetwork && <p className='text-center text-13 text-white/50'>{t('connection-lost-description')}</p>}
+					<h2 className='text-15 leading-tight font-semibold -tracking-4'>{t('something-went-wrong')}</h2>
 				</div>
 				<div className='flex w-full flex-col gap-2.5 md:flex-row md:justify-center'>
 					{/* Uses variant='default' (not 'primary') because the brand color CSS variable
 					    is set by the wallpaper provider, which isn't available at this level. */}
 					<Button size='dialog' variant='default' onClick={() => window.location.reload()}>
-						{isNetwork ? t('reconnect') : t('reload')}
+						{t('reload')}
 					</Button>
-					{!isNetwork && (
-						<Button size='dialog' variant='default' onClick={() => downloadLogs()}>
-							{t('download-logs')}
-						</Button>
-					)}
+					<Button size='dialog' variant='default' onClick={() => downloadLogs()}>
+						{t('download-logs')}
+					</Button>
 				</div>
 				{error != null && (
 					<div className='-mb-4 flex flex-col items-center'>
