@@ -251,7 +251,10 @@ describe.sequential('LAN ingress', () => {
 		expect(appCookie).toBeTypeOf('string')
 		expect(JSON.parse(login.body).url).toBe('http://127.0.0.1:9094/umbrel_/api/v1/auth/handoff')
 		expect(await umbreld.client.user.listSessions.query()).toContainEqual(
-			expect.objectContaining({userAgent: 'UmbrelAppAuthVm/1.0', current: false}),
+			expect.objectContaining({
+				client: {type: 'browser', userAgent: 'UmbrelAppAuthVm/1.0'},
+				current: false,
+			}),
 		)
 
 		const torHandoff = await pRetry(

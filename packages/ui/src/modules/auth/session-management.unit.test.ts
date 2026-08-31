@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {finishLogout, finishLogoutOnUnauthorized} from './logout.ts'
-import {parseSessionUserAgent} from './session-user-agent.ts'
+import {parseNativeSessionClient, parseSessionUserAgent} from './session-user-agent.ts'
 import {AUTH_TOKEN_LOCAL_STORAGE_KEY, AUTH_TOKEN_REFRESH_LOCAL_STORAGE_KEY} from './token-renewal.ts'
 
 class MemoryStorage {
@@ -290,4 +290,81 @@ test('classifies mobile, desktop, and missing user agents for session icons', ()
 	assert.equal(parseSessionUserAgent('Mozilla/5.0 (Linux; Android 15; Pixel 9) Mobile').deviceType, 'mobile')
 	assert.equal(parseSessionUserAgent('Mozilla/5.0 (X11; Linux x86_64) Firefox/128.0').deviceType, 'desktop')
 	assert.equal(parseSessionUserAgent(undefined).deviceType, 'unknown')
+})
+
+test('uses structured native metadata for client labels and icons', () => {
+	const common = {appVersion: '0.1', appBuild: '20', osVersion: '26.6.1'}
+	const cases = [
+		{
+			client: {id: 'umbrel', platform: 'ios', deviceClass: 'phone', ...common} as const,
+			label: 'Umbrel for iPhone',
+			deviceType: 'mobile',
+			os: 'iOS',
+			osIcon: 'apple',
+		},
+		{
+			client: {id: 'umbrel', platform: 'ios', deviceClass: 'tablet', ...common} as const,
+			label: 'Umbrel for iPad',
+			deviceType: 'mobile',
+			os: 'iOS',
+			osIcon: 'apple',
+		},
+		{
+			client: {id: 'umbrel', platform: 'macos', deviceClass: 'desktop', ...common} as const,
+			label: 'Umbrel for Mac',
+			deviceType: 'desktop',
+			os: 'macOS',
+			osIcon: 'apple',
+		},
+		{
+			client: {id: 'umbrel', platform: 'android', deviceClass: 'phone', ...common} as const,
+			label: 'Umbrel for Android',
+			deviceType: 'mobile',
+			os: 'Android',
+			osIcon: 'android',
+		},
+		{
+			client: {id: 'umbrel', platform: 'windows', deviceClass: 'desktop', ...common} as const,
+			label: 'Umbrel for Windows',
+			deviceType: 'desktop',
+			os: 'Windows',
+			osIcon: 'windows',
+		},
+	]
+
+	for (const expected of cases) {
+		const client = parseNativeSessionClient(expected.client)
+		assert.equal(client.label, expected.label)
+		assert.equal(client.deviceType, expected.deviceType)
+		assert.equal(client.clientIcon, '/assets/umbrel-ios.png')
+		assert.equal(client.os, expected.os)
+		assert.equal(client.osIcon, `/assets/session-icons/os/${expected.osIcon}.png`)
+	}
+})
+
+test('unknown native clients degrade without requiring a UI catalog entry', () => {
+	const unknown = parseNativeSessionClient({
+		id: 'example-linux',
+		platform: 'linux',
+		deviceClass: 'laptop',
+		appVersion: '1.0',
+		appBuild: '42',
+		osVersion: '7.0',
+	})
+	assert.equal(unknown.label, 'example-linux')
+	assert.equal(unknown.deviceType, 'unknown')
+	assert.equal(unknown.clientIcon, undefined)
+	assert.equal(unknown.os, undefined)
+	assert.equal(unknown.osIcon, undefined)
+
+	const futureUmbrel = parseNativeSessionClient({
+		id: 'umbrel',
+		platform: 'visionos',
+		deviceClass: 'headset',
+		appVersion: '1.0',
+		appBuild: '1',
+		osVersion: '3.0',
+	})
+	assert.equal(futureUmbrel.label, 'Umbrel')
+	assert.equal(futureUmbrel.clientIcon, '/assets/umbrel-ios.png')
 })

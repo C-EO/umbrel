@@ -769,7 +769,9 @@ describe('Multi-user accounts', () => {
 		// The owner can identify and revoke an individual member session.
 		await loginAs(ownerToken)
 		const sessions = await umbreld.client.user.listAccountSessions.query({userId: memberUserId})
-		const target = sessions.find((session) => session.userAgent === 'Managed member browser/1.0')
+		const target = sessions.find(
+			(session) => session.client.type === 'browser' && session.client.userAgent === 'Managed member browser/1.0',
+		)
 		if (!target) throw new Error('Managed member session was not listed')
 		expect(target.current).toBe(false)
 		await expect(

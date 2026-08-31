@@ -12,7 +12,7 @@ import {toast} from '@/components/ui/toast'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {cn} from '@/lib/utils'
 import {finishBrowserLogout} from '@/modules/auth/logout'
-import {parseSessionUserAgent, SessionClient} from '@/modules/auth/session-user-agent'
+import {parseNativeSessionClient, parseSessionUserAgent, SessionClient} from '@/modules/auth/session-user-agent'
 import {useConfirmation} from '@/providers/confirmation'
 import {useSettingsDialogProps} from '@/routes/settings/_components/shared'
 import {RouterOutput, trpcReact} from '@/trpc/trpc'
@@ -197,14 +197,21 @@ function SessionsView({
 			) : (
 				<div className='flex flex-col gap-2'>
 					{sessions?.map((session) => {
-						const client = parseSessionUserAgent(session.userAgent)
+						const client =
+							session.client.type === 'native'
+								? parseNativeSessionClient(session.client)
+								: parseSessionUserAgent(session.client.userAgent)
 						const description = client.label ?? t('active-logins.unknown-device')
 						const language = i18n.resolvedLanguage ?? i18n.language
+						const details =
+							session.client.type === 'native'
+								? `${session.client.appVersion} (${session.client.appBuild}) · ${session.client.osVersion}`
+								: session.client.userAgent
 
 						return (
 							<div key={session.id} className='flex items-center gap-3 rounded-12 bg-white/6 p-3.5'>
 								<SessionClientIcon client={client} />
-								<div className='min-w-0 flex-1 space-y-1' title={session.userAgent}>
+								<div className='min-w-0 flex-1 space-y-1' title={details}>
 									<div className='flex flex-wrap items-center gap-1.5'>
 										<h3 className='text-13 leading-tight font-medium'>{description}</h3>
 										{session.current && (
@@ -285,16 +292,17 @@ export default function SessionsDrawerOrDialog() {
 	)
 }
 
-// Browser icon with the OS logo overlaid as a small bottom-right badge. Sessions
-// from clients without a recognized browser keep the generic device glyph.
+// Client icon with the OS logo overlaid as a small bottom-right badge. Unknown
+// clients keep the generic device glyph.
 function SessionClientIcon({client}: {client: SessionClient}) {
 	const DeviceIcon =
 		client.deviceType === 'mobile' ? TbDeviceMobile : client.deviceType === 'desktop' ? TbDeviceDesktop : TbHelp
+	const icon = client.clientIcon ?? client.browserIcon
 
 	return (
 		<div className='relative size-10 shrink-0'>
-			{client.browserIcon ? (
-				<img src={client.browserIcon} alt={client.browser} draggable={false} className='size-10 object-contain' />
+			{icon ? (
+				<img src={icon} alt={client.label} draggable={false} className='size-10 object-contain' />
 			) : (
 				<div className='grid size-10 place-items-center rounded-8 bg-white/6'>
 					<DeviceIcon className='size-5 text-white/60' />

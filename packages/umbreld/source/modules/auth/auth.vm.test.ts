@@ -102,20 +102,25 @@ describe.sequential('Browser authentication', () => {
 
 	test('active sessions expose only account-scoped display metadata and identify the caller', async () => {
 		const response = await trpc('user.listSessions', {session: primary})
-		const sessions =
-			trpcData<Array<{id: string; createdAt: number; lastSeenAt: number; userAgent?: string; current: boolean}>>(
-				response,
-			)
+		const sessions = trpcData<
+			Array<{
+				id: string
+				createdAt: number
+				lastSeenAt: number
+				client: {type: 'browser'; userAgent?: string}
+				current: boolean
+			}>
+		>(response)
 
 		expect(sessions).toHaveLength(2)
-		expect(sessions[0]).toMatchObject({userAgent: 'UmbrelPrimary/1.0', current: true})
-		expect(sessions[1]).toMatchObject({userAgent: 'UmbrelSecondary/2.0', current: false})
+		expect(sessions[0]).toMatchObject({client: {userAgent: 'UmbrelPrimary/1.0'}, current: true})
+		expect(sessions[1]).toMatchObject({client: {userAgent: 'UmbrelSecondary/2.0'}, current: false})
 		for (const session of sessions) {
 			expect(session.id).toMatch(/^[0-9a-f]{32}$/)
 			expect(session.createdAt).toBeLessThanOrEqual(Date.now())
 			expect(session.lastSeenAt).toBeGreaterThanOrEqual(session.createdAt)
 			expect(session.lastSeenAt).toBeLessThanOrEqual(Date.now())
-			expect(Object.keys(session).sort()).toEqual(['createdAt', 'current', 'id', 'lastSeenAt', 'userAgent'])
+			expect(Object.keys(session).sort()).toEqual(['client', 'createdAt', 'current', 'id', 'lastSeenAt'])
 		}
 
 		const unauthenticated = await request('/trpc/user.listSessions', {throwHttpErrors: false})
@@ -275,12 +280,12 @@ describe.sequential('Browser authentication', () => {
 		})
 		expect(ca.body).toContain('BEGIN CERTIFICATE')
 
-		const sessions = trpcData<Array<{userAgent?: string; current: boolean}>>(
+		const sessions = trpcData<Array<{client: {type: 'browser'; userAgent?: string}; current: boolean}>>(
 			await trpc('user.listSessions', {session: primary}),
 		)
 		expect(sessions).toEqual([
-			expect.objectContaining({userAgent: 'UmbrelPrimary/1.0', current: true}),
-			expect.objectContaining({userAgent: 'UmbrelSecondary/2.0', current: false}),
+			expect.objectContaining({client: {type: 'browser', userAgent: 'UmbrelPrimary/1.0'}, current: true}),
+			expect.objectContaining({client: {type: 'browser', userAgent: 'UmbrelSecondary/2.0'}, current: false}),
 		])
 	})
 
@@ -322,10 +327,10 @@ describe.sequential('Browser authentication', () => {
 		)
 		secondarySocket = await openWebSocket(`/trpc?ticket=${encodeURIComponent(secondaryTicket)}`)
 		const secondaryClosed = once(secondarySocket, 'close')
-		const sessions = trpcData<Array<{id: string; userAgent?: string}>>(
+		const sessions = trpcData<Array<{id: string; client: {type: 'browser'; userAgent?: string}}>>(
 			await trpc('user.listSessions', {session: primary}),
 		)
-		const secondaryId = sessions.find((session) => session.userAgent === 'UmbrelSecondary/2.0')?.id
+		const secondaryId = sessions.find((session) => session.client.userAgent === 'UmbrelSecondary/2.0')?.id
 		if (!secondaryId) throw new Error('Secondary session was not listed')
 		expect(secondaryId).toMatch(/^[0-9a-f]{32}$/)
 
@@ -337,9 +342,9 @@ describe.sequential('Browser authentication', () => {
 		await expectTrpcStatus('user.get', 401, secondary)
 		await expectTrpcStatus('user.get', 200, primary)
 		expect(
-			trpcData<Array<{userAgent?: string}>>(await trpc('user.listSessions', {session: primary})).map(
-				(session) => session.userAgent,
-			),
+			trpcData<Array<{client: {type: 'browser'; userAgent?: string}}>>(
+				await trpc('user.listSessions', {session: primary}),
+			).map((session) => session.client.userAgent),
 		).toEqual(['UmbrelPrimary/1.0'])
 	})
 

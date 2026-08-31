@@ -13,6 +13,7 @@ import {
 	clearBrowserSessionCookies,
 	setBrowserSessionCookie,
 } from '../auth/browser-session-cookie.js'
+import {nativeClientSchema} from '../auth/native-client.js'
 import * as totp from '../utilities/totp.js'
 import type {Context} from '../server/trpc/context.js'
 import {privateProcedure, privateProcedureWithMembers, publicProcedure, router} from '../server/trpc/trpc.js'
@@ -139,6 +140,7 @@ export default router({
 				userId: z.string().default(OWNER_USER_ID),
 				password: z.string(),
 				totpToken: z.string().optional(),
+				client: nativeClientSchema,
 			}),
 		)
 		.mutation(async ({ctx, input}) => {
@@ -153,6 +155,7 @@ export default router({
 			const session = await ctx.umbreld.auth
 				.createNativeSession({
 					accountId: input.userId,
+					nativeClient: input.client,
 					userAgent: ctx.request!.get('user-agent'),
 					expectedSessionIssuanceRevision: validation.sessionIssuanceRevision,
 				})
@@ -176,22 +179,24 @@ export default router({
 
 	// The device credential is accepted only by this exchange. It remains stable so
 	// a lost response can be retried without destroying the native session.
-	refreshNativeAccess: publicProcedure.input(z.object({deviceToken: z.string()})).mutation(async ({ctx, input}) => {
-		if (!ctx.request || !ctx.response) {
-			throw new TRPCError({code: 'METHOD_NOT_SUPPORTED', message: 'HTTP transport required'})
-		}
-		const session = await ctx.umbreld.auth.refreshNativeAccess(input.deviceToken).catch((error) => {
-			if (error instanceof InvalidNativeDeviceCredentialError) {
-				throw new TRPCError({code: 'UNAUTHORIZED', message: 'Invalid native session'})
+	refreshNativeAccess: publicProcedure
+		.input(z.object({deviceToken: z.string(), client: nativeClientSchema}))
+		.mutation(async ({ctx, input}) => {
+			if (!ctx.request || !ctx.response) {
+				throw new TRPCError({code: 'METHOD_NOT_SUPPORTED', message: 'HTTP transport required'})
 			}
-			throw error
-		})
-		ctx.response!.set('Cache-Control', 'no-store')
-		return {
-			accessToken: session.accessToken,
-			accessExpiresAt: session.accessExpiresAt,
-		}
-	}),
+			const session = await ctx.umbreld.auth.refreshNativeAccess(input.deviceToken, input.client).catch((error) => {
+				if (error instanceof InvalidNativeDeviceCredentialError) {
+					throw new TRPCError({code: 'UNAUTHORIZED', message: 'Invalid native session'})
+				}
+				throw error
+			})
+			ctx.response!.set('Cache-Control', 'no-store')
+			return {
+				accessToken: session.accessToken,
+				accessExpiresAt: session.accessExpiresAt,
+			}
+		}),
 
 	createUser: privateProcedure
 		.input(

@@ -9,6 +9,14 @@ let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
 let dashboardToken = ''
 
 const credentials = {name: 'satoshi', password: 'moneyprintergobrrr'}
+const nativeClient = {
+	id: 'umbrel',
+	platform: 'ios',
+	deviceClass: 'phone',
+	appVersion: '0.1',
+	appBuild: '20',
+	osVersion: '26.6.1',
+} as const
 
 function trpcResult<T>(body: unknown) {
 	return (body as {result?: {data?: T}}).result?.data
@@ -121,10 +129,12 @@ test('session management lists metadata and account-scoped revocation invalidate
 
 	const sessions = await umbreld.client.user.listSessions.query()
 	const current = sessions.find((session) => session.current)
-	const second = sessions.find((session) => session.userAgent === 'UmbrelIntegrationSecondary/1.0')
+	const second = sessions.find(
+		(session) => session.client.type === 'browser' && session.client.userAgent === 'UmbrelIntegrationSecondary/1.0',
+	)
 	expect(current).toBeDefined()
 	expect(second).toMatchObject({current: false})
-	expect(Object.keys(second!).sort()).toEqual(['createdAt', 'current', 'id', 'lastSeenAt', 'userAgent'])
+	expect(Object.keys(second!).sort()).toEqual(['client', 'createdAt', 'current', 'id', 'lastSeenAt'])
 
 	await expect(umbreld.client.user.revokeSession.mutate({sessionId: second!.id})).resolves.toEqual({
 		revoked: true,
@@ -169,7 +179,7 @@ test('native login refreshes and revokes access without weakening browser sessio
 		deviceToken: string
 	}
 	const login = await umbreld.unauthenticatedApi.post('../trpc/user.loginNative', {
-		json: credentials,
+		json: {...credentials, client: nativeClient},
 		headers: {'user-agent': 'UmbrelNativeIntegration/1.0'},
 	})
 	const native = trpcResult<NativeSession>(login.body)
@@ -200,14 +210,14 @@ test('native login refreshes and revokes access without weakening browser sessio
 	expect(webSocketTicketWithNativeAccess.statusCode).toBe(403)
 
 	const refresh = await umbreld.unauthenticatedApi.post('../trpc/user.refreshNativeAccess', {
-		json: {deviceToken: native.deviceToken},
+		json: {deviceToken: native.deviceToken, client: nativeClient},
 	})
 	const renewed = trpcResult<Pick<NativeSession, 'accessToken' | 'accessExpiresAt'>>(refresh.body)
 	if (!renewed) throw new Error('Native refresh did not return credentials')
 	expect(refresh.headers['cache-control']).toBe('no-store')
 	expect(renewed.accessToken).not.toBe(native.accessToken)
 	const refreshRetry = await umbreld.unauthenticatedApi.post('../trpc/user.refreshNativeAccess', {
-		json: {deviceToken: native.deviceToken},
+		json: {deviceToken: native.deviceToken, client: nativeClient},
 	})
 	const retried = trpcResult<Pick<NativeSession, 'accessToken' | 'accessExpiresAt'>>(refreshRetry.body)
 	if (!retried) throw new Error('Native refresh retry did not return credentials')
@@ -235,7 +245,7 @@ test('native login preserves the HTTP 401 and message used to request a 2FA code
 	await umbreld.client.user.enable2fa.mutate({totpUri, totpToken: totp.generateToken(totpUri)})
 
 	const response = await umbreld.unauthenticatedApi.post('../trpc/user.loginNative', {
-		json: {userId: '0', password: credentials.password},
+		json: {userId: '0', password: credentials.password, client: nativeClient},
 		throwHttpErrors: false,
 	})
 

@@ -10,8 +10,18 @@ export type SessionClient = {
 	os?: string
 	/** Row label: "Browser (OS)", else whichever is known, else the UA's leading product token (e.g. "curl"). */
 	label?: string
+	clientIcon?: string
 	browserIcon?: string
 	osIcon?: string
+}
+
+export type NativeSessionMetadata = {
+	id: string
+	platform: string
+	deviceClass: string
+	appVersion: string
+	appBuild: string
+	osVersion: string
 }
 
 // Display-name overrides for raw parser output (keyed lowercase). Raw captures keep
@@ -113,6 +123,23 @@ function iconUrl(kind: 'browsers' | 'os', slug: string) {
 	return `/assets/session-icons/${kind}/${slug}.png`
 }
 
+const nativePlatforms: Record<string, {name: string; icon: string}> = {
+	ios: {name: 'iOS', icon: 'apple'},
+	macos: {name: 'macOS', icon: 'apple'},
+	android: {name: 'Android', icon: 'android'},
+	windows: {name: 'Windows', icon: 'windows'},
+}
+
+const umbrelNativeLabels: Record<string, string> = {
+	'ios:phone': 'Umbrel for iPhone',
+	'ios:tablet': 'Umbrel for iPad',
+	'macos:desktop': 'Umbrel for Mac',
+	'android:phone': 'Umbrel for Android',
+	'android:tablet': 'Umbrel for Android tablet',
+	'windows:desktop': 'Umbrel for Windows',
+	'windows:tablet': 'Umbrel for Windows tablet',
+}
+
 export function parseSessionUserAgent(userAgent?: string): SessionClient {
 	if (!userAgent) return {deviceType: 'unknown'}
 
@@ -139,5 +166,27 @@ export function parseSessionUserAgent(userAgent?: string): SessionClient {
 		label,
 		browserIcon: browserSlug ? iconUrl('browsers', browserSlug) : undefined,
 		osIcon: osSlug ? iconUrl('os', osSlug) : undefined,
+	}
+}
+
+export function parseNativeSessionClient(client: NativeSessionMetadata): SessionClient {
+	const deviceType: SessionDeviceType =
+		client.deviceClass === 'desktop'
+			? 'desktop'
+			: client.deviceClass === 'phone' || client.deviceClass === 'tablet'
+				? 'mobile'
+				: 'unknown'
+	const platform = nativePlatforms[client.platform]
+	// Known clients receive product presentation; unknown identifiers remain
+	// valid and fall back without expanding the server's authentication schema.
+	const isUmbrel = client.id === 'umbrel'
+	const label = isUmbrel ? (umbrelNativeLabels[`${client.platform}:${client.deviceClass}`] ?? 'Umbrel') : client.id
+
+	return {
+		deviceType,
+		label,
+		clientIcon: isUmbrel ? '/assets/umbrel-ios.png' : undefined,
+		os: platform?.name,
+		osIcon: platform ? iconUrl('os', platform.icon) : undefined,
 	}
 }

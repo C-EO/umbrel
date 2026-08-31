@@ -10,6 +10,15 @@ import temporaryDirectory from '../../utilities/temporary-directory.js'
 import type {Context} from './context.js'
 import {isAuthenticated, isOwner} from './is-authenticated.js'
 
+const nativeClient = {
+	id: 'umbrel',
+	platform: 'ios',
+	deviceClass: 'phone',
+	appVersion: '0.1',
+	appBuild: '20',
+	osVersion: '26.6.1',
+} as const
+
 describe('tRPC HTTP authentication', () => {
 	let directory: ReturnType<typeof temporaryDirectory>
 	let auth: Auth
@@ -60,7 +69,7 @@ describe('tRPC HTTP authentication', () => {
 	})
 
 	test('accepts native access credentials without a browser credential', async () => {
-		const session = await auth.createNativeSession()
+		const session = await auth.createNativeSession({nativeClient})
 		await expect(isAuthenticated({ctx: context(`Bearer ${session.accessToken}`), next})).resolves.toEqual(
 			session.principal,
 		)

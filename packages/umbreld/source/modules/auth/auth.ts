@@ -11,6 +11,8 @@ import FileStore from '../utilities/file-store.js'
 import getOrCreateFile from '../utilities/get-or-create-file.js'
 import randomToken from '../utilities/random-token.js'
 
+import type {NativeClient} from './native-client.js'
+
 export const OWNER_ACCOUNT_ID = OWNER_USER_ID
 
 const ONE_SECOND = 1000
@@ -52,14 +54,17 @@ type Session = {
 	lastSeenAt: number
 	expiresAt?: number
 	userAgent?: string
+	nativeClient?: NativeClient
 	credentials: Credential[]
 }
+
+export type SessionClient = {type: 'browser'; userAgent?: string} | ({type: 'native'} & NativeClient)
 
 export type ActiveSession = {
 	id: string
 	createdAt: number
 	lastSeenAt: number
-	userAgent?: string
+	client: SessionClient
 	current: boolean
 }
 
@@ -117,6 +122,15 @@ const normalizeUserAgent = (userAgent: string | undefined) => {
 		.trim()
 		.slice(0, 512)
 	return normalized || undefined
+}
+
+const unidentifiedNativeClient: NativeClient = {
+	id: 'unknown',
+	platform: 'unknown',
+	deviceClass: 'unknown',
+	appVersion: 'unknown',
+	appBuild: 'unknown',
+	osVersion: 'unknown',
 }
 
 const parseCredential = (token: string) => {
@@ -225,13 +239,15 @@ export default class Auth {
 
 	async createNativeSession({
 		accountId = OWNER_ACCOUNT_ID,
+		nativeClient,
 		userAgent,
 		expectedSessionIssuanceRevision,
 	}: {
 		accountId?: string
+		nativeClient: NativeClient
 		userAgent?: string
 		expectedSessionIssuanceRevision?: number
-	} = {}) {
+	}) {
 		if (!(await this.#accountExists(accountId))) throw new Error('Account does not exist')
 
 		const now = Date.now()
@@ -244,6 +260,7 @@ export default class Auth {
 			createdAt: now,
 			lastSeenAt: now,
 			userAgent: normalizeUserAgent(userAgent),
+			nativeClient,
 			credentials: [],
 		}
 		const access = this.#createCredential('native-access', accessExpiresAt)
@@ -262,7 +279,7 @@ export default class Auth {
 
 	// The device credential is accepted only here and never rotates, so an interrupted
 	// exchange can safely retry without invalidating the native session.
-	async refreshNativeAccess(deviceToken: string) {
+	async refreshNativeAccess(deviceToken: string, nativeClient: NativeClient) {
 		let parsedCredential: ReturnType<typeof parseCredential>
 		try {
 			parsedCredential = parseCredential(deviceToken)
@@ -301,6 +318,7 @@ export default class Auth {
 			const updatedSession: Session = {
 				...session,
 				lastSeenAt: now,
+				nativeClient,
 				credentials: [
 					...session.credentials.filter((candidate) => candidate.audience !== 'native-access'),
 					access.record,
@@ -462,7 +480,11 @@ export default class Auth {
 				id: session.id,
 				createdAt: session.createdAt,
 				lastSeenAt: session.lastSeenAt,
-				userAgent: session.userAgent,
+				// Credential kind is authoritative; client metadata is descriptive and
+				// must never let a caller choose how its session is classified.
+				client: this.#isNativeSession(session)
+					? {type: 'native' as const, ...(session.nativeClient ?? unidentifiedNativeClient)}
+					: {type: 'browser' as const, userAgent: session.userAgent},
 				current: session.id === currentSessionId,
 			}))
 			.sort((first, second) => Number(second.current) - Number(first.current) || second.createdAt - first.createdAt)
