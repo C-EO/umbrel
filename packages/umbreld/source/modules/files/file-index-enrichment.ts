@@ -492,6 +492,11 @@ export default class FileIndexEnrichment {
 		}
 	}
 
+	async ensureContentHash(entryId: number) {
+		const content = await this.#ensureEntryContent(entryId, true)
+		return Buffer.from(content.hash, 'hex')
+	}
+
 	async getExistingThumbnail(
 		entryId: number,
 		variant: ThumbnailVariant = FILES_THUMBNAIL_VARIANT,
@@ -618,12 +623,14 @@ export default class FileIndexEnrichment {
 			let retryDelay = 0
 			try {
 				const content = await this.#ensureEntryContent(entry.id, false, entry)
-				const ownsContentReservation = !this.#activeThumbnailContents.has(content.id)
-				if (ownsContentReservation) this.#activeThumbnailContents.add(content.id)
-				try {
-					await this.#ensureContentThumbnail(content, FILES_THUMBNAIL_VARIANT, false)
-				} finally {
-					if (ownsContentReservation) this.#activeThumbnailContents.delete(content.id)
+				if (photoKind(entry.systemPath)) {
+					const ownsContentReservation = !this.#activeThumbnailContents.has(content.id)
+					if (ownsContentReservation) this.#activeThumbnailContents.add(content.id)
+					try {
+						await this.#ensureContentThumbnail(content, FILES_THUMBNAIL_VARIANT, false)
+					} finally {
+						if (ownsContentReservation) this.#activeThumbnailContents.delete(content.id)
+					}
 				}
 			} catch (error) {
 				if (error instanceof StaleFileRevisionError) {
@@ -1048,7 +1055,6 @@ export default class FileIndexEnrichment {
 		const content = await this.#withDatabase((database) => {
 			const attach = database.transaction(() => {
 				const kind = photoKind(candidate.systemPath)
-				if (!kind) throw new Error('Unsupported media source')
 				database
 					.prepare('INSERT INTO contents(blake3, size, created_at) VALUES (?, ?, ?) ON CONFLICT(blake3) DO NOTHING')
 					.run(hash, candidate.size, Date.now())
@@ -1070,10 +1076,13 @@ export default class FileIndexEnrichment {
 						)
 						.get(candidate.id),
 				)
-				if (backgroundEntry) {
-					for (const variant of this.#enabledThumbnailVariants) insertVariant.run(content.id, variant, Date.now())
+				const photosEntry = backgroundEntry && this.#photosAvailable()
+				if (kind) {
+					for (const variant of this.#enabledThumbnailVariants) {
+						if (!PHOTOS_ONLY_VARIANT_SET.has(variant) || photosEntry) insertVariant.run(content.id, variant, Date.now())
+					}
 				}
-				if (backgroundEntry && this.#photosAvailable())
+				if (photosEntry && kind)
 					database
 						.prepare(
 							`INSERT INTO media_metadata(content_id, state, kind, failure_count, updated_at)
@@ -2103,7 +2112,7 @@ async function openContentRevision(systemPath: string, expected: ContentFingerpr
 	}
 }
 
-async function assertPublishedRevision(systemPath: string, expected: PublishedFileRevision) {
+export async function assertPublishedRevision(systemPath: string, expected: PublishedFileRevision) {
 	const handle = await open(systemPath, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK)
 	try {
 		const stats = await handle.stat({bigint: true})

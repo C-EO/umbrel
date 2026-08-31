@@ -1,6 +1,9 @@
 import {once} from 'node:events'
 import type {AddressInfo} from 'node:net'
+import nodePath from 'node:path'
+import {PassThrough} from 'node:stream'
 
+import {Blake3Hasher} from '@napi-rs/blake-hash'
 import express from 'express'
 import fse from 'fs-extra'
 import got from 'got'
@@ -52,10 +55,94 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 const SOURCE_ID = '11111111-1111-4111-8111-111111111111'
 const RESOURCE_KEY = 'a'.repeat(64)
 
+function blake3(contents: Buffer | string) {
+	const hasher = new Blake3Hasher()
+	hasher.update(Buffer.isBuffer(contents) ? contents : Buffer.from(contents))
+	return hasher.digestBuffer()
+}
+
 describe('photo backup API', () => {
 	const directory = temporaryDirectory()
-	const source = {id: SOURCE_ID, accountId: '0', name: 'Pixel 9', createdAt: 1}
+	const source = {id: SOURCE_ID, accountId: '0', name: 'Pixel 9', directoryName: 'Pixel 9', createdAt: 1}
+	const registeredResources = new Map<
+		string,
+		{
+			hash: Buffer
+			receipt: {resourceKey: string; path: string; bytes: number}
+			revision: {inode: string; size: number; modifiedNs: string; ctimeNs: string}
+		}
+	>()
 	const touchSession = vi.fn(async () => true)
+	let sourceActive = true
+	const getBackupSource = vi.fn(async () => source)
+	const withBackupSource = vi.fn(
+		async (_accountId: string, _sourceId: string, operation: (backupSource: typeof source) => Promise<unknown>) =>
+			sourceActive ? {active: true as const, value: await operation(source)} : {active: false as const},
+	)
+	const registerBackupResource = vi.fn(
+		async (
+			_source: typeof source,
+			resourceKey: string,
+			systemPath: string,
+			hash: Buffer,
+			revision: {inode: string; size: number; modifiedNs: string; ctimeNs: string},
+		) => {
+			const receipt = {
+				resourceKey,
+				path: systemPath.replace(mediaDirectory, '/Home'),
+				bytes: revision.size,
+			}
+			registeredResources.set(resourceKey, {hash: Buffer.from(hash), receipt, revision})
+			return receipt
+		},
+	)
+	const registerMatchingBackupResource = vi.fn(
+		async (backupSource: typeof source, resourceKey: string, virtualPath: string, hash: Buffer) => {
+			const registered = registeredResources.get(resourceKey)
+			if (registered?.hash.equals(hash)) {
+				const stats = await fse
+					.stat(registered.receipt.path.replace('/Home', mediaDirectory), {bigint: true})
+					.catch(() => undefined)
+				if (
+					stats &&
+					stats.ino.toString() === registered.revision.inode &&
+					Number(stats.size) === registered.revision.size &&
+					stats.mtimeNs.toString() === registered.revision.modifiedNs &&
+					stats.ctimeNs.toString() === registered.revision.ctimeNs
+				) {
+					return {receipt: registered.receipt, revision: registered.revision}
+				}
+			}
+			const systemPath = virtualPath.replace('/Home', mediaDirectory)
+			const contents = await fse.readFile(systemPath).catch(() => undefined)
+			if (!contents || !blake3(contents).equals(hash)) return
+			const stats = await fse.stat(systemPath, {bigint: true})
+			const revision = {
+				inode: stats.ino.toString(),
+				size: Number(stats.size),
+				modifiedNs: stats.mtimeNs.toString(),
+				ctimeNs: stats.ctimeNs.toString(),
+			}
+			const receipt = await registerBackupResource(backupSource, resourceKey, systemPath, hash, revision)
+			return {receipt, revision}
+		},
+	)
+	const backupResourceRevisionIsCurrent = vi.fn(
+		async (
+			_accountId: string,
+			virtualPath: string,
+			revision: {inode: string; size: number; modifiedNs: string; ctimeNs: string},
+		) => {
+			const stats = await fse.stat(virtualPath.replace('/Home', mediaDirectory), {bigint: true}).catch(() => undefined)
+			return Boolean(
+				stats &&
+					stats.ino.toString() === revision.inode &&
+					Number(stats.size) === revision.size &&
+					stats.mtimeNs.toString() === revision.modifiedNs &&
+					stats.ctimeNs.toString() === revision.ctimeNs,
+			)
+		},
+	)
 	let availableBytes = Number.MAX_SAFE_INTEGER
 	let mediaDirectory: string
 	let server: ReturnType<express.Express['listen']>
@@ -73,10 +160,38 @@ describe('photo backup API', () => {
 			},
 			touchSession,
 		}
-		const photos = {backupSourceMediaDirectory: () => `${mediaDirectory}/${source.accountId}/${source.id}`}
+		const photos = {
+			getBackupSource,
+			withBackupSource,
+			backupSourceVirtualDirectory: () => `/Home/Photos/${source.directoryName}`,
+			prepareBackupResourcePath: async (_source: typeof source, resourceKey: string, fileExtension: string) =>
+				`/Home/Photos/${source.directoryName}/${resourceKey.slice(0, 2)}/${resourceKey}.${fileExtension.toLowerCase()}`,
+			registerBackupResource,
+			registerMatchingBackupResource,
+			backupResourceRevisionIsCurrent,
+		}
+		const files = {
+			virtualToSystemPath: async (path: string) => path.replace('/Home', mediaDirectory),
+			authorizeWritableDestinationSystemPath: async (path: string) => path,
+			systemToVirtualPath: (path: string) => path.replace(mediaDirectory, '/Home'),
+			isInternalStorageVirtualPath: () => true,
+			getUniqueName: async (path: string) => {
+				if (!(await fse.pathExists(path))) return path
+				const parsed = nodePath.parse(path)
+				for (let index = 1; index <= 1000; index++) {
+					const candidate = nodePath.join(parsed.dir, `${parsed.name} (${index})${parsed.ext}`)
+					if (!(await fse.pathExists(candidate))) return candidate
+				}
+				throw new Error('Could not allocate upload path')
+			},
+			chownSystemPath: async () => {},
+			fileIndex: {movePath: async () => {}},
+			logger: {error: vi.fn()},
+		}
 		const umbreld = {
 			auth,
 			photos,
+			files,
 			logger: {error: vi.fn()},
 		} as unknown as Umbreld
 		const uploadDiskPreflight = new UploadDiskPreflight({
@@ -90,11 +205,21 @@ describe('photo backup API', () => {
 		origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 	})
 
-	beforeEach(() => {
+	beforeEach(async () => {
+		await fse.emptyDir(mediaDirectory)
+		registeredResources.clear()
+		source.name = 'Pixel 9'
+		source.directoryName = 'Pixel 9'
 		availableBytes = Number.MAX_SAFE_INTEGER
 		fileWriteFailure.code = undefined
 		fileDurability.syncedPaths = []
 		fileDurability.failSyncPath = undefined
+		registerBackupResource.mockClear()
+		registerMatchingBackupResource.mockClear()
+		backupResourceRevisionIsCurrent.mockClear()
+		getBackupSource.mockClear()
+		withBackupSource.mockClear()
+		sourceActive = true
 	})
 
 	afterAll(async () => {
@@ -116,9 +241,9 @@ describe('photo backup API', () => {
 	}
 
 	async function expectNoUploadArtifacts(resourceKey: string) {
-		const sourceDirectory = `${mediaDirectory}/0/${SOURCE_ID}`
+		const shardDirectory = `${mediaDirectory}/Photos/${source.directoryName}/${resourceKey.slice(0, 2)}`
 		await vi.waitFor(async () => {
-			const entries = (await fse.pathExists(sourceDirectory)) ? await fse.readdir(sourceDirectory) : []
+			const entries = (await fse.pathExists(shardDirectory)) ? await fse.readdir(shardDirectory) : []
 			expect(entries.some((name) => name.includes(resourceKey))).toBe(false)
 		})
 	}
@@ -162,7 +287,7 @@ describe('photo backup API', () => {
 		expect(invalidGrant.statusCode).toBe(401)
 	})
 
-	test('derives a private source path and atomically replaces idempotent retries', async () => {
+	test('derives a friendly Home source path and deduplicates exact retries', async () => {
 		const upload = (body: string) =>
 			got(`${origin}/api/photos/upload?path=/Home/ignored.jpg`, {
 				method: 'POST',
@@ -174,38 +299,187 @@ describe('photo backup API', () => {
 				body,
 			})
 
-		const first = await upload('first photo')
-		const retry = await upload('replacement photo')
-		const receiptPath = `${SOURCE_ID}/${RESOURCE_KEY}.heic`
-		const systemPath = `${mediaDirectory}/0/${receiptPath}`
+		const first = await upload('photo')
+		const retry = await upload('photo')
+		const shard = RESOURCE_KEY.slice(0, 2)
+		const receiptPath = `/Home/Photos/${source.directoryName}/${shard}/${RESOURCE_KEY}.heic`
+		const systemPath = `${mediaDirectory}/Photos/${source.directoryName}/${shard}/${RESOURCE_KEY}.heic`
 
 		expect(first.headers['x-umbrel-photo-backup-key']).toBe(RESOURCE_KEY)
-		expect(first.headers['x-umbrel-upload-path']).toBe(receiptPath)
-		expect(retry.headers['x-umbrel-upload-bytes']).toBe(String(Buffer.byteLength('replacement photo')))
-		await expect(fse.readFile(systemPath, 'utf8')).resolves.toBe('replacement photo')
+		expect(first.headers['x-umbrel-upload-path']).toBe(encodeURI(receiptPath))
+		expect(retry.headers['x-umbrel-upload-path']).toBe(encodeURI(receiptPath))
+		expect(retry.headers['x-umbrel-upload-bytes']).toBe(String(Buffer.byteLength('photo')))
+		await expect(fse.readFile(systemPath, 'utf8')).resolves.toBe('photo')
+		await expect(fse.readdir(nodePath.dirname(systemPath))).resolves.toStrictEqual([`${RESOURCE_KEY}.heic`])
 		expect((await fse.stat(systemPath)).mode & 0o777).toBe(0o600)
-		expect((await fse.stat(`${mediaDirectory}/0/${SOURCE_ID}`)).mode & 0o777).toBe(0o700)
+		expect((await fse.stat(`${mediaDirectory}/Photos/${source.directoryName}`)).mode & 0o777).toBe(0o755)
+		expect((await fse.stat(`${mediaDirectory}/Photos/${source.directoryName}/${shard}`)).mode & 0o777).toBe(0o755)
 		expect(fileDurability.syncedPaths.filter((path) => path.endsWith('.umbrel-upload'))).toHaveLength(2)
-		expect(fileDurability.syncedPaths.filter((path) => path === `${mediaDirectory}/0/${SOURCE_ID}`)).toHaveLength(2)
 		expect(
-			(await fse.readdir(`${mediaDirectory}/0/${SOURCE_ID}`)).filter((name) => name.endsWith('.umbrel-upload')),
+			fileDurability.syncedPaths.filter((path) => path === `${mediaDirectory}/Photos/${source.directoryName}/${shard}`),
+		).toHaveLength(1)
+		expect(
+			(await fse.readdir(`${mediaDirectory}/Photos/${source.directoryName}/${shard}`)).filter((name) =>
+				name.endsWith('.umbrel-upload'),
+			),
 		).toEqual([])
+		expect(registerBackupResource).toHaveBeenCalledTimes(1)
+		expect(registerMatchingBackupResource).toHaveBeenCalledTimes(2)
 		expect(touchSession).toHaveBeenCalledWith(
 			expect.objectContaining({sessionId: 'native-session', accountId: '0', sourceId: SOURCE_ID}),
 		)
 	})
 
+	test('keeps user-edited resource bytes when the phone re-uploads its version', async () => {
+		const first = await upload(RESOURCE_KEY, 'heic', 'phone original')
+		const shard = RESOURCE_KEY.slice(0, 2)
+		const originalPath = `${mediaDirectory}/Photos/${source.directoryName}/${shard}/${RESOURCE_KEY}.heic`
+		await fse.writeFile(originalPath, 'user edit')
+
+		const retry = await upload(RESOURCE_KEY, 'heic', 'phone original')
+		const repeatedRetry = await upload(RESOURCE_KEY, 'heic', 'phone original')
+		const preservedUploadPath = `${mediaDirectory}/Photos/${source.directoryName}/${shard}/${RESOURCE_KEY} (1).heic`
+
+		expect(first.statusCode).toBe(200)
+		expect(retry.statusCode).toBe(200)
+		expect(repeatedRetry.statusCode).toBe(200)
+		expect(retry.headers['x-umbrel-upload-path']).toBe(
+			encodeURI(`/Home/Photos/${source.directoryName}/${shard}/${RESOURCE_KEY} (1).heic`),
+		)
+		expect(repeatedRetry.headers['x-umbrel-upload-path']).toBe(retry.headers['x-umbrel-upload-path'])
+		await expect(fse.readFile(originalPath, 'utf8')).resolves.toBe('user edit')
+		await expect(fse.readFile(preservedUploadPath, 'utf8')).resolves.toBe('phone original')
+		await expect(fse.pathExists(`${nodePath.dirname(preservedUploadPath)}/${RESOURCE_KEY} (2).heic`)).resolves.toBe(
+			false,
+		)
+	})
+
+	test('returns a header-safe receipt for a Unicode device folder', async () => {
+		source.name = '李娜’s iPhone'
+		source.directoryName = '李娜’s iPhone'
+		const response = await upload(RESOURCE_KEY, 'heic', 'photo')
+		const receiptPath = `/Home/Photos/${source.directoryName}/${RESOURCE_KEY.slice(0, 2)}/${RESOURCE_KEY}.heic`
+
+		expect(response.statusCode).toBe(200)
+		expect(response.headers['x-umbrel-upload-path']).toBe(encodeURI(receiptPath))
+		expect(JSON.parse(response.body)).toEqual({key: RESOURCE_KEY, path: receiptPath, bytes: 5})
+		await expect(
+			fse.readFile(
+				`${mediaDirectory}/Photos/${source.directoryName}/${RESOURCE_KEY.slice(0, 2)}/${RESOURCE_KEY}.heic`,
+				'utf8',
+			),
+		).resolves.toBe('photo')
+	})
+
+	test('stores a Live Photo still and motion resource independently', async () => {
+		const stillKey = '1'.repeat(64)
+		const motionKey = '2'.repeat(64)
+		const still = await upload(stillKey, 'heic', 'still')
+		const motion = await upload(motionKey, 'mov', 'motion')
+
+		expect(still.statusCode).toBe(200)
+		expect(motion.statusCode).toBe(200)
+		expect(registerBackupResource.mock.calls.map(([, key]) => key)).toStrictEqual([stillKey, motionKey])
+		await expect(
+			fse.readFile(`${mediaDirectory}/Photos/${source.directoryName}/${stillKey.slice(0, 2)}/${stillKey}.heic`, 'utf8'),
+		).resolves.toBe('still')
+		await expect(
+			fse.readFile(
+				`${mediaDirectory}/Photos/${source.directoryName}/${motionKey.slice(0, 2)}/${motionKey}.mov`,
+				'utf8',
+			),
+		).resolves.toBe('motion')
+	})
+
+	test('accepts a PhotoKit resource format that Photos enrichment does not support yet', async () => {
+		const resourceKey = '3'.repeat(64)
+		const response = await upload(resourceKey, 'aae', 'sidecar')
+
+		expect(response.statusCode).toBe(200)
+		expect(registerBackupResource).toHaveBeenCalledWith(
+			source,
+			resourceKey,
+			`${mediaDirectory}/Photos/${source.directoryName}/${resourceKey.slice(0, 2)}/${resourceKey}.aae`,
+			expect.any(Buffer),
+			expect.objectContaining({size: 7}),
+		)
+		await expect(
+			fse.readFile(
+				`${mediaDirectory}/Photos/${source.directoryName}/${resourceKey.slice(0, 2)}/${resourceKey}.aae`,
+				'utf8',
+			),
+		).resolves.toBe('sidecar')
+	})
+
+	test('checks source removal only after a stalled request body has finished staging', async () => {
+		const resourceKey = '4'.repeat(64)
+		const body = new PassThrough()
+		const responsePromise = got(`${origin}/api/photos/upload`, {
+			method: 'POST',
+			headers: {
+				Authorization: 'Bearer photo-grant',
+				'Content-Length': '5',
+				'X-Umbrel-Photo-Backup-Key': resourceKey,
+				'X-Umbrel-Photo-Backup-Extension': 'heic',
+			},
+			body,
+			throwHttpErrors: false,
+		})
+		body.write('a')
+		await vi.waitFor(() => expect(getBackupSource).toHaveBeenCalledTimes(1))
+		expect(withBackupSource).not.toHaveBeenCalled()
+
+		sourceActive = false
+		body.end('bcde')
+		const response = await responsePromise
+
+		expect(response.statusCode).toBe(401)
+		expect(withBackupSource).toHaveBeenCalledTimes(1)
+		expect(registerBackupResource).not.toHaveBeenCalled()
+		await expectNoUploadArtifacts(resourceKey)
+	})
+
+	test('does not hold the box-wide publication queue while a source lifecycle guard waits', async () => {
+		let releaseGuard!: () => void
+		let markGuardEntered!: () => void
+		const guardEntered = new Promise<void>((resolve) => (markGuardEntered = resolve))
+		const guardGate = new Promise<void>((resolve) => (releaseGuard = resolve))
+		withBackupSource.mockImplementationOnce(async (_accountId, _sourceId, operation) => {
+			markGuardEntered()
+			await guardGate
+			return {active: true as const, value: await operation(source)}
+		})
+
+		const blockedUpload = upload('4'.repeat(64), 'heic', 'blocked')
+		await guardEntered
+		const independentUpload = upload('5'.repeat(64), 'heic', 'independent')
+		let independentResponse
+		try {
+			independentResponse = await Promise.race([
+				independentUpload,
+				new Promise<never>((_, reject) =>
+					setTimeout(() => reject(new Error('independent upload was blocked by another source guard')), 1_000),
+				),
+			])
+		} finally {
+			releaseGuard()
+		}
+
+		expect(independentResponse.statusCode).toBe(200)
+		await expect(blockedUpload).resolves.toMatchObject({statusCode: 200})
+	})
+
 	test('withholds the receipt when the final directory entry cannot be synced', async () => {
 		const resourceKey = 'f'.repeat(64)
-		const sourceDirectory = `${mediaDirectory}/0/${SOURCE_ID}`
-		fileDurability.failSyncPath = sourceDirectory
+		const shardDirectory = `${mediaDirectory}/Photos/${source.directoryName}/${resourceKey.slice(0, 2)}`
+		fileDurability.failSyncPath = shardDirectory
 
 		const response = await upload(resourceKey, 'heic', 'photo')
 
 		expect(response.statusCode).toBe(500)
 		expect(fileDurability.syncedPaths.some((path) => path.endsWith('.umbrel-upload'))).toBe(true)
-		expect(fileDurability.syncedPaths).toContain(sourceDirectory)
-		await expect(fse.readFile(`${sourceDirectory}/${resourceKey}.heic`, 'utf8')).resolves.toBe('photo')
+		expect(fileDurability.syncedPaths).toContain(shardDirectory)
+		await expect(fse.readFile(`${shardDirectory}/${resourceKey}.heic`, 'utf8')).resolves.toBe('photo')
 	})
 
 	test('rejects an upload before writing when it cannot fit', async () => {
@@ -238,7 +512,7 @@ describe('photo backup API', () => {
 
 		expect(response.statusCode).toBe(500)
 		expect(response.headers['x-umbrel-photo-backup-error']).toBeUndefined()
-		expect(JSON.parse(response.body)).toEqual({error: 'error writing photo backup'})
+		expect(JSON.parse(response.body)).toEqual({error: 'error writing file'})
 		await expectNoUploadArtifacts(resourceKey)
 	})
 })

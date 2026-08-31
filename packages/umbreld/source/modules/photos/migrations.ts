@@ -1,6 +1,6 @@
 import type BetterSqlite3 from 'better-sqlite3'
 
-export const PHOTOS_SCHEMA_VERSION = 2
+export const PHOTOS_SCHEMA_VERSION = 3
 export const PHOTOS_MIGRATION_MODULE = 'photos'
 
 export class UnsupportedPhotosSchemaError extends Error {}
@@ -86,14 +86,19 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 1, ?)')
 				.run(PHOTOS_MIGRATION_MODULE, Date.now())
 		}
-		if (version === 1) {
+		if (
+			version < 3 &&
+			(database.prepare("PRAGMA table_info('photos_content_state')").all() as Array<{name: string}>).some(
+				({name}) => name === 'deleted_at',
+			)
+		) {
 			// v1 represented Photos deletion as durable metadata while leaving the
 			// original file in Home. Trash is now the source of truth, so retain the
 			// unrelated per-content state and discard the obsolete tombstones.
 			database.exec(`
-				DROP TABLE photos_deletion_targets;
+				DROP TABLE IF EXISTS photos_deletion_targets;
 				DROP INDEX photos_content_state_by_account;
-				CREATE TABLE photos_content_state_v2 (
+				CREATE TABLE photos_content_state_v3 (
 					account_id TEXT NOT NULL,
 					content_hash BLOB NOT NULL CHECK (length(content_hash) = 32),
 					source_id TEXT NOT NULL REFERENCES photos_sources(id) ON DELETE RESTRICT,
@@ -101,16 +106,37 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 					imported_at INTEGER NOT NULL,
 					PRIMARY KEY(account_id, content_hash)
 				) WITHOUT ROWID;
-				INSERT INTO photos_content_state_v2(account_id, content_hash, source_id, is_favorite, imported_at)
+				INSERT INTO photos_content_state_v3(account_id, content_hash, source_id, is_favorite, imported_at)
 					SELECT account_id, content_hash, source_id, is_favorite, imported_at FROM photos_content_state;
 				DROP TABLE photos_content_state;
-				ALTER TABLE photos_content_state_v2 RENAME TO photos_content_state;
+				ALTER TABLE photos_content_state_v3 RENAME TO photos_content_state;
 				CREATE INDEX photos_content_state_by_account
 					ON photos_content_state(account_id, is_favorite, content_hash);
 			`)
 		}
+		if (version < 3) {
+			database.exec(`
+				CREATE TABLE IF NOT EXISTS photos_source_resources (
+					account_id TEXT NOT NULL,
+					source_id TEXT NOT NULL REFERENCES photos_sources(id) ON DELETE CASCADE,
+					resource_key TEXT NOT NULL CHECK (
+						length(resource_key) = 64 AND resource_key = lower(resource_key)
+						AND resource_key NOT GLOB '*[^0-9a-f]*'
+					),
+					content_hash BLOB NOT NULL CHECK (length(content_hash) = 32),
+					PRIMARY KEY(account_id, source_id, resource_key)
+				) WITHOUT ROWID;
+				CREATE INDEX IF NOT EXISTS photos_source_resources_by_content
+					ON photos_source_resources(account_id, content_hash, source_id);
+			`)
+		}
+		if (version < 2) {
+			database
+				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 2, ?)')
+				.run(PHOTOS_MIGRATION_MODULE, Date.now())
+		}
 		database
-			.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 2, ?)')
+			.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 3, ?)')
 			.run(PHOTOS_MIGRATION_MODULE, Date.now())
 	})
 	migrate.immediate()

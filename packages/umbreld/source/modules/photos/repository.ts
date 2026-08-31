@@ -78,7 +78,7 @@ type LivePairLocation = {
 const HASH_PATTERN = /^[a-f0-9]{64}$/
 
 const PHOTO_LIBRARY_CTE = `
-	WITH authorized_locations AS (
+	WITH indexed_locations AS (
 		SELECT index_roots.owner_id AS account_id,
 			index_roots.kind AS root_kind,
 			contents.blake3 AS content_hash, lower(hex(contents.blake3)) AS id,
@@ -86,7 +86,6 @@ const PHOTO_LIBRARY_CTE = `
 			entries.id AS entry_id, entries.content_id, entries.name, entries.search_name_folded,
 			entries.size, entries.modified_ms, entries.birthtime_ms, entries.relative_path,
 			index_roots.virtual_path AS root_virtual_path,
-			photos_source.id AS source_id, photos_source.name AS source_name, photos_source.type AS source_type,
 			media_metadata.kind, media_metadata.sub_kind, media_metadata.taken_at,
 			media_metadata.taken_at_offset_minutes, media_metadata.created_at,
 			media_metadata.width, media_metadata.height, media_metadata.duration_ms, media_metadata.tint,
@@ -98,15 +97,38 @@ const PHOTO_LIBRARY_CTE = `
 		JOIN entries ON entries.root_id = index_roots.id
 		JOIN contents ON contents.id = entries.content_id
 		JOIN media_metadata ON media_metadata.content_id = entries.content_id AND media_metadata.state = 'ready'
-		JOIN umbrel.photos_sources AS photos_source ON photos_source.account_id = index_roots.owner_id
-			AND photos_source.type = 'umbrel'
 		WHERE index_roots.owner_id = ? AND index_roots.kind IN ('home', 'trash')
 			AND entries.type = 'file' AND entries.hidden = 0
-			AND (index_roots.kind = 'trash' OR ${sourceScopeSql('photos_source')})
+	),
+	authorized_locations AS (
+		SELECT DISTINCT indexed_locations.*, iphone_source.id AS source_id,
+			iphone_source.name AS source_name, iphone_source.type AS source_type
+		FROM indexed_locations
+		JOIN umbrel.photos_source_resources AS resource
+			ON resource.account_id = indexed_locations.account_id
+			AND resource.content_hash = indexed_locations.content_hash
+		JOIN umbrel.photos_sources AS iphone_source ON iphone_source.id = resource.source_id
+			AND iphone_source.account_id = resource.account_id AND iphone_source.type = 'iphone'
+		UNION ALL
+		SELECT indexed_locations.*, umbrel_source.id AS source_id,
+			umbrel_source.name AS source_name, umbrel_source.type AS source_type
+		FROM indexed_locations
+		JOIN umbrel.photos_sources AS umbrel_source ON umbrel_source.account_id = indexed_locations.account_id
+			AND umbrel_source.type = 'umbrel'
+		WHERE (indexed_locations.root_kind = 'trash' OR
+			${sourceScopeSql('umbrel_source', 'indexed_locations', 'indexed_locations', 'root_virtual_path')})
+			AND NOT EXISTS (
+				SELECT 1 FROM umbrel.photos_source_resources AS resource
+				JOIN umbrel.photos_sources AS iphone_source ON iphone_source.id = resource.source_id
+					AND iphone_source.account_id = resource.account_id AND iphone_source.type = 'iphone'
+				WHERE resource.account_id = indexed_locations.account_id
+					AND resource.content_hash = indexed_locations.content_hash
+			)
 	),
 	ranked_locations AS (
 		SELECT *, ROW_NUMBER() OVER (
-			PARTITION BY content_hash, root_kind ORDER BY root_virtual_path, relative_path
+			PARTITION BY content_hash, root_kind
+			ORDER BY source_type = 'umbrel', source_id, root_virtual_path, relative_path
 		) AS location_rank
 		FROM authorized_locations
 	),
@@ -222,6 +244,222 @@ export default class PhotosRepository {
 			changed = this.refreshLivePairsForAccount(database, ownerId) || changed
 		}
 		return changed
+	}
+
+	upsertBackupSource(database: Database, accountId: string, sourceId: string, name: string, createdAt: number) {
+		const existing = database
+			.prepare('SELECT account_id, type FROM umbrel.photos_sources WHERE id = ?')
+			.get(sourceId) as {account_id: string; type: string} | undefined
+		if (existing && (existing.account_id !== accountId || existing.type !== 'iphone')) {
+			throw new Error('Photo backup source identity collision')
+		}
+		database
+			.prepare(
+				`INSERT INTO umbrel.photos_sources(id, account_id, type, name, created_at)
+				VALUES (?, ?, 'iphone', ?, ?)
+				ON CONFLICT(id) DO UPDATE SET name = excluded.name`,
+			)
+			.run(sourceId, accountId, name, createdAt)
+		return true
+	}
+
+	registerBackupResource(
+		database: Database,
+		accountId: string,
+		sourceId: string,
+		resourceKey: string,
+		entryId: number,
+		hash: Buffer,
+	) {
+		const source = database
+			.prepare("SELECT 1 FROM umbrel.photos_sources WHERE id = ? AND account_id = ? AND type = 'iphone'")
+			.get(sourceId, accountId)
+		if (!source) throw new Error('Photo backup source was not registered')
+		const uploaded = database
+			.prepare(
+				`SELECT contents.blake3, entries.content_id, entries.size, entries.relative_path, index_roots.virtual_path
+				FROM entries
+				JOIN index_roots ON index_roots.id = entries.root_id
+				LEFT JOIN contents ON contents.id = entries.content_id
+				WHERE entries.id = ? AND index_roots.owner_id = ? AND index_roots.kind = 'home'
+					AND entries.type = 'file' AND entries.hidden = 0`,
+			)
+			.get(entryId, accountId) as
+			| {blake3: Buffer | null; content_id: number | null; size: number; relative_path: string; virtual_path: string}
+			| undefined
+		if (!uploaded) throw new Error('Uploaded Photos backup resource was not indexed')
+		if (uploaded.blake3 && !uploaded.blake3.equals(hash)) throw new Error('Uploaded Photos backup hash mismatch')
+		const now = Date.now()
+		database
+			.prepare(
+				`INSERT INTO umbrel.photos_source_resources(account_id, source_id, resource_key, content_hash)
+				VALUES (?, ?, ?, ?)
+				ON CONFLICT(account_id, source_id, resource_key)
+				DO UPDATE SET content_hash = excluded.content_hash`,
+			)
+			.run(accountId, sourceId, resourceKey, hash)
+		if (uploaded.content_id !== null) {
+			database
+				.prepare(
+					`INSERT INTO umbrel.photos_content_state(account_id, content_hash, source_id, is_favorite, imported_at)
+					VALUES (?, ?, ?, 0, ?)
+					ON CONFLICT(account_id, content_hash) DO UPDATE SET
+						source_id = CASE
+							WHEN (SELECT type FROM umbrel.photos_sources WHERE id = photos_content_state.source_id) = 'umbrel'
+							THEN excluded.source_id ELSE photos_content_state.source_id END`,
+				)
+				.run(accountId, hash, sourceId, now)
+		}
+		database.prepare('UPDATE umbrel.photos_sources SET last_import_at = ? WHERE id = ?').run(now, sourceId)
+		return {
+			resourceKey,
+			path: nodePath.posix.join(uploaded.virtual_path, uploaded.relative_path),
+			bytes: Number(uploaded.size),
+		}
+	}
+
+	confirmedBackupResources(database: Database, accountId: string, sourceId: string, resourceKeys: string[]) {
+		if (resourceKeys.length === 0) return []
+		const placeholders = resourceKeys.map(() => '?').join(', ')
+		return (
+			database
+				.prepare(
+					`WITH candidates AS (
+						SELECT resource.resource_key, entries.device, entries.inode, entries.size,
+							entries.modified_ns, entries.ctime_ns, entries.relative_path, index_roots.virtual_path,
+							ROW_NUMBER() OVER (
+								PARTITION BY resource.resource_key
+								ORDER BY index_roots.virtual_path, entries.relative_path
+							) AS location_rank
+						FROM umbrel.photos_source_resources AS resource
+						JOIN contents ON contents.blake3 = resource.content_hash
+						JOIN entries ON entries.content_id = contents.id
+						JOIN index_roots ON index_roots.id = entries.root_id
+						WHERE resource.account_id = ? AND resource.source_id = ?
+							AND resource.resource_key IN (${placeholders})
+							AND index_roots.owner_id = resource.account_id AND index_roots.kind = 'home'
+							AND entries.type = 'file' AND entries.hidden = 0
+					) SELECT resource.resource_key, resource.content_hash,
+						candidates.device, candidates.inode, candidates.size,
+						candidates.modified_ns, candidates.ctime_ns,
+						candidates.relative_path, candidates.virtual_path
+					FROM umbrel.photos_source_resources AS resource
+					LEFT JOIN candidates ON candidates.resource_key = resource.resource_key
+						AND candidates.location_rank = 1
+					WHERE resource.account_id = ? AND resource.source_id = ?
+						AND resource.resource_key IN (${placeholders})
+					ORDER BY resource.resource_key`,
+				)
+				.all(accountId, sourceId, ...resourceKeys, accountId, sourceId, ...resourceKeys) as Array<{
+				resource_key: string
+				content_hash: Buffer
+				device: string | null
+				inode: string | null
+				size: number | null
+				modified_ns: string | null
+				ctime_ns: string | null
+				relative_path: string | null
+				virtual_path: string | null
+			}>
+		).map((row) => ({
+			resourceKey: row.resource_key,
+			contentHash: row.content_hash,
+			...(row.virtual_path === null ||
+			row.relative_path === null ||
+			row.device === null ||
+			row.inode === null ||
+			row.size === null ||
+			row.modified_ns === null ||
+			row.ctime_ns === null
+				? {}
+				: {
+						path: nodePath.posix.join(row.virtual_path, row.relative_path),
+						bytes: Number(row.size),
+						revision: {
+							device: row.device,
+							inode: row.inode,
+							size: Number(row.size),
+							modifiedNs: row.modified_ns,
+							ctimeNs: row.ctime_ns,
+						},
+					}),
+		}))
+	}
+
+	unresolvedBackupResourceHashes(database: Database, accountId: string, sourceId: string) {
+		return (
+			database
+				.prepare(
+					`SELECT DISTINCT resource.content_hash
+					FROM umbrel.photos_source_resources AS resource
+					WHERE resource.account_id = ? AND resource.source_id = ?
+						AND NOT EXISTS (
+							SELECT 1 FROM contents
+							JOIN entries ON entries.content_id = contents.id
+							JOIN index_roots ON index_roots.id = entries.root_id
+							WHERE contents.blake3 = resource.content_hash
+								AND index_roots.owner_id = resource.account_id AND index_roots.kind = 'home'
+								AND entries.type = 'file' AND entries.hidden = 0
+						)`,
+				)
+				.all(accountId, sourceId) as Array<{content_hash: Buffer}>
+		).map(({content_hash}) => content_hash)
+	}
+
+	sourceRemovalFiles(database: Database, accountId: string, sourceId: string) {
+		return (
+			database
+				.prepare(
+					`WITH exclusive_resources AS (
+						SELECT DISTINCT resource.content_hash
+						FROM umbrel.photos_source_resources AS resource
+						WHERE resource.account_id = ? AND resource.source_id = ?
+							AND NOT EXISTS (
+								SELECT 1 FROM umbrel.photos_source_resources AS other
+								WHERE other.account_id = resource.account_id
+									AND other.content_hash = resource.content_hash
+									AND other.source_id <> resource.source_id
+							)
+							AND 1 = (
+								SELECT COUNT(*) FROM contents
+								JOIN entries ON entries.content_id = contents.id
+								JOIN index_roots ON index_roots.id = entries.root_id
+								WHERE contents.blake3 = resource.content_hash
+									AND index_roots.owner_id = resource.account_id
+									AND index_roots.kind = 'home'
+									AND entries.type = 'file' AND entries.hidden = 0
+							)
+					)
+					SELECT lower(hex(contents.blake3)) AS id, index_roots.virtual_path,
+						entries.relative_path, entries.inode, entries.size,
+						entries.modified_ns, entries.ctime_ns
+					FROM exclusive_resources
+					JOIN contents ON contents.blake3 = exclusive_resources.content_hash
+					JOIN entries ON entries.content_id = contents.id
+					JOIN index_roots ON index_roots.id = entries.root_id
+					WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
+						AND entries.type = 'file' AND entries.hidden = 0
+					ORDER BY index_roots.virtual_path, entries.relative_path`,
+				)
+				.all(accountId, sourceId, accountId) as Array<{
+				id: string
+				virtual_path: string
+				relative_path: string
+				inode: string
+				size: number
+				modified_ns: string
+				ctime_ns: string
+			}>
+		).map((row) => ({
+			id: row.id,
+			path: joinVirtualPath(row.virtual_path, row.relative_path),
+			revision: {
+				inode: row.inode,
+				size: Number(row.size),
+				modifiedNs: row.modified_ns,
+				ctimeNs: row.ctime_ns,
+			},
+		}))
 	}
 
 	attachContentHash(database: Database, entryId: number, hash: Buffer) {
@@ -751,16 +989,19 @@ export default class PhotosRepository {
 			...(row.last_import_at === null ? {} : {lastImportAt: Number(row.last_import_at)}),
 			createdAt: Number(row.created_at),
 			stats: {photos: Number(row.photos), videos: Number(row.videos), sizeBytes: Number(row.size_bytes)},
-			...(row.scope_mode ? {scope: {mode: row.scope_mode, paths: parseStringArray(row.scope_paths)}} : {}),
+			...(row.type === 'umbrel' && row.scope_mode
+				? {scope: {mode: row.scope_mode, paths: parseStringArray(row.scope_paths)}}
+				: {}),
 		}))
 	}
 
 	updateSource(database: Database, accountId: string, id: string, scope?: {mode: PhotoScopeMode; paths: string[]}) {
 		const source = database
 			.prepare('SELECT type FROM umbrel.photos_sources WHERE id = ? AND account_id = ?')
-			.get(id, accountId)
+			.get(id, accountId) as {type: 'umbrel' | 'iphone'} | undefined
 		if (!source) return
 		if (scope) {
+			if (source.type !== 'umbrel') throw new Error('[photos-source-scope-unsupported]')
 			const root = (
 				database.prepare("SELECT virtual_path FROM index_roots WHERE owner_id = ? AND kind = 'home'").get(accountId) as
 					| {virtual_path: string}
@@ -778,22 +1019,22 @@ export default class PhotosRepository {
 		return this.listSources(database, accountId).find((candidate) => candidate.id === id)
 	}
 
-	removeSource(database: Database, accountId: string, id: string, keepItems: boolean) {
+	removeSource(database: Database, accountId: string, id: string, _keepItems: boolean) {
 		const source = database
 			.prepare('SELECT type FROM umbrel.photos_sources WHERE id = ? AND account_id = ?')
 			.get(id, accountId) as {type: string} | undefined
 		if (!source || source.type === 'umbrel') return false
 		const remove = database.transaction(() => {
-			if (keepItems) {
-				const replacement = this.#ensureSource(database, accountId)
-				database
-					.prepare('UPDATE umbrel.photos_content_state SET source_id = ? WHERE source_id = ? AND account_id = ?')
-					.run(replacement, id, accountId)
-			} else {
-				database
-					.prepare('DELETE FROM umbrel.photos_content_state WHERE source_id = ? AND account_id = ?')
-					.run(id, accountId)
-			}
+			const replacement = this.#ensureSource(database, accountId)
+			database
+				.prepare(
+					`UPDATE umbrel.photos_content_state SET source_id = COALESCE((
+						SELECT MIN(other.source_id) FROM umbrel.photos_source_resources AS other
+						WHERE other.account_id = photos_content_state.account_id
+							AND other.content_hash = photos_content_state.content_hash AND other.source_id <> ?
+					), ?) WHERE source_id = ? AND account_id = ?`,
+				)
+				.run(id, replacement, id, accountId)
 			database.prepare('DELETE FROM umbrel.photos_sources WHERE id = ? AND account_id = ?').run(id, accountId)
 		})
 		remove.immediate()
@@ -839,7 +1080,9 @@ export default class PhotosRepository {
 					LEFT JOIN media_metadata ON media_metadata.content_id = entries.content_id
 					WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
 						AND entries.type = 'file' AND entries.hidden = 0
-						AND entries.thumbnail_identity_kind = 'content' AND ${sourceScopeSql('photos_source')}
+						AND entries.thumbnail_identity_kind = 'content'
+						AND (entries.content_id IS NULL OR media_metadata.content_id IS NOT NULL)
+						AND ${sourceScopeSql('photos_source')}
 					GROUP BY work_id
 				) SELECT COUNT(*) AS total, COALESCE(SUM(completed), 0) AS completed,
 					COALESCE(SUM(failed), 0) AS failures FROM work`,
@@ -880,18 +1123,11 @@ export default class PhotosRepository {
 		return (
 			database
 				.prepare(
-					`SELECT DISTINCT contents.blake3 FROM index_roots
-					JOIN entries ON entries.root_id = index_roots.id
-					JOIN contents ON contents.id = entries.content_id
-					JOIN media_metadata ON media_metadata.content_id = entries.content_id AND media_metadata.state = 'ready'
-					JOIN umbrel.photos_sources AS photos_source ON photos_source.account_id = index_roots.owner_id
-						AND photos_source.type = 'umbrel'
-					WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
-						AND entries.type = 'file' AND entries.hidden = 0
-						AND contents.blake3 IN (${placeholders}) AND ${sourceScopeSql('photos_source')}`,
+					`${PHOTO_LIBRARY_CTE} SELECT DISTINCT content_hash FROM logical_items
+					WHERE content_hash IN (${placeholders})`,
 				)
-				.all(accountId, ...hashes) as Array<{blake3: Buffer}>
-		).map(({blake3}) => blake3)
+				.all(accountId, ...hashes) as Array<{content_hash: Buffer}>
+		).map(({content_hash}) => content_hash)
 	}
 
 	#withLiveCompanions(database: Database, accountId: string, hashes: Buffer[], rootKind: PhotoRootKind) {
@@ -1085,8 +1321,13 @@ function filterQuery(filter: PhotoFilter): Query {
 	return {sql: clauses.join(' AND '), parameters}
 }
 
-function sourceScopeSql(source = 'umbrel.photos_sources', root = 'index_roots', entry = 'entries') {
-	const virtualPath = `(${root}.virtual_path || '/' || ${entry}.relative_path)`
+function sourceScopeSql(
+	source = 'umbrel.photos_sources',
+	root = 'index_roots',
+	entry = 'entries',
+	rootVirtualPathColumn = 'virtual_path',
+) {
+	const virtualPath = `(${root}.${rootVirtualPathColumn} || '/' || ${entry}.relative_path)`
 	const containsPath = `${virtualPath} = value OR (${virtualPath} >= value || '/' AND ${virtualPath} < value || '0')`
 	return `(
 		${source}.scope_mode IS NULL OR ${source}.scope_mode = 'everything'

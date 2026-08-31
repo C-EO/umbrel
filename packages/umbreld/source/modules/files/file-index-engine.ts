@@ -13,6 +13,7 @@ import PhotosRepository from '../photos/repository.js'
 import type {PhotoFilter, PhotoIndexingProgress, PhotoScopeMode} from '../photos/types.js'
 import FileIndexEnrichment, {
 	BACKGROUND_QUIET_PERIOD_MS,
+	assertPublishedRevision,
 	type FileIndexEnrichmentRuntime,
 	type PublishedFileRevision,
 	type ThumbnailReference,
@@ -1417,8 +1418,16 @@ export default class FileIndexEngine {
 						inode = excluded.inode,
 						modified_ns = excluded.modified_ns,
 						ctime_ns = excluded.ctime_ns,
-						thumbnail_identity_kind = excluded.thumbnail_identity_kind,
+						thumbnail_identity_kind = CASE
+							WHEN entries.thumbnail_identity_kind = 'content' AND entries.content_id IS NOT NULL
+								AND excluded.type = 'file' AND entries.inode IS excluded.inode
+								AND entries.size IS excluded.size AND entries.modified_ns IS excluded.modified_ns
+							THEN 'content' ELSE excluded.thumbnail_identity_kind END,
 						content_id = CASE
+							WHEN entries.thumbnail_identity_kind = 'content' AND entries.content_id IS NOT NULL
+								AND excluded.type = 'file' AND entries.inode IS excluded.inode
+								AND entries.size IS excluded.size AND entries.modified_ns IS excluded.modified_ns
+							THEN entries.content_id
 							WHEN excluded.thumbnail_identity_kind = 'content'
 								AND entries.thumbnail_identity_kind = 'content'
 				AND entries.inode IS excluded.inode
@@ -1428,6 +1437,10 @@ export default class FileIndexEngine {
 							ELSE NULL
 						END,
 						hash_failure_count = CASE
+							WHEN entries.thumbnail_identity_kind = 'content' AND entries.content_id IS NOT NULL
+								AND excluded.type = 'file' AND entries.inode IS excluded.inode
+								AND entries.size IS excluded.size AND entries.modified_ns IS excluded.modified_ns
+							THEN entries.hash_failure_count
 							WHEN excluded.thumbnail_identity_kind = 'content'
 								AND entries.thumbnail_identity_kind = 'content'
 				AND entries.inode IS excluded.inode
@@ -1437,6 +1450,10 @@ export default class FileIndexEngine {
 							ELSE 0
 						END,
 						hash_retry_at = CASE
+							WHEN entries.thumbnail_identity_kind = 'content' AND entries.content_id IS NOT NULL
+								AND excluded.type = 'file' AND entries.inode IS excluded.inode
+								AND entries.size IS excluded.size AND entries.modified_ns IS excluded.modified_ns
+							THEN entries.hash_retry_at
 							WHEN entries.thumbnail_identity_kind = 'content'
 								AND excluded.thumbnail_identity_kind = 'content'
 				AND entries.inode IS excluded.inode
@@ -1446,6 +1463,10 @@ export default class FileIndexEngine {
 							ELSE excluded.hash_retry_at
 						END,
 						hash_error = CASE
+							WHEN entries.thumbnail_identity_kind = 'content' AND entries.content_id IS NOT NULL
+								AND excluded.type = 'file' AND entries.inode IS excluded.inode
+								AND entries.size IS excluded.size AND entries.modified_ns IS excluded.modified_ns
+							THEN entries.hash_error
 							WHEN excluded.thumbnail_identity_kind = 'content'
 								AND entries.thumbnail_identity_kind = 'content'
 								AND entries.inode IS excluded.inode
@@ -1582,6 +1603,134 @@ export default class FileIndexEngine {
 		})
 	}
 
+	async photosUpsertBackupSource(accountId: string, sourceId: string, name: string, createdAt: number) {
+		this.#requirePhotos()
+		return this.#mutate((database) => {
+			const upsert = database.transaction(() =>
+				this.#photos.upsertBackupSource(this.#photosDatabase(database), accountId, sourceId, name, createdAt),
+			)
+			return upsert.immediate()
+		})
+	}
+
+	async photosRegisterBackupResource(
+		accountId: string,
+		sourceId: string,
+		resourceKey: string,
+		systemPath: string,
+		hash: Buffer,
+		expectedRevision: PublishedFileRevision,
+	) {
+		this.#requirePhotos()
+		await this.reconcilePath(systemPath)
+		const entry = await this.getEntryBySystemPath(systemPath)
+		if (
+			!entry ||
+			entry.type !== 'file' ||
+			entry.hidden ||
+			entry.inode !== expectedRevision.inode ||
+			entry.size !== expectedRevision.size ||
+			entry.modifiedNs !== expectedRevision.modifiedNs ||
+			entry.ctimeNs !== expectedRevision.ctimeNs
+		) {
+			throw new Error('Uploaded Photos backup resource was not indexed')
+		}
+		await assertPublishedRevision(systemPath, expectedRevision)
+		await this.#promoteContentIdentity(entry.id, expectedRevision)
+		await this.#enrichment.attachKnownContentHash(entry.id, hash, expectedRevision)
+		return this.#mutate((database) => {
+			const register = database.transaction(() =>
+				this.#photos.registerBackupResource(
+					this.#photosDatabase(database),
+					accountId,
+					sourceId,
+					resourceKey,
+					entry.id,
+					hash,
+				),
+			)
+			return register.immediate()
+		})
+	}
+
+	async photosConfirmedBackupResources(accountId: string, sourceId: string, resourceKeys: string[]) {
+		this.#requirePhotos()
+		let resources = await this.#mutate((database) =>
+			this.#photos.confirmedBackupResources(this.#photosDatabase(database), accountId, sourceId, resourceKeys),
+		)
+		await this.#recoverBackupResourceIdentities(
+			accountId,
+			resources.filter(({path}) => path === undefined).map(({contentHash}) => contentHash),
+		)
+		resources = await this.#mutate((database) =>
+			this.#photos.confirmedBackupResources(this.#photosDatabase(database), accountId, sourceId, resourceKeys),
+		)
+		return resources
+	}
+
+	async #promoteContentIdentity(entryId: number, revision: PublishedFileRevision) {
+		const promoted = await this.#mutate(
+			(database) =>
+				database
+					.prepare(
+						`UPDATE entries SET thumbnail_identity_kind = 'content', hash_retry_at = NULL, hash_error = NULL
+					WHERE id = ? AND type = 'file' AND hidden = 0
+						AND inode = ? AND size = ? AND modified_ns = ? AND ctime_ns = ?`,
+					)
+					.run(entryId, revision.inode, revision.size, revision.modifiedNs, revision.ctimeNs).changes,
+		)
+		if (promoted === 0) throw new Error('Photos backup resource changed before content indexing')
+	}
+
+	async #recoverBackupResourceIdentities(accountId: string, hashes: Buffer[]) {
+		const unresolved = new Set(hashes.map((hash) => hash.toString('hex')))
+		if (unresolved.size === 0) return
+		const candidates = await this.#mutate(
+			(database) =>
+				database
+					.prepare(
+						`SELECT entries.id, entries.name, entries.inode, entries.size, entries.modified_ns, entries.ctime_ns
+						FROM entries
+						JOIN index_roots ON index_roots.id = entries.root_id
+						WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
+							AND entries.type = 'file' AND entries.hidden = 0 AND entries.content_id IS NULL`,
+					)
+					.all(accountId) as Array<{
+					id: number
+					name: string
+					inode: string
+					size: number
+					modified_ns: string
+					ctime_ns: string
+				}>,
+			20,
+		)
+		// A normal Files move preserves the resource-key filename, so try those
+		// cheap, high-confidence candidates first. Renamed resources remain
+		// recoverable by hash without making path metadata durable.
+		candidates.sort((left, right) => {
+			const leftNamed = /^[0-9a-f]{64}\.[0-9a-z]{1,16}$/i.test(left.name)
+			const rightNamed = /^[0-9a-f]{64}\.[0-9a-z]{1,16}$/i.test(right.name)
+			return Number(rightNamed) - Number(leftNamed)
+		})
+		for (const candidate of candidates) {
+			if (unresolved.size === 0) break
+			const revision = {
+				inode: candidate.inode,
+				size: Number(candidate.size),
+				modifiedNs: candidate.modified_ns,
+				ctimeNs: candidate.ctime_ns,
+			}
+			try {
+				await this.#promoteContentIdentity(candidate.id, revision)
+				const hash = await this.#enrichment.ensureContentHash(candidate.id)
+				unresolved.delete(hash.toString('hex'))
+			} catch (error) {
+				this.logger.error(`Failed to recover Photos backup identity for '${candidate.name}'`, error)
+			}
+		}
+	}
+
 	async photosPrepareUpload(accountId: string, hash: Buffer, albumId?: string) {
 		this.#requirePhotos()
 		return this.#mutate((database) => {
@@ -1691,6 +1840,33 @@ export default class FileIndexEngine {
 
 	async photosUpdateSource(accountId: string, id: string, scope?: {mode: PhotoScopeMode; paths: string[]}) {
 		return this.#mutate((database) => this.#photos.updateSource(this.#photosDatabase(database), accountId, id, scope))
+	}
+
+	async photosSourceRemovalFiles(accountId: string, id: string) {
+		this.#requirePhotos()
+		// Source-removal intents replay early at startup, while the ordinary
+		// background scan may still be rebuilding a disposable index. Wait for a
+		// current Home snapshot so keepItems:false cannot silently leave an
+		// unindexed backup behind as a later Umbrel item.
+		const homeRoot = [...this.#roots.values()].find(
+			(root) => root.ownerId === accountId && root.kind === 'home' && root.scanEnabled !== false,
+		)
+		if (!homeRoot?.id) throw new Error(`Photos source removal requires an indexed Home root for '${accountId}'`)
+		const scanGeneration = homeRoot.scanGeneration
+		await this.reconcileRoot(homeRoot.virtualPath, 'photos-source-removal')
+		if (
+			this.#roots.get(homeRoot.virtualPath) !== homeRoot ||
+			homeRoot.scanGeneration <= scanGeneration ||
+			homeRoot.state !== 'ready' ||
+			homeRoot.lastSuccessfulScanAt === undefined
+		) {
+			throw new Error(`Photos source removal requires a current Home snapshot for '${accountId}'`)
+		}
+		const resourceHashes = await this.#mutate((database) =>
+			this.#photos.unresolvedBackupResourceHashes(this.#photosDatabase(database), accountId, id),
+		)
+		await this.#recoverBackupResourceIdentities(accountId, resourceHashes)
+		return this.#mutate((database) => this.#photos.sourceRemovalFiles(this.#photosDatabase(database), accountId, id))
 	}
 
 	async photosRemoveSource(accountId: string, id: string, keepItems: boolean) {
@@ -1958,6 +2134,7 @@ function reuseMovedContent(
 	database
 		.prepare(
 			`UPDATE entries AS destination SET
+				thumbnail_identity_kind = 'content',
 				content_id = source.content_id,
 				hash_failure_count = source.hash_failure_count,
 				hash_retry_at = source.hash_retry_at,
@@ -1971,7 +2148,7 @@ function reuseMovedContent(
 					ELSE ? || substr(source.relative_path, length(?) + 1)
 				END
 				AND source.thumbnail_identity_kind = 'content'
-				AND destination.thumbnail_identity_kind = 'content'
+				AND destination.type = 'file'
 				AND source.content_id IS NOT NULL
 				AND destination.inode = source.inode
 				AND destination.size = source.size

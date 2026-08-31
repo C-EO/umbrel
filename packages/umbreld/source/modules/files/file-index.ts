@@ -383,6 +383,40 @@ export default class FileIndex {
 		])
 	}
 
+	async photosUpsertBackupSource(accountId: string, sourceId: string, name: string, createdAt: number) {
+		return this.#request<boolean>('photosUpsertBackupSource', [accountId, sourceId, name, createdAt])
+	}
+
+	async photosRegisterBackupResource(
+		accountId: string,
+		sourceId: string,
+		resourceKey: string,
+		systemPath: string,
+		hash: Buffer,
+		expectedRevision: PublishedFileRevision,
+	) {
+		return this.#request<{resourceKey: string; path: string; bytes: number}>('photosRegisterBackupResource', [
+			accountId,
+			sourceId,
+			resourceKey,
+			systemPath,
+			hash,
+			expectedRevision,
+		])
+	}
+
+	async photosConfirmedBackupResources(accountId: string, sourceId: string, resourceKeys: string[]) {
+		return this.#request<
+			Array<{
+				resourceKey: string
+				contentHash: Buffer
+				path?: string
+				bytes?: number
+				revision?: {device: string; inode: string; size: number; modifiedNs: string; ctimeNs: string}
+			}>
+		>('photosConfirmedBackupResources', [accountId, sourceId, resourceKeys])
+	}
+
 	async photosPrepareUpload(accountId: string, hash: Buffer, albumId?: string) {
 		return this.#request<{status: 'new'} | {status: 'duplicate'; itemId: string}>('photosPrepareUpload', [
 			accountId,
@@ -486,6 +520,13 @@ export default class FileIndex {
 
 	async photosUpdateSource(accountId: string, id: string, scope?: {mode: PhotoScopeMode; paths: string[]}) {
 		return this.#request<PhotoSource | undefined>('photosUpdateSource', [accountId, id, scope])
+	}
+
+	async photosSourceRemovalFiles(accountId: string, id: string) {
+		return this.#request<Array<{id: string; path: string; revision: PublishedFileRevision}>>(
+			'photosSourceRemovalFiles',
+			[accountId, id],
+		)
 	}
 
 	async photosRemoveSource(accountId: string, id: string, keepItems: boolean) {

@@ -515,6 +515,24 @@ export default class Auth {
 		return revoked
 	}
 
+	async revokePhotoBackupGrantsForSource(accountId: string, sourceId: string) {
+		let revoked = 0
+		await this.#store.getWriteLock(async ({set}) => {
+			const sessions = this.#sessions.map((session) => {
+				if (session.accountId !== accountId) return session
+				const credentials = session.credentials.filter(
+					(credential) => credential.audience !== 'photo-backup' || credential.photoBackupSourceId !== sourceId,
+				)
+				revoked += session.credentials.length - credentials.length
+				return credentials.length === session.credentials.length ? session : {...session, credentials}
+			})
+			if (!revoked) return
+			await set('sessions', sessions)
+			this.#sessions = sessions
+		})
+		return revoked
+	}
+
 	// Background uploads keep Active Logins useful without rewriting the auth
 	// store for every photo in a batch.
 	async touchSession(principal: Principal) {

@@ -2090,13 +2090,13 @@ export default class Files {
 			if (!stats.isFile()) throw new Error('[not-a-file]')
 
 			const canonicalPath = await fse.realpath(systemPath)
-			const canonicalVirtualPath = this.systemToVirtualPath(canonicalPath)
-			const authorizedCanonicalPath = await this.virtualToSystemPath(canonicalVirtualPath, userId)
-			if (nodePath.resolve(authorizedCanonicalPath) !== nodePath.resolve(canonicalPath)) {
+			const reauthorizedSystemPath = await this.virtualToSystemPath(virtualPath, userId)
+			const reauthorizedCanonicalPath = await fse.realpath(reauthorizedSystemPath)
+			if (nodePath.resolve(reauthorizedCanonicalPath) !== nodePath.resolve(canonicalPath)) {
 				throw new Error('[forbidden]')
 			}
 
-			const validationHandle = await open(canonicalPath, flags)
+			const validationHandle = await open(reauthorizedCanonicalPath, flags)
 			try {
 				const canonicalStats = await validationHandle.stat({bigint: true})
 				if (canonicalStats.dev !== stats.dev || canonicalStats.ino !== stats.ino) throw new Error('[file-changed]')

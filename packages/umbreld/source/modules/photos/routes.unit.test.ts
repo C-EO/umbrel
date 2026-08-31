@@ -30,9 +30,8 @@ test('creates a source-bound grant only after validating the native session', as
 		createdAt: 1,
 	}
 	const validateNativePrincipal = vi.fn(async () => principal)
-	const issuePhotoBackupGrant = vi.fn(async () => ({token: 'grant'}))
-	const registerBackupSource = vi.fn(async () => source)
-	const context = contextFor({validateNativePrincipal, issuePhotoBackupGrant}, {registerBackupSource})
+	const createBackupGrant = vi.fn(async () => ({token: 'grant', source}))
+	const context = contextFor({validateNativePrincipal}, {createBackupGrant})
 	const caller = routes.createCaller(context)
 
 	await expect(caller.createBackupGrant({sourceId: source.id, suggestedName: source.name})).resolves.toEqual({
@@ -40,26 +39,23 @@ test('creates a source-bound grant only after validating the native session', as
 		source,
 	})
 	expect(validateNativePrincipal).toHaveBeenCalledWith(principal)
-	expect(registerBackupSource).toHaveBeenCalledWith({
-		accountId: 'Alice',
+	expect(createBackupGrant).toHaveBeenCalledWith({
+		principal,
 		sourceId: source.id,
 		suggestedName: source.name,
 	})
-	expect(issuePhotoBackupGrant).toHaveBeenCalledWith(principal, source.id)
 	expect(context.response!.set).toHaveBeenCalledWith('Cache-Control', 'no-store')
 })
 
 test('rejects browser sessions before registering a backup source', async () => {
-	const registerBackupSource = vi.fn()
-	const issuePhotoBackupGrant = vi.fn()
+	const createBackupGrant = vi.fn()
 	const context = contextFor(
 		{
 			validateNativePrincipal: vi.fn(async () => {
 				throw new NativeSessionRequiredError()
 			}),
-			issuePhotoBackupGrant,
 		},
-		{registerBackupSource},
+		{createBackupGrant},
 	)
 	const caller = routes.createCaller(context)
 
@@ -69,16 +65,15 @@ test('rejects browser sessions before registering a backup source', async () => 
 			suggestedName: 'Browser source',
 		}),
 	).rejects.toMatchObject({code: 'FORBIDDEN'})
-	expect(registerBackupSource).not.toHaveBeenCalled()
-	expect(issuePhotoBackupGrant).not.toHaveBeenCalled()
+	expect(createBackupGrant).not.toHaveBeenCalled()
 })
 
 test.each(['00000000-0000-0000-0000-000000000000', '11111111-1111-0111-8111-111111111111'])(
 	'rejects unsupported backup source id %s at the route boundary',
 	async (sourceId) => {
-		const registerBackupSource = vi.fn()
+		const createBackupGrant = vi.fn()
 		const confirmedBackupResources = vi.fn()
-		const caller = routes.createCaller(contextFor({}, {registerBackupSource, confirmedBackupResources}))
+		const caller = routes.createCaller(contextFor({}, {createBackupGrant, confirmedBackupResources}))
 
 		await expect(caller.createBackupGrant({sourceId, suggestedName: 'Phone'})).rejects.toMatchObject({
 			code: 'BAD_REQUEST',
@@ -86,7 +81,7 @@ test.each(['00000000-0000-0000-0000-000000000000', '11111111-1111-0111-8111-1111
 		await expect(caller.confirmedBackupResources({sourceId, resources: []})).rejects.toMatchObject({
 			code: 'BAD_REQUEST',
 		})
-		expect(registerBackupSource).not.toHaveBeenCalled()
+		expect(createBackupGrant).not.toHaveBeenCalled()
 		expect(confirmedBackupResources).not.toHaveBeenCalled()
 	},
 )

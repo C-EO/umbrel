@@ -1,4 +1,4 @@
-# Photos v1 — backend contract
+# Photos v2 — backend contract
 
 What umbreld provides for the Photos UI. A logical photo is identified by its
 32-byte BLAKE3 content hash. Durable account/hash state lives in namespaced
@@ -7,6 +7,35 @@ locations, content hashes, media metadata, search terms, and thumbnail work live
 in the disposable `<dataDirectory>/file-index/index.db` or artifact directories.
 The shared database is backed up and is never quarantined with the rebuildable
 index.
+
+iPhone backups are ordinary files in the account's Home Photos directory, under
+a stable, client-supplied friendly device folder such as
+`/Home/Photos/Luke's iPhone` (or `/Users/Luke/Photos/Luke's iPhone` for a
+member). Resource files are sharded below that folder by the first byte of their
+64-character resource key, for example `ab/abcdef….heic`, so a large library
+does not create one oversized directory. The folder layout is presentation and
+upload-routing state, not identity.
+`umbrel.db` relates each PhotoKit resource to its content using exactly
+`(account_id, source_id, resource_key, content_hash)`; the disposable file index
+resolves that hash to whichever accessible path currently contains the bytes.
+The client must assign a distinct resource key to every resource within a
+source, including separate keys for a Live Photo's still and motion resources.
+Moving or renaming an uploaded media file therefore does not lose its iPhone
+source attribution or backup receipt. Before returning a receipt, the server
+reopens the indexed path and verifies that it is still the exact indexed file
+revision; an index row alone is never treated as proof that the bytes remain on
+disk. Exact upload retries reuse matching bytes. If the same resource key later
+contains different bytes, or the user edited its ordinary Home file, publication
+uses Files' keep-both naming instead of overwriting either version.
+
+The backup transport accepts PhotoKit resources with any protocol-valid file
+extension, including formats the Photos library cannot yet enrich (for example,
+AAE sidecars). Those bytes and their durable receipt are preserved, but they do
+not appear as Photos items until the format is supported. Existing private-layout
+backups are moved into the account Home and their relations rebuilt the first
+time that source is registered after upgrade. Source registration, grants,
+uploads, and removal are serialized per account/source; removal is recorded as a
+durable intent and replayed after a restart before the source can be used again.
 
 Account and path authorization is applied before locations are grouped by hash.
 Consequently, duplicate bytes are returned once per Home/Trash view without
@@ -24,6 +53,11 @@ media from the account's Home root; the Deleted view projects every indexed
 photo/video from that account's Trash root. There is no Photos deletion marker,
 retention period, or automatic cleanup. Trash therefore needs the same hashes,
 media metadata, live-pair data, and Photos thumbnail variants as Home.
+Trash bytes deliberately do not satisfy a phone's backup receipt: once the last
+Home copy is deleted, a resource that still exists on the phone may be backed up
+again. This is backup behavior, not bidirectional deletion sync, and prevents a
+phone from freeing its original based only on a copy the user can permanently
+empty from Trash.
 
 Not in v1 (no routers or fields exist for them): people, locations, semantic
 search, Android motion photos (the MP4-embedded-in-a-JPEG kind — needs byte
@@ -208,9 +242,14 @@ new hash and deliberately does not inherit old state.
 - `list()` → `Source[]` — always includes the permanent `umbrel` source (identified
   by `type === 'umbrel'`; the UI renames it after the account). iPhones appear here
   when they pair through the mobile app — there is no `add` procedure in v1.
-- `update({id, scope?})` → `Source` — partial patch.
+- `update({id, scope?})` → `Source` — partial patch. Folder scope is supported
+  only by the built-in `umbrel` source; iPhone source scope updates are rejected.
 - `remove({id, keepItems: boolean})` — unpair an iPhone; `keepItems: false` also
-  removes its library copies and index rows. The `umbrel` source refuses removal.
+  moves its items to Recently Deleted so the ordinary Home index cannot
+  immediately re-import them as Umbrel items. If the same bytes exist at more
+  than one visible Home path, removal preserves the logical item as an Umbrel
+  item rather than risking deletion of an independently kept duplicate. The
+  `umbrel` source refuses removal.
 
 Errors: plain tRPC errors (NOT_FOUND etc.) — the UI shows generic toasts, no
 special error-code vocabulary.

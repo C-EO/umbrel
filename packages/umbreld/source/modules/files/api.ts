@@ -211,8 +211,10 @@ type ReceiveUploadOptions = {
 	virtualPath: string
 	collision: 'error' | 'keep-both' | 'replace'
 	calculateBlake3?: boolean
+	insufficientStorageHeader?: {name: string; value: string}
 	onBeforePublish?: (hash: Buffer) => Promise<'publish' | 'skip'>
 	onPublished?: (upload: PublishedUpload) => Promise<void>
+	publicationGuard?: <T>(publish: () => Promise<T>, staged: {blake3?: Buffer}) => Promise<T>
 }
 
 export type PublishedUpload = {
@@ -229,7 +231,15 @@ export async function receiveUpload(
 	uploadDiskPreflight: UploadDiskPreflight,
 	request: express.Request,
 	response: express.Response,
-	{virtualPath, collision, calculateBlake3 = false, onBeforePublish, onPublished}: ReceiveUploadOptions,
+	{
+		virtualPath,
+		collision,
+		calculateBlake3 = false,
+		insufficientStorageHeader,
+		onBeforePublish,
+		onPublished,
+		publicationGuard,
+	}: ReceiveUploadOptions,
 ) {
 	// This is shared by Files and Photos so Photos can finish durable import
 	// bookkeeping before it sends a success response. Errors are still answered
@@ -305,6 +315,9 @@ export async function receiveUpload(
 		}
 	}
 	if (!admitted) {
+		if (insufficientStorageHeader) {
+			response.setHeader(insufficientStorageHeader.name, insufficientStorageHeader.value)
+		}
 		response.status(507).json({error: '[not-enough-space]'})
 		return
 	}
@@ -344,10 +357,16 @@ export async function receiveUpload(
 			} finally {
 				await syncHandle.close()
 			}
-		} catch {
+		} catch (error) {
 			// Return an error
 			response.setHeader('Connection', 'close')
-			response.status(500).json({error: 'error writing file'})
+			const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
+			if (insufficientStorageHeader && (code === 'ENOSPC' || code === 'EDQUOT')) {
+				response.setHeader(insufficientStorageHeader.name, insufficientStorageHeader.value)
+				response.status(507).json({error: '[not-enough-space]'})
+			} else {
+				response.status(500).json({error: 'error writing file'})
+			}
 			return
 		} finally {
 			await temporaryFile?.close().catch(() => {})
@@ -357,7 +376,7 @@ export async function receiveUpload(
 		// Choose and claim the destination while serialized with other uploads.
 		// link(2) fails atomically if a keep-both/error destination appeared
 		// since the initial check; unlike rename it can never replace that file.
-		const publication: PublishedUpload | SkippedUpload | undefined = await uploadPublicationQueue.add(async () => {
+		const publish = async (): Promise<PublishedUpload | SkippedUpload | undefined> => {
 			// Photos can reject a content duplicate while the complete bytes still
 			// live only in this hidden temporary file. This avoids publishing and
 			// then destructively cleaning up a pathname that another writer can
@@ -419,7 +438,15 @@ export async function receiveUpload(
 				}
 				return upload
 			}
-		})
+		}
+		const enqueuePublication = () => uploadPublicationQueue.add(publish)
+		// A caller-specific lifecycle lock may take arbitrarily long (for example,
+		// while an iPhone source is being removed). Acquire it before taking the
+		// box-wide publication slot, while still keeping its active-source check,
+		// publication, and durable registration in one guarded operation.
+		const publication: PublishedUpload | SkippedUpload | undefined = publicationGuard
+			? await publicationGuard(enqueuePublication, {blake3})
+			: await enqueuePublication()
 		if (!publication) {
 			response.setHeader('Connection', 'close')
 			response.status(400).json({error: '[destination-already-exists]'})

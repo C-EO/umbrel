@@ -24,7 +24,7 @@ import Machines from './modules/machines/machines.js'
 import LanIngress from './modules/lan-ingress/lan-ingress.js'
 import Auth from './modules/auth/auth.js'
 import Mcp, {type McpStoreSettings} from './modules/mcp/mcp.js'
-import Photos, {type PhotoBackupSource} from './modules/photos/photos.js'
+import Photos, {type PhotoBackupSource, type PhotoBackupSourceRemoval} from './modules/photos/photos.js'
 
 import type {CloudStore} from './modules/files/cloud-types.js'
 
@@ -121,6 +121,7 @@ type StoreSchema = {
 	}
 	photos?: {
 		backupSources?: PhotoBackupSource[]
+		backupSourceRemovals?: PhotoBackupSourceRemoval[]
 	}
 	notifications: string[]
 	backups: {

@@ -164,7 +164,9 @@ describe.sequential('LAN ingress', () => {
 		})
 		expect(uploaded.headers['cache-control']).toBe('no-store')
 		expect(uploaded.headers['x-umbrel-photo-backup-key']).toBe(uploadedKey)
-		expect(uploaded.headers['x-umbrel-upload-path']).toBe(`${sourceId}/${uploadedKey}.heic`)
+		expect(uploaded.headers['x-umbrel-upload-path']).toBe(
+			encodeURI(`/Home/Photos/Test iPhone/${uploadedKey.slice(0, 2)}/${uploadedKey}.heic`),
+		)
 		expect(uploaded.headers['x-umbrel-upload-bytes']).toBe('5')
 
 		// Reject before consuming the body, exercising the ingress behavior that

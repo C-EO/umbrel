@@ -47,6 +47,11 @@ async function contentRevision(systemPath: string) {
 	}
 }
 
+async function indexedContentRevision(systemPath: string) {
+	const stats = await lstat(systemPath, {bigint: true})
+	return {device: stats.dev.toString(), ...(await contentRevision(systemPath))}
+}
+
 afterEach(async () => {
 	await Promise.all(indexes.splice(0).map((index) => index.stop()))
 	await temporary.destroyRoot()
@@ -2108,6 +2113,384 @@ test('applies Photos source folder scopes to lists, summaries, and source statis
 	await expect(index.photosGetItem('owner', literalScope.items[0]!.id)).resolves.toMatchObject({
 		path: '/Home/Literal%_Folder/literal.jpg',
 	})
+})
+
+test('durably registers backup resources that are not Photos-enrichment formats', async () => {
+	const hash = Buffer.alloc(32, 0x42)
+	const enrichmentRuntime = {hashFile: async () => hash}
+	const {index, root, homeDirectory, dataDirectory} = await fixture(undefined, {enrichmentRuntime})
+	await index.initializePhotos('owner')
+	const sourceId = 'iphone:sidecar-source'
+	await index.photosUpsertBackupSource('owner', sourceId, 'Sidecars', 123)
+	const resourceKey = 'd'.repeat(64)
+	const contents = 'sidecar bytes'
+	const bytes = Buffer.byteLength(contents)
+	const systemPath = nodePath.join(homeDirectory, 'Photos', 'Sidecars', resourceKey.slice(0, 2), `${resourceKey}.aae`)
+	await fse.outputFile(systemPath, contents)
+
+	await expect(
+		index.photosRegisterBackupResource(
+			'owner',
+			sourceId,
+			resourceKey,
+			systemPath,
+			hash,
+			await contentRevision(systemPath),
+		),
+	).resolves.toEqual({
+		resourceKey,
+		path: `/Home/Photos/Sidecars/${resourceKey.slice(0, 2)}/${resourceKey}.aae`,
+		bytes,
+	})
+	await expect(index.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([
+		{
+			resourceKey,
+			contentHash: hash,
+			path: `/Home/Photos/Sidecars/${resourceKey.slice(0, 2)}/${resourceKey}.aae`,
+			bytes,
+			revision: await indexedContentRevision(systemPath),
+		},
+	])
+	await expect(index.photosListItems('owner', {sourceIds: [sourceId]}, undefined, 10)).resolves.toMatchObject({
+		total: 0,
+	})
+	await index.reconcileRoot('/Home', 'generic-photo-resource')
+	await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'ready'})
+
+	const durable = new BetterSqlite3(nodePath.join(dataDirectory, 'umbrel.db'))
+	expect(
+		durable
+			.prepare(
+				`SELECT account_id, source_id, resource_key, lower(hex(content_hash)) AS content_hash
+				FROM photos_source_resources`,
+			)
+			.all(),
+	).toStrictEqual([
+		{account_id: 'owner', source_id: sourceId, resource_key: resourceKey, content_hash: hash.toString('hex')},
+	])
+	durable.close()
+
+	const movedPath = nodePath.join(homeDirectory, 'Archive', 'capture.aae')
+	await fse.move(systemPath, movedPath)
+	await index.movePath(systemPath, movedPath)
+	await expect(index.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([
+		{
+			resourceKey,
+			contentHash: hash,
+			path: '/Home/Archive/capture.aae',
+			bytes,
+			revision: await indexedContentRevision(movedPath),
+		},
+	])
+
+	await index.stop()
+	await fse.remove(nodePath.join(dataDirectory, 'file-index'))
+	let failRemovalScan = true
+	const removalWalk: NonNullable<FileIndexEngineOptions['walkTree']> = async function* (
+		rootPath,
+		stopping,
+		includePath,
+		onPathError,
+	) {
+		if (failRemovalScan) throw new Error('simulated source-removal scan failure')
+		yield* walkFileTree(rootPath, stopping, includePath, onPathError)
+	}
+	const rebuilt = new FileIndex({
+		dataDirectory,
+		logger,
+		isHidden: () => false,
+		walkTree: removalWalk,
+		enrichmentRuntime: {availableParallelism: 1, ...enrichmentRuntime},
+	})
+	indexes.push(rebuilt)
+	await rebuilt.start()
+	await rebuilt.setRoots([root])
+	await rebuilt.initializePhotos('owner')
+	// Removal can replay before startup's background reconciliation has rebuilt
+	// the disposable index. Planning must fail closed after a bad scan, retain
+	// the durable relation, and retry from a current Home snapshot.
+	await expect(rebuilt.photosSourceRemovalFiles('owner', sourceId)).rejects.toThrow(
+		"Photos source removal requires a current Home snapshot for 'owner'",
+	)
+	await expect(rebuilt.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([
+		{resourceKey, contentHash: hash},
+	])
+	failRemovalScan = false
+	await expect(rebuilt.photosSourceRemovalFiles('owner', sourceId)).resolves.toStrictEqual([
+		{
+			id: hash.toString('hex'),
+			path: '/Home/Archive/capture.aae',
+			revision: await contentRevision(movedPath),
+		},
+	])
+	await expect(rebuilt.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([
+		{
+			resourceKey,
+			contentHash: hash,
+			path: '/Home/Archive/capture.aae',
+			bytes,
+			revision: await indexedContentRevision(movedPath),
+		},
+	])
+	await expect(rebuilt.photosRemoveSource('owner', sourceId, false)).resolves.toBe(true)
+	await expect(rebuilt.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([])
+})
+
+test('attributes iPhone resources by durable hash after their files move', async () => {
+	const hash = Buffer.alloc(32, 0x31)
+	const enrichmentRuntime = {
+		hashFile: async () => hash,
+		generateThumbnail: async (_source: string, destination: string) => fse.outputFile(destination, 'thumbnail'),
+		extractMediaMetadata: async () => ({
+			kind: 'photo' as const,
+			takenAt: 1,
+			createdAt: 1,
+			width: 1,
+			height: 1,
+		}),
+	}
+	const {index, root, trashRoot, homeDirectory, trashDirectory, dataDirectory} = await fixture(undefined, {
+		includeTrash: true,
+		enrichmentRuntime,
+	})
+	await index.initializePhotos('owner')
+	const sourceId = 'iphone:test-source'
+	await index.photosUpsertBackupSource('owner', sourceId, "Luke's iPhone", 123)
+	const resourceKey = 'a'.repeat(64)
+	const original = nodePath.join(
+		homeDirectory,
+		'Photos',
+		"Luke's iPhone",
+		resourceKey.slice(0, 2),
+		`${resourceKey}.heic`,
+	)
+	await fse.outputFile(original, 'still')
+	await index.photosRegisterBackupResource(
+		'owner',
+		sourceId,
+		resourceKey,
+		original,
+		hash,
+		await contentRevision(original),
+	)
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const item = (await index.photosListItems('owner', {sourceIds: [sourceId]}, undefined, 10)).items[0]!
+	await expect(index.photosGetItem('owner', item.id)).resolves.toMatchObject({
+		source: {id: sourceId, name: "Luke's iPhone", type: 'iphone'},
+		path: `/Home/Photos/Luke's iPhone/${resourceKey.slice(0, 2)}/${resourceKey}.heic`,
+	})
+	await expect(index.photosListSources('owner')).resolves.toContainEqual(
+		expect.objectContaining({
+			id: sourceId,
+			name: "Luke's iPhone",
+			type: 'iphone',
+			lastImportAt: expect.any(Number),
+			stats: {photos: 1, videos: 0, sizeBytes: 5},
+		}),
+	)
+	await expect(index.photosUpdateSource('owner', sourceId, {mode: 'only', paths: ['/Home/Photos']})).rejects.toThrow(
+		'[photos-source-scope-unsupported]',
+	)
+
+	const moved = nodePath.join(homeDirectory, 'Trips', 'Iceland.heic')
+	await fse.move(original, moved)
+	await index.movePath(original, moved)
+	await expect(index.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([
+		{
+			resourceKey,
+			contentHash: hash,
+			path: '/Home/Trips/Iceland.heic',
+			bytes: 5,
+			revision: await indexedContentRevision(moved),
+		},
+	])
+	await expect(index.photosGetItem('owner', item.id)).resolves.toMatchObject({
+		source: {id: sourceId, name: "Luke's iPhone", type: 'iphone'},
+		path: '/Home/Trips/Iceland.heic',
+	})
+
+	const umbrelSource = (await index.photosListSources('owner')).find(({type}) => type === 'umbrel')!
+	await index.photosUpdateSource('owner', umbrelSource.id, {mode: 'only', paths: ['/Home/Photos']})
+	await expect(index.photosSetFavorite('owner', [item.id], true)).resolves.toBe(1)
+	const tripAlbum = await index.photosCreateAlbum('owner', 'Trip')
+	await expect(index.photosAddAlbumItems('owner', tripAlbum.id, [item.id])).resolves.toBe(1)
+	await expect(index.photosGetItem('owner', item.id)).resolves.toMatchObject({
+		isFavorite: true,
+		albums: [{id: tripAlbum.id, name: 'Trip'}],
+	})
+	await index.photosUpdateSource('owner', umbrelSource.id, {mode: 'everything', paths: []})
+
+	const durable = new BetterSqlite3(nodePath.join(dataDirectory, 'umbrel.db'))
+	expect(
+		durable
+			.prepare(
+				`SELECT account_id, source_id, resource_key, lower(hex(content_hash)) AS content_hash
+				FROM photos_source_resources`,
+			)
+			.all(),
+	).toStrictEqual([
+		{account_id: 'owner', source_id: sourceId, resource_key: resourceKey, content_hash: hash.toString('hex')},
+	])
+	durable.close()
+
+	await index.stop()
+	await fse.remove(nodePath.join(dataDirectory, 'file-index'))
+	const rebuilt = new FileIndex({dataDirectory, logger, isHidden: () => false, enrichmentRuntime})
+	indexes.push(rebuilt)
+	await rebuilt.start()
+	await rebuilt.setRoots([root, trashRoot])
+	await rebuilt.reconcileRoot('/Home', 'rebuilt-iphone-source')
+	await rebuilt.initializePhotos('owner')
+	rebuilt.startBackgroundReconciliation()
+	await pRetry(
+		async () =>
+			expect(await rebuilt.photosListItems('owner', {sourceIds: [sourceId]}, undefined, 10)).toMatchObject({
+				total: 1,
+			}),
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
+	await expect(rebuilt.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([
+		{
+			resourceKey,
+			contentHash: hash,
+			path: '/Home/Trips/Iceland.heic',
+			bytes: 5,
+			revision: await indexedContentRevision(moved),
+		},
+	])
+	await expect(rebuilt.photosSourceRemovalFiles('owner', sourceId)).resolves.toStrictEqual([
+		{
+			id: hash.toString('hex'),
+			path: '/Home/Trips/Iceland.heic',
+			revision: await contentRevision(moved),
+		},
+	])
+	const trashed = nodePath.join(trashDirectory, 'Iceland.heic')
+	await fse.move(moved, trashed)
+	await rebuilt.movePath(moved, trashed)
+	await expect(rebuilt.photosRemoveSource('owner', sourceId, false)).resolves.toBe(true)
+	await expect(rebuilt.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 0})
+	await expect(rebuilt.photosListItems('owner', {deleted: true}, undefined, 10)).resolves.toMatchObject({total: 1})
+	await expect(rebuilt.photosGetItem('owner', item.id, true)).resolves.toMatchObject({
+		path: '/Trash/Iceland.heic',
+		source: {type: 'umbrel'},
+	})
+	await expect(rebuilt.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([])
+	await expect(rebuilt.photosListSources('owner')).resolves.not.toContainEqual(expect.objectContaining({id: sourceId}))
+})
+
+test('preserves independently kept duplicate files when removing an iPhone source', async () => {
+	const hash = Buffer.alloc(32, 0x61)
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => hash,
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	await index.initializePhotos('owner')
+	const sourceId = 'iphone:duplicate-source'
+	const resourceKey = '6'.repeat(64)
+	await index.photosUpsertBackupSource('owner', sourceId, 'Phone', 123)
+	const uploaded = nodePath.join(homeDirectory, 'Photos', 'Phone', resourceKey.slice(0, 2), `${resourceKey}.heic`)
+	const keptCopy = nodePath.join(homeDirectory, 'Pictures', 'kept-copy.heic')
+	await Promise.all([fse.outputFile(uploaded, 'same bytes'), fse.outputFile(keptCopy, 'same bytes')])
+	await index.photosRegisterBackupResource(
+		'owner',
+		sourceId,
+		resourceKey,
+		uploaded,
+		hash,
+		await contentRevision(uploaded),
+	)
+	await index.reconcileRoot('/Home', 'iphone-duplicate')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	await expect(index.photosSourceRemovalFiles('owner', sourceId)).resolves.toStrictEqual([])
+	await expect(index.photosRemoveSource('owner', sourceId, false)).resolves.toBe(true)
+	const preserved = await index.photosListItems('owner', {}, undefined, 10)
+	expect(preserved).toMatchObject({total: 1})
+	await expect(index.photosGetItem('owner', preserved.items[0]!.id)).resolves.toMatchObject({
+		source: {type: 'umbrel'},
+	})
+})
+
+test('does not hash unrelated Home files when removing a fully resolved iPhone source', async () => {
+	const sourceHash = Buffer.alloc(32, 0x64)
+	const hashFile = vi.fn(async () => Buffer.alloc(32, 0x65))
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile,
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	await index.initializePhotos('owner')
+	const sourceId = 'iphone:resolved-source'
+	const resourceKey = '8'.repeat(64)
+	await index.photosUpsertBackupSource('owner', sourceId, 'Phone', 123)
+	const uploaded = nodePath.join(homeDirectory, 'Photos', 'Phone', resourceKey.slice(0, 2), `${resourceKey}.heic`)
+	await fse.outputFile(uploaded, 'photo')
+	await index.photosRegisterBackupResource(
+		'owner',
+		sourceId,
+		resourceKey,
+		uploaded,
+		sourceHash,
+		await contentRevision(uploaded),
+	)
+	await fse.outputFile(nodePath.join(homeDirectory, 'Machines', 'large-disk.iso'), 'unrelated bytes')
+	await index.reconcileRoot('/Home', 'unrelated-home-file')
+	hashFile.mockClear()
+
+	await expect(index.photosSourceRemovalFiles('owner', sourceId)).resolves.toMatchObject([
+		{id: sourceHash.toString('hex'), path: `/Home/Photos/Phone/${resourceKey.slice(0, 2)}/${resourceKey}.heic`},
+	])
+	expect(hashFile).not.toHaveBeenCalled()
+})
+
+test('restores iPhone attribution only after its source relation is freshly registered', async () => {
+	const hash = Buffer.alloc(32, 0x62)
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => hash,
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	await index.initializePhotos('owner')
+	const sourceId = 'iphone:reregistered-source'
+	const resourceKey = '7'.repeat(64)
+	await index.photosUpsertBackupSource('owner', sourceId, 'Phone', 123)
+	const uploaded = nodePath.join(homeDirectory, 'Photos', 'Phone', resourceKey.slice(0, 2), `${resourceKey}.heic`)
+	await fse.outputFile(uploaded, 'photo')
+	const revision = await contentRevision(uploaded)
+	await index.photosRegisterBackupResource('owner', sourceId, resourceKey, uploaded, hash, revision)
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const item = (await index.photosListItems('owner', {}, undefined, 10)).items[0]!
+	await expect(index.photosGetItem('owner', item.id)).resolves.toMatchObject({source: {id: sourceId, type: 'iphone'}})
+	await expect(index.photosRemoveSource('owner', sourceId, true)).resolves.toBe(true)
+	await expect(index.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([])
+	await expect(index.photosGetItem('owner', item.id)).resolves.toMatchObject({source: {type: 'umbrel'}})
+
+	await index.photosUpsertBackupSource('owner', sourceId, 'Phone', 456)
+	await index.photosRegisterBackupResource('owner', sourceId, resourceKey, uploaded, hash, revision)
+
+	await expect(index.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toHaveLength(1)
+	await expect(index.photosGetItem('owner', item.id)).resolves.toMatchObject({source: {id: sourceId, type: 'iphone'}})
 })
 
 test('paginates and combines Photos filters without duplicates or unstable offsets', async () => {

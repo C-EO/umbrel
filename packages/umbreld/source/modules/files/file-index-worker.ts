@@ -181,6 +181,19 @@ async function request(method: FileIndexRequestMethod, args: unknown[]) {
 				contentFingerprintArg(args, 3),
 				optionalStringArg(args, 4),
 			)
+		case 'photosUpsertBackupSource':
+			return index.photosUpsertBackupSource(stringArg(args), stringArg(args, 1), stringArg(args, 2), numberArg(args, 3))
+		case 'photosRegisterBackupResource':
+			return index.photosRegisterBackupResource(
+				stringArg(args),
+				stringArg(args, 1),
+				stringArg(args, 2),
+				stringArg(args, 3),
+				bufferArg(args, 4),
+				contentFingerprintArg(args, 5),
+			)
+		case 'photosConfirmedBackupResources':
+			return index.photosConfirmedBackupResources(stringArg(args), stringArg(args, 1), stringsArg(args, 2))
 		case 'getExistingThumbnail':
 			return index.getExistingThumbnail(stringArg(args), thumbnailVariantArg(args, 1))
 		case 'enableThumbnailVariants': {
@@ -238,6 +251,8 @@ async function request(method: FileIndexRequestMethod, args: unknown[]) {
 				stringArg(args, 1),
 				args[2] === undefined ? undefined : objectArg<{mode: PhotoScopeMode; paths: string[]}>(args, 2),
 			)
+		case 'photosSourceRemovalFiles':
+			return index.photosSourceRemovalFiles(stringArg(args), stringArg(args, 1))
 		case 'photosRemoveSource':
 			return index.photosRemoveSource(stringArg(args), stringArg(args, 1), booleanArg(args, 2))
 		case 'matchesThumbnail':

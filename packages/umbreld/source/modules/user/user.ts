@@ -386,7 +386,8 @@ export default class User {
 			)
 		}
 
-		// Managed Photos data lives outside the member's Home directory.
+		// Remove Photos source state and any legacy private-layout data before
+		// Files removes the member's Home and its current backup files.
 		await this.#umbreld.photos.deleteAccount(userId)
 
 		// Delete the user's private Home, trash, and associated metadata.

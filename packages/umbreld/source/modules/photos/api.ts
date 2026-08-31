@@ -8,14 +8,10 @@
 //   POST /api/photos/upload?name=IMG_1234.jpg&album=<id> (browser import)
 //   POST /api/photos/upload + X-Umbrel-Photo-Backup-* headers (PhotoKit backup)
 //
-import {randomBytes} from 'node:crypto'
-import {constants} from 'node:fs'
-import {open} from 'node:fs/promises'
 import nodePath from 'node:path'
 import {pipeline} from 'node:stream/promises'
 
 import express from 'express'
-import fse from 'fs-extra'
 
 import type Umbreld from '../../index.js'
 import type {Principal} from '../auth/auth.js'
@@ -38,10 +34,7 @@ function isInsufficientStorageError(error: unknown) {
 	return code === 'ENOSPC' || code === 'EDQUOT'
 }
 
-function rejectInsufficientStorage(response: express.Response) {
-	response.setHeader(INSUFFICIENT_STORAGE_HEADER, 'insufficient-storage')
-	return response.status(507).json({error: '[not-enough-space]'})
-}
+class InactivePhotoBackupSourceError extends Error {}
 
 async function receivePhotoBackupUpload(
 	umbreld: Umbreld,
@@ -68,77 +61,97 @@ async function receivePhotoBackupUpload(
 	}
 
 	const principal = response.locals.photoBackupPrincipal as PhotoBackupPrincipal
-	const directory = umbreld.photos.backupSourceMediaDirectory({
-		accountId: principal.accountId,
-		id: principal.sourceId,
-	})
-	const fileName = `${resourceKey}.${fileExtension}`
-	const systemPath = nodePath.join(directory, fileName)
-	const temporarySystemPath = nodePath.join(directory, `.${fileName}.${randomBytes(16).toString('hex')}.umbrel-upload`)
-
-	if (!(await uploadDiskPreflight.admit(temporarySystemPath, contentLength))) {
-		return rejectInsufficientStorage(response)
+	const stagedSource = await umbreld.photos.getBackupSource(principal.accountId, principal.sourceId)
+	if (!stagedSource) {
+		response.setHeader('Connection', 'close')
+		return response.status(401).json({error: 'unauthorized'})
 	}
-
-	let promoted = false
+	let receipt: {resourceKey: string; path: string; bytes: number} | undefined
+	let matchingResource:
+		| {
+				receipt: {resourceKey: string; path: string; bytes: number}
+				revision: {inode: string; size: number; modifiedNs: string; ctimeNs: string}
+		  }
+		| undefined
+	let activeSource = stagedSource
 	try {
-		await fse.ensureDir(directory, {mode: 0o700})
-		await fse.chmod(directory, 0o700)
-		let temporaryFile: Awaited<ReturnType<typeof open>> | undefined
-		try {
-			temporaryFile = await open(
-				temporarySystemPath,
-				constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
-				0o600,
-			)
-			const writeStream = temporaryFile.createWriteStream()
-			temporaryFile = undefined
-			await pipeline(request, writeStream)
-
-			// A successful response is a permanent backup receipt on the phone.
-			// Flush both the bytes and their final directory entry before sending it.
-			const syncHandle = await open(temporarySystemPath, constants.O_RDONLY | constants.O_NOFOLLOW)
-			try {
-				await syncHandle.sync()
-			} finally {
-				await syncHandle.close()
-			}
-		} finally {
-			await temporaryFile?.close().catch(() => {})
-		}
-
-		await fse.rename(temporarySystemPath, systemPath)
-		promoted = true
-		const directoryHandle = await open(directory, constants.O_RDONLY)
-		try {
-			await directoryHandle.sync()
-		} finally {
-			await directoryHandle.close()
-		}
-		const receiptPath = `${principal.sourceId}/${fileName}`
+		response.locals.principal = principal
+		const virtualPath = await umbreld.photos.prepareBackupResourcePath(stagedSource, resourceKey, fileExtension)
+		const upload = await receiveUpload(umbreld, uploadDiskPreflight, request, response, {
+			virtualPath,
+			// A resource-key pathname is user-accessible ordinary Home storage. Never
+			// overwrite bytes that may have been edited independently; exact retries
+			// are recognized below, and changed resources publish with keep-both.
+			collision: 'keep-both',
+			calculateBlake3: true,
+			insufficientStorageHeader: {name: INSUFFICIENT_STORAGE_HEADER, value: 'insufficient-storage'},
+			onBeforePublish: async () => {
+				if (!matchingResource) return 'publish'
+				if (
+					!(await umbreld.photos.backupResourceRevisionIsCurrent(
+						principal.accountId,
+						matchingResource.receipt.path,
+						matchingResource.revision,
+					))
+				) {
+					matchingResource = undefined
+					return 'publish'
+				}
+				receipt = matchingResource.receipt
+				return 'skip'
+			},
+			publicationGuard: async (publish, staged) => {
+				const result = await umbreld.photos.withBackupSource(
+					principal.accountId,
+					principal.sourceId,
+					async (source) => {
+						// A request authenticated before removal must not attach itself to a
+						// later source lifecycle that happens to reuse the same source id.
+						if (source.createdAt !== stagedSource.createdAt) throw new InactivePhotoBackupSourceError()
+						activeSource = source
+						matchingResource = staged.blake3
+							? await umbreld.photos.registerMatchingBackupResource(source, resourceKey, virtualPath, staged.blake3)
+							: undefined
+						return publish()
+					},
+				)
+				if (!result.active) throw new InactivePhotoBackupSourceError()
+				return result.value
+			},
+			onPublished: async (published) => {
+				if (!published.blake3) throw new Error('Missing photo backup hash')
+				receipt = await umbreld.photos.registerBackupResource(
+					activeSource,
+					resourceKey,
+					published.systemPath,
+					published.blake3,
+					published.revision,
+				)
+			},
+		})
+		if (!upload) return
+		if (!receipt) throw new Error('Photo backup registration did not complete')
 		response.setHeader('Cache-Control', 'no-store')
 		response.setHeader('X-Umbrel-Photo-Backup-Key', resourceKey)
-		response.setHeader('X-Umbrel-Upload-Path', receiptPath)
-		response.setHeader('X-Umbrel-Upload-Bytes', String(contentLength))
+		response.setHeader('X-Umbrel-Upload-Path', encodeURI(receipt.path))
+		response.setHeader('X-Umbrel-Upload-Bytes', String(receipt.bytes))
 		await umbreld.auth
 			.touchSession(principal)
 			.catch((error) => umbreld.logger.error('Failed to update photo backup session activity', error))
-		return response.status(200).json({key: resourceKey, path: receiptPath, bytes: contentLength})
+		return response.status(200).json({key: resourceKey, path: receipt.path, bytes: receipt.bytes})
 	} catch (error) {
-		if (isInsufficientStorageError(error)) return rejectInsufficientStorage(response)
-		response.setHeader('Connection', 'close')
-		return response.status(500).json({error: 'error writing photo backup'})
-	} finally {
-		let restoreCapacity = false
-		if (!promoted) {
-			try {
-				await fse.remove(temporarySystemPath)
-				restoreCapacity = true
-			} catch {
-				// Keep the reservation because the partial file may remain.
+		if (!response.headersSent) {
+			if (error instanceof InactivePhotoBackupSourceError) {
+				response.setHeader('Connection', 'close')
+				return response.status(401).json({error: 'unauthorized'})
 			}
+			if (isInsufficientStorageError(error)) {
+				response.setHeader(INSUFFICIENT_STORAGE_HEADER, 'insufficient-storage')
+				return response.status(507).json({error: '[not-enough-space]'})
+			}
+			response.setHeader('Connection', 'close')
+			return response.status(500).json({error: 'error writing photo backup'})
 		}
-		await uploadDiskPreflight.release(temporarySystemPath, {restoreCapacity})
 	}
 }
 

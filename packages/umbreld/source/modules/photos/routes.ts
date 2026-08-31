@@ -57,13 +57,9 @@ export default router({
 			}
 			throw error
 		})
-		const source = await ctx.umbreld.photos.registerBackupSource({
-			accountId: ctx.principal!.accountId,
-			...input,
-		})
-		const grant = await ctx.umbreld.auth.issuePhotoBackupGrant(ctx.principal!, source.id)
+		const grant = await ctx.umbreld.photos.createBackupGrant({principal: ctx.principal!, ...input})
 		ctx.response.set('Cache-Control', 'no-store')
-		return {token: grant.token, source}
+		return grant
 	}),
 
 	revokeBackupGrant: privateProcedureWithMembers.mutation(async ({ctx}) => {
@@ -188,6 +184,9 @@ export default router({
 				} catch (error) {
 					if (error instanceof Error && error.message === '[photos-invalid-scope-path]') {
 						throw new TRPCError({code: 'BAD_REQUEST', message: 'Source paths must be inside your home folder'})
+					}
+					if (error instanceof Error && error.message === '[photos-source-scope-unsupported]') {
+						throw new TRPCError({code: 'BAD_REQUEST', message: 'This source does not support folder scope'})
 					}
 					throw error
 				}

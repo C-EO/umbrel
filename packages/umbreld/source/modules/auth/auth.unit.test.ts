@@ -176,6 +176,24 @@ describe('Auth', () => {
 		await expect(auth.revokePhotoBackupGrant(native.principal)).resolves.toBe(false)
 	})
 
+	test('revokes every native grant bound to a removed photo source', async () => {
+		const sourceId = '11111111-1111-4111-8111-111111111111'
+		const otherSourceId = '22222222-2222-4222-8222-222222222222'
+		const first = await auth.createNativeSession({nativeClient: {...nativeClient, id: 'first'}})
+		const second = await auth.createNativeSession({nativeClient: {...nativeClient, id: 'second'}})
+		const other = await auth.createNativeSession({nativeClient: {...nativeClient, id: 'other'}})
+		const firstGrant = await auth.issuePhotoBackupGrant(first.principal, sourceId)
+		const secondGrant = await auth.issuePhotoBackupGrant(second.principal, sourceId)
+		const otherGrant = await auth.issuePhotoBackupGrant(other.principal, otherSourceId)
+
+		await expect(auth.revokePhotoBackupGrantsForSource('0', sourceId)).resolves.toBe(2)
+		await expect(auth.authenticatePhotoBackupGrant(firstGrant.token)).rejects.toThrow('Invalid credential')
+		await expect(auth.authenticatePhotoBackupGrant(secondGrant.token)).rejects.toThrow('Invalid credential')
+		await expect(auth.authenticatePhotoBackupGrant(otherGrant.token)).resolves.toMatchObject({
+			sourceId: otherSourceId,
+		})
+	})
+
 	test('records background session activity at most once per hour', async () => {
 		vi.useFakeTimers()
 		vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
