@@ -1,3 +1,6 @@
+import http from 'node:http'
+import net from 'node:net'
+
 import {describe, expect, test, vi} from 'vitest'
 
 const {dockerCommand, execaDollar} = vi.hoisted(() => {
@@ -8,6 +11,48 @@ const {dockerCommand, execaDollar} = vi.hoisted(() => {
 vi.mock('execa', () => ({$: execaDollar}))
 
 import LanIngress, {appAuthDashboardRedirect} from './lan-ingress.js'
+
+describe('LAN ingress shutdown', () => {
+	test('drains an active HTTP response while closing an upgraded socket', async () => {
+		let releaseResponse = () => {}
+		const waitForRelease = new Promise<void>((resolve) => (releaseResponse = resolve))
+		let markRequestStarted = () => {}
+		const requestStarted = new Promise<void>((resolve) => (markRequestStarted = resolve))
+		const server = http.createServer(async (_request, response) => {
+			markRequestStarted()
+			await waitForRelease
+			response.end('accepted')
+		})
+		server.on('upgrade', (_request, socket) => {
+			socket.write('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n')
+		})
+		const logger = {createChildLogger: () => logger}
+		const ingress = new LanIngress({dataDirectory: '/tmp', logger} as never) as unknown as {
+			trackServerSockets(server: http.Server): void
+			closeServer(server: http.Server, options: {drainActiveResponses: boolean}): Promise<void>
+		}
+		ingress.trackServerSockets(server)
+		await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+		const address = server.address()
+		if (!address || typeof address === 'string') throw new Error('Test server did not bind a TCP port')
+		const upgradedSocket = net.createConnection({host: '127.0.0.1', port: address.port})
+		const upgradedSocketClosed = new Promise<void>((resolve) => upgradedSocket.once('close', resolve))
+		upgradedSocket.write('GET /events HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n')
+		await new Promise<void>((resolve) => upgradedSocket.once('data', () => resolve()))
+
+		const responsePromise = fetch(`http://127.0.0.1:${address.port}`)
+		await requestStarted
+		const closeStartedAt = Date.now()
+		const closePromise = ingress.closeServer(server, {drainActiveResponses: true})
+		releaseResponse()
+
+		const response = await responsePromise
+		expect(await response.text()).toBe('accepted')
+		await closePromise
+		await upgradedSocketClosed
+		expect(Date.now() - closeStartedAt).toBeLessThan(1000)
+	})
+})
 
 describe('app auth navigation redirect', () => {
 	test.each([

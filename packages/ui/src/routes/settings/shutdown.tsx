@@ -17,7 +17,7 @@ export default function ShutdownDialog() {
 	const {t} = useTranslation()
 	const dialogProps = useDialogOpenProps('shutdown')
 
-	const {shutdown} = useGlobalSystemState()
+	const {shutdown, isPowerActionPending} = useGlobalSystemState()
 
 	return (
 		<AlertDialog {...dialogProps}>
@@ -33,10 +33,11 @@ export default function ShutdownDialog() {
 							e.preventDefault()
 							shutdown()
 						}}
+						disabled={isPowerActionPending}
 					>
 						{t('shut-down.confirm.submit')}
 					</AlertDialogAction>
-					<AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+					<AlertDialogCancel disabled={isPowerActionPending}>{t('cancel')}</AlertDialogCancel>
 				</AlertDialogFooter>
 			</AlertDialogContent>
 		</AlertDialog>

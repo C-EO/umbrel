@@ -26,6 +26,8 @@ const HIDDEN_INGRESS_PORT_START = 23_000
 const HIDDEN_INGRESS_PORT_END = 65_535
 const APP_TARGET_RECOVERY_RETRY_DELAYS = [0, 250, 1000, 2000]
 const APP_TARGET_RECOVERY_COOLDOWN = 10_000
+const SERVER_CLOSE_GRACE_MS = 2000
+const IDLE_CONNECTION_SWEEP_MS = 100
 
 type AppIngressRoute = {
 	id: string
@@ -118,6 +120,7 @@ export default class LanIngress {
 	// Track sockets at the TCP layer because Node's HTTP force-close helper does not cover
 	// upgraded/raw sockets, and the mux servers are plain net.Server instances.
 	#activeSocketsByServer = new WeakMap<net.Server | http.Server, Set<net.Socket>>()
+	#upgradedSocketsByServer = new WeakMap<net.Server | http.Server, Set<net.Socket>>()
 	logger: Umbreld['logger']
 	directory: string
 	caCertificatePath: string
@@ -1029,42 +1032,94 @@ export default class LanIngress {
 			activeSockets.add(socket)
 			socket.on('close', () => activeSockets.delete(socket))
 		})
+
+		const httpServer = server as http.Server
+		if (typeof httpServer.closeIdleConnections === 'function') {
+			const upgradedSockets = new Set<net.Socket>()
+			this.#upgradedSocketsByServer.set(server, upgradedSockets)
+			httpServer.on('upgrade', (_request, socket) => {
+				const upgradedSocket = socket as net.Socket
+				upgradedSockets.add(upgradedSocket)
+				upgradedSocket.on('close', () => upgradedSockets.delete(upgradedSocket))
+			})
+		}
 	}
 
-	private closeServer(server?: net.Server | http.Server) {
+	private closeServer(
+		server?: net.Server | http.Server,
+		{drainActiveResponses = false}: {drainActiveResponses?: boolean} = {},
+	) {
 		return new Promise<void>((resolve) => {
 			if (!server) return resolve()
 			if (!server.listening) {
 				this.destroyServerSockets(server)
 				return resolve()
 			}
-			// Stop accepting first, then destroy tracked sockets so close() can resolve promptly.
-			server.close(() => resolve())
-			this.destroyServerSockets(server)
+			if (!drainActiveResponses) {
+				server.close(() => resolve())
+				this.endServerSockets(server)
+				return
+			}
+
+			// Stop accepting new connections while active HTTP responses finish. The
+			// power-action acknowledgement may still be crossing this proxy when
+			// umbreld begins shutdown, so ending its socket here loses the response.
+			let idleConnectionSweep: ReturnType<typeof setInterval> | undefined
+			const forceClose = setTimeout(() => this.destroyServerSockets(server), SERVER_CLOSE_GRACE_MS)
+			forceClose.unref()
+			server.close(() => {
+				if (idleConnectionSweep) clearInterval(idleConnectionSweep)
+				clearTimeout(forceClose)
+				resolve()
+			})
+
+			const closeIdleConnections = (server as http.Server).closeIdleConnections
+			if (typeof closeIdleConnections === 'function') {
+				const closeIdle = () => {
+					closeIdleConnections.call(server)
+					this.destroyUpgradedSockets(server)
+				}
+				closeIdle()
+				idleConnectionSweep = setInterval(closeIdle, IDLE_CONNECTION_SWEEP_MS)
+				idleConnectionSweep.unref()
+			} else this.endServerSockets(server)
 		})
 	}
 
-	private destroyServerSockets(server: net.Server | http.Server) {
+	private endServerSockets(server: net.Server | http.Server) {
 		const activeSockets = this.#activeSocketsByServer.get(server)
 		if (!activeSockets) return
 		for (const socket of activeSockets) {
-			// End instead of destroy so buffered writes flush before the connection
-			// closes. An immediate destroy resets in-flight responses and event frames
-			// during shutdown, which previously flushed because umbreld never closed
-			// its own server sockets. Force-destroy shortly after for clients that
-			// never acknowledge the close.
 			socket.end()
-			const forceDestroy = setTimeout(() => socket.destroy(), 2000)
+			const forceDestroy = setTimeout(() => socket.destroy(), SERVER_CLOSE_GRACE_MS)
 			forceDestroy.unref()
 			socket.once('close', () => clearTimeout(forceDestroy))
 		}
 		activeSockets.clear()
 	}
 
+	private destroyUpgradedSockets(server: net.Server | http.Server) {
+		const upgradedSockets = this.#upgradedSocketsByServer.get(server)
+		if (!upgradedSockets) return
+		for (const socket of upgradedSockets) socket.destroy()
+		upgradedSockets.clear()
+	}
+
+	private destroyServerSockets(server: net.Server | http.Server) {
+		const activeSockets = this.#activeSocketsByServer.get(server)
+		if (!activeSockets) return
+		for (const socket of activeSockets) socket.destroy()
+		activeSockets.clear()
+	}
+
 	private async closeAllServers() {
 		await Promise.all([
-			this.closeServer(this.#dashboardHttpServer).then(() => (this.#dashboardHttpServer = undefined)),
-			this.closeServer(this.#dashboardHttpsServer).then(() => (this.#dashboardHttpsServer = undefined)),
+			this.closeServer(this.#dashboardHttpServer, {drainActiveResponses: true}).then(
+				() => (this.#dashboardHttpServer = undefined),
+			),
+			this.closeServer(this.#dashboardHttpsServer, {drainActiveResponses: true}).then(
+				() => (this.#dashboardHttpsServer = undefined),
+			),
 			this.closeServer(this.#appAuthMuxServer).then(() => (this.#appAuthMuxServer = undefined)),
 			this.closeServer(this.#appAuthHttpProxyServer),
 			this.closeServer(this.#appAuthHttpsProxyServer),

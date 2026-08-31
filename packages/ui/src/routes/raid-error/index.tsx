@@ -65,10 +65,6 @@ export default function RaidErrorScreen() {
 	const [showShutdownDialog, setShowShutdownDialog] = useState(false)
 	const [showFactoryResetDialog, setShowFactoryResetDialog] = useState(false)
 
-	// Action triggered states - for immediate UI feedback before overlay appears
-	const [restartTriggered, setRestartTriggered] = useState(false)
-	const [shutdownTriggered, setShutdownTriggered] = useState(false)
-
 	// Check if there's actually a RAID mount failure - we redirect away if not
 	const mountFailureQ = trpcReact.hardware.raid.checkRaidMountFailure.useQuery(undefined, {
 		retry: false,
@@ -84,7 +80,7 @@ export default function RaidErrorScreen() {
 	const healthDialog = useSsdHealthDialog()
 
 	// System actions - we use global state here for proper overlay covers
-	const {restart, shutdown} = useGlobalSystemState()
+	const {restart, shutdown, isPowerActionPending} = useGlobalSystemState()
 
 	// In recovery mode (RAID mount failure), factory reset doesn't require a password
 	// We call the mutation directly - global state will show ResettingCover based on status
@@ -228,10 +224,9 @@ export default function RaidErrorScreen() {
 								description={t('raid-error.step-restart.description')}
 								buttonText={t('raid-error.step-restart.button')}
 								onClick={() => {
-									setRestartTriggered(true)
 									restart()
 								}}
-								disabled={restartTriggered}
+								disabled={isPowerActionPending}
 							/>
 							<TroubleshootingStep
 								number={2}
@@ -302,14 +297,13 @@ export default function RaidErrorScreen() {
 							variant='destructive'
 							onClick={(e) => {
 								e.preventDefault()
-								setShutdownTriggered(true)
 								shutdown()
 							}}
-							disabled={shutdownTriggered}
+							disabled={isPowerActionPending}
 						>
 							{t('shut-down')}
 						</AlertDialogAction>
-						<AlertDialogCancel disabled={shutdownTriggered}>{t('cancel')}</AlertDialogCancel>
+						<AlertDialogCancel disabled={isPowerActionPending}>{t('cancel')}</AlertDialogCancel>
 					</AlertDialogFooter>
 				</AlertDialogContent>
 			</AlertDialog>

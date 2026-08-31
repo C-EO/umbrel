@@ -1,8 +1,7 @@
 import {useTranslation} from 'react-i18next'
 
-import {toast} from '@/components/ui/toast'
 import {primaryButtonProps} from '@/layouts/bare/shared'
-import {trpcReact} from '@/trpc/trpc'
+import {useGlobalSystemState} from '@/providers/global-system-state'
 
 type RaidErrorProps = {
 	title: string
@@ -16,15 +15,7 @@ type RaidErrorProps = {
 // Error component for both device detection errors and no SSDs found.
 export function RaidError({title, instructions, image}: RaidErrorProps) {
 	const {t} = useTranslation()
-	const shutdownMut = trpcReact.system.shutdown.useMutation({
-		onError: (error) => {
-			toast.error(t('shut-down.failed', {message: error.message}), {area: 'umbrelos'})
-		},
-	})
-
-	const handleShutdown = () => {
-		shutdownMut.mutate()
-	}
+	const {shutdown, isPowerActionPending} = useGlobalSystemState()
 
 	return (
 		<div className={`flex flex-1 flex-col items-center justify-center ${image ? 'md:justify-between' : ''}`}>
@@ -37,8 +28,8 @@ export function RaidError({title, instructions, image}: RaidErrorProps) {
 					{title}
 				</h1>
 				<p className='-mt-2 max-w-[300px] text-center text-[14px] text-white/70 md:text-[15px]'>{instructions}</p>
-				<button onClick={handleShutdown} disabled={shutdownMut.isPending} {...primaryButtonProps}>
-					{shutdownMut.isPending ? t('shut-down.shutting-down') : t('shut-down')}
+				<button onClick={() => shutdown()} disabled={isPowerActionPending} {...primaryButtonProps}>
+					{isPowerActionPending ? t('shut-down.shutting-down') : t('shut-down')}
 				</button>
 			</div>
 

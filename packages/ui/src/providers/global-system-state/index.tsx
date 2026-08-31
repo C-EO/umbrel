@@ -1,5 +1,5 @@
 import {useQueryClient} from '@tanstack/react-query'
-import {createContext, ReactNode, useContext, useEffect, useState} from 'react'
+import {createContext, ReactNode, useContext, useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {JSONTree} from 'react-json-tree'
 import {usePreviousDistinct} from 'react-use'
@@ -21,6 +21,8 @@ import {RestoreCover} from './restore'
 import {UpdatingCover, useUpdate} from './update'
 
 type SystemStatus = RouterOutput['system']['status']
+type PowerActionStatus = Extract<SystemStatus, 'restarting' | 'shutting-down'>
+type PowerAction = {status: PowerActionStatus; phase: 'pending' | 'accepted'}
 
 const GlobalSystemStateContext = createContext<{
 	shutdown: () => void
@@ -30,6 +32,7 @@ const GlobalSystemStateContext = createContext<{
 	reset: (password: string) => void
 	getError(): RouterError | null
 	clearError(): void
+	isPowerActionPending: boolean
 	// We call this before triggering a custom restart flow (e.g., RAID setup) to prevent the error boundary
 	// and the status covers from replacing the flow's own progress UI when the device goes down.
 	// Unlike the normal restart flow, this does NOT trigger reload-on-running behavior.
@@ -39,31 +42,33 @@ const GlobalSystemStateContext = createContext<{
 export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 	const {t} = useTranslation()
 	const [triggered, setTriggered] = useState(false)
+	const [powerAction, setPowerAction] = useState<PowerAction>()
 	const [failure, setFailure] = useState(false)
 	const [restoreFailure, setRestoreFailure] = useState(false)
 	const [shouldReloadOnRunning, setShouldReloadOnRunning] = usePrefixedLocalStorage('should-reload-on-running', false)
-	const [startShutdownTimer, setStartShutdownTimer] = useState(false)
 	const [shutdownComplete, setShutdownComplete] = useState(false)
 	const [routerError, setRouterError] = useState<RouterError | null>(null)
+	// The local-storage mirror updates one render later, so guard against scheduling the reload twice.
+	const reloadScheduled = useRef(false)
 	// Separate flag for suppressing errors without triggering reload-on-running (e.g., RAID setup)
 	const [errorsSuppressedOnly, setErrorsSuppressedOnly] = useState(false)
 
 	// Start over fresh when any of the supported actions is triggered
-	const onMutate = async () => {
+	const onMutate = () => {
 		setTriggered(true)
+		setPowerAction(undefined)
 		setErrorsSuppressedOnly(false)
 		setFailure(false)
 		setRestoreFailure(false)
 		setShouldReloadOnRunning(false)
-		setStartShutdownTimer(false)
 		setShutdownComplete(false)
 		setRouterError(null)
 	}
 
-	// Intercept router errors so the triggering component can handle them.
+	// Intercept factory reset errors so the triggering component can handle them.
 	// Password errors (UNAUTHORIZED) are shown in the form field.
 	// System errors (e.g., factory reset failed) are shown as toasts.
-	const onError = async (error: RouterError) => {
+	const onResetError = (error: RouterError) => {
 		if (error?.data?.code === 'UNAUTHORIZED') {
 			setRouterError(error)
 		} else {
@@ -72,6 +77,12 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 		setTriggered(false)
 
 		// Prevent the post-action reload when an error occurs
+		setShouldReloadOnRunning(false)
+	}
+	const onPowerActionError = (error: RouterError) => {
+		toast.error(t('something-went-wrong'), {area: 'umbrelos', description: error.message})
+		setPowerAction(undefined)
+		setTriggered(false)
 		setShouldReloadOnRunning(false)
 	}
 	const getError = () => routerError
@@ -92,16 +103,30 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 		if (!success) {
 			setTriggered(false)
 			setShouldReloadOnRunning(false)
-			setStartShutdownTimer(false)
 		}
 	}
+	const acceptPowerAction = (status: PowerActionStatus) => (success: boolean) => {
+		onSuccess(success)
+		setPowerAction(success ? {status, phase: 'accepted'} : undefined)
+	}
+	const beginPowerAction = (status: PowerActionStatus) => () => {
+		onMutate()
+		setPowerAction({status, phase: 'pending'})
+	}
 
-	// TODO: handle `onError` for other actions than reset?
-	const restart = useRestart({onMutate, onSuccess})
-	const shutdown = useShutdown({onMutate, onSuccess})
+	const restart = useRestart({
+		onMutate: beginPowerAction('restarting'),
+		onSuccess: acceptPowerAction('restarting'),
+		onError: onPowerActionError,
+	})
+	const shutdown = useShutdown({
+		onMutate: beginPowerAction('shutting-down'),
+		onSuccess: acceptPowerAction('shutting-down'),
+		onError: onPowerActionError,
+	})
 	const update = useUpdate({onMutate, onSuccess})
 	const migrate = useMigrate({onMutate, onSuccess})
-	const reset = useReset({onMutate, onError})
+	const reset = useReset({onMutate, onError: onResetError})
 
 	// During triggered actions (device reboots, updates, etc.) we poll at 500ms
 	// with no retry so the UI detects the backend coming back ASAP: requests fail
@@ -127,9 +152,8 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 	const connectionLost =
 		!expectedDowntime && (systemStatusQ.isError || (systemStatusQ.isFetched && systemStatusQ.data === undefined))
 
-	// Status is `undefined` upon mount, then updating to the status reported by
-	// the backend, plus when the system reboots, the first status query to fail
-	// will report `undefined` again. Handle these cases explicitly below.
+	// Status is `undefined` upon mount. During a reboot, React Query can keep the
+	// last successful status while newer requests fail, so error state matters too.
 	const status = systemStatusQ.data
 	const prevStatus: SystemStatus | undefined = usePreviousDistinct(status)
 
@@ -144,19 +168,24 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 	// When global system state is triggered and status switches to anything but
 	// 'running', we know that the action is now in progress. So we'll now wait
 	// until the system becomes 'running' again before reloading the UI.
-	// Here, `undefined` is a valid non-running status in that it indicates that
-	// the system has stopped responding, so is likely rebooting.
+	// For restart and shutdown, a failed status request counts only after the
+	// mutation was acknowledged. This prevents an existing connection error from
+	// turning an action that never reached umbreld into a reload loop.
 	useEffect(() => {
-		if (status !== 'running' && triggered && !shouldReloadOnRunning) {
+		const acceptedPowerActionWentOffline =
+			powerAction?.phase === 'accepted' && (status !== 'running' || systemStatusQ.isError)
+		const otherActionWentOffline = !powerAction && status !== 'running'
+		if ((acceptedPowerActionWentOffline || otherActionWentOffline) && triggered && !shouldReloadOnRunning) {
 			setShouldReloadOnRunning(true)
 		}
-	}, [setShouldReloadOnRunning, shouldReloadOnRunning, status, triggered])
+	}, [powerAction, setShouldReloadOnRunning, shouldReloadOnRunning, status, systemStatusQ.isError, triggered])
 
 	// When the system becomes running again after setting shouldReloadOnRunning
 	// above, reload the UI while preserving the session, in turn
 	// resetting global system state provider incl. its various state vars.
 	useEffect(() => {
-		if (status === 'running' && shouldReloadOnRunning) {
+		if (status === 'running' && !systemStatusQ.isError && shouldReloadOnRunning && !reloadScheduled.current) {
+			reloadScheduled.current = true
 			// shouldReloadOnRunning is stored in local storage for when the user
 			// manually reloads the page even though they shouldn't. Hence we unset it
 			// explicitly here and delay for a moment to be sure that local storage
@@ -168,20 +197,28 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 			}, 500)
 			return
 		}
-	}, [status, prevStatus, shouldReloadOnRunning, setShouldReloadOnRunning, queryClient, triggered])
+	}, [
+		status,
+		prevStatus,
+		shouldReloadOnRunning,
+		setShouldReloadOnRunning,
+		queryClient,
+		systemStatusQ.isError,
+		triggered,
+	])
 
-	// Start shutdown timer when status endpoint starts failing, showing the
-	// shutdown complete cover after a sensible delay.
+	const acceptedShutdown = powerAction?.phase === 'accepted' && powerAction.status === 'shutting-down'
+	const observedShutdown = !powerAction && status === 'shutting-down'
+	const shutdownWentOffline =
+		(acceptedShutdown || observedShutdown) && (systemStatusQ.isError || systemStatusQ.failureCount > 0)
+
+	// Show the shutdown-complete cover after the accepted shutdown goes offline.
+	// Cleanup prevents a failed attempt from completing the timer during a retry.
 	useEffect(() => {
-		if (
-			status === 'shutting-down' &&
-			!startShutdownTimer &&
-			(systemStatusQ.isError || systemStatusQ.failureCount > 0)
-		) {
-			setStartShutdownTimer(true)
-			setTimeout(() => setShutdownComplete(true), 30 * MS_PER_SECOND)
-		}
-	}, [startShutdownTimer, status, systemStatusQ.failureCount, systemStatusQ.isError, triggered])
+		if (!shutdownWentOffline) return
+		const timeout = setTimeout(() => setShutdownComplete(true), 30 * MS_PER_SECOND)
+		return () => clearTimeout(timeout)
+	}, [shutdownWentOffline])
 
 	// We poll for restore errors only while the system is 'restoring' (not during other non-running states)
 	// - After we just transitioned from 'restoring' -> 'running', we do one more fetch to catch an error reported at the boundary
@@ -201,15 +238,18 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 		if (restoreErrorQ.data) setRestoreFailure(true)
 	}, [restoreErrorQ.data])
 
-	// When we come back online, we should continue to show the previous state until we've logged out,
+	// When we come back online, continue showing the previous state until the page reloads,
 	// plus, when the action failed, we should show the failure cover until the user interacts with it.
 	// When an external flow owns the restart UX (suppressErrors), render no cover at all — the flow
 	// shows its own progress screen and handles the post-restart redirect itself.
-	const statusToShow = errorsSuppressedOnly
-		? undefined
-		: (triggered || failure || restoreFailure) && (!status || status === 'running')
-			? prevStatus
-			: status
+	let statusToShow = status
+	if (errorsSuppressedOnly || powerAction?.phase === 'pending') {
+		statusToShow = undefined
+	} else if (powerAction?.phase === 'accepted') {
+		statusToShow = powerAction.status
+	} else if ((triggered || failure || restoreFailure) && (!status || status === 'running')) {
+		statusToShow = prevStatus
+	}
 
 	// Debug info can be activated by adding the local storage key 'debug' with a value of `true`
 	const debugInfo = (
@@ -220,11 +260,12 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 						status,
 						prevStatus,
 						statusToShow,
+						powerAction,
 						triggered,
 						failure,
 						restoreFailure,
 						shouldReloadOnRunning,
-						startShutdownTimer,
+						shutdownWentOffline,
 						shutdownComplete,
 						statusIsError: systemStatusQ.isError,
 						failureCount: systemStatusQ.failureCount,
@@ -253,7 +294,17 @@ export function GlobalSystemStateProvider({children}: {children: ReactNode}) {
 		case 'running': {
 			return (
 				<GlobalSystemStateContext
-					value={{shutdown, restart, update, migrate, reset, getError, clearError, suppressErrors}}
+					value={{
+						shutdown,
+						restart,
+						update,
+						migrate,
+						reset,
+						getError,
+						clearError,
+						isPowerActionPending: powerAction?.phase === 'pending',
+						suppressErrors,
+					}}
 				>
 					{children}
 					{debugInfo}

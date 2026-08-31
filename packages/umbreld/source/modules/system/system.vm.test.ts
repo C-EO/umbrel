@@ -1,4 +1,5 @@
-import {expect, beforeAll, afterAll, describe, test} from 'vitest'
+import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from 'vitest'
+import pWaitFor from 'p-wait-for'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
@@ -48,5 +49,44 @@ describe('memoryUsage', () => {
 
 	test('should be behind authentication', async () => {
 		await expect(umbreld.unauthenticatedClient.system.memoryUsage.query()).rejects.toThrow('Invalid token')
+	})
+})
+
+describe('power actions', () => {
+	let failed = false
+
+	afterEach(({task}) => {
+		if (task.result?.state === 'fail') failed = true
+	})
+
+	beforeEach(({skip}) => {
+		if (failed) skip()
+	})
+
+	test('acknowledges restart through LAN ingress before rebooting', async () => {
+		const bootIdBeforeRestart = (await umbreld.vm.ssh('cat /proc/sys/kernel/random/boot_id')).trim()
+		await expect(umbreld.client.system.restart.mutate()).resolves.toBe(true)
+
+		// The acknowledgement must not merely delay or prevent the requested reboot.
+		await pWaitFor(
+			async () => {
+				try {
+					await umbreld.unauthenticatedClient.user.exists.query()
+					return false
+				} catch {
+					return true
+				}
+			},
+			{interval: 100, timeout: 30_000},
+		)
+		await umbreld.waitForStartup({waitForUser: true})
+		await umbreld.login()
+		const bootIdAfterRestart = (await umbreld.vm.ssh('cat /proc/sys/kernel/random/boot_id')).trim()
+		expect(bootIdAfterRestart).not.toBe(bootIdBeforeRestart)
+	})
+
+	test('acknowledges shutdown through LAN ingress before powering off', async () => {
+		await expect(umbreld.client.system.shutdown.mutate()).resolves.toBe(true)
+		await umbreld.vm.waitForShutdown()
 	})
 })

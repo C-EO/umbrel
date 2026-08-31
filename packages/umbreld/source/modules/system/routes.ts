@@ -40,6 +40,7 @@ import {
 	router,
 	privateProcedureWithMembers,
 } from '../server/trpc/trpc.js'
+import {runAfterResponse} from '../server/run-after-response.js'
 
 type SystemStatus = 'running' | 'updating' | 'shutting-down' | 'restarting' | 'migrating' | 'resetting' | 'restoring'
 let systemStatus: SystemStatus = 'running'
@@ -47,6 +48,26 @@ let systemStatus: SystemStatus = 'running'
 // Quick hack so we can set system status from migration module until we refactor this
 export function setSystemStatus(status: SystemStatus) {
 	systemStatus = status
+}
+
+function startPowerAction(
+	umbreld: Umbreld,
+	response: Parameters<typeof runAfterResponse>[0],
+	status: Extract<SystemStatus, 'restarting' | 'shutting-down'>,
+	action: () => Promise<unknown>,
+) {
+	systemStatus = status
+	runAfterResponse(response, () => {
+		void (async () => {
+			try {
+				await umbreld.stop()
+				await action()
+			} catch (error) {
+				systemStatus = 'running'
+				umbreld.logger.error(`Failed while ${status}`, error)
+			}
+		})()
+	})
 }
 
 async function getSystemLogs(type: 'umbrelos' | 'system', lines = 1500, maxOutputBytes?: number) {
@@ -265,19 +286,13 @@ export default router({
 		)
 		.mutation(async ({ctx, input}) => clearStaticIp(ctx.umbreld, input)),
 	// Public during onboarding and recovery mode so users can shut down during RAID setup or mount failure
-	shutdown: publicProcedureWhenNoUserExists.mutation(async ({ctx}) => {
-		systemStatus = 'shutting-down'
-		await ctx.umbreld.stop()
-		await shutdown()
-
+	shutdown: publicProcedureWhenNoUserExists.mutation(({ctx}) => {
+		startPowerAction(ctx.umbreld, ctx.response, 'shutting-down', shutdown)
 		return true
 	}),
 	// Public during onboarding and recovery mode
-	restart: publicProcedureWhenNoUserExists.mutation(async ({ctx}) => {
-		systemStatus = 'restarting'
-		await ctx.umbreld.stop()
-		await reboot()
-
+	restart: publicProcedureWhenNoUserExists.mutation(({ctx}) => {
+		startPowerAction(ctx.umbreld, ctx.response, 'restarting', reboot)
 		return true
 	}),
 	logs: privateProcedure

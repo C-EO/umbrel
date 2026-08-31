@@ -1,4 +1,3 @@
-import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {RiRestartLine} from 'react-icons/ri'
 
@@ -18,8 +17,7 @@ export default function RestartDialog() {
 	const {t} = useTranslation()
 	const dialogProps = useDialogOpenProps('restart')
 
-	const {restart} = useGlobalSystemState()
-	const [triggered, setTriggered] = useState(false)
+	const {restart, isPowerActionPending} = useGlobalSystemState()
 
 	return (
 		<AlertDialog {...dialogProps}>
@@ -34,14 +32,13 @@ export default function RestartDialog() {
 						onClick={(e) => {
 							// Prevent closing by default
 							e.preventDefault()
-							setTriggered(true)
 							restart()
 						}}
-						disabled={triggered}
+						disabled={isPowerActionPending}
 					>
 						{t('restart.confirm.submit')}
 					</AlertDialogAction>
-					<AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
+					<AlertDialogCancel disabled={isPowerActionPending}>{t('cancel')}</AlertDialogCancel>
 				</AlertDialogFooter>
 			</AlertDialogContent>
 		</AlertDialog>
