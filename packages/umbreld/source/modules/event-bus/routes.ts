@@ -21,6 +21,7 @@ const memberAllowedEvents = new Set<(typeof events)[number]>([
 	// Payload-free ping; members refetch their own account-filtered list
 	'notifications:change',
 	'photos:change',
+	'photos:indexing-progress',
 ])
 
 export default router({
@@ -55,12 +56,28 @@ export default router({
 					if (input.event === 'files:cloud-progress') {
 						yield ctx.umbreld.files.cloud.getActivity(userId)
 					}
+					if (input.event === 'photos:indexing-progress') {
+						try {
+							yield await ctx.umbreld.photos.indexingState(userId)
+						} catch (error) {
+							// The subscription can connect before the file-index worker is ready
+							// during startup. Keep listening: the first indexing update will seed
+							// the client once the worker and Photos database become available.
+							ctx.logger.error('Failed to seed Photos indexing progress subscription', error)
+						}
+					}
 
 					for await (let event of eventStream) {
 						if (input.event === 'photos:change') {
 							const change = event as EventTypes['photos:change']
 							if (!change.accountIds.includes(userId)) continue
 							if (isMember) event = {accountIds: [userId]} as EventTypes['photos:change']
+						}
+						if (input.event === 'photos:indexing-progress') {
+							const progress = event as EventTypes['photos:indexing-progress']
+							if (progress.accountId !== userId) continue
+							yield progress.state
+							continue
 						}
 						// Reformat the files:watcher:change event so it's suitable to be consumed by the client
 						if (input.event === 'files:watcher:change') {

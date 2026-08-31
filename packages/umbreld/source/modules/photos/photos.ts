@@ -158,13 +158,19 @@ export default class Photos {
 
 	async updateSource(accountId: string, id: string, scope?: {mode: PhotoScopeMode; paths: string[]}) {
 		const source = await this.#umbreld.files.fileIndex.photosUpdateSource(accountId, id, scope)
-		if (source) this.#changed(accountId)
+		if (source) {
+			this.#changed(accountId)
+			await this.#indexingProgress(accountId)
+		}
 		return source
 	}
 
 	async removeSource(accountId: string, id: string, keepItems: boolean) {
 		const removed = await this.#umbreld.files.fileIndex.photosRemoveSource(accountId, id, keepItems)
-		if (removed) this.#changed(accountId)
+		if (removed) {
+			this.#changed(accountId)
+			await this.#indexingProgress(accountId)
+		}
 		return removed
 	}
 
@@ -202,5 +208,16 @@ export default class Photos {
 
 	#changed(accountId: string) {
 		this.#umbreld.eventBus.emit('photos:change', {accountIds: [accountId]})
+	}
+
+	async #indexingProgress(accountId: string) {
+		try {
+			const state = await this.indexingState(accountId)
+			await this.#umbreld.eventBus.emit('photos:indexing-progress', {accountId, state})
+		} catch (error) {
+			// A progress notification is best-effort and must not turn a completed
+			// source mutation into an API failure during file-index startup/recovery.
+			this.logger.error('Failed to report Photos indexing progress', error)
+		}
 	}
 }

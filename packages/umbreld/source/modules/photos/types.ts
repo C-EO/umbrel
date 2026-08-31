@@ -94,6 +94,8 @@ export type PhotoIndexingState =
 	| {phase: 'ready'; completed: number; total: number; percentage: 100}
 	| {phase: 'degraded'; completed?: number; total?: number; percentage?: number; error?: string}
 
+export type PhotoIndexingProgress = {accountId: string; state: PhotoIndexingState}
+
 export type PhotoSummary = {
 	counts: {items: number; favorites: number; photos: number; videos: number; deleted: number}
 	sizeBytes: number

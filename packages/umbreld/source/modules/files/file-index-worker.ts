@@ -34,6 +34,7 @@ const index = new FileIndexEngine({
 	isHidden,
 	onAvailabilityChange: (available) => post({type: 'availability', available}),
 	onPhotosChange: (accountIds) => post({type: 'photos-change', accountIds}),
+	onPhotosIndexingProgress: (progress) => post({type: 'photos-indexing-progress', progress}),
 	reconciliationIntervalMs: options.reconciliationIntervalMs,
 	recoveryRetryMs: options.recoveryRetryMs,
 	watcherBulkThreshold: options.watcherBulkThreshold,

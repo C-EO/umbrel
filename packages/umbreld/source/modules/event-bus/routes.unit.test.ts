@@ -3,6 +3,7 @@ import {expect, test, vi} from 'vitest'
 import type Umbreld from '../../index.js'
 import type {Context} from '../server/trpc/context.js'
 import type {CloudSyncActivity} from '../files/cloud-types.js'
+import type {PhotoIndexingState} from '../photos/types.js'
 import routes from './routes.js'
 
 test('Cloud subscriptions discard another account wake-up before yielding', async () => {
@@ -76,5 +77,77 @@ test('Photos subscriptions expose only the requesting account activity to member
 	const subscription = await routes.createCaller(context).listen({event: 'photos:change'})
 	const iterator = subscription[Symbol.asyncIterator]()
 	await expect(iterator.next()).resolves.toEqual({done: false, value: {accountIds: ['Alice']}})
+	await iterator.return?.()
+})
+
+test('Photos indexing subscriptions seed and expose only the requesting account state', async () => {
+	const initialState: PhotoIndexingState = {phase: 'enriching', completed: 1, total: 4, percentage: 25}
+	const readyState: PhotoIndexingState = {phase: 'ready', completed: 4, total: 4, percentage: 100}
+	const setupOrder: string[] = []
+	const stream = vi.fn(() => {
+		setupOrder.push('stream')
+		return (async function* () {
+			yield {accountId: '0', state: readyState}
+			yield {accountId: 'Alice', state: readyState}
+		})()
+	})
+	const indexingState = vi.fn(async () => {
+		setupOrder.push('snapshot')
+		return initialState
+	})
+	const umbreld = {
+		auth: {validatePrincipal: vi.fn(async () => {})},
+		eventBus: {stream},
+		photos: {indexingState},
+	} as unknown as Umbreld
+	const context = {
+		umbreld,
+		transport: 'ws',
+		principal: {sessionId: 'member-session', accountId: 'Alice', actor: 'account'},
+		logger: {verbose: vi.fn(), error: vi.fn()},
+		dangerouslyBypassAuthentication: false,
+	} as unknown as Context
+
+	const subscription = await routes.createCaller(context).listen({event: 'photos:indexing-progress'})
+	const iterator = subscription[Symbol.asyncIterator]()
+	await expect(iterator.next()).resolves.toEqual({done: false, value: initialState})
+	await expect(iterator.next()).resolves.toEqual({done: false, value: readyState})
+	expect(setupOrder).toEqual(['stream', 'snapshot'])
+	expect(indexingState).toHaveBeenCalledWith('Alice')
+	expect(stream).toHaveBeenCalledWith('photos:indexing-progress', {signal: undefined})
+	await iterator.return?.()
+})
+
+test('Photos indexing subscriptions keep listening when the startup snapshot is unavailable', async () => {
+	const readyState: PhotoIndexingState = {phase: 'ready', completed: 4, total: 4, percentage: 100}
+	const stream = vi.fn(() =>
+		(async function* () {
+			yield {accountId: 'Alice', state: readyState}
+		})(),
+	)
+	const indexingState = vi.fn(async () => {
+		throw new Error('file index is starting')
+	})
+	const error = vi.fn()
+	const umbreld = {
+		auth: {validatePrincipal: vi.fn(async () => {})},
+		eventBus: {stream},
+		photos: {indexingState},
+	} as unknown as Umbreld
+	const context = {
+		umbreld,
+		transport: 'ws',
+		principal: {sessionId: 'member-session', accountId: 'Alice', actor: 'account'},
+		logger: {verbose: vi.fn(), error},
+		dangerouslyBypassAuthentication: false,
+	} as unknown as Context
+
+	const subscription = await routes.createCaller(context).listen({event: 'photos:indexing-progress'})
+	const iterator = subscription[Symbol.asyncIterator]()
+	await expect(iterator.next()).resolves.toEqual({done: false, value: readyState})
+	expect(error).toHaveBeenCalledWith(
+		'Failed to seed Photos indexing progress subscription',
+		expect.objectContaining({message: 'file index is starting'}),
+	)
 	await iterator.return?.()
 })

@@ -191,6 +191,9 @@ export default class Files {
 			hiddenFiles: this.hiddenFiles,
 			hiddenExtensions: this.hiddenExtensions,
 			onPhotosChange: (accountIds) => this.#umbreld.eventBus.emit('photos:change', {accountIds}),
+			onPhotosIndexingProgress: (progress) => {
+				for (const update of progress) this.#umbreld.eventBus.emit('photos:indexing-progress', update)
+			},
 		})
 		this.watcher = new Watcher(umbreld, {
 			paths: this.#staticIndexRoots()

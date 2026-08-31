@@ -14,6 +14,7 @@ import type {
 	ScrubStatus,
 } from '../hardware/raid.js'
 import type {Machine, OsImage} from '../machines/machines.js'
+import type {PhotoIndexingProgress} from '../photos/types.js'
 
 // A Watchman callback can contain hundreds of thousands of paths. Emitting the
 // whole array at once creates one promise and one copy of each listener's work
@@ -60,6 +61,7 @@ export const events = [
 	'notifications:change',
 	'hardware:thunderbolt:devices-change',
 	'photos:change',
+	'photos:indexing-progress',
 ] as const satisfies readonly (keyof EventTypes)[]
 
 // Statically define event types
@@ -122,6 +124,8 @@ export type EventTypes = {
 	// Fires when Photos data changes. Account ids let subscriptions discard
 	// unrelated activity before clients learn that it happened.
 	'photos:change': {accountIds: string[]}
+	// Fires with the latest indexing job snapshot for one Photos account.
+	'photos:indexing-progress': PhotoIndexingProgress
 }
 
 export default class EventBus {

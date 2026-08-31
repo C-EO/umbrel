@@ -14,6 +14,7 @@ import {PHOTOS_THUMBNAIL_VARIANTS, type ThumbnailVariant} from './thumbnail-supp
 import type {
 	PhotoAlbum,
 	PhotoFilter,
+	PhotoIndexingProgress,
 	PhotoIndexingState,
 	PhotoItem,
 	PhotoItemDetail,
@@ -50,6 +51,7 @@ export type FileIndexOptions = {
 	watcherBulkThreshold?: number
 	batchSize?: number
 	onPhotosChange?: (accountIds: string[]) => void
+	onPhotosIndexingProgress?: (progress: PhotoIndexingProgress[]) => void
 }
 
 export type FileIndexRuntime = {
@@ -98,6 +100,7 @@ export default class FileIndex {
 	#backgroundReconciliationStarted = false
 	#enabledThumbnailVariants = new Set<ThumbnailVariant>()
 	#onPhotosChange?: (accountIds: string[]) => void
+	#onPhotosIndexingProgress?: (progress: PhotoIndexingProgress[]) => void
 
 	constructor(
 		{
@@ -110,6 +113,7 @@ export default class FileIndex {
 			watcherBulkThreshold = DEFAULT_WATCHER_BULK_THRESHOLD,
 			batchSize,
 			onPhotosChange,
+			onPhotosIndexingProgress,
 		}: FileIndexOptions,
 		{
 			createWorker = (url, options) => new Worker(url, options),
@@ -135,6 +139,7 @@ export default class FileIndex {
 		this.#workerShutdownTimeoutMs = workerShutdownTimeoutMs
 		this.#watcherBulkThreshold = watcherBulkThreshold
 		this.#onPhotosChange = onPhotosChange
+		this.#onPhotosIndexingProgress = onPhotosIndexingProgress
 	}
 
 	get available() {
@@ -228,6 +233,9 @@ export default class FileIndex {
 				return
 			case 'photos-change':
 				this.#onPhotosChange?.(message.accountIds)
+				return
+			case 'photos-indexing-progress':
+				this.#onPhotosIndexingProgress?.(message.progress)
 				return
 			case 'response': {
 				const pending = this.#pendingRequests.get(message.id)

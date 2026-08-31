@@ -139,6 +139,8 @@ export type FileIndexEnrichmentOptions = {
 	onContentAttached?: (entryId: number, hash: Buffer) => Promise<void>
 	onMediaMetadataReady?: (contentId: number) => Promise<void>
 	onThumbnailReady?: (contentId: number, variant: ThumbnailVariant) => void
+	onHashFailure?: (entryId: number) => Promise<void>
+	onContentFailure?: (contentId: number) => Promise<void>
 }
 
 export type FileIndexEnrichmentRuntime = {
@@ -179,6 +181,8 @@ export default class FileIndexEnrichment {
 	#onContentAttached?: (entryId: number, hash: Buffer) => Promise<void>
 	#onMediaMetadataReady?: (contentId: number) => Promise<void>
 	#onThumbnailReady?: (contentId: number, variant: ThumbnailVariant) => void
+	#onHashFailure?: (entryId: number) => Promise<void>
+	#onContentFailure?: (contentId: number) => Promise<void>
 	#hashFile: typeof hashFileRevision
 	#generateThumbnail: typeof generateThumbnailFile
 	#generateThumbnails: typeof generateThumbnailFiles
@@ -222,6 +226,8 @@ export default class FileIndexEnrichment {
 			onContentAttached,
 			onMediaMetadataReady,
 			onThumbnailReady,
+			onHashFailure,
+			onContentFailure,
 		}: FileIndexEnrichmentOptions,
 		{
 			hashFile = hashFileRevision,
@@ -244,6 +250,8 @@ export default class FileIndexEnrichment {
 		this.#onContentAttached = onContentAttached
 		this.#onMediaMetadataReady = onMediaMetadataReady
 		this.#onThumbnailReady = onThumbnailReady
+		this.#onHashFailure = onHashFailure
+		this.#onContentFailure = onContentFailure
 		this.#hashFile = hashFile
 		this.#generateThumbnail = generateThumbnail
 		this.#generateThumbnails =
@@ -866,6 +874,7 @@ export default class FileIndexEnrichment {
 						throw new StaleFileRevisionError('No current metadata source remains', {cause: error})
 				}
 				await this.#recordMediaMetadataFailure(content.id, error, priority)
+				await this.#onContentFailure?.(content.id)
 				throw new PersistedEnrichmentFailure(error)
 			} finally {
 				await source?.close().catch(() => {})
@@ -983,6 +992,7 @@ export default class FileIndexEnrichment {
 		} catch (error) {
 			if (error instanceof StaleFileRevisionError) throw error
 			await this.#recordHashFailure(candidate, error, priority)
+			await this.#onHashFailure?.(candidate.id)
 			throw new PersistedEnrichmentFailure(error)
 		}
 
@@ -1268,6 +1278,7 @@ export default class FileIndexEnrichment {
 						for (const output of outputs) {
 							await this.#recordThumbnailFailure(content.id, output.variant, error, priority)
 						}
+						await this.#onContentFailure?.(content.id)
 						throw new PersistedEnrichmentFailure(error)
 					} finally {
 						await source?.close().catch(() => {})

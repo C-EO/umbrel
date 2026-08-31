@@ -184,6 +184,13 @@ class FakeWorker extends EventEmitter {
 		this.emitMessage({type: 'photos-change', accountIds})
 	}
 
+	photosIndexingProgress() {
+		this.emitMessage({
+			type: 'photos-indexing-progress',
+			progress: [{accountId: 'Alice', state: {phase: 'enriching', completed: 1, total: 2, percentage: 50}}],
+		})
+	}
+
 	async terminate() {
 		this.emit('exit', 0)
 		return 0
@@ -208,6 +215,24 @@ test('forwards Photos library changes from the worker to the main process', asyn
 	worker.photosChanged()
 	expect(onPhotosChange).toHaveBeenCalledOnce()
 	expect(onPhotosChange).toHaveBeenCalledWith(['Alice'])
+})
+
+test('forwards Photos indexing progress from the worker to the main process', async () => {
+	const dataDirectory = await temporary.create()
+	const worker = new FakeWorker(1)
+	const onPhotosIndexingProgress = vi.fn()
+	const index = new FileIndex(
+		{dataDirectory, logger, hiddenFiles: [], hiddenExtensions: [], onPhotosIndexingProgress},
+		{createWorker: () => worker as unknown as Worker},
+	)
+	indexes.push(index)
+	await index.start()
+
+	worker.photosIndexingProgress()
+	expect(onPhotosIndexingProgress).toHaveBeenCalledOnce()
+	expect(onPhotosIndexingProgress).toHaveBeenCalledWith([
+		{accountId: 'Alice', state: {phase: 'enriching', completed: 1, total: 2, percentage: 50}},
+	])
 })
 
 test('compacts watcher bursts and restores state after an unexpected worker exit', async () => {

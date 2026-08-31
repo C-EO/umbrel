@@ -10,7 +10,7 @@ import PQueue from 'p-queue'
 
 import {migratePhotos} from '../photos/migrations.js'
 import PhotosRepository from '../photos/repository.js'
-import type {PhotoFilter, PhotoScopeMode} from '../photos/types.js'
+import type {PhotoFilter, PhotoIndexingProgress, PhotoScopeMode} from '../photos/types.js'
 import FileIndexEnrichment, {
 	BACKGROUND_QUIET_PERIOD_MS,
 	type FileIndexEnrichmentRuntime,
@@ -48,6 +48,7 @@ const MAX_RARE_TRIGRAMS = 6
 const PHOTOS_ONLY_THUMBNAIL_VARIANT_SET = new Set<ThumbnailVariant>(
 	PHOTOS_THUMBNAIL_VARIANTS.filter((variant) => variant !== FILES_THUMBNAIL_VARIANT),
 )
+const PHOTOS_INDEXING_PROGRESS_INTERVAL_MS = 1000
 
 export type FileIndexLogger = {
 	log(message?: string): void
@@ -144,6 +145,7 @@ export type FileIndexEngineOptions = {
 	isHidden: (name: string) => boolean
 	onAvailabilityChange?: (available: boolean) => void
 	onPhotosChange?: (accountIds: string[]) => void
+	onPhotosIndexingProgress?: (progress: PhotoIndexingProgress[]) => void
 	reconciliationIntervalMs?: number
 	recoveryRetryMs?: number
 	watcherBulkThreshold?: number
@@ -294,8 +296,11 @@ export default class FileIndexEngine {
 	#isHidden: (name: string) => boolean
 	#onAvailabilityChange?: (available: boolean) => void
 	#onPhotosChange?: (accountIds: string[]) => void
+	#onPhotosIndexingProgress?: (progress: PhotoIndexingProgress[]) => void
 	#photosChangeTimer?: ReturnType<typeof setTimeout>
 	#photosChangedAccountIds = new Set<string>()
+	#photosIndexingProgressTimer?: ReturnType<typeof setTimeout>
+	#photosIndexingProgressAccountIds = new Set<string>()
 	#reconciliationIntervalMs: number
 	#recoveryRetryMs: number
 	#watcherBulkThreshold: number
@@ -309,6 +314,7 @@ export default class FileIndexEngine {
 		isHidden,
 		onAvailabilityChange,
 		onPhotosChange,
+		onPhotosIndexingProgress,
 		reconciliationIntervalMs = DEFAULT_RECONCILIATION_INTERVAL_MS,
 		recoveryRetryMs = DEFAULT_RECOVERY_RETRY_MS,
 		watcherBulkThreshold = DEFAULT_WATCHER_BULK_THRESHOLD,
@@ -322,6 +328,7 @@ export default class FileIndexEngine {
 		this.#isHidden = isHidden
 		this.#onAvailabilityChange = onAvailabilityChange
 		this.#onPhotosChange = onPhotosChange
+		this.#onPhotosIndexingProgress = onPhotosIndexingProgress
 		this.#reconciliationIntervalMs = reconciliationIntervalMs
 		this.#recoveryRetryMs = recoveryRetryMs
 		this.#watcherBulkThreshold = watcherBulkThreshold
@@ -355,6 +362,16 @@ export default class FileIndexEngine {
 					this.#notifyPhotosChanged(accountIds)
 				},
 				onThumbnailReady: async (contentId) => {
+					if (!this.#photosAvailable) return
+					const accountIds = await this.#mutate((database) => this.#photos.accountIdsForContent(database, contentId))
+					this.#notifyPhotosChanged(accountIds)
+				},
+				onHashFailure: async (entryId) => {
+					if (!this.#photosAvailable) return
+					const accountIds = await this.#mutate((database) => this.#photos.accountIdsForEntry(database, entryId))
+					this.#notifyPhotosChanged(accountIds)
+				},
+				onContentFailure: async (contentId) => {
 					if (!this.#photosAvailable) return
 					const accountIds = await this.#mutate((database) => this.#photos.accountIdsForContent(database, contentId))
 					this.#notifyPhotosChanged(accountIds)
@@ -867,6 +884,7 @@ export default class FileIndexEngine {
 				)
 			})
 			root.scanGeneration = generation
+			if (root.kind === 'home' && root.lastSuccessfulScanAt === undefined) this.#notifyPhotosChanged([root.ownerId])
 
 			// Root scans are serialized, so this table contains only the current
 			// snapshot. An unqualified delete lets SQLite clear it efficiently after
@@ -1822,6 +1840,7 @@ export default class FileIndexEngine {
 				root.id,
 			),
 		).catch(() => {})
+		if (root.kind === 'home') this.#notifyPhotosChanged([root.ownerId])
 	}
 
 	#rootForSystemPath(systemPath: string) {
@@ -1863,15 +1882,38 @@ export default class FileIndexEngine {
 	}
 
 	#notifyPhotosChanged(accountIds: Iterable<string>) {
-		if (!this.#photosAvailable || !this.#onPhotosChange || this.#stopping) return
-		for (const accountId of accountIds) this.#photosChangedAccountIds.add(accountId)
-		if (this.#photosChangedAccountIds.size === 0 || this.#photosChangeTimer) return
-		this.#photosChangeTimer = setTimeout(() => {
-			this.#photosChangeTimer = undefined
-			const changedAccountIds = [...this.#photosChangedAccountIds]
-			this.#photosChangedAccountIds.clear()
-			this.#onPhotosChange?.(changedAccountIds)
-		}, 250)
+		if (!this.#photosAvailable || (!this.#onPhotosChange && !this.#onPhotosIndexingProgress) || this.#stopping) return
+		const changedAccountIds = [...new Set(accountIds)]
+		if (changedAccountIds.length === 0) return
+
+		if (this.#onPhotosChange) {
+			for (const accountId of changedAccountIds) this.#photosChangedAccountIds.add(accountId)
+			this.#photosChangeTimer ??= setTimeout(() => {
+				this.#photosChangeTimer = undefined
+				const accountIds = [...this.#photosChangedAccountIds]
+				this.#photosChangedAccountIds.clear()
+				this.#onPhotosChange?.(accountIds)
+			}, 250)
+		}
+
+		if (this.#onPhotosIndexingProgress) {
+			for (const accountId of changedAccountIds) this.#photosIndexingProgressAccountIds.add(accountId)
+			this.#photosIndexingProgressTimer ??= setTimeout(() => {
+				this.#photosIndexingProgressTimer = undefined
+				const accountIds = [...this.#photosIndexingProgressAccountIds]
+				this.#photosIndexingProgressAccountIds.clear()
+				void this.#mutate((database) =>
+					accountIds.map((accountId) => ({
+						accountId,
+						state: this.#photos.indexingState(this.#photosDatabase(database), accountId),
+					})),
+				)
+					.then((progress) => {
+						if (!this.#stopping) this.#onPhotosIndexingProgress?.(progress)
+					})
+					.catch((error) => this.logger.error('Failed to report Photos indexing progress', error))
+			}, PHOTOS_INDEXING_PROGRESS_INTERVAL_MS)
+		}
 	}
 
 	async stop() {
@@ -1881,10 +1923,14 @@ export default class FileIndexEngine {
 		if (this.#recoveryTimer) clearTimeout(this.#recoveryTimer)
 		if (this.#photosRecoveryTimer) clearTimeout(this.#photosRecoveryTimer)
 		if (this.#photosChangeTimer) clearTimeout(this.#photosChangeTimer)
+		if (this.#photosIndexingProgressTimer) clearTimeout(this.#photosIndexingProgressTimer)
 		this.#reconciliationTimer = undefined
 		this.#recoveryTimer = undefined
 		this.#photosRecoveryTimer = undefined
 		this.#photosChangeTimer = undefined
+		this.#photosIndexingProgressTimer = undefined
+		this.#photosChangedAccountIds.clear()
+		this.#photosIndexingProgressAccountIds.clear()
 		await this.#recoveryAttempt
 		await this.#photosRecoveryAttempt
 		await this.#enrichment.stop()

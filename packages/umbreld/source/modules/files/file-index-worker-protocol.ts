@@ -1,4 +1,5 @@
 import type {FileIndexRoot} from './file-index-engine.js'
+import type {PhotoIndexingProgress} from '../photos/types.js'
 
 export type FileIndexWorkerData = {
 	dataDirectory: string
@@ -86,6 +87,7 @@ export type FileIndexWorkerOutboundMessage =
 	| {type: 'ready'; threadId: number}
 	| {type: 'availability'; available: boolean}
 	| {type: 'photos-change'; accountIds: string[]}
+	| {type: 'photos-indexing-progress'; progress: PhotoIndexingProgress[]}
 	| {type: 'response'; id: number; result: unknown}
 	| {type: 'response'; id: number; error: SerializedError}
 	| {type: 'log'; level: 'log' | 'verbose' | 'error'; message?: string; error?: SerializedError}

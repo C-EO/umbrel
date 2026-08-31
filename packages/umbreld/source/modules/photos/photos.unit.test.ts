@@ -181,3 +181,47 @@ test('uses a short-lived account-bound ticket for large download selections', as
 	expect(photos.consumeDownloadTicket('Alice', secondTicket)).toStrictEqual(ids)
 	expect(photos.consumeDownloadTicket('Alice', secondTicket)).toBeUndefined()
 })
+
+test('publishes the updated indexing snapshot when a source scope changes', async () => {
+	const scope = {mode: 'everything-except' as const, paths: ['/Home/Corrupt.jpg']}
+	const source = {id: 'home', scope}
+	const state = {phase: 'ready', completed: 3, total: 3, percentage: 100} as const
+	const emit = vi.fn(async () => {})
+	const photosUpdateSource = vi.fn(async () => source)
+	const photosIndexingState = vi.fn(async () => state)
+	const umbreld = {
+		logger: {createChildLogger: () => ({log: vi.fn()})},
+		eventBus: {emit},
+		files: {fileIndex: {photosUpdateSource, photosIndexingState}},
+	} as unknown as Umbreld
+	const photos = new Photos(umbreld)
+
+	await expect(photos.updateSource('Alice', 'home', scope)).resolves.toBe(source)
+	expect(photosIndexingState).toHaveBeenCalledWith('Alice')
+	expect(emit).toHaveBeenNthCalledWith(1, 'photos:change', {accountIds: ['Alice']})
+	expect(emit).toHaveBeenNthCalledWith(2, 'photos:indexing-progress', {accountId: 'Alice', state})
+})
+
+test('keeps a completed source update successful when its progress snapshot is unavailable', async () => {
+	const source = {id: 'home'}
+	const error = vi.fn()
+	const umbreld = {
+		logger: {createChildLogger: () => ({log: vi.fn(), error})},
+		eventBus: {emit: vi.fn()},
+		files: {
+			fileIndex: {
+				photosUpdateSource: vi.fn(async () => source),
+				photosIndexingState: vi.fn(async () => {
+					throw new Error('file index is recovering')
+				}),
+			},
+		},
+	} as unknown as Umbreld
+	const photos = new Photos(umbreld)
+
+	await expect(photos.updateSource('Alice', 'home')).resolves.toBe(source)
+	expect(error).toHaveBeenCalledWith(
+		'Failed to report Photos indexing progress',
+		expect.objectContaining({message: 'file index is recovering'}),
+	)
+})

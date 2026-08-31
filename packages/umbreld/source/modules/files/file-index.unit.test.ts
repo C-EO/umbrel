@@ -58,7 +58,12 @@ async function fixture(
 	options: Partial<
 		Pick<
 			FileIndexEngineOptions,
-			'reconciliationIntervalMs' | 'watcherBulkThreshold' | 'batchSize' | 'enrichmentRuntime' | 'onPhotosChange'
+			| 'reconciliationIntervalMs'
+			| 'watcherBulkThreshold'
+			| 'batchSize'
+			| 'enrichmentRuntime'
+			| 'onPhotosChange'
+			| 'onPhotosIndexingProgress'
 		>
 	> = {},
 ) {
@@ -992,10 +997,12 @@ test('serves an account-scoped Photos library from indexed media and durable sta
 	})
 })
 
-test('coalesces Photos discovery and enrichment changes into library notifications', async () => {
+test('coalesces Photos changes and reports account-scoped indexing progress snapshots', async () => {
 	const onPhotosChange = vi.fn()
+	const onPhotosIndexingProgress = vi.fn()
 	const {index, homeDirectory} = await fixture(undefined, {
 		onPhotosChange,
+		onPhotosIndexingProgress,
 		enrichmentRuntime: {
 			hashFile: async () => Buffer.alloc(32, 0x41),
 			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
@@ -1018,6 +1025,14 @@ test('coalesces Photos discovery and enrichment changes into library notificatio
 	})
 	expect(onPhotosChange.mock.calls.length).toBeLessThanOrEqual(2)
 	expect(onPhotosChange.mock.calls.flatMap(([accountIds]) => accountIds)).toContain('owner')
+	await pRetry(
+		() =>
+			expect(onPhotosIndexingProgress.mock.calls.flatMap(([progress]) => progress)).toContainEqual({
+				accountId: 'owner',
+				state: {phase: 'ready', completed: 1, total: 1, percentage: 100},
+			}),
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
 })
 
 test('keeps owner and member Photos libraries and metadata search isolated by their indexed Home roots', async () => {
@@ -2053,7 +2068,9 @@ test('preserves a Photos id, favorite, and album membership across a filesystem 
 })
 
 test('reports indexing, enrichment progress, ready, and persistent enrichment failures', async () => {
+	const onPhotosIndexingProgress = vi.fn()
 	const {index, homeDirectory} = await fixture(undefined, {
+		onPhotosIndexingProgress,
 		enrichmentRuntime: {
 			hashFile: async () => Buffer.alloc(32, 0x42),
 			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
@@ -2073,6 +2090,13 @@ test('reports indexing, enrichment progress, ready, and persistent enrichment fa
 		minTimeout: 10,
 		maxTimeout: 20,
 	})
+	await pRetry(
+		() =>
+			expect(onPhotosIndexingProgress.mock.calls.flatMap(([progress]) => progress)).toContainEqual(
+				expect.objectContaining({accountId: 'owner', state: expect.objectContaining({phase: 'degraded'})}),
+			),
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
+	)
 })
 
 test('preserves Photos ids and user state when the disposable file index is rebuilt', async () => {
