@@ -2,10 +2,15 @@
 
 import {act} from 'react'
 import {createRoot} from 'react-dom/client'
-import {afterEach, beforeEach, describe, expect, it} from 'vitest'
+import {MemoryRouter, Route, Routes} from 'react-router-dom'
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest'
 
-import {GpuInfoRows} from './device-info-content'
+import {DeviceInfoContent, GpuInfoRows} from './device-info-content'
 
+vi.mock('react-i18next', async (importOriginal) => ({
+	...(await importOriginal<typeof import('react-i18next')>()),
+	useTranslation: () => ({t: (key: string) => key}),
+}))
 ;(globalThis as {IS_REACT_ACT_ENVIRONMENT?: boolean}).IS_REACT_ACT_ENVIRONMENT = true
 
 let container: HTMLDivElement
@@ -59,5 +64,33 @@ describe('GPU device info rows', () => {
 		act(() => root.render(<GpuInfoRows label='GPU' gpus={[{vendor: '', model: ''}]} />))
 
 		expect(container.children).toHaveLength(0)
+	})
+})
+
+describe('Storage device info row', () => {
+	it('links non-Pro devices to Storage Manager', () => {
+		act(() =>
+			root.render(
+				<MemoryRouter
+					initialEntries={['/settings/device-info']}
+					future={{v7_startTransition: true, v7_relativeSplatPath: true}}
+				>
+					<Routes>
+						<Route
+							path='/settings/device-info'
+							element={<DeviceInfoContent umbrelHostEnvironment='raspberry-pi' storage='1 TB SSD' />}
+						/>
+						<Route path='/settings/storage' element={<div>Storage Manager destination</div>} />
+					</Routes>
+				</MemoryRouter>,
+			),
+		)
+
+		const storageManagerButton = container.querySelector<HTMLButtonElement>('button[aria-label="storage-manager"]')
+		expect(storageManagerButton).not.toBeNull()
+
+		act(() => storageManagerButton?.click())
+
+		expect(container.textContent).toContain('Storage Manager destination')
 	})
 })

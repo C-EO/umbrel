@@ -52,7 +52,6 @@ export function DeviceInfoContent({
 }) {
 	const {t} = useTranslation()
 	const navigate = useNavigate()
-	const isUmbrelPro = umbrelHostEnvironment === 'umbrel-pro'
 
 	return (
 		<div className='space-y-6'>
@@ -105,21 +104,16 @@ export function DeviceInfoContent({
 				{storage && (
 					<div className={listItemClassNarrow}>
 						<span>{t('device-info.storage')}</span>
-						<span
-							className={cn(
-								'flex items-center gap-2 font-normal',
-								!isUmbrelPro && (modelNumber || serialNumber) && 'pr-6',
-							)}
-						>
+						<span className='flex items-center gap-2 font-normal'>
 							{storage}
-							{isUmbrelPro && (
-								<button
-									className='rounded-4 opacity-20 transition-opacity hover:opacity-40 focus:outline-hidden focus-visible:opacity-60'
-									onClick={() => navigate('/settings/storage')}
-								>
-									<TbChevronRight className='shrink-0' />
-								</button>
-							)}
+							<button
+								type='button'
+								aria-label={t('storage-manager')}
+								className='rounded-4 opacity-20 transition-opacity hover:opacity-40 focus:outline-hidden focus-visible:opacity-60'
+								onClick={() => navigate('/settings/storage')}
+							>
+								<TbChevronRight className='shrink-0' />
+							</button>
 						</span>
 					</div>
 				)}
