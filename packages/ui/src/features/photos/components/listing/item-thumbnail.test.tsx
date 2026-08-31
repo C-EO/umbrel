@@ -1,0 +1,109 @@
+// @vitest-environment jsdom
+
+import {act} from 'react'
+import {createRoot, type Root} from 'react-dom/client'
+import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
+
+import {ItemThumbnail, thumbSizeForTile} from './item-thumbnail'
+
+vi.mock('@/modules/auth/http-url-authorizer', () => ({
+	useSharedAuthorizedHttpUrl: (url: string | undefined) => url,
+}))
+;(globalThis as {IS_REACT_ACT_ENVIRONMENT?: boolean}).IS_REACT_ACT_ENVIRONMENT = true
+
+let host: HTMLDivElement
+let root: Root
+
+beforeEach(() => {
+	host = document.createElement('div')
+	document.body.append(host)
+	root = createRoot(host)
+	// jsdom has no img.decode; the component awaits it before dropping the
+	// coarse layer of an upgrade
+	HTMLImageElement.prototype.decode = () => Promise.resolve()
+})
+
+afterEach(() => {
+	act(() => root.unmount())
+	host.remove()
+})
+
+const render = (ui: Parameters<Root['render']>[0]) => act(() => root.render(ui))
+const imgs = () => [...host.querySelectorAll('img')]
+const load = (img: HTMLImageElement) => act(() => void img.dispatchEvent(new Event('load')))
+
+describe('thumbSizeForTile', () => {
+	test('the 192 the canvas shares while its short side covers the tile, the 512 above', () => {
+		expect(thumbSizeForTile(48)).toBe(192)
+		expect(thumbSizeForTile(96)).toBe(192)
+		expect(thumbSizeForTile(128)).toBe(192)
+		expect(thumbSizeForTile(129)).toBe(512)
+		expect(thumbSizeForTile(400)).toBe(512)
+	})
+})
+
+describe('ItemThumbnail', () => {
+	test('fades the photograph in over the tint once it loads', () => {
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={512} />)
+		const img = imgs()[0]!
+		expect(img.src).toContain('s=512')
+		expect(img.className).toContain('opacity-0')
+		load(img)
+		expect(img.className).toContain('opacity-100')
+		expect(img.className).toContain('transition-opacity')
+	})
+
+	test('a load inside the warm window is shown at once, without the fade', () => {
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={192} warmUntil={performance.now() + 60_000} />)
+		const img = imgs()[0]!
+		load(img)
+		expect(img.className).toContain('opacity-100')
+		expect(img.className).not.toContain('transition-opacity')
+	})
+
+	test('a load after the warm window has passed fades as usual', () => {
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={192} warmUntil={performance.now() - 1} />)
+		const img = imgs()[0]!
+		load(img)
+		expect(img.className).toContain('transition-opacity')
+	})
+
+	test('an upgrade keeps the loaded rendition beneath until the finer one arrives', async () => {
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={192} />)
+		const first = imgs()[0]!
+		load(first)
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={512} />)
+		expect(imgs()).toHaveLength(2)
+		const [coarse, fine] = imgs() as [HTMLImageElement, HTMLImageElement]
+		// The very element that was fine a render ago: same node, same pixels
+		expect(coarse).toBe(first)
+		expect(coarse.src).toContain('s=192')
+		expect(coarse.className).not.toContain('opacity-0')
+		expect(fine.src).toContain('s=512')
+		expect(fine.className).toContain('opacity-0')
+		load(fine)
+		// A sharpening is instant…
+		expect(fine.className).toContain('opacity-100')
+		expect(fine.className).not.toContain('transition-opacity')
+		// … and once the finer pixels have decoded, the coarse layer goes
+		await act(async () => {})
+		expect(imgs()).toHaveLength(1)
+		expect(imgs()[0]).toBe(fine)
+	})
+
+	test('an upgrade before anything loaded simply moves to the finer rendition', () => {
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={192} />)
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={512} />)
+		expect(imgs()).toHaveLength(1)
+		expect(imgs()[0]!.src).toContain('s=512')
+	})
+
+	test('a step down is ignored: the finer pixels already here cover it', () => {
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={512} />)
+		const img = imgs()[0]!
+		load(img)
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={192} />)
+		expect(imgs()).toHaveLength(1)
+		expect(imgs()[0]!.src).toContain('s=512')
+	})
+})

@@ -108,7 +108,11 @@ export function ActionsBar() {
 				<div className={cn('flex min-w-0 flex-col self-end', titleShadowClass)}>
 					<div className='relative h-[1lh] overflow-y-clip text-17 leading-tight'>
 						<AnimatePresence mode='popLayout' initial={false} custom={direction}>
-							{selection.selecting ? (
+							{selection.coveringFor ? (
+								<motion.h2 key='covering' className={titleClass} {...faceProps(titleRoll)}>
+									{t('photos-album.pick-cover')}
+								</motion.h2>
+							) : selection.selecting ? (
 								<motion.h2 key='selection' className={titleClass} {...faceProps(titleRoll)}>
 									<SelectionCount count={selection.ids.size} />
 								</motion.h2>
@@ -128,7 +132,16 @@ export function ActionsBar() {
 			    tooltips are portaled, and the wider face must not be cut while it rolls */}
 			<div className='relative -my-1.5 ml-auto flex items-center gap-2 overflow-x-visible overflow-y-clip py-1.5'>
 				<AnimatePresence mode='popLayout' initial={false} custom={direction}>
-					{selection.pickingFor ? (
+					{selection.coveringFor ? (
+						<motion.div key='covering' className='flex items-center gap-2' {...faceProps(pillsRoll)}>
+							{isTimeline && (
+								<div className='hidden items-center gap-2 md:flex'>
+									<TimelineZoom />
+								</div>
+							)}
+							<PillButton onClick={() => selection.done()}>{t('cancel')}</PillButton>
+						</motion.div>
+					) : selection.pickingFor ? (
 						<motion.div key='picking' className='flex items-center gap-2' {...faceProps(pillsRoll)}>
 							{isTimeline && (
 								<div className='hidden items-center gap-2 md:flex'>

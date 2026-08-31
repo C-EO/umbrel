@@ -9,6 +9,9 @@ export type CoverTone = {
 	tint?: string
 	// CSS background image: the gradient behind the caption
 	scrim: string
+	// The scrim's own colour at full depth, opaque — for chrome that should
+	// match the darkening (the card's options button)
+	shade: string
 }
 
 // The scrim is a deep shade of whatever colour the image has under the
@@ -23,7 +26,10 @@ export function scrimGradient(color: (alpha: number) => string, alpha: number) {
 	return `linear-gradient(to top, ${stop(1, 0)}, ${stop(0.95, 45)}, ${stop(0.5, 73)}, ${stop(0, 100)})`
 }
 
-export const DEFAULT_TONE: CoverTone = {scrim: scrimGradient((alpha) => `rgb(0 0 0 / ${alpha.toFixed(2)})`, 0.95)}
+export const DEFAULT_TONE: CoverTone = {
+	scrim: scrimGradient((alpha) => `rgb(0 0 0 / ${alpha.toFixed(2)})`, 0.95),
+	shade: 'rgb(0 0 0)',
+}
 
 // The title is always this light — legibility over the scrim never depends on
 // the image — and only as colourful as a tint, never neon
@@ -49,9 +55,7 @@ export function coverTone(pixels: Pixels): CoverTone {
 	const bottom = regionStats(pixels, Math.floor(pixels.height * CAPTION_FROM), pixels.height)
 	const shade = rgbToOklch(...bottom.rgb)
 	const alpha = SCRIM_ALPHA.min + (SCRIM_ALPHA.max - SCRIM_ALPHA.min) * Math.sqrt(bottom.luminance)
-	const scrim = scrimGradient(
-		(a) => oklchToCss(SHADE_LIGHTNESS, Math.min(SHADE_MAX_CHROMA, shade.c), shade.h, a),
-		alpha,
-	)
-	return {tint, scrim}
+	const shadeColor = (a?: number) => oklchToCss(SHADE_LIGHTNESS, Math.min(SHADE_MAX_CHROMA, shade.c), shade.h, a)
+	const scrim = scrimGradient(shadeColor, alpha)
+	return {tint, scrim, shade: shadeColor()}
 }

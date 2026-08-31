@@ -27,10 +27,12 @@ const GENERATE_CAP = 2
 // Cold generation of a 12MP JPEG on a Pi genuinely takes seconds; killing it
 // at five just wastes the work
 const REQUEST_TIMEOUT_MS = 20_000
-// Below this a 512px photo downscaled into the cell is indistinguishable from
-// its own average colour, and asking for it would spend the whole thumbnail
-// budget on pixels nobody can see
-const FETCH_MIN_DEVICE_PX = 20
+// The zoom floor is 14px tiles on desktop and 12 on mobile, and even at those
+// sizes a photograph reads as a photograph next to its flat tint — so the
+// mosaic fills for real all the way down, on 1× displays too. Only below
+// every floor there is (a browser zoomed out past 100%) is a tile truly its
+// own average colour, and only then is the network not worth spending.
+const FETCH_MIN_DEVICE_PX = 12
 // After two failures in a row, stop asking for a moment
 const FAIL_PAUSE_MS = 2000
 // Round-trip time, smoothed, decides how many we dare have in flight
@@ -58,6 +60,7 @@ export class ThumbnailSource {
 	#range = {start: 0, end: -1}
 	#focal = 0
 	#tile = 0
+	#cell = 0
 	#step = 0
 	// Where the outward walk first passed over an item that needed making
 	// while the generation lane was full, so it can be picked up again
@@ -80,21 +83,25 @@ export class ThumbnailSource {
 	want(items: Item[], range: {start: number; end: number}, focal: number, devicePx: number) {
 		if (this.#disposed) return
 		const at = Math.min(range.end, Math.max(range.start, focal))
+		const cell = this.#host.cell()
 		// The walk is one pass outward from the focal point, so anything that
 		// moves either the band or the point it radiates from starts it again;
 		// carrying on from where it was would leave the ground between the two
-		// unasked for. So does a change of cell size, which leaves behind cells
-		// the walk passed over as held.
+		// unasked for. So does the atlas moving to another cell size, which
+		// leaves cells the walk passed over as held either behind or — carried
+		// up through the re-tier — stretched, and stale.
 		const moved =
 			this.#items !== items ||
 			range.start !== this.#range.start ||
 			range.end !== this.#range.end ||
 			at !== this.#focal ||
-			devicePx !== this.#tile
+			devicePx !== this.#tile ||
+			cell !== this.#cell
 		this.#items = items
 		this.#range = range
 		this.#focal = at
 		this.#tile = devicePx
+		this.#cell = cell
 		if (moved) {
 			this.#step = 0
 			this.#deferred = undefined
@@ -104,6 +111,20 @@ export class ThumbnailSource {
 			request.abort()
 			this.#pending.delete(id)
 		}
+		this.#dispatch()
+	}
+
+	// Authorization changed — a token arrived, rotated, or came back after
+	// failing — so every URL is signed anew, and what failed under the old
+	// signature deserves another ask. The failure pause goes with it: a
+	// fresh token is fresh information.
+	reauthorized() {
+		if (this.#disposed || this.#failed.size === 0) return
+		this.#failed.clear()
+		this.#failures = 0
+		this.#pausedUntil = 0
+		this.#step = 0
+		this.#deferred = undefined
 		this.#dispatch()
 	}
 

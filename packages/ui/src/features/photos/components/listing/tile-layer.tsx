@@ -90,6 +90,13 @@ export function TileLayer({
 		selection.set(ids)
 		navigate(linkToDialog('photos-create-album'))
 	}
+	// Cover mode ends on the first choice: this item becomes the album's face
+	const commitCover = (item: Item) => {
+		const albumId = selection.coveringFor
+		if (!albumId) return
+		selection.done()
+		act(setCover({id: albumId, itemId: item.id}))
+	}
 	const purge = async () => {
 		const count = ids.length
 		const formattedCount = formatNumberI18n({n: count, showDecimals: false, locale: i18n.language})
@@ -133,6 +140,8 @@ export function TileLayer({
 						const tile = tileFrom(event)
 						const item = itemFrom(event)
 						if (!item) return
+						// Choosing a cover: the first click is the choice
+						if (selection.coveringFor) return commitCover(item)
 						// The selection circle needs a 72px tile, bigger than any the
 						// canvas draws, so a canvas tile never has one to hit
 						if (selecting || (tile && onCircle(event, tile))) onSelect(item, event.shiftKey)
@@ -150,7 +159,9 @@ export function TileLayer({
 			</ContextMenuTrigger>
 			<ContextMenuContent>
 				{target &&
-					(selection.pickingFor ? (
+					(selection.coveringFor ? (
+						<ContextMenuItem onClick={() => commitCover(target)}>{t('photos-item.set-cover')}</ContextMenuItem>
+					) : selection.pickingFor ? (
 						<>
 							<ContextMenuItem onClick={() => act(setFavorite({ids, favorite: !target.isFavorite}))}>
 								{target.isFavorite ? t('photos-item.unfavorite') : t('photos-item.favorite')}

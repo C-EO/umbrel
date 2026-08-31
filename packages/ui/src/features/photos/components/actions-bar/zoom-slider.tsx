@@ -54,11 +54,15 @@ export function ZoomSlider() {
 	// (a pinch, the wheel) hands it back.
 	const [held, setHeld] = useState<{columns: number; live: boolean} | null>(null)
 	const wheel = useRef({distance: 0, at: 0})
-	// No grid on screen (a collections page): the control shows, but idle
+	// No grid on screen (a collections page): the control shows, but idle —
+	// keeping the thumb where the last grid left it instead of collapsing to
+	// the track's end (with no grid yet this session, it rests there anyway)
 	const disabled = !grid
-	const width = grid?.width ?? 0
-	const track = zoomTrack(width, isMobile, grid?.floor)
-	const committed = columnValue(width, tileSize, isMobile, grid?.floor)
+	const lastGeometry = useRef<{width: number; floor: number | undefined}>({width: 0, floor: undefined})
+	if (grid) lastGeometry.current = {width: grid.width, floor: grid.floor}
+	const {width, floor} = grid ? {width: grid.width, floor: grid.floor} : lastGeometry.current
+	const track = zoomTrack(width, isMobile, floor)
+	const committed = columnValue(width, tileSize, isMobile, floor)
 	const shown = useRef(committed)
 	useEffect(() => {
 		if (shown.current === committed) return

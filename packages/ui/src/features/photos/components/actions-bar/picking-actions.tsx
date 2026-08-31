@@ -1,4 +1,4 @@
-import {FolderPlus} from 'lucide-react'
+import {Album} from 'lucide-react'
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useNavigate} from 'react-router-dom'
@@ -48,7 +48,7 @@ export function PickingActions({albumId}: {albumId: string}) {
 
 	return (
 		<>
-			<PillButton icon={FolderPlus} disabled={selection.ids.size === 0 || busy} onClick={add}>
+			<PillButton icon={Album} disabled={selection.ids.size === 0 || busy} onClick={add}>
 				{label}
 			</PillButton>
 			<PillButton onClick={finish}>{t('cancel')}</PillButton>

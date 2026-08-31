@@ -1,4 +1,14 @@
-import {createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode} from 'react'
+import {
+	createContext,
+	useCallback,
+	useContext,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useRef,
+	useState,
+	type ReactNode,
+} from 'react'
 import {useLocation, useNavigate} from 'react-router-dom'
 
 import {BASE_ROUTE_PATH} from '@/features/photos/constants'
@@ -28,6 +38,12 @@ type PhotosSelection = {
 	// the whole library.
 	pickingFor: string | undefined
 	pickFor: (albumId: string) => void
+	// The album a cover is being chosen for, while one is: selection mode on
+	// the album's own page where the first item chosen becomes the cover (a
+	// cover must be one of the album's items, so leaving the page cancels).
+	// While it's on, the selection itself is inert — nothing accumulates.
+	coveringFor: string | undefined
+	coverFor: (albumId: string) => void
 }
 
 const EMPTY: ReadonlySet<string> = new Set()
@@ -45,6 +61,13 @@ export function PhotosSelectionProvider({children}: {children: ReactNode}) {
 	const [ids, setIds] = useState(EMPTY)
 	const [explicit, setExplicit] = useState(false)
 	const [pickingFor, setPickingFor] = useState<string>()
+	const [coveringFor, setCoveringFor] = useState<string>()
+	// Read by the otherwise-stable callbacks, so entering cover mode doesn't
+	// change their identity for every consumer that lists them as deps
+	const covering = useRef<string>(undefined)
+	useLayoutEffect(() => {
+		covering.current = coveringFor
+	}, [coveringFor])
 
 	// A new route is a new list: nothing from the old one stays selected —
 	// unless the selection is being gathered for an album, when it is the
@@ -56,31 +79,66 @@ export function PhotosSelectionProvider({children}: {children: ReactNode}) {
 		setIds(EMPTY)
 		setExplicit(false)
 	}, [pathname, pickingFor])
+	// Covering is the album page's own mode: anywhere else there is nothing
+	// valid to choose (the backend only accepts one of the album's items).
+	// Cancelled on leaving the page — but only once the mode has arrived
+	// there: `coverFor` sets the mode and navigates together, and this effect
+	// can run between the two, when the pathname is still the old page's.
+	// Which album arrived, not whether: an arrival for album A must not count
+	// against a covering just switched to album B mid-navigation.
+	const coveringArrived = useRef<string>(undefined)
+	useEffect(() => {
+		if (!coveringFor) {
+			coveringArrived.current = undefined
+			return
+		}
+		if (pathname === `${BASE_ROUTE_PATH}/albums/${coveringFor}`) coveringArrived.current = coveringFor
+		else if (coveringArrived.current === coveringFor) {
+			coveringArrived.current = undefined
+			setCoveringFor(undefined)
+		}
+	}, [pathname, coveringFor])
 
 	const start = useCallback(() => setExplicit(true), [])
 	const done = useCallback(() => {
 		setIds(EMPTY)
 		setExplicit(false)
 		setPickingFor(undefined)
+		setCoveringFor(undefined)
 	}, [])
 	const pickFor = useCallback(
 		(albumId: string) => {
 			setIds(EMPTY)
+			setCoveringFor(undefined)
 			setPickingFor(albumId)
 			navigate(BASE_ROUTE_PATH)
 		},
 		[navigate],
 	)
+	const coverFor = useCallback(
+		(albumId: string) => {
+			setIds(EMPTY)
+			setExplicit(false)
+			setPickingFor(undefined)
+			setCoveringFor(albumId)
+			// Already on the album's page (its own sidebar card): navigating
+			// again would only push a dead history entry
+			const path = `${BASE_ROUTE_PATH}/albums/${albumId}`
+			if (pathname !== path) navigate(path)
+		},
+		[navigate, pathname],
+	)
 	const toggle = useCallback(
 		(id: string) =>
 			setIds((prev) => {
+				if (covering.current) return prev
 				const next = new Set(prev)
 				if (!next.delete(id)) next.add(id)
 				return next
 			}),
 		[],
 	)
-	const set = useCallback((next: Iterable<string>) => setIds(new Set(next)), [])
+	const set = useCallback((next: Iterable<string>) => setIds((prev) => (covering.current ? prev : new Set(next))), [])
 	const retain = useCallback(
 		(known: ReadonlySet<string>) =>
 			setIds((prev) => {
@@ -94,7 +152,7 @@ export function PhotosSelectionProvider({children}: {children: ReactNode}) {
 	const value = useMemo<PhotosSelection>(
 		() => ({
 			ids,
-			selecting: explicit || ids.size > 0 || pickingFor !== undefined,
+			selecting: explicit || ids.size > 0 || pickingFor !== undefined || coveringFor !== undefined,
 			start,
 			done,
 			toggle,
@@ -102,8 +160,10 @@ export function PhotosSelectionProvider({children}: {children: ReactNode}) {
 			retain,
 			pickingFor,
 			pickFor,
+			coveringFor,
+			coverFor,
 		}),
-		[ids, explicit, start, done, toggle, set, retain, pickingFor, pickFor],
+		[ids, explicit, start, done, toggle, set, retain, pickingFor, pickFor, coveringFor, coverFor],
 	)
 	return <PhotosSelectionContext value={value}>{children}</PhotosSelectionContext>
 }

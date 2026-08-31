@@ -1,5 +1,5 @@
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import {ChevronLeft, ChevronRight, Download, FolderPlus, Heart, Info, RotateCcw, Trash2, X} from 'lucide-react'
+import {Album, ChevronLeft, ChevronRight, Download, Heart, Info, RotateCcw, Trash2, X} from 'lucide-react'
 import {useReducedMotion} from 'motion/react'
 import {useCallback, useEffect, useLayoutEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
@@ -22,6 +22,7 @@ import {usePhotosView} from '@/features/photos/components/view-context'
 import {Filmstrip} from '@/features/photos/components/viewer/filmstrip'
 import {InfoPanel} from '@/features/photos/components/viewer/info-panel'
 import {LightboxButton, lightboxButtonClass} from '@/features/photos/components/viewer/lightbox-button'
+import {LivePhoto} from '@/features/photos/components/viewer/live-photo'
 import {useNeighborPrefetch} from '@/features/photos/components/viewer/neighbor-prefetch'
 import {usePictureFlight} from '@/features/photos/components/viewer/picture-flight'
 import {PANE_GAP, useStageGestures} from '@/features/photos/components/viewer/stage-gestures'
@@ -373,7 +374,7 @@ export function ItemViewer() {
 									disabled={!item || (!otherAlbums?.length && !routeAlbumId)}
 									className={lightboxButtonClass}
 								>
-									<FolderPlus className='size-5' />
+									<Album className='size-5' />
 								</button>
 							</DropdownMenuTrigger>
 						</DarkTooltip>
@@ -539,6 +540,14 @@ export function ItemViewer() {
 													)}
 												/>
 											) : null)}
+										{/* A live photo's motion clip and LIVE chip (see LivePhoto). Gated on
+										    the rest alone — never `warm`, which only means a neighbouring
+										    still was prefetched, while mounting this starts a video download.
+										    Gone the moment the close begins: the picture flies home as the
+										    still it will land as. */}
+										{item && item.subKind === 'live' && flight.arrived && restedId === item.id && !closing && (
+											<LivePhoto id={item.id} autoPlay={!reduceMotion} />
+										)}
 									</div>
 								)}
 								{/* A horizontal swipe's neighbours, mounted only while the strip

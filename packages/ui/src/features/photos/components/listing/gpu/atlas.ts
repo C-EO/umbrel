@@ -14,6 +14,11 @@
 // new one, one instanced pass per destination layer. Zooming out therefore
 // never costs a fetch for anything already on screen, and the picture stays
 // clean the whole way out instead of aliasing into sparkle.
+//
+// Zooming back in stretches those carried pixels, so each cell also remembers
+// the size its pixels truly are (`quality`): the stretch stays on screen — it
+// is better company than a tint while the fetch is in flight — but the cell
+// reads as missing, and the sharp version is fetched over it.
 
 import {cellAt, retierMap, slotCount, type AtlasPlan} from '@/features/photos/components/listing/gpu/capability'
 
@@ -78,6 +83,11 @@ export class Atlas {
 	texture: WebGLTexture
 	// Which item is in each cell, by slot
 	resident: (string | undefined)[]
+	// The size each cell's pixels truly are: the cell size they were decoded
+	// at, stepped down by every smaller cell they have been carried through
+	// since. Below the current cell size means stretched — drawn, but not
+	// held, so the sharp version is fetched over it.
+	quality: number[]
 
 	#gl: WebGL2RenderingContext
 	#retier: {program: WebGLProgram; buffer: WebGLBuffer; vao: WebGLVertexArrayObject; frame: WebGLFramebuffer} | null =
@@ -89,6 +99,7 @@ export class Atlas {
 		this.cell = cell
 		this.slots = slotCount(plan, cell)
 		this.resident = new Array<string | undefined>(this.slots)
+		this.quality = new Array<number>(this.slots).fill(0)
 		this.texture = this.#allocate()
 	}
 
@@ -109,7 +120,8 @@ export class Atlas {
 	}
 
 	holds(index: number, id: string) {
-		return this.resident[index % this.slots] === id
+		const slot = index % this.slots
+		return this.resident[slot] === id && this.quality[slot]! >= this.cell
 	}
 
 	put(index: number, id: string, source: ImageBitmap) {
@@ -121,6 +133,8 @@ export class Atlas {
 		gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false)
 		gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false)
 		gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, 0, x, y, layer, this.cell, this.cell, 1, gl.RGBA, gl.UNSIGNED_BYTE, source)
+		this.resident[slot] = id
+		this.quality[slot] = this.cell
 	}
 
 	// Move to a new cell size, carrying every resident cell the band still
@@ -133,12 +147,19 @@ export class Atlas {
 		const moves = retierMap(this.resident, slots, band, idAt)
 		const from = this.texture
 		const fromCell = this.cell
+		const fromQuality = this.quality
 		this.cell = cell
 		this.slots = slots
 		this.resident = new Array<string | undefined>(slots)
+		this.quality = new Array<number>(slots).fill(0)
 		this.texture = this.#allocate()
 		if (moves.length > 0 && this.#blit(from, fromCell, moves)) {
-			for (const move of moves) this.resident[move.to] = move.id
+			for (const move of moves) {
+				this.resident[move.to] = move.id
+				// A downscale is everything the smaller cell can show; an
+				// upscale is only ever as good as what it was stretched from
+				this.quality[move.to] = Math.min(fromQuality[move.from] ?? 0, cell)
+			}
 		}
 		gl.deleteTexture(from)
 	}

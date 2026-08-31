@@ -1,4 +1,4 @@
-import {Album, Calendar, Globe, Image, RectangleHorizontal, ScanLine, Search, Sparkles, Video, X} from 'lucide-react'
+import {Album, Calendar, Globe, Image, RectangleHorizontal, ScanLine, Search, Video, X} from 'lucide-react'
 import {motion} from 'motion/react'
 import {useEffect, useMemo, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
@@ -6,6 +6,7 @@ import {useParams} from 'react-router-dom'
 
 import {FadeScroller} from '@/components/fade-scroller'
 import {Popover, PopoverAnchor, PopoverContent} from '@/components/ui/popover'
+import {LivePhotoIcon} from '@/features/photos/components/live-photo-icon'
 import {suggest, type Suggestion} from '@/features/photos/components/search/suggest'
 import {SourceIcon} from '@/features/photos/components/sources/source-icon'
 import {usePhotosView, type SearchToken} from '@/features/photos/components/view-context'
@@ -470,7 +471,7 @@ function TokenIcon({token, className, sourceSize = 14}: {token: SearchToken; cla
 			: token.type === 'album'
 				? Album
 				: token.type === 'subKind'
-					? {live: Sparkles, panorama: RectangleHorizontal, screenshot: ScanLine, spherical: Globe}[token.subKind]
+					? {live: LivePhotoIcon, panorama: RectangleHorizontal, screenshot: ScanLine, spherical: Globe}[token.subKind]
 					: token.kind === 'video'
 						? Video
 						: Image

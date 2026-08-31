@@ -1,8 +1,11 @@
-import {Check, Heart, Play, Sparkles} from 'lucide-react'
-import {memo} from 'react'
+import {Check, Heart, Play} from 'lucide-react'
+import {memo, useEffect, useRef, useState} from 'react'
 
 import {ItemThumbnail} from '@/features/photos/components/listing/item-thumbnail'
-import type {Item} from '@/features/photos/hooks/use-items'
+import {LivePhotoIcon} from '@/features/photos/components/live-photo-icon'
+import {itemLiveUrl, type Item, type ThumbSize} from '@/features/photos/hooks/use-items'
+import {cn} from '@/lib/utils'
+import {useAuthorizedHttpUrl} from '@/modules/auth/http-auth'
 import {tw} from '@/utils/tw'
 
 function formatDuration(ms: number) {
@@ -40,10 +43,22 @@ const tileClassByState = {
 // dense zoom stop mounts in one frame, and nothing transitions.
 export const ItemTile = memo(function ItemTile({
 	item,
+	thumbSize = 512,
+	warmUntil = 0,
+	live,
 	selected,
 	selectable,
 }: {
 	item: Item
+	// The rendition the tile's size asks for (see thumbSizeForTile) and how
+	// long an arriving photograph is shown without its fade (see
+	// ItemThumbnail.warmUntil) — both the grid's business, passed through
+	thumbSize?: ThumbSize
+	warmUntil?: number
+	// A hovered live photo's motion clip (see useLiveHover): 'playing' under
+	// the pointer, 'ending' while it lingers out after the pointer has left.
+	// A primitive, not an object, so the memo around this tile holds.
+	live?: 'playing' | 'ending'
 	selected: boolean
 	selectable: boolean
 }) {
@@ -54,14 +69,15 @@ export const ItemTile = memo(function ItemTile({
 			aria-pressed={selectable ? selected : undefined}
 			className={tileClassByState[selected ? 'selected' : selectable ? 'selectable' : 'idle']}
 		>
-			<ItemThumbnail item={item} className='h-full w-full' />
+			<ItemThumbnail item={item} size={thumbSize} warmUntil={warmUntil} className='h-full w-full' />
+			{live && <LiveTileClip id={item.id} active={live === 'playing'} />}
 			{/* Badges only once the tile is big enough to carry them (see TileSlot's container).
 			    One corner shares them: 360° and duration can coexist on a video, Live is photos-only. */}
 			{(item.subKind === 'live' || item.subKind === 'spherical' || item.durationMs !== undefined) && (
 				<span className='absolute bottom-1.5 left-1.5 hidden items-center gap-1 @min-[88px]:flex'>
 					{item.subKind === 'live' && (
-						<span className='flex items-center rounded-full bg-black/55 p-1 text-white backdrop-blur-sm'>
-							<Sparkles className='size-2.5' fill='currentColor' strokeWidth={0} />
+						<span className='flex items-center rounded-full bg-black/55 p-[3px] text-white backdrop-blur-sm'>
+							<LivePhotoIcon className='size-3.5' />
 						</span>
 					)}
 					{item.subKind === 'spherical' && (
@@ -93,3 +109,55 @@ export const ItemTile = memo(function ItemTile({
 		</button>
 	)
 })
+
+// A clip that couldn't decode (Apple pairs are often HEVC) stays broken for
+// the session: a re-hover must not refetch it just to fail again
+const failedClips = new Set<string>()
+
+// The hovered live tile's motion clip, looping muted over the still. Only
+// ever one of these in the whole grid — the hover's single slot (see
+// useLiveHover) — so its video and fetch cost nothing until a tile is
+// actually dwelt on. Fades in only once frames render (`playing`), exactly
+// like the lightbox's LivePhoto: a clip the browser can't decode simply
+// leaves the still alone. Sound has no place here — hover is not a request
+// to hear anything, and unmuted play without a gesture is refused anyway;
+// the lightbox's sound toggle is where audio lives. The badges stay
+// mounted above it, so the LIVE mark rides the motion the way iOS keeps it.
+function LiveTileClip({id, active}: {id: string; active: boolean}) {
+	const url = useAuthorizedHttpUrl(itemLiveUrl(id))
+	const videoRef = useRef<HTMLVideoElement | null>(null)
+	const [showing, setShowing] = useState(false)
+	// Play follows `active`: the pointer resting (a pending play simply
+	// starts when enough has buffered), the linger pausing it to fade out
+	useEffect(() => {
+		const video = videoRef.current
+		if (!video) return
+		if (active) {
+			video.play().catch(() => {})
+		} else {
+			video.pause()
+			setShowing(false)
+		}
+	}, [active, url])
+	if (failedClips.has(id)) return null
+	return url ? (
+		<video
+			ref={videoRef}
+			src={url}
+			muted
+			playsInline
+			loop
+			preload='auto'
+			aria-hidden='true'
+			onPlaying={() => setShowing(true)}
+			onError={() => {
+				failedClips.add(id)
+				setShowing(false)
+			}}
+			className={cn(
+				'pointer-events-none absolute inset-0 h-full w-full object-cover transition-opacity ease-out motion-reduce:transition-none',
+				showing ? 'opacity-100 duration-200' : 'opacity-0 duration-200',
+			)}
+		/>
+	) : null
+}

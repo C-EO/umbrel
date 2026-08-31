@@ -5,7 +5,9 @@ import {ThumbnailSource} from '@/features/photos/components/listing/gpu/thumbnai
 import {createRenderer, type Frame, type TileRenderer} from '@/features/photos/components/listing/gpu/tile-renderer'
 import {itemAt} from '@/features/photos/components/listing/timeline-rows'
 import {itemThumbnailUrl} from '@/features/photos/hooks/use-items'
+import {withHttpApiToken} from '@/modules/auth/authorized-url'
 import {useHttpUrlAuthorizer} from '@/modules/auth/http-url-authorizer'
+import {trpcReact} from '@/trpc/trpc'
 
 // The canvas the grid draws its tiles on below the seam, and everything that
 // keeps it fed.
@@ -43,12 +45,13 @@ export function TileCanvas({
 	// One shared token for every URL the canvas asks for: a query observer per
 	// tile was once most of what a dense zoom stop cost
 	const authorize = useHttpUrlAuthorizer()
+	const utils = trpcReact.useUtils()
 	const [initialCell] = useState(cell)
 	const engine = useRef<{renderer: TileRenderer; source: ThumbnailSource} | null>(null)
 	// Read by the callbacks below, which are made once
-	const latest = useRef({authorize, onLost})
+	const latest = useRef({authorize, utils, onLost})
 	useLayoutEffect(() => {
-		latest.current = {authorize, onLost}
+		latest.current = {authorize, utils, onLost}
 	})
 	// The last frame drawn, so an arriving photograph can be shown without the
 	// grid being asked for one
@@ -82,12 +85,17 @@ export function TileCanvas({
 			return
 		}
 		// The mosaic's rendition is the 192: its cells never exceed 128 device
-		// px, and the URL is derived from the id, so every item's is known.
-		// `generate` remains only as the retry path for a token that wasn't
-		// minted yet when `known` was first asked.
+		// px, and the URL is derived from the id, so every item's is known the
+		// moment there is a token to sign it with. On a hard refresh the canvas
+		// can outrun that token's first fetch, and `known` comes back empty —
+		// not because the thumbnail is missing, but because nothing can be
+		// signed yet. So `generate` makes no thumbnail here: it waits out the
+		// shared token query and signs the URL itself. A token fetch that
+		// fails, fails like any fetch — and `reauthorized` below asks again.
 		const source = new ThumbnailSource({
 			known: (item) => latest.current.authorize(itemThumbnailUrl(item.id, 192)),
-			generate: async (item) => latest.current.authorize(itemThumbnailUrl(item.id, 192)),
+			generate: async (item) =>
+				withHttpApiToken(itemThumbnailUrl(item.id, 192), await latest.current.utils.user.getHttpApiToken.ensureData()),
 			cell: () => renderer.cell,
 			holds: renderer.holds,
 			deliver: (index, id, bitmap) => {
@@ -121,6 +129,13 @@ export function TileCanvas({
 		// drag. Nothing the renderer reads changes while the shape holds — the
 		// floor is the grid's business, not the atlas's.
 	}, [plan.side, plan.layers, initialCell])
+
+	// Authorization is the one input the walk cannot see move: a token that
+	// arrives, rotates, or comes back after failing re-signs every URL, so
+	// whatever failed under the old one deserves another ask
+	useEffect(() => {
+		engine.current?.source.reauthorized()
+	}, [authorize])
 
 	useImperativeHandle(ref, () => ({
 		draw(frame, racing) {

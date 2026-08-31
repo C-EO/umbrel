@@ -99,6 +99,11 @@ export type ZoomFrame = {
 	// Whether the zoom is still moving. The last frame of a gesture is the
 	// first with this false: that is where the grid commits.
 	live: boolean
+	// The scale of a lean past a stop: 1 inside the range, above it past min,
+	// below it past max. The mosaic draws a lean as layout — `columns` is
+	// simply past the stop — but the DOM commits whole stops only, so this is
+	// the scale it shows about the focal point instead.
+	overshoot: number
 	// Where to zoom about, in the scroller's viewport px, when a pointer or a
 	// pinch's midpoint set it; null leaves the grid its own focal point
 	focal: {x: number; y: number} | null
@@ -214,6 +219,7 @@ export class ZoomGesture {
 		return {
 			columns: this.#columns,
 			live: this.live,
+			overshoot: this.#columns > 0 ? this.#clamped() / this.#columns : 1,
 			focal: this.#focal,
 			pan: this.#pan,
 			racing: this.live && this.#rate.racing,

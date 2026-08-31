@@ -8,7 +8,6 @@ import {
 	Image,
 	RectangleHorizontal,
 	ScanLine,
-	Sparkles,
 	Trash2,
 	Video,
 	type LucideIcon,
@@ -23,6 +22,7 @@ import {Button} from '@/components/ui/button'
 import {ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger} from '@/components/ui/context-menu'
 import {contextMenuClasses} from '@/components/ui/shared/menu'
 import {AlbumCard} from '@/features/photos/components/albums/album-card'
+import {LivePhotoIcon} from '@/features/photos/components/live-photo-icon'
 import {usePhotosSelection} from '@/features/photos/components/selection-context'
 import {SidebarItem} from '@/features/photos/components/sidebar/sidebar-item'
 import {SourceItem} from '@/features/photos/components/sidebar/source-item'
@@ -35,7 +35,7 @@ import {usePhotoSources, type PhotoSource} from '@/features/photos/hooks/use-pho
 import {cn} from '@/lib/utils'
 import {useLinkToDialog} from '@/utils/dialog'
 
-type Item = {section: PhotosSection; label: string; icon: LucideIcon}
+type Item = {section: PhotosSection; label: string; icon: LucideIcon | typeof LivePhotoIcon}
 
 export function Sidebar({className}: {className?: string}) {
 	const {t} = useTranslation()
@@ -61,7 +61,7 @@ export function Sidebar({className}: {className?: string}) {
 	const utilityItems: Item[] = [
 		// {section: 'people', label: t('photos-sidebar.people'), icon: Users},
 		// {section: 'locations', label: t('photos-sidebar.locations'), icon: MapPin},
-		{section: 'live-photos', label: t('photos-sidebar.live-photos'), icon: Sparkles},
+		{section: 'live-photos', label: t('photos-sidebar.live-photos'), icon: LivePhotoIcon},
 		{section: 'panoramas', label: t('photos-sidebar.panoramas'), icon: RectangleHorizontal},
 		{section: 'screenshots', label: t('photos-sidebar.screenshots'), icon: ScanLine},
 		{section: '360', label: t('photos-sidebar.spherical'), icon: Globe},
@@ -121,10 +121,10 @@ export function Sidebar({className}: {className?: string}) {
 				<div className='h-4' />
 				<PhoneBackupCard />
 
-				<SidebarDivider />
+				<div className='h-4' />
 				<SidebarSection label={t('photos-sidebar.utilities')}>{utilityItems.map(renderItem)}</SidebarSection>
 
-				<div className='h-4' />
+				<SidebarDivider />
 				<AlbumsSection isActive={pathname === sectionPath('albums')} onClick={() => navigate(sectionPath('albums'))} />
 
 				{/* Spacer */}
@@ -151,7 +151,15 @@ function PhoneBackupCard() {
 				<img src='/assets/photos/phone-backup.webp' alt='' className='w-full' draggable={false} />
 			</div>
 			<div className='flex flex-col gap-1'>
-				<div className='text-15 leading-tight font-semibold text-white/90'>{t('photos-phone-backup.title')}</div>
+				<div className='text-15 leading-tight font-semibold text-white/90'>
+					{t('photos-phone-backup.title')}{' '}
+					<img
+						src='/assets/photos/magic-sparkles.webp'
+						alt=''
+						className='inline-block h-auto w-4 align-[-0.125em]'
+						draggable={false}
+					/>
+				</div>
 				<div className='text-12 leading-snug text-white/50'>{t('photos-phone-backup.description')}</div>
 			</div>
 			<div className='flex flex-wrap gap-2'>

@@ -1,4 +1,4 @@
-import {Check, Download, FolderMinus, FolderPlus, Heart, Plus, RotateCcw, Trash2} from 'lucide-react'
+import {Album, Check, CircleMinus, Download, Heart, Plus, RotateCcw, Trash2} from 'lucide-react'
 import {useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useNavigate, useParams} from 'react-router-dom'
@@ -25,8 +25,8 @@ import {useBreakpoint} from '@/utils/tw'
 
 // What the actions bar offers while items are selected: add to an album (in
 // an album: remove from it), favorite, download, delete — or in Deleted,
-// restore and delete for good — and Done. Deleting asks first; the
-// rest just happen. Actions that leave the items in place (favorite,
+// restore and delete for good — and Done. Deleting for good asks first;
+// the rest just happen. Actions that leave the items in place (favorite,
 // download) keep the selection — Done ends it — while the others end it
 // themselves. Below xl the actions share one pill as icons with tooltips
 // (with labels they only just fit a 1100px window, and not a 1024px one,
@@ -73,21 +73,7 @@ export function SelectionActions({inDeleted}: {inDeleted: boolean}) {
 			})
 			.catch(failed)
 	const removeFromThisAlbum = () => removeFromAlbum({id: albumId!, ids: list()}).then(done).catch(failed)
-	const remove = async () => {
-		const ok = await confirm({
-			title: t('photos-selection.delete-title', {count, formattedCount}),
-			message: t('photos-selection.delete-message', {count}),
-			actions: [
-				{label: t('photos-item.delete'), value: 'delete', variant: 'destructive'},
-				{label: t('cancel'), value: 'cancel', variant: 'default'},
-			],
-		}).then(
-			(result) => result.actionValue === 'delete',
-			() => false,
-		)
-		if (!ok) return
-		deleteItems({ids: list()}).then(done).catch(failed)
-	}
+	const remove = () => deleteItems({ids: list()}).then(done).catch(failed)
 	const restore = () => restoreItems({ids: list()}).then(done).catch(failed)
 	const purge = async () => {
 		const ok = await confirm({
@@ -127,7 +113,7 @@ export function SelectionActions({inDeleted}: {inDeleted: boolean}) {
 		<>
 			{albumId ? (
 				<ActionPill
-					icon={FolderMinus}
+					icon={CircleMinus}
 					label={t('photos-item.remove-from-album')}
 					iconOnly={iconOnly}
 					disabled={none}
@@ -136,7 +122,7 @@ export function SelectionActions({inDeleted}: {inDeleted: boolean}) {
 			) : (
 				<DropdownMenu>
 					<DropdownMenuTrigger asChild>
-						<ActionPill icon={FolderPlus} label={t('photos-item.add-to-album')} iconOnly={iconOnly} disabled={none} />
+						<ActionPill icon={Album} label={t('photos-item.add-to-album')} iconOnly={iconOnly} disabled={none} />
 					</DropdownMenuTrigger>
 					<DropdownMenuContent align='end'>
 						<DropdownMenuItem onSelect={() => navigate(linkToDialog('photos-create-album'))}>

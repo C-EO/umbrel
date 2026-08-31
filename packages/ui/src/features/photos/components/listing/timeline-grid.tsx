@@ -13,7 +13,9 @@ import {
 	noteContextLoss,
 	webgl2Limits,
 } from '@/features/photos/components/listing/gpu/capability'
+import {thumbSizeForTile} from '@/features/photos/components/listing/item-thumbnail'
 import {ItemTile} from '@/features/photos/components/listing/item-tile'
+import {LIVE_MIN_TILE, useLiveHover} from '@/features/photos/components/listing/live-hover'
 import {useMarquee} from '@/features/photos/components/listing/marquee'
 import {attachPinch} from '@/features/photos/components/listing/pinch'
 import {ReflowMotion} from '@/features/photos/components/listing/reflow-motion'
@@ -49,7 +51,7 @@ import {
 import {ZoomGesture} from '@/features/photos/components/listing/zoom-gesture'
 import {usePhotosSelection} from '@/features/photos/components/selection-context'
 import {usePhotosView} from '@/features/photos/components/view-context'
-import type {Item} from '@/features/photos/hooks/use-items'
+import type {Item, ThumbSize} from '@/features/photos/hooks/use-items'
 import {useContainerSize} from '@/hooks/use-container-size'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useDockClearance} from '@/modules/desktop/dock'
@@ -77,6 +79,13 @@ const REFLOW_MIN_MS = 90
 // A tile entering the window flies in from its previous place unless that is
 // further away than this many viewports — then it just appears
 const MAX_FLIGHT_VIEWPORTS = 1.5
+// For this long after the commit that carries the grid up over the GPU seam,
+// tiles show their photographs the moment they load instead of fading in from
+// tint: the canvas was just drawing the same 192s, so the loads are cache
+// hits, and pixels that were on screen a breath ago must not flash back
+// through their colour on the way in. Long enough for a bandful of cache
+// reads on a slow disk; a load past it is a genuine arrival and fades.
+const SEAM_WARM_MS = 1500
 
 // What the DOM shows: a layout, the rows mounted from it and the scroll
 // position it was committed at. Adopted whole (see below), never piecemeal.
@@ -92,6 +101,11 @@ type View = {
 	animate: boolean
 	// Whether the tiles are drawn by the canvas rather than by elements
 	gpu: boolean
+	// Until when a tile's photograph is shown without its fade-in (see
+	// SEAM_WARM_MS): set by the commit that crosses up over the seam, zero
+	// everywhere else. An absolute time, so it expires on its own however
+	// long the view is scrolled without a reflow.
+	warmUntil: number
 }
 
 type Slot = {item: Item; x: number; y: number; size: number}
@@ -301,6 +315,7 @@ export function TimelineGrid({
 			scrollTop,
 			animate: view !== null && view.width === width && !reduceMotion,
 			gpu,
+			warmUntil: view?.gpu && !gpu ? now + SEAM_WARM_MS : 0,
 		})
 	}, [layout, width, height, endSpacer, view, reduceMotion, gpu, attempt])
 
@@ -322,7 +337,18 @@ export function TimelineGrid({
 	}, [gesture])
 
 	const slots = useMemo(() => (view && !view.gpu ? slotsFor(view) : []), [view])
+	// The rendition the mounted tiles want, from the device pixels each covers.
+	// Near the seam that is the 192 the canvas draws its cells from, so a
+	// crossing in either direction finds every visible thumbnail already in
+	// the browser's cache and refetches nothing.
+	const thumbSize: ThumbSize = view ? thumbSizeForTile(view.layout.tile * dpr) : 512
 	const itemById = useMemo(() => new Map(slots.map((slot) => [slot.item.id, slot.item])), [slots])
+	// A rested-on live tile plays its clip (mouse hover, DOM tiles only — the
+	// canvas's tiles are below LIVE_MIN_TILE by definition): see useLiveHover
+	const liveHover = useLiveHover({
+		enabled: !reduceMotion && view !== null && !view.gpu && view.layout.tile >= LIVE_MIN_TILE,
+		isLive: (id) => itemById.get(id)?.subKind === 'live',
+	})
 	// Headers in the window, less the current section's — its title is in the bar
 	const headers = useMemo(
 		() => (view ? headersFor(view).filter((header) => header.key !== current?.key) : []),
@@ -536,7 +562,9 @@ export function TimelineGrid({
 			}
 			focalRef.current = moved.focal
 			if (moved.focal) eyeRef.current = moved.focal
-			const whole = Math.round(moved.columns)
+			// The stop this frame may commit: a lean past either end is drawn
+			// (below), never committed
+			const whole = Math.round(Math.min(gesture.range.max, Math.max(gesture.range.min, moved.columns)))
 			const committed = viewRef.current
 			if (committed?.gpu && scroller && moved.live && tileSizeFor(width, whole) < bounds.min) {
 				const low = Math.floor(moved.columns)
@@ -561,6 +589,23 @@ export function TimelineGrid({
 				// crossing the seam), restoring here would snap the grid back to
 				// the mosaic and poison the flight the commit springs from.
 				restore(committed, scroller)
+			}
+			// Past the last stop the mosaic leans as layout — the blend above
+			// simply draws beyond the end — but the DOM commits whole stops
+			// only, so it leans as a scale about the fingers instead: the grid
+			// tries to grow past the limit and can't quite, and the release
+			// spring carries it home. Visual only — no reflow and no scroll
+			// geometry — so a frame of it costs a compositor transform.
+			const content = contentRef.current
+			if (content && !committed?.gpu) {
+				if (moved.overshoot !== 1 && scroller) {
+					const focal = moved.focal ?? {x: width / 2, y: height / 2}
+					content.style.transformOrigin = `${focal.x}px ${scroller.scrollTop + focal.y}px`
+					content.style.transform = `scale(${moved.overshoot})`
+				} else if (content.style.transform) {
+					content.style.transform = ''
+					content.style.transformOrigin = ''
+				}
 			}
 			for (const listener of zoomListeners) listener()
 			if (moved.live) pump()
@@ -826,6 +871,11 @@ export function TimelineGrid({
 			frame={frame}
 			onScroll={onScroll}
 			{...marquee.handlers}
+			// While a cover is being chosen a drag has nothing to select — the
+			// mode takes single clicks only — so no marquee session starts
+			onPointerDown={(event) => {
+				if (!selection.coveringFor) marquee.handlers.onPointerDown(event)
+			}}
 			onPointerMove={(event) => {
 				marquee.handlers.onPointerMove(event)
 				trackHover(event)
@@ -836,6 +886,7 @@ export function TimelineGrid({
 				<div
 					ref={contentRef}
 					className='relative select-none'
+					{...liveHover.handlers}
 					// Corner radius follows the tile size, like the gap (see tileRadius)
 					style={{
 						height: view.layout.total + endSpacer,
@@ -875,6 +926,9 @@ export function TimelineGrid({
 									x={x}
 									y={y}
 									size={size}
+									thumbSize={thumbSize}
+									warmUntil={view.warmUntil}
+									live={liveHover.clip?.id === item.id ? (liveHover.clip.active ? 'playing' : 'ending') : undefined}
 									registry={tileEls}
 									selected={selectedIds.has(item.id)}
 									selectable={selection.selecting}
@@ -964,6 +1018,9 @@ const TileSlot = memo(function TileSlot({
 	x,
 	y,
 	size,
+	thumbSize,
+	warmUntil,
+	live,
 	registry,
 	selected,
 	selectable,
@@ -972,6 +1029,9 @@ const TileSlot = memo(function TileSlot({
 	x: number
 	y: number
 	size: number
+	thumbSize: ThumbSize
+	warmUntil: number
+	live?: 'playing' | 'ending'
 	registry: Map<string, HTMLElement>
 	selected: boolean
 	selectable: boolean
@@ -982,7 +1042,14 @@ const TileSlot = memo(function TileSlot({
 		// for them without being told its size. Compositing is the motion
 		// loop's business, and only while the tile is in flight.
 		<div ref={ref} className='@container absolute origin-top-left' style={{left: x, top: y, width: size, height: size}}>
-			<ItemTile item={item} selected={selected} selectable={selectable} />
+			<ItemTile
+				item={item}
+				thumbSize={thumbSize}
+				warmUntil={warmUntil}
+				live={live}
+				selected={selected}
+				selectable={selectable}
+			/>
 		</div>
 	)
 })

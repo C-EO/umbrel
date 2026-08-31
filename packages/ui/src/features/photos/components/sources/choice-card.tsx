@@ -37,7 +37,7 @@ export function ChoiceCard({
 			aria-pressed={selected}
 			className={cn(
 				'group flex flex-1 items-center gap-3.5 rounded-xl border p-3 text-left transition-colors disabled:opacity-60',
-				selected ? 'border-brand bg-brand/15' : 'border-white/10 bg-white/5 enabled:hover:bg-white/10',
+				selected ? 'border-brand bg-brand/15' : 'border-white/8 bg-white/5 enabled:hover:bg-white/10',
 			)}
 		>
 			{art}

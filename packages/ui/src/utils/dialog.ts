@@ -24,7 +24,12 @@ export type FilesDialogKey =
 	| 'files-add-network-share'
 	| 'files-format-drive'
 	| 'files-cloud-add'
-export type PhotosDialogKey = 'photos-source' | 'photos-add-source' | 'photos-item' | 'photos-create-album'
+export type PhotosDialogKey =
+	| 'photos-source'
+	| 'photos-add-source'
+	| 'photos-item'
+	| 'photos-create-album'
+	| 'photos-rename-album'
 export type DialogKey = GlobalDialogKey | AppStoreDialogKey | SettingsDialogKey | FilesDialogKey | PhotosDialogKey
 
 // TODO: make dialog query params typesafe

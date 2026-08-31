@@ -18,6 +18,8 @@ export type ThumbSize = 192 | 512 | 1280
 export const itemThumbnailUrl = (id: string, size: ThumbSize) => `/api/photos/thumb/${encodeURIComponent(id)}?s=${size}`
 export const itemOriginalUrl = (id: string, {download = false} = {}) =>
 	`/api/photos/original/${encodeURIComponent(id)}${download ? '?download' : ''}`
+// A live pair's motion clip — only answers for items with subKind 'live'
+export const itemLiveUrl = (id: string) => `/api/photos/live/${encodeURIComponent(id)}`
 export const itemsDownloadUrl = (ticket: string) => `/api/photos/download?ticket=${encodeURIComponent(ticket)}`
 
 // tRPC's query-key prefix for every photos.items.list query (any filter, any cursor)

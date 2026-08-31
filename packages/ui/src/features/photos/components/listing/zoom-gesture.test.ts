@@ -140,6 +140,32 @@ describe('ZoomGesture', () => {
 		expect(leaning.columns).toBe(24)
 	})
 
+	it('reports a lean past the near stop as the scale the stop denies', () => {
+		const zoom = gesture()
+		zoom.begin({x: 100, y: 200})
+		zoom.scale(2) // exactly at the near stop: 3 columns
+		expect(zoom.advance(FRAME, 16).overshoot).toBe(1)
+		zoom.scale(4) // well past it
+		const leaning = zoom.advance(FRAME, 32)
+		expect(leaning.overshoot).toBeGreaterThan(1)
+		expect(leaning.overshoot).toBeLessThan(1.42)
+		// … which is how much bigger tiles at the leant count would be
+		expect(leaning.overshoot).toBeCloseTo(3 / zoom.columns, 6)
+		zoom.release(true)
+		const frames = settle(zoom, 32)
+		expect(frames.at(-1)!.overshoot).toBe(1)
+		expect(zoom.columns).toBe(3)
+	})
+
+	it('… and below one past the far end, where the grid would shrink', () => {
+		const zoom = gesture()
+		zoom.begin(null)
+		zoom.scale(0.05) // way past 24 columns
+		const leaning = zoom.advance(FRAME, 16)
+		expect(leaning.overshoot).toBeLessThan(1)
+		expect(leaning.overshoot).toBeGreaterThan(1 / 1.42)
+	})
+
 	it('commits at once with reduced motion, and draws no spring frames', () => {
 		const zoom = gesture()
 		zoom.begin(null)

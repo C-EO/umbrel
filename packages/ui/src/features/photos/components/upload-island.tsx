@@ -47,19 +47,16 @@ export function PhotosUploadIsland() {
 	)
 }
 
-// "2 / 20,000 added", numbers in the viewer's locale — and what the server
-// already had: "· 3 already in your library"
-function useAddedText(done: number, total: number, duplicates: number) {
+// "2 / 20,000 added", numbers in the viewer's locale
+function useAddedText(done: number, total: number) {
 	const {t, i18n} = useTranslation()
 	const format = (n: number) => formatNumberI18n({n, showDecimals: false, locale: i18n.language})
-	const added = t('photos-upload.added', {done: format(done), total: format(total)})
-	if (duplicates === 0) return added
-	return `${added} · ${t('photos-upload.duplicates', {count: duplicates, formattedCount: format(duplicates)})}`
+	return t('photos-upload.added', {done: format(done), total: format(total)})
 }
 
 function MinimizedContent() {
-	const {status, done, total, duplicates, progress, etaSeconds} = usePhotosUploads()
-	const addedText = useAddedText(done, total, duplicates)
+	const {status, done, total, progress, etaSeconds} = usePhotosUploads()
+	const addedText = useAddedText(done, total)
 
 	return (
 		<div className='flex h-full w-full items-center gap-2 px-2'>
@@ -82,8 +79,8 @@ function MinimizedContent() {
 
 function ExpandedContent() {
 	const {t} = useTranslation()
-	const {status, done, total, duplicates, progress, currentPreview, speed, etaSeconds} = usePhotosUploads()
-	const addedText = useAddedText(done, total, duplicates)
+	const {status, done, total, progress, currentPreview, speed, etaSeconds} = usePhotosUploads()
+	const addedText = useAddedText(done, total)
 	const paused = status === 'paused'
 	const percent = progress * 100
 	const wire = !paused && speed !== undefined && etaSeconds !== undefined

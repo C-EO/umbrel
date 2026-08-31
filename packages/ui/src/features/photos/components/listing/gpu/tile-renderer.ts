@@ -21,13 +21,24 @@ import {bandFor, cellForBand, GPU_OVERSCAN, type AtlasPlan} from '@/features/pho
 import {rectOf, tileRadius, type Layout} from '@/features/photos/components/listing/timeline-rows'
 
 // Tint → photograph, ease-out. Never while a gesture is live (a fade over a
-// moving grid reads as flicker), and never when a photo replaces a coarser
-// version of itself — that is a sharpening, and it should be instant.
+// moving grid reads as flicker), never when a photo replaces a coarser
+// version of itself — that is a sharpening, and it should be instant — and
+// never in the canvas's first moments (WARM_MS below).
 const FADE_MS = 180
-// Uploads are the one main-thread cost in the pipeline that can drop a frame:
-// four cells is a few tenths of a millisecond at 32px and a couple of
-// milliseconds at 256px
-const UPLOAD_PER_FRAME = 4
+// A canvas this young is filling in after the seam crossing or a remount:
+// what arrives now was on screen a breath ago — the DOM tiles nearest the
+// seam draw the same 192 rendition, so the fetches are cache hits — and
+// fading it in from tint would read as the grid flashing. Past this, an
+// arrival is a genuine arrival and gets its fade.
+const WARM_MS = 800
+// Uploads are the one main-thread cost in the pipeline that can drop a frame.
+// While a gesture owns the grid they are strictly rationed — four cells is a
+// few tenths of a millisecond at 32px and a couple of milliseconds at 256px —
+// but a settled frame spends a measured slice instead: a warm seam crossing
+// delivers a bandful in one burst, and four a frame would hold the mosaic in
+// tint for a second while the pixels sat decoded in the queue.
+const UPLOAD_PER_FRAME_LIVE = 4
+const UPLOAD_BUDGET_MS = 3
 // Floats per instance: x, y, size, radius | slot, tint, flags, fade
 const STRIDE = 8
 // A cell with no colour of its own yet, matching the DOM tile's `bg-white/6`
@@ -159,6 +170,8 @@ export function createRenderer(canvas: HTMLCanvasElement, plan: AtlasPlan, cell:
 	if (!program) return null
 
 	const atlas = new Atlas(gl, plan, cell)
+	// When this canvas came to be, for the warm window above
+	const born = performance.now()
 	const buffer = gl.createBuffer()!
 	const vao = gl.createVertexArray()!
 	gl.bindVertexArray(vao)
@@ -224,18 +237,21 @@ export function createRenderer(canvas: HTMLCanvasElement, plan: AtlasPlan, cell:
 		return dpr
 	}
 
-	function upload(frame: Frame, now: number) {
-		let budget = UPLOAD_PER_FRAME
+	function upload(frame: Frame, now: number, everything = false) {
+		const deadline = performance.now() + UPLOAD_BUDGET_MS
+		let budget = UPLOAD_PER_FRAME_LIVE
 		for (const [id, {index, bitmap}] of waiting) {
-			if (budget-- <= 0) break
+			if (!everything && (frame.settled ? performance.now() >= deadline : budget-- <= 0)) break
 			waiting.delete(id)
 			// Decoded for a cell size the atlas has since left behind: drop it
 			// and let the scheduler ask again at the size that is wanted now
 			if (bitmap.width === atlas.cell) {
-				atlas.put(index, id, bitmap)
 				const slot = atlas.slotOf(index)
-				atlas.resident[slot] = id
-				arrivedAt[slot] = frame.settled && frame.animate ? now : 0
+				// The same photograph coming back sharper — shown stretched
+				// since a re-tier — swaps in place, with no fade
+				const sharpening = atlas.resident[slot] === id
+				atlas.put(index, id, bitmap)
+				arrivedAt[slot] = !sharpening && frame.settled && frame.animate && now - born >= WARM_MS ? now : 0
 			}
 			bitmap.close()
 		}
@@ -295,6 +311,15 @@ export function createRenderer(canvas: HTMLCanvasElement, plan: AtlasPlan, cell:
 				readBrand()
 				const want = cellForBand(frame.layout.tile, dpr, plan, bandFor(frame.viewport))
 				if (want !== atlas.cell) {
+					// Everything already decoded for the cell being left goes
+					// aboard first, whatever this one frame costs: the re-tier
+					// carries it, where dropping it would leave holes that
+					// nothing refills at the floor — tiles there are below
+					// FETCH_MIN_DEVICE_PX, and the scheduler, rightly, will
+					// not spend the network on them. A fast descent can leave
+					// a bandful decoded but not yet up; this is the one moment
+					// the per-frame budget must not apply to it.
+					upload(frame, now, true)
 					atlas.retier(want, frame.items, (index) => frame.layout.items[index]?.id)
 					arrivedAt = new Float64Array(atlas.slots)
 				}
