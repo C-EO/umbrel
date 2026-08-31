@@ -1,4 +1,4 @@
-import {ReactNode} from 'react'
+import {Fragment, ReactNode} from 'react'
 import {useTranslation} from 'react-i18next'
 
 import {LOADING_DASH, UNKNOWN} from '@/constants'
@@ -15,7 +15,17 @@ export function SettingsSummary({className}: {className?: string}) {
 	const uptimeQ = trpcReact.system.uptime.useQuery()
 	const ipAddresses = trpcReact.system.getIpAddresses.useQuery()
 	const localIpValue = ipAddresses.data?.length ? (
-		<span className='break-all whitespace-normal select-text'>{ipAddresses.data.join(', ')}</span>
+		<span className='whitespace-normal select-text'>
+			{ipAddresses.data.map((ipAddress, index) => (
+				<Fragment key={ipAddress}>
+					{index > 0 && ' '}
+					<span className='whitespace-nowrap'>
+						{ipAddress}
+						{index < ipAddresses.data.length - 1 && ','}
+					</span>
+				</Fragment>
+			))}
+		</span>
 	) : (
 		LOADING_DASH
 	)
@@ -36,7 +46,7 @@ export function SettingsSummary({className}: {className?: string}) {
 function SummaryRow({label, value}: {label: string; value: ReactNode}) {
 	return (
 		<div className='flex min-h-[46px] items-center justify-between gap-4 border-b border-white/8 px-5 last:border-b-0'>
-			<dt className='font-semibold text-white/45'>{label}</dt>
+			<dt className='shrink-0 font-semibold whitespace-nowrap text-white/45'>{label}</dt>
 			<dd className='min-w-0 truncate text-right font-medium text-white'>{value}</dd>
 		</div>
 	)
