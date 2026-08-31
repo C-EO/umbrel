@@ -108,6 +108,11 @@ type RecoveredTrashClaim = {
 	manifestSystemPath: string
 }
 
+type PublishedRevisionClaim = {
+	claimSystemPath: string
+	manifestSystemPath: string
+}
+
 const TRASH_CLAIM_SUFFIX = '.umbrel-trash'
 const TRASH_CLAIM_MANIFEST_SUFFIX = `.json${TRASH_CLAIM_SUFFIX}`
 const MAX_TRASH_CLAIM_MANIFEST_BYTES = 16 * 1024
@@ -248,6 +253,9 @@ export default class Files {
 		for (const {virtualPath} of memberRoots) await this.watcher.addPath(virtualPath)
 
 		await this.fileIndex.start()
+		void this.recoverTrashClaims().catch((error) =>
+			this.logger.error('Failed to recover interrupted revision-checked file operations', error),
+		)
 
 		// Start submodules
 		await this.watcher.start().catch((error) => this.logger.error(`Failed to start watcher`, error))
@@ -1160,52 +1168,11 @@ export default class Files {
 		const trashSystemRoot = await this.virtualToSystemPath(this.trashRootForUser(userId), userId)
 		const trashSystemPath = await nodePath.join(trashSystemRoot, nodePath.basename(systemPath))
 		let claimedSystemPath = systemPath
-		let quarantineSystemPath: string | undefined
-		let claimManifestSystemPath: string | undefined
+		let revisionClaim: PublishedRevisionClaim | undefined
 
 		if (expectedRevision) {
-			// A stopped earlier attempt may have left its atomically-claimed entry
-			// hidden beside this path. Recover it before starting another claim; the
-			// caller retries after the index observes the restored pathname.
-			const recoveredClaim = await this.#recoverTrashClaim(systemPath, userId)
-			if (recoveredClaim) {
-				await this.#finishTrashClaimRecovery(recoveredClaim)
-				throw new Error('[trash-claim-recovered]')
-			}
-
-			// Atomically take this directory entry out of the visible/Photos namespace,
-			// then inspect the object we actually claimed. A check followed by a
-			// separate rename can trash a replacement installed between those calls.
-			// The internal suffix is ignored by Files and the index, so a coalesced
-			// watcher batch cannot treat the temporary name as a Photos rename.
-			const claimDirectory = nodePath.dirname(systemPath)
-			const claimPaths = trashClaimPaths(systemPath)
-			quarantineSystemPath = claimPaths.claimSystemPath
-			claimManifestSystemPath = claimPaths.manifestSystemPath
-			await this.#writeTrashClaimManifest(claimManifestSystemPath, {
-				version: 1,
-				originalSystemPath: systemPath,
-				revision: expectedRevision,
-			})
-			await rename(systemPath, quarantineSystemPath).catch(async (error) => {
-				await this.#removeTrashClaimManifest(claimManifestSystemPath!).catch((cleanupError) =>
-					this.logger.error(`Failed to remove unused trash claim '${claimManifestSystemPath}'`, cleanupError),
-				)
-				if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('[source-not-exists]')
-				throw error
-			})
-			claimedSystemPath = quarantineSystemPath
-			await this.#syncDirectory(claimDirectory).catch(async (error) => {
-				await this.#restoreQuarantinedTrashSource(quarantineSystemPath!, systemPath)
-				await this.#removeTrashClaimManifest(claimManifestSystemPath!)
-				throw error
-			})
-			const stats = await lstat(claimedSystemPath, {bigint: true}).catch(() => undefined)
-			if (!matchesPublishedRevision(stats, expectedRevision)) {
-				await this.#restoreQuarantinedTrashSource(quarantineSystemPath, systemPath)
-				await this.#removeTrashClaimManifest(claimManifestSystemPath)
-				throw new Error('[source-changed]')
-			}
+			revisionClaim = await this.#claimPublishedRevision(systemPath, userId, expectedRevision)
+			claimedSystemPath = revisionClaim.claimSystemPath
 		}
 
 		// Retry on error to work around collision race condition
@@ -1229,14 +1196,14 @@ export default class Files {
 				},
 			)
 		} catch (error) {
-			if (quarantineSystemPath && (await fse.pathExists(quarantineSystemPath))) {
-				await this.#restoreQuarantinedTrashSource(quarantineSystemPath, systemPath)
+			if (revisionClaim && (await fse.pathExists(revisionClaim.claimSystemPath))) {
+				await this.#restoreQuarantinedTrashSource(revisionClaim.claimSystemPath, systemPath)
 			}
-			if (claimManifestSystemPath) await this.#removeTrashClaimManifest(claimManifestSystemPath)
+			if (revisionClaim) await this.#removeTrashClaimManifest(revisionClaim.manifestSystemPath)
 			throw error
 		}
-		if (claimManifestSystemPath) await this.#syncDirectory(trashSystemRoot)
-		if (claimManifestSystemPath) await this.#removeTrashClaimManifest(claimManifestSystemPath)
+		if (revisionClaim) await this.#syncDirectory(trashSystemRoot)
+		if (revisionClaim) await this.#removeTrashClaimManifest(revisionClaim.manifestSystemPath)
 		// Write the meta data for the trashed file or directory
 		// TODO: Migrate this to SQLite
 		const trashMetaDirectory = this.trashMetaDirectoryForUser(userId)
@@ -1246,15 +1213,16 @@ export default class Files {
 
 		await this.memberShares.removeWithin(virtualPath)
 		await this.#umbreld.mcp.removeFileGrantsWithin(virtualPath)
-		this.#updateFileIndex(`trash '${systemPath}' as '${uniqueTrashSystemPath}'`, () =>
+		const indexUpdate = this.#updateFileIndex(`trash '${systemPath}' as '${uniqueTrashSystemPath}'`, () =>
 			this.fileIndex.movePath(systemPath, uniqueTrashSystemPath),
 		)
+		if (expectedRevision) await indexUpdate
 
 		// Return the virtual path of the trashed file or directory
 		return this.systemToVirtualPath(uniqueTrashSystemPath)
 	}
 
-	// Recover a revision claim left by a stopped permanent Photos deletion. The
+	// Recover a revision claim left by a stopped revision-checked trash move. The
 	// journal is scoped to the authorized source directory and restoration uses
 	// link() so it can never replace a newer pathname.
 	async recoverTrashClaim(virtualPath: string, userId: string = OWNER_USER_ID) {
@@ -1268,6 +1236,84 @@ export default class Files {
 				return true
 			})) ?? false
 		)
+	}
+
+	// Recover every interrupted revision claim in a boot-time background sweep. Claims can
+	// be left in Home by a Photos delete or in Trash by a Photos permanent delete;
+	// scanning both account-owned roots makes the journal useful after a reboot,
+	// not only when an operation happens to retry the same visible pathname.
+	async recoverTrashClaims() {
+		const memberRoots = (await this.#umbreld.user.listMembers()).flatMap(({id}) => this.#memberIndexRoots(id))
+		const roots = [...this.#staticIndexRoots(), ...memberRoots].filter(
+			(root) => root.kind === 'home' || root.kind === 'trash',
+		)
+		for (const root of roots) {
+			for await (const manifestSystemPath of walkTrashClaimManifests(root.systemPath)) {
+				await this.#trashClaimQueue.add(async () => {
+					const manifest = await this.#readTrashClaimManifest(manifestSystemPath)
+					if (!manifest) {
+						if (await fse.pathExists(manifestSystemPath)) {
+							this.logger.error(`Ignoring invalid trash claim manifest '${manifestSystemPath}'`)
+						}
+						return
+					}
+					if (
+						!isPathInsideOrEqual(root.systemPath, manifest.originalSystemPath) ||
+						trashClaimPaths(manifest.originalSystemPath).manifestSystemPath !== manifestSystemPath
+					) {
+						this.logger.error(`Ignoring invalid trash claim manifest '${manifestSystemPath}'`)
+						return
+					}
+					const recovered = await this.#recoverTrashClaim(manifest.originalSystemPath, root.ownerId)
+					if (recovered) await this.#finishTrashClaimRecovery(recovered)
+				})
+			}
+		}
+	}
+
+	async #claimPublishedRevision(
+		systemPath: string,
+		userId: string,
+		expectedRevision: PublishedFileRevision,
+	): Promise<PublishedRevisionClaim> {
+		// A stopped earlier attempt may have left its atomically-claimed entry
+		// hidden beside this path. Recover it before starting another claim; the
+		// caller retries after the index observes the restored pathname.
+		const recoveredClaim = await this.#recoverTrashClaim(systemPath, userId)
+		if (recoveredClaim) {
+			await this.#finishTrashClaimRecovery(recoveredClaim)
+			throw new Error('[trash-claim-recovered]')
+		}
+
+		// Atomically take this directory entry out of the visible namespace, then
+		// inspect the object we actually claimed. A check followed by a separate
+		// move or unlink could act on a replacement installed between those calls.
+		const claimDirectory = nodePath.dirname(systemPath)
+		const claim = trashClaimPaths(systemPath)
+		await this.#writeTrashClaimManifest(claim.manifestSystemPath, {
+			version: 1,
+			originalSystemPath: systemPath,
+			revision: expectedRevision,
+		})
+		await rename(systemPath, claim.claimSystemPath).catch(async (error) => {
+			await this.#removeTrashClaimManifest(claim.manifestSystemPath).catch((cleanupError) =>
+				this.logger.error(`Failed to remove unused trash claim '${claim.manifestSystemPath}'`, cleanupError),
+			)
+			if ((error as NodeJS.ErrnoException).code === 'ENOENT') throw new Error('[source-not-exists]')
+			throw error
+		})
+		await this.#syncDirectory(claimDirectory).catch(async (error) => {
+			await this.#restoreQuarantinedTrashSource(claim.claimSystemPath, systemPath)
+			await this.#removeTrashClaimManifest(claim.manifestSystemPath)
+			throw error
+		})
+		const stats = await lstat(claim.claimSystemPath, {bigint: true}).catch(() => undefined)
+		if (!matchesPublishedRevision(stats, expectedRevision)) {
+			await this.#restoreQuarantinedTrashSource(claim.claimSystemPath, systemPath)
+			await this.#removeTrashClaimManifest(claim.manifestSystemPath)
+			throw new Error('[source-changed]')
+		}
+		return claim
 	}
 
 	async #recoverTrashClaim(systemPath: string, userId: string): Promise<RecoveredTrashClaim | undefined> {
@@ -1401,7 +1447,11 @@ export default class Files {
 	// Restore a file or directory from the trash
 	async restore(
 		trashVirtualPath: string,
-		{collision = 'error', userId = OWNER_USER_ID}: {collision?: string; userId?: string} = {},
+		{
+			collision = 'error',
+			userId = OWNER_USER_ID,
+			waitForIndex = false,
+		}: {collision?: string; userId?: string; waitForIndex?: boolean} = {},
 	) {
 		trashVirtualPath = normalizePath(trashVirtualPath)
 
@@ -1455,9 +1505,10 @@ export default class Files {
 				this.fileIndex.removePath(targetSystemPath),
 			)
 		}
-		this.#updateFileIndex(`restore '${trashSystemPath}' to '${targetSystemPath}'`, () =>
+		const indexUpdate = this.#updateFileIndex(`restore '${trashSystemPath}' to '${targetSystemPath}'`, () =>
 			this.fileIndex.movePath(trashSystemPath, targetSystemPath),
 		)
+		if (waitForIndex) await indexUpdate
 
 		// Return the virtual path of the restored file or directory
 		return this.systemToVirtualPath(targetSystemPath)
@@ -1502,15 +1553,32 @@ export default class Files {
 
 	// Permanently delete a batch, resolving any member-owned Cloud roots once
 	// before processing individual filesystem entries.
-	async deleteMany(virtualPaths: string[], userId: string = OWNER_USER_ID) {
+	async deleteMany(
+		virtualPaths: string[],
+		userId: string = OWNER_USER_ID,
+		{
+			waitForIndex = false,
+			expectedRevisions,
+		}: {waitForIndex?: boolean; expectedRevisions?: Map<string, PublishedFileRevision>} = {},
+	) {
 		const paths = virtualPaths.map(normalizePath)
+		const revisions = expectedRevisions
+			? new Map([...expectedRevisions].map(([path, revision]) => [normalizePath(path), revision]))
+			: undefined
 		// Shared-destination resolution consults the global Cloud index, so all
 		// request paths must pass authorization before it runs.
 		await Promise.all(paths.map((path) => this.virtualToSystemPath(path, userId)))
 		const cloudCandidates = await this.cloud.resolveSharedDestinationDeletesAsOwner(userId, paths)
 		const deletions = new Map<string, Promise<boolean>>()
 		for (const path of paths) {
-			if (!deletions.has(path)) deletions.set(path, this.deleteOne(path, userId, cloudCandidates.get(path)))
+			if (!deletions.has(path)) {
+				const expectedRevision = revisions?.get(path)
+				const operation = () => this.deleteOne(path, userId, cloudCandidates.get(path), waitForIndex, expectedRevision)
+				deletions.set(
+					path,
+					expectedRevision ? this.#trashClaimQueue.add(operation).then((result) => result!) : operation(),
+				)
+			}
 		}
 		return Promise.all(paths.map((path) => deletions.get(path)!))
 	}
@@ -1519,6 +1587,8 @@ export default class Files {
 		virtualPath: string,
 		userId: string,
 		cloudCandidate: SharedDestinationDeleteCandidate | undefined,
+		waitForIndex: boolean,
+		expectedRevision?: PublishedFileRevision,
 	) {
 		// Check if operation is allowed
 		const allowedOperations = await this.getAllowedOperations(virtualPath, userId)
@@ -1536,28 +1606,52 @@ export default class Files {
 			await this.samba.removeSharesWithin(virtualPath)
 		}
 
-		// Delete the file or directory
+		// Delete the file or directory. Photos supplies the indexed revision for
+		// permanent deletion, so atomically claim and validate that exact file before
+		// unlinking it. A reboot before the unlink restores the visible Trash entry.
+		let revisionClaim: PublishedRevisionClaim | undefined
+		let deletionSystemPath = systemPath
 		try {
+			if (expectedRevision) {
+				revisionClaim = await this.#claimPublishedRevision(systemPath, userId, expectedRevision)
+				deletionSystemPath = revisionClaim.claimSystemPath
+			}
 			if (cloudCandidate) {
-				await this.cloud.deleteSharedDestinationAsOwner(userId, cloudCandidate, () => fse.remove(systemPath))
+				await this.cloud.deleteSharedDestinationAsOwner(userId, cloudCandidate, () => fse.remove(deletionSystemPath))
 			} else {
-				await fse.remove(systemPath)
+				await fse.remove(deletionSystemPath)
+			}
+			if (revisionClaim) {
+				await this.#syncDirectory(nodePath.dirname(deletionSystemPath))
+				await this.#removeTrashClaimManifest(revisionClaim.manifestSystemPath)
 			}
 			await this.memberShares.removeWithin(virtualPath)
 			await this.#umbreld.mcp.removeFileGrantsWithin(virtualPath)
-			this.#updateFileIndex(`delete '${systemPath}'`, () => this.fileIndex.removePath(systemPath))
+			const indexUpdate = this.#updateFileIndex(`delete '${systemPath}'`, () => this.fileIndex.removePath(systemPath))
+			if (waitForIndex) await indexUpdate
 			return true
 		} catch (error) {
+			if (revisionClaim && (await fse.pathExists(revisionClaim.claimSystemPath))) {
+				try {
+					await this.#restoreQuarantinedTrashSource(revisionClaim.claimSystemPath, systemPath)
+					await this.#removeTrashClaimManifest(revisionClaim.manifestSystemPath)
+				} catch (restoreError) {
+					// Keep the journal if a replacement owns the original pathname (or
+					// restoration otherwise fails) so startup recovery can preserve both.
+					this.logger.error(`Failed to restore revision claim for '${systemPath}'`, restoreError)
+				}
+			}
 			this.logger.error(`Failed to delete '${systemPath}'`, error)
 			return false
 		}
 	}
 
-	#updateFileIndex(description: string, update: () => Promise<void>) {
+	#updateFileIndex(description: string, update: () => Promise<void>): Promise<void> {
 		try {
-			void update().catch((error) => this.logger.error(`Failed to update file index after ${description}`, error))
+			return update().catch((error) => this.logger.error(`Failed to update file index after ${description}`, error))
 		} catch (error) {
 			this.logger.error(`Failed to update file index after ${description}`, error)
+			return Promise.resolve()
 		}
 	}
 
@@ -2152,6 +2246,29 @@ function trashClaimPaths(systemPath: string) {
 
 function trashClaimManifestTemporaryPath(manifestSystemPath: string) {
 	return `${manifestSystemPath}.tmp${TRASH_CLAIM_SUFFIX}`
+}
+
+async function* walkTrashClaimManifests(rootSystemPath: string): AsyncGenerator<string> {
+	const directories = [rootSystemPath]
+	while (directories.length > 0) {
+		const directory = directories.pop()!
+		let handle
+		try {
+			handle = await fse.opendir(directory)
+		} catch {
+			continue
+		}
+		try {
+			for await (const entry of handle) {
+				const systemPath = nodePath.join(directory, entry.name)
+				if (entry.isDirectory()) directories.push(systemPath)
+				else if (entry.isFile() && entry.name.endsWith(TRASH_CLAIM_MANIFEST_SUFFIX)) yield systemPath
+			}
+		} catch {
+			// A disappearing or unreadable subtree cannot invalidate claims in other
+			// directories. Leave it for the next startup sweep and keep walking.
+		}
+	}
 }
 
 function matchesPublishedRevision(stats: BigIntStats | undefined, revision: PublishedFileRevision) {

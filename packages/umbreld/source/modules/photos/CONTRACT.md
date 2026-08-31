@@ -9,14 +9,21 @@ The shared database is backed up and is never quarantined with the rebuildable
 index.
 
 Account and path authorization is applied before locations are grouped by hash.
-Consequently, duplicate bytes are returned once without revealing copies that
-belong to another account. For path-based operations, the backend chooses the
-first currently accessible location ordered by root virtual path and relative
-path, and falls back to the next location if it disappears. Filename search and
-source filters consider every accessible duplicate, not just that canonical
-location. Items are omitted until their hash and media metadata are ready; the
-separate indexing-state procedure tells the client when the visible result set
-is still warming.
+Consequently, duplicate bytes are returned once per Home/Trash view without
+revealing copies that belong to another account. For path-based operations, the
+backend chooses the first currently accessible location ordered by root virtual
+path and relative path, and falls back to the next location if it disappears.
+Filename search considers every accessible duplicate in the selected view, not
+just that canonical location. Home source filters never hide Trash media. Items
+are omitted until their hash and media metadata are ready; the separate
+indexing-state procedure tells the client when the Home result set is still
+warming.
+
+Files Trash is the only deletion source of truth. The normal library projects
+media from the account's Home root; the Deleted view projects every indexed
+photo/video from that account's Trash root. There is no Photos deletion marker,
+retention period, or automatic cleanup. Trash therefore needs the same hashes,
+media metadata, live-pair data, and Photos thumbnail variants as Home.
 
 Not in v1 (no routers or fields exist for them): people, locations, semantic
 search, Android motion photos (the MP4-embedded-in-a-JPEG kind — needs byte
@@ -62,7 +69,7 @@ type ItemDetail = Item & {
 	fileName: string
 	sizeBytes: number
 	source: {id: string; name: string; type: SourceType}
-	path: string // virtual path of the original ("Show in Files")
+	path: string // virtual path in the selected Home or Trash projection ("Show in Files")
 	createdAt: number // embedded creation/capture time, else indexed birth time, else modification time
 	importedAt: number // epoch ms the import wrote the row
 	// Partial camera metadata plus EXIF UserComment. Camera values are
@@ -85,7 +92,7 @@ type ItemDetail = Item & {
 
 // All clauses AND together; within one array, any match counts.
 // Each field is one predicate — the UI's sidebar sections are just presets
-// (Favorites = {favorite: true}, Recently deleted = {deleted: true}, …).
+// (Favorites = {favorite: true}, Deleted = {deleted: true}, …).
 type Filter = {
 	query?: string // every term must appear in the file name, camera make/model, or UserComment
 	kind?: Kind
@@ -164,19 +171,22 @@ playback UX is the frontend's.
   — newest first (`takenAt DESC, id ASC`), keyset pagination; the cursor is opaque
   to the client. `limit` up to 1000 (the grid asks for what it is about to draw).
   `total` = the filter's full match count — only needed when `cursor` is absent.
-- `get({id})` → `ItemDetail` — NOT_FOUND if missing.
+- `get({id, deleted?: boolean})` → `ItemDetail` — NOT_FOUND if missing from the
+  selected Home (`false`, default) or Trash (`true`) projection.
 - `neighbors({id, filter})` → `{prevId?: string, nextId?: string}` — the item's
   neighbours under the same order and filter as `list`; the lightbox's deep-link case.
 - `setFavorite({ids, favorite})` — bulk.
-- `delete({ids})` — soft: into the `deleted: true` view;
-- `restore({ids})`
-- `deletePermanently({ids?})` — omitted `ids` = purge everything deleted. Removes
-  every currently accessible same-hash copy owned by the requesting account;
-  in-place originals go through Files' trash. Every path is re-authorized at the
-  Files boundary, and inaccessible or other-account copies are never touched.
-  Soft deletion durably remembers those account-owned paths until restore or
-  successful removal, allowing an interrupted Files trash claim to be recovered
-  even if the disposable file index has already swept its hidden pathname.
+- `delete({ids})` — moves every selected, account-owned Home media copy into the
+  account's Files Trash. A live companion moves only when every still in that
+  Home projection that references it is selected.
+- `restore({ids})` — restores every selected, account-owned Trash media copy
+  through Files, using Files' original-path metadata and collision rules.
+- `deletePermanently({ids?})` — hard-deletes selected Trash media through Files;
+  omitted `ids` resolves and deletes all photos/videos in the account's Trash,
+  but never directories or non-media files. Every path is re-authorized at the
+  Files boundary and atomically checked against its indexed revision, and
+  inaccessible or other-account copies are never touched. Interrupted revision
+  claims are recovered from account Home and Trash roots during Files startup.
 
 ### albums
 
@@ -188,10 +198,10 @@ playback UX is the frontend's.
 - `delete({id})` — items stay in the library.
 - `addItems({id, ids})` / `removeItems({id, ids})` — bulk membership.
 
-Favorites, recently-deleted state, album membership and covers are keyed by
-account plus content hash. They therefore survive moves and a disposable
-file-index rebuild, and reconnect when the same bytes are indexed again. An
-in-place byte edit is a new hash and deliberately does not inherit old state.
+Favorites, album membership and covers are keyed by account plus content hash.
+They therefore survive Home/Trash moves and a disposable file-index rebuild,
+and reconnect when the same bytes are indexed again. An in-place byte edit is a
+new hash and deliberately does not inherit old state.
 
 ### sources
 

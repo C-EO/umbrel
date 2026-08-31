@@ -3,161 +3,112 @@ import {expect, test, vi} from 'vitest'
 import type Umbreld from '../../index.js'
 import Photos from './photos.js'
 
-test('keeps the complete durable deletion set when a later file operation fails', async () => {
+test('moves every resolved Home copy to Files Trash', async () => {
 	const revision = {inode: '1', size: 1, modifiedNs: '2', ctimeNs: '3'}
-	const trash = vi.fn(async (path: string) => {
-		if (path.endsWith('second.jpg')) throw new Error('injected trash failure')
-	})
-	const photosDeleteItems = vi.fn(async () => 1)
+	const trash = vi.fn()
 	const emit = vi.fn()
+	const photosResolveItemFiles = vi.fn(async () => [
+		{id: 'first', path: '/Home/first.jpg', revision},
+		{id: 'second', path: '/Home/second.jpg', revision},
+	])
 	const umbreld = {
 		logger: {createChildLogger: () => ({log: vi.fn()})},
 		eventBus: {emit},
 		files: {
 			trash,
-			recoverTrashClaim: vi.fn(async () => false),
-			fileIndex: {
-				photosResolveDeletedItems: async () => [
-					{id: 'first', path: '/Home/first.jpg', revision},
-					{id: 'second', path: '/Home/second.jpg', revision},
-				],
-				photosDeleteItems,
-			},
+			fileIndex: {photosResolveItemFiles},
 		},
 	} as unknown as Umbreld
 
 	const photos = new Photos(umbreld)
-	await expect(photos.deletePermanently('Alice')).rejects.toThrow('injected trash failure')
-	expect(photosDeleteItems).not.toHaveBeenCalled()
+	await expect(photos.deleteItems('Alice', ['first', 'second'])).resolves.toBe(2)
+	expect(photosResolveItemFiles).toHaveBeenCalledWith('Alice', ['first', 'second'], 'home')
 	expect(trash).toHaveBeenNthCalledWith(1, '/Home/first.jpg', 'Alice', revision)
-	expect(emit).not.toHaveBeenCalled()
+	expect(trash).toHaveBeenNthCalledWith(2, '/Home/second.jpg', 'Alice', revision)
+	expect(emit).toHaveBeenCalledWith('photos:change', {accountIds: ['Alice']})
 })
 
-test('permanently deletes every resolved copy of one logical content hash', async () => {
-	const hash = 'ab'.repeat(32)
+test('restores every resolved Trash copy through Files', async () => {
 	const revision = {inode: '1', size: 1, modifiedNs: '2', ctimeNs: '3'}
-	const trash = vi.fn()
-	const photosDeleteItems = vi.fn(async () => 1)
+	const restore = vi.fn()
 	const emit = vi.fn()
+	const photosResolveItemFiles = vi.fn(async () => [
+		{id: 'still', path: '/Trash/photo.jpg', revision},
+		{id: 'motion', path: '/Trash/photo.mov', revision},
+	])
 	const umbreld = {
 		logger: {createChildLogger: () => ({log: vi.fn()})},
 		eventBus: {emit},
 		files: {
-			trash,
-			recoverTrashClaim: vi.fn(async () => false),
-			fileIndex: {
-				photosResolveDeletedItems: async () => [
-					{id: hash, path: '/Home/A/photo.jpg', revision},
-					{id: hash, path: '/Home/B/copy.jpg', revision},
-				],
-				photosDeleteItems,
-			},
+			restore,
+			fileIndex: {photosResolveItemFiles},
 		},
 	} as unknown as Umbreld
 
 	const photos = new Photos(umbreld)
-	await expect(photos.deletePermanently('Alice', [hash])).resolves.toBe(1)
-	expect(trash).toHaveBeenNthCalledWith(1, '/Home/A/photo.jpg', 'Alice', revision)
-	expect(trash).toHaveBeenNthCalledWith(2, '/Home/B/copy.jpg', 'Alice', revision)
-	expect(photosDeleteItems).toHaveBeenCalledWith('Alice', [hash], false)
+	await expect(photos.restoreItems('Alice', ['still'])).resolves.toBe(2)
+	expect(photosResolveItemFiles).toHaveBeenCalledWith('Alice', ['still'], 'trash')
+	expect(restore).toHaveBeenNthCalledWith(1, '/Trash/photo.jpg', {userId: 'Alice', waitForIndex: true})
+	expect(restore).toHaveBeenNthCalledWith(2, '/Trash/photo.mov', {userId: 'Alice', waitForIndex: true})
 	expect(emit).toHaveBeenCalledWith('photos:change', {accountIds: ['Alice']})
 })
 
-test('finishes a permanent deletion whose file was moved by an earlier attempt', async () => {
-	const trash = vi.fn()
-	const recoverTrashClaim = vi.fn(async () => false)
-	const photosDeleteItems = vi.fn(async () => 1)
+test('permanently deletes only the selected resolved Trash media', async () => {
+	const revision = {inode: '1', size: 1, modifiedNs: '2', ctimeNs: '3'}
+	const deleteMany = vi.fn(async () => [true, true])
 	const emit = vi.fn()
+	const photosResolveItemFiles = vi.fn(async () => [
+		{id: 'selected', path: '/Trash/photo.jpg', revision},
+		{id: 'selected', path: '/Trash/copy.jpg', revision},
+	])
 	const umbreld = {
 		logger: {createChildLogger: () => ({log: vi.fn()})},
 		eventBus: {emit},
 		files: {
-			trash,
-			recoverTrashClaim,
-			fileIndex: {
-				photosResolveDeletedItems: async () => [{id: 'already-moved', path: '/Home/already-moved.jpg'}],
-				photosDeleteItems,
-			},
+			deleteMany,
+			fileIndex: {photosResolveItemFiles},
 		},
 	} as unknown as Umbreld
 
 	const photos = new Photos(umbreld)
-	await expect(photos.deletePermanently('Alice', ['already-moved'])).resolves.toBe(1)
-	expect(trash).not.toHaveBeenCalled()
-	expect(recoverTrashClaim).toHaveBeenCalledWith('/Home/already-moved.jpg', 'Alice')
-	expect(photosDeleteItems).toHaveBeenCalledWith('Alice', ['already-moved'], false)
+	await expect(photos.deletePermanently('Alice', ['selected'])).resolves.toBe(2)
+	expect(photosResolveItemFiles).toHaveBeenCalledWith('Alice', ['selected'], 'trash')
+	expect(deleteMany).toHaveBeenCalledWith(['/Trash/photo.jpg', '/Trash/copy.jpg'], 'Alice', {
+		waitForIndex: true,
+		expectedRevisions: new Map([
+			['/Trash/photo.jpg', revision],
+			['/Trash/copy.jpg', revision],
+		]),
+	})
 	expect(emit).toHaveBeenCalledWith('photos:change', {accountIds: ['Alice']})
 })
 
-test('only recovers a remembered target that is no longer present in the live index', async () => {
+test('permanently deletes all resolved Trash media and reports partial failure', async () => {
 	const revision = {inode: '1', size: 1, modifiedNs: '2', ctimeNs: '3'}
-	const trash = vi.fn()
-	const recoverTrashClaim = vi.fn(async () => false)
-	const photosDeleteItems = vi.fn(async () => 1)
+	const deleteMany = vi.fn(async () => [true, false])
+	const photosResolveItemFiles = vi.fn(async () => [
+		{id: 'photo', path: '/Trash/photo.jpg', revision},
+		{id: 'video', path: '/Trash/video.mp4', revision},
+	])
 	const umbreld = {
 		logger: {createChildLogger: () => ({log: vi.fn()})},
 		eventBus: {emit: vi.fn()},
 		files: {
-			trash,
-			recoverTrashClaim,
-			fileIndex: {
-				photosResolveDeletedItems: async () => [
-					{id: 'remembered', path: '/Home/remembered.jpg', revision, recoverOnly: true},
-				],
-				photosDeleteItems,
-			},
+			deleteMany,
+			fileIndex: {photosResolveItemFiles},
 		},
 	} as unknown as Umbreld
 
 	const photos = new Photos(umbreld)
-	await expect(photos.deletePermanently('Alice', ['remembered'])).resolves.toBe(1)
-	expect(recoverTrashClaim).toHaveBeenCalledWith('/Home/remembered.jpg', 'Alice')
-	expect(trash).not.toHaveBeenCalled()
-	expect(photosDeleteItems).toHaveBeenCalledWith('Alice', ['remembered'], false)
-})
-
-test('keeps durable Photos rows after recovering an interrupted filesystem claim', async () => {
-	const photosDeleteItems = vi.fn(async () => 1)
-	const umbreld = {
-		logger: {createChildLogger: () => ({log: vi.fn()})},
-		eventBus: {emit: vi.fn()},
-		files: {
-			trash: vi.fn(),
-			recoverTrashClaim: vi.fn(async () => true),
-			fileIndex: {
-				photosResolveDeletedItems: async () => [{id: 'interrupted', path: '/Home/interrupted.jpg'}],
-				photosDeleteItems,
-			},
-		},
-	} as unknown as Umbreld
-
-	const photos = new Photos(umbreld)
-	await expect(photos.deletePermanently('Alice', ['interrupted'])).rejects.toThrow('[trash-claim-recovered]')
-	expect(photosDeleteItems).not.toHaveBeenCalled()
-})
-
-test('keeps durable Photos rows while a recovered file is being rehashed', async () => {
-	const trash = vi.fn()
-	const recoverTrashClaim = vi.fn()
-	const photosDeleteItems = vi.fn()
-	const umbreld = {
-		logger: {createChildLogger: () => ({log: vi.fn()})},
-		eventBus: {emit: vi.fn()},
-		files: {
-			trash,
-			recoverTrashClaim,
-			fileIndex: {
-				photosResolveDeletedItems: async () => [{id: 'rehashing', path: '/Home/rehashing.jpg', pendingRevision: true}],
-				photosDeleteItems,
-			},
-		},
-	} as unknown as Umbreld
-
-	const photos = new Photos(umbreld)
-	await expect(photos.deletePermanently('Alice', ['rehashing'])).rejects.toThrow('[photos-item-busy]')
-	expect(trash).not.toHaveBeenCalled()
-	expect(recoverTrashClaim).not.toHaveBeenCalled()
-	expect(photosDeleteItems).not.toHaveBeenCalled()
+	await expect(photos.deletePermanently('Alice')).rejects.toThrow('[photos-delete-failed]')
+	expect(photosResolveItemFiles).toHaveBeenCalledWith('Alice', undefined, 'trash')
+	expect(deleteMany).toHaveBeenCalledWith(['/Trash/photo.jpg', '/Trash/video.mp4'], 'Alice', {
+		waitForIndex: true,
+		expectedRevisions: new Map([
+			['/Trash/photo.jpg', revision],
+			['/Trash/video.mp4', revision],
+		]),
+	})
 })
 
 test('uses a short-lived account-bound ticket for large download selections', async () => {

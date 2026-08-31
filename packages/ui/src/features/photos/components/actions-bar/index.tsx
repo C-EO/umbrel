@@ -6,6 +6,7 @@ import {useNavigate, useParams} from 'react-router-dom'
 
 import {FilterPills, PillButton} from '@/components/ui/edge-controls'
 import {CountText} from '@/features/photos/components/actions-bar/count-text'
+import {DeletedActions} from '@/features/photos/components/actions-bar/deleted-actions'
 import {PickingActions} from '@/features/photos/components/actions-bar/picking-actions'
 import {SelectionActions} from '@/features/photos/components/actions-bar/selection-actions'
 import {UploadButton} from '@/features/photos/components/actions-bar/upload-button'
@@ -31,9 +32,10 @@ import {tw} from '@/utils/tw'
 // pull-up (ListingSurface's BAR_TOP is the other half of that sum). What it
 // offers follows the route: timeline pages get the timeline zoom, grid zoom
 // and upload, a source's page its Import now / Manage, an album's its Add;
-// Albums gets "Create album", Sources "Add source"; Recently
-// Deleted only what every page has, search. Zoom and search live in the view
-// context so the listing reacts to them. On phones the page's controls sit
+// Albums gets "Create album", Sources "Add source"; Deleted only what every
+// page has, search. Zoom and search live in the view
+// context so the listing reacts to them. Deleted additionally offers a
+// media-only permanent purge of Trash. On phones the page's controls sit
 // in the title row instead (MobileActions), leaving this row to the date.
 //
 // While items are selected the bar is the selection's: how many, and what
@@ -156,6 +158,7 @@ export function ActionsBar() {
 								    search is cleared */}
 								<CollapseAside hidden={searchEngaged}>
 									{isTimeline && <GroupingPills />}
+									{inDeleted && <DeletedActions />}
 									{collection === 'albums' && (
 										<PillButton icon={Plus} onClick={createAlbum}>
 											{t('photos-actions.create-album')}

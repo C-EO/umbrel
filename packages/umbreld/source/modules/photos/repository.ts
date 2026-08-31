@@ -62,6 +62,7 @@ type ItemDetailRow = ItemRow & {
 }
 
 type Query = {sql: string; parameters: unknown[]}
+type PhotoRootKind = 'home' | 'trash'
 
 type LivePairLocation = {
 	account_id: string
@@ -79,6 +80,7 @@ const HASH_PATTERN = /^[a-f0-9]{64}$/
 const PHOTO_LIBRARY_CTE = `
 	WITH authorized_locations AS (
 		SELECT index_roots.owner_id AS account_id,
+			index_roots.kind AS root_kind,
 			contents.blake3 AS content_hash, lower(hex(contents.blake3)) AS id,
 			contents.created_at AS content_created_at,
 			entries.id AS entry_id, entries.content_id, entries.name, entries.search_name_folded,
@@ -98,13 +100,13 @@ const PHOTO_LIBRARY_CTE = `
 		JOIN media_metadata ON media_metadata.content_id = entries.content_id AND media_metadata.state = 'ready'
 		JOIN umbrel.photos_sources AS photos_source ON photos_source.account_id = index_roots.owner_id
 			AND photos_source.type = 'umbrel'
-		WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
+		WHERE index_roots.owner_id = ? AND index_roots.kind IN ('home', 'trash')
 			AND entries.type = 'file' AND entries.hidden = 0
-			AND ${sourceScopeSql('photos_source')}
+			AND (index_roots.kind = 'trash' OR ${sourceScopeSql('photos_source')})
 	),
 	ranked_locations AS (
 		SELECT *, ROW_NUMBER() OVER (
-			PARTITION BY content_hash ORDER BY root_virtual_path, relative_path
+			PARTITION BY content_hash, root_kind ORDER BY root_virtual_path, relative_path
 		) AS location_rank
 		FROM authorized_locations
 	),
@@ -112,20 +114,22 @@ const PHOTO_LIBRARY_CTE = `
 		SELECT * FROM ranked_locations WHERE location_rank = 1
 	),
 	active_live_pairs AS (
-		SELECT pair.account_id, pair.still_hash, pair.motion_hash
+		SELECT pair.account_id, pair.still_hash, pair.motion_hash, location_kind.root_kind
 		FROM umbrel.photos_live_pairs AS pair
+		CROSS JOIN (SELECT 'home' AS root_kind UNION ALL SELECT 'trash') AS location_kind
 		WHERE EXISTS (
 			SELECT 1 FROM authorized_locations AS still
 			WHERE still.account_id = pair.account_id AND still.content_hash = pair.still_hash
+				AND still.root_kind = location_kind.root_kind
 		) AND EXISTS (
 			SELECT 1 FROM authorized_locations AS motion
 			WHERE motion.account_id = pair.account_id AND motion.content_hash = pair.motion_hash
+				AND motion.root_kind = location_kind.root_kind
 		)
 	),
 	logical_items AS (
 		SELECT canonical_locations.*,
 			COALESCE(umbrel.photos_content_state.is_favorite, 0) AS is_favorite,
-			umbrel.photos_content_state.deleted_at,
 			COALESCE(umbrel.photos_content_state.imported_at, canonical_locations.content_created_at) AS imported_at,
 			COALESCE(canonical_locations.taken_at, canonical_locations.birthtime_ms,
 				canonical_locations.modified_ms) AS logical_taken_at,
@@ -145,10 +149,12 @@ const PHOTO_LIBRARY_CTE = `
 			AND umbrel.photos_content_state.content_hash = canonical_locations.content_hash
 		LEFT JOIN active_live_pairs AS live_pair ON live_pair.account_id = canonical_locations.account_id
 			AND live_pair.still_hash = canonical_locations.content_hash
+			AND live_pair.root_kind = canonical_locations.root_kind
 		WHERE NOT EXISTS (
 			SELECT 1 FROM active_live_pairs AS hidden_motion
 			WHERE hidden_motion.account_id = canonical_locations.account_id
 				AND hidden_motion.motion_hash = canonical_locations.content_hash
+				AND hidden_motion.root_kind = canonical_locations.root_kind
 		)
 	)`
 
@@ -161,7 +167,7 @@ export default class PhotosRepository {
 		const root = database.prepare('SELECT owner_id, kind FROM index_roots WHERE id = ?').get(entry.rootId) as
 			| {owner_id: string; kind: string}
 			| undefined
-		if (!root || root.kind !== 'home') return false
+		if (!root || !isPhotoRootKind(root.kind)) return false
 		this.#ensureSource(database, root.owner_id)
 		if (entry.type !== 'file' || entry.hidden || !supportsPhotos(entry.name)) return true
 		const content = database
@@ -190,7 +196,7 @@ export default class PhotosRepository {
 		const accounts = database
 			.prepare(
 				`SELECT DISTINCT owner_id FROM index_roots
-				WHERE kind = 'home' ${accountId ? 'AND owner_id = ?' : ''}`,
+				WHERE kind IN ('home', 'trash') ${accountId ? 'AND owner_id = ?' : ''}`,
 			)
 			.all(...(accountId ? [accountId] : [])) as Array<{owner_id: string}>
 		let changed = false
@@ -206,7 +212,7 @@ export default class PhotosRepository {
 					JOIN entries ON entries.root_id = index_roots.id
 					JOIN contents ON contents.id = entries.content_id
 					JOIN media_metadata ON media_metadata.content_id = contents.id
-					WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
+					WHERE index_roots.owner_id = ? AND index_roots.kind IN ('home', 'trash')
 						AND entries.type = 'file' AND entries.hidden = 0
 					GROUP BY contents.blake3
 					ON CONFLICT(account_id, content_hash) DO NOTHING`,
@@ -226,7 +232,7 @@ export default class PhotosRepository {
 				WHERE entries.id = ?`,
 			)
 			.get(entryId) as {owner_id: string; kind: string} | undefined
-		if (!root || root.kind !== 'home') return false
+		if (!root || !isPhotoRootKind(root.kind)) return false
 		return this.#ensureContentState(database, root.owner_id, hash)
 	}
 
@@ -236,7 +242,7 @@ export default class PhotosRepository {
 				.prepare(
 					`SELECT DISTINCT index_roots.owner_id FROM entries
 					JOIN index_roots ON index_roots.id = entries.root_id
-					WHERE entries.content_id = ? AND index_roots.kind = 'home'`,
+					WHERE entries.content_id = ? AND index_roots.kind IN ('home', 'trash')`,
 				)
 				.all(contentId) as Array<{owner_id: string}>
 		).map(({owner_id}) => owner_id)
@@ -248,7 +254,7 @@ export default class PhotosRepository {
 				.prepare(
 					`SELECT DISTINCT index_roots.owner_id FROM entries
 					JOIN index_roots ON index_roots.id = entries.root_id
-					WHERE entries.id = ? AND index_roots.kind = 'home'`,
+					WHERE entries.id = ? AND index_roots.kind IN ('home', 'trash')`,
 				)
 				.all(entryId) as Array<{owner_id: string}>
 		).map(({owner_id}) => owner_id)
@@ -286,7 +292,6 @@ export default class PhotosRepository {
 					AND umbrel.photos_content_state.content_hash = contents.blake3
 				WHERE index_roots.owner_id = ? AND index_roots.kind = 'home' AND contents.blake3 = ?
 					AND entries.type = 'file' AND entries.hidden = 0
-					AND umbrel.photos_content_state.deleted_at IS NULL
 					AND ${sourceScopeSql('photos_source')}
 				LIMIT 1`,
 			)
@@ -316,18 +321,7 @@ export default class PhotosRepository {
 		}
 		const videos = this.#liveLocations(database, accountId, 'video')
 		const replace = database.transaction(() => {
-			database
-				.prepare(
-					`DELETE FROM umbrel.photos_live_pairs AS pair WHERE account_id = ? AND NOT (
-						EXISTS (SELECT 1 FROM umbrel.photos_content_state AS still_state
-							WHERE still_state.account_id = pair.account_id
-								AND still_state.content_hash = pair.still_hash AND still_state.deleted_at IS NOT NULL)
-						AND EXISTS (SELECT 1 FROM umbrel.photos_content_state AS motion_state
-							WHERE motion_state.account_id = pair.account_id
-								AND motion_state.content_hash = pair.motion_hash AND motion_state.deleted_at IS NOT NULL)
-					)`,
-				)
-				.run(accountId)
+			database.prepare('DELETE FROM umbrel.photos_live_pairs WHERE account_id = ?').run(accountId)
 			const insert = database.prepare(
 				`INSERT INTO umbrel.photos_live_pairs(account_id, still_hash, motion_hash, updated_at)
 				VALUES (?, ?, ?, ?)
@@ -387,7 +381,7 @@ export default class PhotosRepository {
 		}
 	}
 
-	getItem(database: Database, accountId: string, id: string): PhotoItemDetail | undefined {
+	getItem(database: Database, accountId: string, id: string, deleted = false): PhotoItemDetail | undefined {
 		if (!idToHash(id)) return
 		this.#ensureSource(database, accountId)
 		const row = database
@@ -397,9 +391,9 @@ export default class PhotosRepository {
 				COALESCE(created_at, birthtime_ms, modified_ms) AS created_at, imported_at,
 				camera_make, camera_model, lens, focal_length, aperture, exposure,
 				iso, latitude, longitude, altitude, user_comment
-				FROM logical_items WHERE id = ?`,
+				FROM logical_items WHERE id = ? AND root_kind = ?`,
 			)
-			.get(accountId, id) as ItemDetailRow | undefined
+			.get(accountId, id, deleted ? 'trash' : 'home') as ItemDetailRow | undefined
 		if (!row) return
 		const albums = database
 			.prepare(
@@ -415,11 +409,14 @@ export default class PhotosRepository {
 	neighbors(database: Database, accountId: string, id: string, filter: PhotoFilter) {
 		if (!idToHash(id)) return
 		this.#ensureSource(database, accountId)
-		const current = database
-			.prepare(`${PHOTO_LIBRARY_CTE} SELECT logical_taken_at AS taken_at, id FROM logical_items WHERE id = ?`)
-			.get(accountId, id) as {taken_at: number; id: string} | undefined
-		if (!current) return
 		const where = filterQuery(filter)
+		const current = database
+			.prepare(
+				`${PHOTO_LIBRARY_CTE} SELECT logical_taken_at AS taken_at, id FROM logical_items
+				WHERE id = ? AND ${where.sql}`,
+			)
+			.get(accountId, id, ...where.parameters) as {taken_at: number; id: string} | undefined
+		if (!current) return
 		const previous = database
 			.prepare(
 				`${PHOTO_LIBRARY_CTE} SELECT id FROM logical_items WHERE ${where.sql}
@@ -442,12 +439,12 @@ export default class PhotosRepository {
 		const row = database
 			.prepare(
 				`${PHOTO_LIBRARY_CTE} SELECT
-					COUNT(*) FILTER (WHERE deleted_at IS NULL) AS items,
-					COUNT(*) FILTER (WHERE deleted_at IS NULL AND is_favorite = 1) AS favorites,
-					COUNT(*) FILTER (WHERE deleted_at IS NULL AND kind = 'photo') AS photos,
-					COUNT(*) FILTER (WHERE deleted_at IS NULL AND kind = 'video') AS videos,
-					COUNT(*) FILTER (WHERE deleted_at IS NOT NULL) AS deleted,
-					COALESCE(SUM(size) FILTER (WHERE deleted_at IS NULL), 0) AS size_bytes
+					COUNT(*) FILTER (WHERE root_kind = 'home') AS items,
+					COUNT(*) FILTER (WHERE root_kind = 'home' AND is_favorite = 1) AS favorites,
+					COUNT(*) FILTER (WHERE root_kind = 'home' AND kind = 'photo') AS photos,
+					COUNT(*) FILTER (WHERE root_kind = 'home' AND kind = 'video') AS videos,
+					COUNT(*) FILTER (WHERE root_kind = 'trash') AS deleted,
+					COALESCE(SUM(size) FILTER (WHERE root_kind = 'home'), 0) AS size_bytes
 				FROM logical_items`,
 			)
 			.get(accountId) as Record<string, number>
@@ -456,7 +453,7 @@ export default class PhotosRepository {
 				database
 					.prepare(
 						`${PHOTO_LIBRARY_CTE} SELECT logical_sub_kind AS value, COUNT(*) AS count
-						FROM logical_items WHERE deleted_at IS NULL AND logical_sub_kind IS NOT NULL
+						FROM logical_items WHERE root_kind = 'home' AND logical_sub_kind IS NOT NULL
 						GROUP BY logical_sub_kind`,
 					)
 					.all(accountId) as Array<{value: string; count: number}>
@@ -467,9 +464,10 @@ export default class PhotosRepository {
 				database
 					.prepare(
 						`${PHOTO_LIBRARY_CTE} SELECT source.id AS value, COUNT(*) AS count
-						FROM umbrel.photos_sources AS source JOIN logical_items ON logical_items.deleted_at IS NULL
+						FROM umbrel.photos_sources AS source JOIN logical_items ON logical_items.root_kind = 'home'
 							AND EXISTS (SELECT 1 FROM authorized_locations AS location
-								WHERE location.content_hash = logical_items.content_hash AND location.source_id = source.id)
+								WHERE location.content_hash = logical_items.content_hash
+									AND location.root_kind = logical_items.root_kind AND location.source_id = source.id)
 						WHERE source.account_id = ? GROUP BY source.id`,
 					)
 					.all(accountId, accountId) as Array<{value: string; count: number}>
@@ -481,7 +479,7 @@ export default class PhotosRepository {
 					`${PHOTO_LIBRARY_CTE} SELECT
 						CAST(strftime('%Y', logical_taken_at / 1000, 'unixepoch') AS INTEGER) AS year,
 						CAST(strftime('%m', logical_taken_at / 1000, 'unixepoch') AS INTEGER) AS month,
-						COUNT(*) AS count FROM logical_items WHERE deleted_at IS NULL
+						COUNT(*) AS count FROM logical_items WHERE root_kind = 'home'
 					GROUP BY year, month ORDER BY year DESC, month DESC`,
 				)
 				.all(accountId) as Array<{year: number; month: number; count: number}>
@@ -521,156 +519,46 @@ export default class PhotosRepository {
 		return changes
 	}
 
-	setDeleted(database: Database, accountId: string, ids: string[], deleted: boolean) {
-		let hashes = this.#accessibleHashes(database, accountId, ids)
-		hashes = this.#withLiveCompanions(database, accountId, hashes)
-		const update = database.transaction(() => {
-			let changes = 0
-			for (const hash of hashes) {
-				this.#ensureContentState(database, accountId, hash)
-				const deletedAt = deleted ? Date.now() : null
-				changes += database
-					.prepare(
-						`UPDATE umbrel.photos_content_state SET deleted_at = ?
-						WHERE account_id = ? AND content_hash = ? AND deleted_at IS NOT ?`,
-					)
-					.run(deletedAt, accountId, hash, deletedAt).changes
-				if (!deleted) {
-					database
-						.prepare('DELETE FROM umbrel.photos_deletion_targets WHERE account_id = ? AND content_hash = ?')
-						.run(accountId, hash)
-					continue
-				}
-				const locations = database
-					.prepare(
-						`SELECT index_roots.virtual_path, entries.relative_path
-						FROM index_roots
-						JOIN entries ON entries.root_id = index_roots.id
-						JOIN contents ON contents.id = entries.content_id
-						WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
-							AND contents.blake3 = ? AND entries.type = 'file' AND entries.hidden = 0`,
-					)
-					.all(accountId, hash) as Array<{
-					virtual_path: string
-					relative_path: string
-				}>
-				const remember = database.prepare(
-					`INSERT INTO umbrel.photos_deletion_targets(account_id, content_hash, virtual_path)
-					VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
-				)
-				for (const location of locations) {
-					remember.run(accountId, hash, joinVirtualPath(location.virtual_path, location.relative_path))
-				}
-			}
-			return changes
-		})
-		return update.immediate()
-	}
-
-	deleteItems(database: Database, accountId: string, ids: string[], includeLiveCompanions = true) {
-		let hashes = ids.map(idToHash).filter((hash): hash is Buffer => hash !== undefined)
-		if (includeLiveCompanions) hashes = this.#withLiveCompanions(database, accountId, hashes)
-		if (hashes.length === 0) return 0
-		const remove = database.transaction(() => {
-			let changes = 0
-			for (const hash of uniqueBuffers(hashes)) {
-				database
-					.prepare(
-						`DELETE FROM umbrel.photos_album_items WHERE content_hash = ? AND EXISTS (
-							SELECT 1 FROM umbrel.photos_albums WHERE umbrel.photos_albums.id = umbrel.photos_album_items.album_id
-								AND umbrel.photos_albums.account_id = ?
-						)`,
-					)
-					.run(hash, accountId)
-				database
-					.prepare(
-						`UPDATE umbrel.photos_albums SET cover_content_hash = NULL
-						WHERE account_id = ? AND cover_content_hash = ?`,
-					)
-					.run(accountId, hash)
-				database
-					.prepare(
-						`DELETE FROM umbrel.photos_live_pairs WHERE account_id = ?
-							AND (still_hash = ? OR motion_hash = ?)`,
-					)
-					.run(accountId, hash, hash)
-				changes += database
-					.prepare(
-						`DELETE FROM umbrel.photos_content_state
-						WHERE account_id = ? AND content_hash = ? AND deleted_at IS NOT NULL`,
-					)
-					.run(accountId, hash).changes
-			}
-			return changes
-		})
-		return remove.immediate()
-	}
-
 	resolveItems(database: Database, accountId: string, ids: string[]) {
 		const validIds = [...new Set(ids.filter((id) => idToHash(id)))]
 		if (validIds.length === 0) return []
 		this.#ensureSource(database, accountId)
 		const placeholders = validIds.map(() => '?').join(', ')
+		const rows = database
+			.prepare(
+				`${PHOTO_LIBRARY_CTE} SELECT id, root_virtual_path, relative_path FROM logical_items
+				WHERE id IN (${placeholders}) ORDER BY id, root_kind = 'home' DESC`,
+			)
+			.all(accountId, ...validIds) as Array<{id: string; root_virtual_path: string; relative_path: string}>
+		const resolved = new Map<string, {id: string; path: string}>()
+		for (const row of rows) {
+			if (!resolved.has(row.id)) {
+				resolved.set(row.id, {id: row.id, path: joinVirtualPath(row.root_virtual_path, row.relative_path)})
+			}
+		}
+		return [...resolved.values()]
+	}
+
+	resolveItemFiles(database: Database, accountId: string, ids: string[] | undefined, rootKind: PhotoRootKind) {
+		let hashes = ids ? ids.map(idToHash).filter((hash): hash is Buffer => hash !== undefined) : undefined
+		if (hashes) hashes = this.#withLiveCompanions(database, accountId, hashes, rootKind)
+		const hashFilter = hashes?.length ? `AND contents.blake3 IN (${hashes.map(() => '?').join(', ')})` : ''
+		if (hashes && hashes.length === 0) return []
 		return (
 			database
 				.prepare(
-					`${PHOTO_LIBRARY_CTE} SELECT id, root_virtual_path, relative_path FROM logical_items
-					WHERE id IN (${placeholders}) ORDER BY id`,
-				)
-				.all(accountId, ...validIds) as Array<{id: string; root_virtual_path: string; relative_path: string}>
-		).map((row) => ({id: row.id, path: joinVirtualPath(row.root_virtual_path, row.relative_path)}))
-	}
-
-	resolveDeletedItems(database: Database, accountId: string, ids?: string[]) {
-		let hashes = ids
-			? ids.map(idToHash).filter((hash): hash is Buffer => hash !== undefined)
-			: (
-					database
-						.prepare(
-							`SELECT content_hash FROM umbrel.photos_content_state
-							WHERE account_id = ? AND deleted_at IS NOT NULL`,
-						)
-						.all(accountId) as Array<{content_hash: Buffer}>
-				).map(({content_hash}) => content_hash)
-		hashes = this.#withLiveCompanions(database, accountId, hashes, true)
-		const rows: Array<{
-			id: string
-			path?: string
-			revision?: {inode: string; size: number; modifiedNs: string; ctimeNs: string}
-			recoverOnly?: true
-			pendingRevision?: boolean
-		}> = []
-		const pendingHashes = Boolean(
-			database
-				.prepare(
-					`SELECT 1 FROM index_roots LEFT JOIN entries ON entries.root_id = index_roots.id
-					WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
-						AND (index_roots.state = 'warming' OR (entries.type = 'file'
-							AND entries.hidden = 0 AND entries.thumbnail_identity_kind = 'content'
-							AND entries.content_id IS NULL)) LIMIT 1`,
-				)
-				.get(accountId),
-		)
-		for (const hash of uniqueBuffers(hashes)) {
-			const state = database
-				.prepare(
-					`SELECT 1 FROM umbrel.photos_content_state
-					WHERE account_id = ? AND content_hash = ? AND deleted_at IS NOT NULL`,
-				)
-				.get(accountId, hash)
-			if (!state) continue
-			const locations = database
-				.prepare(
-					`SELECT index_roots.virtual_path, entries.relative_path, entries.inode,
-						entries.size, entries.modified_ns, entries.ctime_ns
+					`SELECT lower(hex(contents.blake3)) AS id, index_roots.virtual_path, entries.relative_path,
+						entries.inode, entries.size, entries.modified_ns, entries.ctime_ns
 					FROM index_roots
 					JOIN entries ON entries.root_id = index_roots.id
 					JOIN contents ON contents.id = entries.content_id
-					WHERE index_roots.owner_id = ? AND index_roots.kind = 'home' AND contents.blake3 = ?
+					JOIN media_metadata ON media_metadata.content_id = contents.id AND media_metadata.state = 'ready'
+					WHERE index_roots.owner_id = ? AND index_roots.kind = ? ${hashFilter}
 						AND entries.type = 'file' AND entries.hidden = 0
 					ORDER BY index_roots.virtual_path, entries.relative_path`,
 				)
-				.all(accountId, hash) as Array<{
+				.all(accountId, rootKind, ...(hashes ?? [])) as Array<{
+				id: string
 				virtual_path: string
 				relative_path: string
 				inode: string
@@ -678,36 +566,16 @@ export default class PhotosRepository {
 				modified_ns: string
 				ctime_ns: string
 			}>
-			const currentPaths = new Set<string>()
-			for (const location of locations) {
-				const path = joinVirtualPath(location.virtual_path, location.relative_path)
-				currentPaths.add(path)
-				rows.push({
-					id: hashToId(hash),
-					path,
-					revision: {
-						inode: location.inode,
-						size: Number(location.size),
-						modifiedNs: location.modified_ns,
-						ctimeNs: location.ctime_ns,
-					},
-				})
-			}
-			const remembered = database
-				.prepare(
-					`SELECT virtual_path FROM umbrel.photos_deletion_targets
-					WHERE account_id = ? AND content_hash = ? ORDER BY virtual_path`,
-				)
-				.all(accountId, hash) as Array<{virtual_path: string}>
-			for (const target of remembered) {
-				if (!currentPaths.has(target.virtual_path)) {
-					rows.push({id: hashToId(hash), path: target.virtual_path, recoverOnly: true})
-				}
-			}
-			if (locations.length === 0 && pendingHashes) rows.push({id: hashToId(hash), pendingRevision: true})
-			if (locations.length === 0 && remembered.length === 0 && !pendingHashes) rows.push({id: hashToId(hash)})
-		}
-		return rows
+		).map((row) => ({
+			id: row.id,
+			path: joinVirtualPath(row.virtual_path, row.relative_path),
+			revision: {
+				inode: row.inode,
+				size: Number(row.size),
+				modifiedNs: row.modified_ns,
+				ctimeNs: row.ctime_ns,
+			},
+		}))
 	}
 
 	resolveLiveCompanion(database: Database, accountId: string, id: string) {
@@ -740,16 +608,16 @@ export default class PhotosRepository {
 							SELECT 1 FROM umbrel.photos_album_items AS chosen_membership
 							JOIN logical_items AS chosen ON chosen.content_hash = chosen_membership.content_hash
 							WHERE chosen_membership.album_id = umbrel.photos_albums.id
-								AND chosen.content_hash = umbrel.photos_albums.cover_content_hash AND chosen.deleted_at IS NULL
+								AND chosen.content_hash = umbrel.photos_albums.cover_content_hash AND chosen.root_kind = 'home'
 						) THEN lower(hex(umbrel.photos_albums.cover_content_hash)) ELSE (
 							SELECT newest.id FROM umbrel.photos_album_items AS newest_membership
 							JOIN logical_items AS newest ON newest.content_hash = newest_membership.content_hash
-							WHERE newest_membership.album_id = umbrel.photos_albums.id AND newest.deleted_at IS NULL
+							WHERE newest_membership.album_id = umbrel.photos_albums.id AND newest.root_kind = 'home'
 							ORDER BY newest.logical_taken_at DESC, newest.id LIMIT 1
 						) END AS cover_id,
-						COUNT(logical_items.id) FILTER (WHERE logical_items.deleted_at IS NULL) AS count,
-						MIN(logical_items.logical_taken_at) FILTER (WHERE logical_items.deleted_at IS NULL) AS taken_from,
-						MAX(logical_items.logical_taken_at) FILTER (WHERE logical_items.deleted_at IS NULL) AS taken_to
+						COUNT(logical_items.id) FILTER (WHERE logical_items.root_kind = 'home') AS count,
+						MIN(logical_items.logical_taken_at) FILTER (WHERE logical_items.root_kind = 'home') AS taken_from,
+						MAX(logical_items.logical_taken_at) FILTER (WHERE logical_items.root_kind = 'home') AS taken_to
 					FROM umbrel.photos_albums
 					LEFT JOIN umbrel.photos_album_items ON umbrel.photos_album_items.album_id = umbrel.photos_albums.id
 					LEFT JOIN logical_items ON logical_items.content_hash = umbrel.photos_album_items.content_hash
@@ -805,7 +673,7 @@ export default class PhotosRepository {
 					`${PHOTO_LIBRARY_CTE} SELECT 1 FROM umbrel.photos_album_items
 					JOIN logical_items ON logical_items.content_hash = umbrel.photos_album_items.content_hash
 					WHERE umbrel.photos_album_items.album_id = ? AND umbrel.photos_album_items.content_hash = ?
-						AND logical_items.deleted_at IS NULL`,
+						AND logical_items.root_kind = 'home'`,
 				)
 				.get(accountId, id, hash)
 			if (!member) return 0
@@ -847,17 +715,17 @@ export default class PhotosRepository {
 				.prepare(
 					`${PHOTO_LIBRARY_CTE} SELECT source.*,
 						COUNT(logical_items.id) FILTER (
-							WHERE logical_items.deleted_at IS NULL AND logical_items.kind = 'photo'
+							WHERE logical_items.root_kind = 'home' AND logical_items.kind = 'photo'
 								AND EXISTS (SELECT 1 FROM authorized_locations AS location
 									WHERE location.content_hash = logical_items.content_hash AND location.source_id = source.id)
 						) AS photos,
 						COUNT(logical_items.id) FILTER (
-							WHERE logical_items.deleted_at IS NULL AND logical_items.kind = 'video'
+							WHERE logical_items.root_kind = 'home' AND logical_items.kind = 'video'
 								AND EXISTS (SELECT 1 FROM authorized_locations AS location
 									WHERE location.content_hash = logical_items.content_hash AND location.source_id = source.id)
 						) AS videos,
 						COALESCE(SUM(logical_items.size) FILTER (
-							WHERE logical_items.deleted_at IS NULL
+							WHERE logical_items.root_kind = 'home'
 								AND EXISTS (SELECT 1 FROM authorized_locations AS location
 									WHERE location.content_hash = logical_items.content_hash AND location.source_id = source.id)
 						), 0) AS size_bytes
@@ -1026,25 +894,35 @@ export default class PhotosRepository {
 		).map(({blake3}) => blake3)
 	}
 
-	#withLiveCompanions(database: Database, accountId: string, hashes: Buffer[], includeUnavailable = false) {
+	#withLiveCompanions(database: Database, accountId: string, hashes: Buffer[], rootKind: PhotoRootKind) {
 		if (hashes.length === 0) return []
 		const unique = uniqueBuffers(hashes)
 		const placeholders = unique.map(() => '?').join(', ')
 		const companions = database
 			.prepare(
-				`SELECT motion_hash FROM umbrel.photos_live_pairs WHERE account_id = ? AND still_hash IN (${placeholders})
-				${
-					includeUnavailable
-						? ''
-						: `AND EXISTS (SELECT 1 FROM entries
+				`SELECT selected.motion_hash FROM umbrel.photos_live_pairs AS selected
+				WHERE selected.account_id = ? AND selected.still_hash IN (${placeholders})
+				AND EXISTS (SELECT 1 FROM entries
+					JOIN index_roots ON index_roots.id = entries.root_id
+					JOIN contents ON contents.id = entries.content_id
+					WHERE index_roots.owner_id = ? AND index_roots.kind = ?
+						AND contents.blake3 = selected.motion_hash
+						AND entries.type = 'file' AND entries.hidden = 0)
+				AND NOT EXISTS (
+					-- A shared motion file stays protected while any unselected still
+					-- remains visible in either Photos projection.
+					SELECT 1 FROM umbrel.photos_live_pairs AS other
+					WHERE other.account_id = selected.account_id AND other.motion_hash = selected.motion_hash
+						AND other.still_hash NOT IN (${placeholders})
+						AND EXISTS (SELECT 1 FROM entries
 							JOIN index_roots ON index_roots.id = entries.root_id
 							JOIN contents ON contents.id = entries.content_id
-							WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
-								AND contents.blake3 = umbrel.photos_live_pairs.motion_hash
-								AND entries.type = 'file' AND entries.hidden = 0)`
-				}`,
+							WHERE index_roots.owner_id = ? AND index_roots.kind IN ('home', 'trash')
+								AND contents.blake3 = other.still_hash
+								AND entries.type = 'file' AND entries.hidden = 0)
+				)`,
 			)
-			.all(accountId, ...unique, ...(includeUnavailable ? [] : [accountId])) as Array<{motion_hash: Buffer}>
+			.all(accountId, ...unique, accountId, rootKind, ...unique, accountId) as Array<{motion_hash: Buffer}>
 		return uniqueBuffers([...unique, ...companions.map(({motion_hash}) => motion_hash)])
 	}
 
@@ -1077,16 +955,7 @@ export default class PhotosRepository {
 		const candidate = bestLiveCandidate(stillRows, this.#liveLocations(database, accountId, 'video'))
 		if (!candidate) {
 			database
-				.prepare(
-					`DELETE FROM umbrel.photos_live_pairs AS pair WHERE account_id = ? AND still_hash = ? AND NOT (
-						EXISTS (SELECT 1 FROM umbrel.photos_content_state AS still_state
-							WHERE still_state.account_id = pair.account_id
-								AND still_state.content_hash = pair.still_hash AND still_state.deleted_at IS NOT NULL)
-						AND EXISTS (SELECT 1 FROM umbrel.photos_content_state AS motion_state
-							WHERE motion_state.account_id = pair.account_id
-								AND motion_state.content_hash = pair.motion_hash AND motion_state.deleted_at IS NOT NULL)
-					)`,
-				)
+				.prepare('DELETE FROM umbrel.photos_live_pairs WHERE account_id = ? AND still_hash = ?')
 				.run(accountId, stillHash)
 			return Boolean(previous)
 		}
@@ -1111,7 +980,7 @@ export default class PhotosRepository {
 				JOIN entries ON entries.root_id = index_roots.id
 				JOIN contents ON contents.id = entries.content_id
 				JOIN media_metadata ON media_metadata.content_id = entries.content_id AND media_metadata.state = 'ready'
-				WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
+				WHERE index_roots.owner_id = ? AND index_roots.kind IN ('home', 'trash')
 					AND entries.type = 'file' AND entries.hidden = 0 AND media_metadata.kind = ?
 				ORDER BY index_roots.virtual_path, entries.relative_path`,
 			)
@@ -1148,8 +1017,8 @@ export default class PhotosRepository {
 }
 
 function filterQuery(filter: PhotoFilter): Query {
-	const clauses = ['deleted_at IS ' + (filter.deleted ? 'NOT NULL' : 'NULL')]
-	const parameters: unknown[] = []
+	const clauses = ['root_kind = ?']
+	const parameters: unknown[] = [filter.deleted ? 'trash' : 'home']
 	if (filter.kind) {
 		clauses.push('kind = ?')
 		parameters.push(filter.kind)
@@ -1166,6 +1035,7 @@ function filterQuery(filter: PhotoFilter): Query {
 		clauses.push(
 			`EXISTS (SELECT 1 FROM authorized_locations AS source_match
 			WHERE source_match.content_hash = logical_items.content_hash
+				AND source_match.root_kind = logical_items.root_kind
 				AND source_match.source_id IN (${filter.sourceIds.map(() => '?').join(', ')}))`,
 		)
 		parameters.push(...filter.sourceIds)
@@ -1189,7 +1059,8 @@ function filterQuery(filter: PhotoFilter): Query {
 		if (Array.from(term).length >= 3) {
 			clauses.push(
 				`EXISTS (SELECT 1 FROM authorized_locations AS search_location
-				WHERE search_location.content_hash = logical_items.content_hash AND (
+				WHERE search_location.content_hash = logical_items.content_hash
+					AND search_location.root_kind = logical_items.root_kind AND (
 					search_location.entry_id IN (
 						SELECT rowid FROM entry_names_fts WHERE entry_names_fts MATCH ?
 					) OR search_location.content_id IN (
@@ -1203,6 +1074,7 @@ function filterQuery(filter: PhotoFilter): Query {
 			clauses.push(
 				`EXISTS (SELECT 1 FROM authorized_locations AS search_location
 				WHERE search_location.content_hash = logical_items.content_hash
+					AND search_location.root_kind = logical_items.root_kind
 					AND (instr(search_location.search_name_folded, ?) > 0
 						OR instr(search_location.search_text, ?) > 0))`,
 			)
@@ -1313,6 +1185,10 @@ function umbrelSourceId(accountId: string) {
 
 function joinVirtualPath(root: string, relativePath: string) {
 	return relativePath ? `${root}/${relativePath}` : root
+}
+
+function isPhotoRootKind(kind: string): kind is PhotoRootKind {
+	return kind === 'home' || kind === 'trash'
 }
 
 function idToHash(id: string): Buffer | undefined {

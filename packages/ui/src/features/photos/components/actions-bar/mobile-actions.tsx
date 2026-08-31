@@ -4,6 +4,7 @@ import {useTranslation} from 'react-i18next'
 import {useNavigate, useParams} from 'react-router-dom'
 
 import {PillButton} from '@/components/ui/edge-controls'
+import {DeletedActions} from '@/features/photos/components/actions-bar/deleted-actions'
 import {UploadButton} from '@/features/photos/components/actions-bar/upload-button'
 import {useBarRoute} from '@/features/photos/components/actions-bar/use-bar-route'
 import {usePhotosSelection} from '@/features/photos/components/selection-context'
@@ -31,7 +32,7 @@ export function MobileActions({className}: {className?: string}) {
 	const selection = usePhotosSelection()
 	const {search} = usePhotosView()
 	const reduceMotion = useReducedMotion() ?? false
-	const {collection, isSources, hasGrid, isTimeline} = useBarRoute()
+	const {collection, isSources, inDeleted, hasGrid, isTimeline} = useBarRoute()
 	const {albumId, sourceId} = useParams()
 
 	return (
@@ -56,6 +57,7 @@ export function MobileActions({className}: {className?: string}) {
 						/>
 					)}
 					{isTimeline && !sourceId && <UploadButton iconOnly />}
+					{inDeleted && <DeletedActions iconOnly />}
 					{/* The same circled check a tile wears when selected — the row
 					    stays a clean run of glyphs */}
 					{hasGrid && (

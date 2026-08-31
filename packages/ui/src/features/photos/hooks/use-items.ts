@@ -61,8 +61,8 @@ export function useItems(filter: ItemFilter, {enabled = true, keepPrevious = fal
 	}
 }
 
-export function useItem(id: string | undefined) {
-	return trpcReact.photos.items.get.useQuery({id: id ?? ''}, {enabled: Boolean(id)})
+export function useItem(id: string | undefined, deleted = false) {
+	return trpcReact.photos.items.get.useQuery({id: id ?? '', deleted}, {enabled: Boolean(id)})
 }
 
 export function useItemNeighbors(id: string | undefined, filter: ItemFilter) {
@@ -141,7 +141,7 @@ export function useItemActions() {
 	const deletePermanently = trpcReact.photos.items.deletePermanently.useMutation({
 		onMutate: ({ids}) => ids && remove(ids),
 		onError: recover,
-		onSettled: settle,
+		onSettled: (_data, _error, {ids}) => (ids ? settle() : recover()),
 	})
 	return {
 		setFavorite: setFavorite.mutateAsync,

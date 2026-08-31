@@ -18,6 +18,7 @@ import {SELECT_CIRCLE} from '@/features/photos/components/listing/item-tile'
 import {usePhotosSelection} from '@/features/photos/components/selection-context'
 import {useDownloadItems, useItemActions, type Item} from '@/features/photos/hooks/use-items'
 import {useAlbumActions, useAlbums} from '@/features/photos/hooks/use-library'
+import {useConfirmation} from '@/providers/confirmation/use-confirmation'
 import {useLinkToDialog} from '@/utils/dialog'
 import {formatNumberI18n} from '@/utils/number'
 
@@ -59,6 +60,7 @@ export function TileLayer({
 	children: ReactNode
 }) {
 	const {t, i18n} = useTranslation()
+	const confirm = useConfirmation()
 	const navigate = useNavigate()
 	const linkToDialog = useLinkToDialog()
 	const {setFavorite, deleteItems, restoreItems, deletePermanently} = useItemActions()
@@ -87,6 +89,19 @@ export function TileLayer({
 	const createAlbumWith = () => {
 		selection.set(ids)
 		navigate(linkToDialog('photos-create-album'))
+	}
+	const purge = async () => {
+		const count = ids.length
+		const formattedCount = formatNumberI18n({n: count, showDecimals: false, locale: i18n.language})
+		const result = await confirm({
+			title: t('photos-selection.delete-permanently-title', {count, formattedCount}),
+			message: t('photos-selection.delete-permanently-message', {count}),
+			actions: [
+				{label: t('photos-item.delete-permanently'), value: 'delete', variant: 'destructive'},
+				{label: t('cancel'), value: 'cancel', variant: 'default'},
+			],
+		}).catch(() => undefined)
+		if (result?.actionValue === 'delete') act(deletePermanently({ids}))
 	}
 
 	const tileFrom = (event: SyntheticEvent) => (event.target as Element).closest<HTMLElement>('[data-item-id]')
@@ -145,10 +160,7 @@ export function TileLayer({
 					) : inDeleted ? (
 						<>
 							<ContextMenuItem onClick={() => act(restoreItems({ids}))}>{t('photos-item.restore')}</ContextMenuItem>
-							<ContextMenuItem
-								className={contextMenuClasses.item.rootDestructive}
-								onClick={() => act(deletePermanently({ids}))}
-							>
+							<ContextMenuItem className={contextMenuClasses.item.rootDestructive} onClick={purge}>
 								{t('photos-item.delete-permanently')}
 							</ContextMenuItem>
 						</>

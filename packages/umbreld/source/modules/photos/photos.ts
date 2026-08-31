@@ -209,8 +209,8 @@ export default class Photos {
 		return this.#umbreld.files.fileIndex.photosListItems(accountId, filter, cursor, limit)
 	}
 
-	getItem(accountId: string, id: string) {
-		return this.#umbreld.files.fileIndex.photosGetItem(accountId, id)
+	getItem(accountId: string, id: string, deleted = false) {
+		return this.#umbreld.files.fileIndex.photosGetItem(accountId, id, deleted)
 	}
 
 	neighbors(accountId: string, id: string, filter: PhotoFilter) {
@@ -224,46 +224,28 @@ export default class Photos {
 	}
 
 	async deleteItems(accountId: string, ids: string[]) {
-		const changes = await this.#umbreld.files.fileIndex.photosSetDeleted(accountId, ids, true)
-		if (changes) this.#changed(accountId)
-		return changes
+		const items = await this.#umbreld.files.fileIndex.photosResolveItemFiles(accountId, ids, 'home')
+		for (const item of items) await this.#umbreld.files.trash(item.path, accountId, item.revision)
+		if (items.length) this.#changed(accountId)
+		return items.length
 	}
 
 	async restoreItems(accountId: string, ids: string[]) {
-		const changes = await this.#umbreld.files.fileIndex.photosSetDeleted(accountId, ids, false)
-		if (changes) this.#changed(accountId)
-		return changes
+		const items = await this.#umbreld.files.fileIndex.photosResolveItemFiles(accountId, ids, 'trash')
+		for (const item of items) await this.#umbreld.files.restore(item.path, {userId: accountId, waitForIndex: true})
+		if (items.length) this.#changed(accountId)
+		return items.length
 	}
 
 	async deletePermanently(accountId: string, ids?: string[]) {
-		const items = await this.#umbreld.files.fileIndex.photosResolveDeletedItems(accountId, ids)
-		// A recovered claim can restore the visible file before enrichment has
-		// reattached its content hash. Keep the durable Photos row until that brief
-		// settling window closes so a retry cannot orphan and later reimport it.
-		if (items.some(({pendingRevision}) => pendingRevision)) throw new Error('[photos-item-busy]')
-		// Resolve the complete safe set before touching the filesystem, including
-		// only Live companions no other deleted still references. Keep every
-		// durable row until all moves succeed so a stopped/failed attempt can use
-		// the preserved pair relation to resolve the same set on retry.
-		for (const item of items) {
-			// A prior attempt may already have moved this exact file. Only touch the
-			// live pathname while the index still identifies the same content
-			// revision. If a stopped attempt left an internal claim, restore it first
-			// and keep the durable rows so the next retry can validate it normally.
-			if (item.path && (await this.#umbreld.files.recoverTrashClaim(item.path, accountId))) {
-				throw new Error('[trash-claim-recovered]')
-			}
-			if (item.path && item.revision && !item.recoverOnly) {
-				await this.#umbreld.files.trash(item.path, accountId, item.revision)
-			}
-		}
-		const changes = await this.#umbreld.files.fileIndex.photosDeleteItems(
-			accountId,
-			[...new Set(items.map(({id}) => id))],
-			false,
-		)
-		if (changes) this.#changed(accountId)
-		return changes
+		const items = await this.#umbreld.files.fileIndex.photosResolveItemFiles(accountId, ids, 'trash')
+		if (items.length === 0) return 0
+		const paths = [...new Set(items.map(({path}) => path))]
+		const expectedRevisions = new Map(items.map(({path, revision}) => [path, revision]))
+		const results = await this.#umbreld.files.deleteMany(paths, accountId, {waitForIndex: true, expectedRevisions})
+		if (results.some((deleted) => !deleted)) throw new Error('[photos-delete-failed]')
+		this.#changed(accountId)
+		return results.length
 	}
 
 	listAlbums(accountId: string) {

@@ -424,8 +424,8 @@ export default class FileIndex {
 		])
 	}
 
-	async photosGetItem(accountId: string, id: string) {
-		return this.#request<PhotoItemDetail | undefined>('photosGetItem', [accountId, id])
+	async photosGetItem(accountId: string, id: string, deleted = false) {
+		return this.#request<PhotoItemDetail | undefined>('photosGetItem', [accountId, id, deleted])
 	}
 
 	async photosNeighbors(accountId: string, id: string, filter: PhotoFilter) {
@@ -436,32 +436,20 @@ export default class FileIndex {
 		return this.#request<number>('photosSetFavorite', [accountId, ids, favorite])
 	}
 
-	async photosSetDeleted(accountId: string, ids: string[], deleted: boolean) {
-		return this.#request<number>('photosSetDeleted', [accountId, ids, deleted])
-	}
-
 	async photosResolveItems(accountId: string, ids: string[]) {
 		return this.#request<Array<{id: string; path: string}>>('photosResolveItems', [accountId, ids])
 	}
 
-	async photosResolveDeletedItems(accountId: string, ids?: string[]) {
-		return this.#request<
-			Array<{
-				id: string
-				path?: string
-				revision?: PublishedFileRevision
-				recoverOnly?: true
-				pendingRevision?: true
-			}>
-		>('photosResolveDeletedItems', [accountId, ids])
+	async photosResolveItemFiles(accountId: string, ids: string[] | undefined, rootKind: 'home' | 'trash') {
+		return this.#request<Array<{id: string; path: string; revision: PublishedFileRevision}>>('photosResolveItemFiles', [
+			accountId,
+			ids,
+			rootKind,
+		])
 	}
 
 	async photosResolveLiveCompanion(accountId: string, id: string) {
 		return this.#request<{id: string; path: string} | undefined>('photosResolveLiveCompanion', [accountId, id])
-	}
-
-	async photosDeleteItems(accountId: string, ids: string[], includeLiveCompanions = true) {
-		return this.#request<number>('photosDeleteItems', [accountId, ids, includeLiveCompanions])
 	}
 
 	async photosListAlbums(accountId: string) {

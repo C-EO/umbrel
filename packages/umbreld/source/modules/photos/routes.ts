@@ -102,11 +102,13 @@ export default router({
 				}),
 			)
 			.query(({ctx, input}) => ctx.umbreld.photos.listItems(accountId(ctx), input.filter, input.cursor, input.limit)),
-		get: privateProcedureWithMembers.input(z.object({id: z.string()})).query(async ({ctx, input}) => {
-			const item = await ctx.umbreld.photos.getItem(accountId(ctx), input.id)
-			if (!item) throw new TRPCError({code: 'NOT_FOUND'})
-			return item
-		}),
+		get: privateProcedureWithMembers
+			.input(z.object({id: z.string(), deleted: z.boolean().default(false)}))
+			.query(async ({ctx, input}) => {
+				const item = await ctx.umbreld.photos.getItem(accountId(ctx), input.id, input.deleted)
+				if (!item) throw new TRPCError({code: 'NOT_FOUND'})
+				return item
+			}),
 		neighbors: privateProcedureWithMembers
 			.input(z.object({id: z.string(), filter: filterSchema.default({})}))
 			.query(async ({ctx, input}) => {

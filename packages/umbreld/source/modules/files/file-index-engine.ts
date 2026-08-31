@@ -941,7 +941,7 @@ export default class FileIndexEngine {
 							)`,
 						root.id,
 					)
-					if (this.#photosAvailable && root.kind === 'home') {
+					if (this.#photosAvailable && isPhotosRootKind(root.kind)) {
 						this.#photos.refreshLivePairsForAccount(database, root.ownerId)
 					}
 					run(database, 'DELETE FROM reconciliation_seen')
@@ -976,7 +976,7 @@ export default class FileIndexEngine {
 				root.lastError = undefined
 				this.logger.log(`Reconciled '${root.virtualPath}' in ${completedAt - startedAt}ms (${indexedEntries} entries)`)
 			}
-			if (root.kind === 'home') this.#notifyPhotosChanged([root.ownerId])
+			if (isPhotosRootKind(root.kind)) this.#notifyPhotosChanged([root.ownerId])
 		} catch (error) {
 			if (!(error instanceof ScanCancelledError) && this.#roots.get(root.virtualPath) === root) {
 				await this.#degradeRoot(root, error)
@@ -1206,7 +1206,14 @@ export default class FileIndexEngine {
 			await this.reconcilePath(destinationSystemPath)
 			const sourceRoot = this.#rootForSystemPath(sourceSystemPath)
 			const destinationRoot = this.#rootForSystemPath(destinationSystemPath)
-			if (sourceRoot?.kind === 'home' && destinationRoot?.kind === 'home' && sourceRoot.id && destinationRoot.id) {
+			if (
+				sourceRoot &&
+				destinationRoot &&
+				isPhotosRootKind(sourceRoot.kind) &&
+				isPhotosRootKind(destinationRoot.kind) &&
+				sourceRoot.id &&
+				destinationRoot.id
+			) {
 				await this.#mutate((database) => {
 					const move = database.transaction(() => {
 						const sourceRelativePath = relativePathWithin(sourceRoot.systemPath, sourceSystemPath)
@@ -1335,7 +1342,7 @@ export default class FileIndexEngine {
 			(database) => this.#applyPathMutation(database, {type: 'delete', rootId, relativePath}),
 			priority,
 		)
-		if (root.kind === 'home') this.#notifyPhotosChanged([root.ownerId])
+		if (isPhotosRootKind(root.kind)) this.#notifyPhotosChanged([root.ownerId])
 		this.#enrichment.kick()
 	}
 
@@ -1352,7 +1359,7 @@ export default class FileIndexEngine {
 				if (mutation.relativePath === '') {
 					run(database, 'DELETE FROM entries WHERE root_id = ?', mutation.rootId)
 					run(database, 'DELETE FROM reconciliation_seen WHERE root_id = ?', mutation.rootId)
-					if (root?.kind === 'home') this.#photos.refreshLivePairsForAccount(database, root.owner_id)
+					if (root && isPhotosRootKind(root.kind)) this.#photos.refreshLivePairsForAccount(database, root.owner_id)
 					return
 				}
 				// SQLite's default binary ordering places every `path/...`
@@ -1388,7 +1395,7 @@ export default class FileIndexEngine {
 					prefix,
 					prefixEnd,
 				)
-				if (root?.kind === 'home') this.#photos.refreshLivePairsForAccount(database, root.owner_id)
+				if (root && isPhotosRootKind(root.kind)) this.#photos.refreshLivePairsForAccount(database, root.owner_id)
 				return
 			}
 
@@ -1622,8 +1629,8 @@ export default class FileIndexEngine {
 		)
 	}
 
-	async photosGetItem(accountId: string, id: string) {
-		return this.#mutate((database) => this.#photos.getItem(this.#photosDatabase(database), accountId, id))
+	async photosGetItem(accountId: string, id: string, deleted = false) {
+		return this.#mutate((database) => this.#photos.getItem(this.#photosDatabase(database), accountId, id, deleted))
 	}
 
 	async photosNeighbors(accountId: string, id: string, filter: PhotoFilter) {
@@ -1636,26 +1643,18 @@ export default class FileIndexEngine {
 		)
 	}
 
-	async photosSetDeleted(accountId: string, ids: string[], deleted: boolean) {
-		return this.#mutate((database) => this.#photos.setDeleted(this.#photosDatabase(database), accountId, ids, deleted))
-	}
-
 	async photosResolveItems(accountId: string, ids: string[]) {
 		return this.#mutate((database) => this.#photos.resolveItems(this.#photosDatabase(database), accountId, ids))
 	}
 
-	async photosResolveDeletedItems(accountId: string, ids?: string[]) {
-		return this.#mutate((database) => this.#photos.resolveDeletedItems(this.#photosDatabase(database), accountId, ids))
+	async photosResolveItemFiles(accountId: string, ids: string[] | undefined, rootKind: 'home' | 'trash') {
+		return this.#mutate((database) =>
+			this.#photos.resolveItemFiles(this.#photosDatabase(database), accountId, ids, rootKind),
+		)
 	}
 
 	async photosResolveLiveCompanion(accountId: string, id: string) {
 		return this.#mutate((database) => this.#photos.resolveLiveCompanion(this.#photosDatabase(database), accountId, id))
-	}
-
-	async photosDeleteItems(accountId: string, ids: string[], includeLiveCompanions = true) {
-		return this.#mutate((database) =>
-			this.#photos.deleteItems(this.#photosDatabase(database), accountId, ids, includeLiveCompanions),
-		)
 	}
 
 	async photosListAlbums(accountId: string) {
@@ -2197,6 +2196,10 @@ function sameRootDefinition(left: FileIndexRoot, right: FileIndexRoot) {
 		left.searchEnabled === right.searchEnabled &&
 		(left.scanEnabled ?? true) === (right.scanEnabled ?? true)
 	)
+}
+
+function isPhotosRootKind(kind: string): kind is 'home' | 'trash' {
+	return kind === 'home' || kind === 'trash'
 }
 
 function isReservedMemberTrashPath(root: FileIndexRoot, relativePath: string) {

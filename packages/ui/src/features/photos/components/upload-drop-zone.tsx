@@ -6,7 +6,7 @@ import {FileDropZone} from '@/components/file-drop-zone'
 import {useUpload} from '@/features/photos/hooks/use-upload'
 
 // Files dragged from the desktop drop anywhere on the pane — every page
-// except Recently Deleted — and upload into the library; dropped on an
+// except Deleted — and upload into the library; dropped on an
 // album's page they join the album too (use-upload reads the route). No
 // filtering here: use-upload sifts photos and videos from everything else
 // and explains the rest, so nothing silently disappears.

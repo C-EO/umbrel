@@ -65,13 +65,14 @@ async function fixture(
 			| 'onPhotosChange'
 			| 'onPhotosIndexingProgress'
 		>
-	> = {},
+	> & {includeTrash?: boolean} = {},
 ) {
-	const {enrichmentRuntime, ...engineOptions} = options
+	const {enrichmentRuntime, includeTrash = false, ...engineOptions} = options
 	const rootDirectory = await temporary.create()
 	const dataDirectory = await temporary.create()
 	const homeDirectory = nodePath.join(rootDirectory, 'home')
-	await fse.ensureDir(homeDirectory)
+	const trashDirectory = nodePath.join(rootDirectory, 'trash')
+	await Promise.all([fse.ensureDir(homeDirectory), fse.ensureDir(trashDirectory)])
 
 	const index = new FileIndex({
 		dataDirectory,
@@ -106,8 +107,15 @@ async function fixture(
 		kind: 'home',
 		searchEnabled: true,
 	}
-	await index.setRoots([root])
-	return {index, root, rootDirectory, dataDirectory, homeDirectory}
+	const trashRoot: FileIndexRoot = {
+		virtualPath: '/Trash',
+		systemPath: trashDirectory,
+		ownerId: 'owner',
+		kind: 'trash',
+		searchEnabled: false,
+	}
+	await index.setRoots(includeTrash ? [root, trashRoot] : [root])
+	return {index, root, trashRoot, rootDirectory, dataDirectory, homeDirectory, trashDirectory}
 }
 
 async function candidateNames(index: FileIndex, query: string, maxResults = 100) {
@@ -1070,7 +1078,8 @@ test('serves an account-scoped Photos library from indexed media and durable sta
 	const generateThumbnail = vi.fn(async (_source: string, destination: string) => {
 		await fse.outputFile(destination, 'thumbnail')
 	})
-	const {index, homeDirectory} = await fixture(undefined, {
+	const {index, homeDirectory, trashDirectory} = await fixture(undefined, {
+		includeTrash: true,
 		enrichmentRuntime: {
 			hashFile: async (systemPath) => Buffer.alloc(32, nodePath.basename(systemPath).startsWith('video') ? 2 : 1),
 			generateThumbnail,
@@ -1113,10 +1122,16 @@ test('serves an account-scoped Photos library from indexed media and durable sta
 		isFavorite: true,
 		albums: [{id: album.id, name: 'Trip'}],
 	})
-	await index.photosSetDeleted('owner', [photo.id], true)
+	await fse.move(nodePath.join(homeDirectory, 'photo.jpg'), nodePath.join(trashDirectory, 'photo.jpg'))
+	await index.movePath(nodePath.join(homeDirectory, 'photo.jpg'), nodePath.join(trashDirectory, 'photo.jpg'))
 	await expect(index.photosSummary('owner')).resolves.toMatchObject({
 		counts: {items: 1, favorites: 0, photos: 0, videos: 1, deleted: 1},
 	})
+	await expect(index.photosListItems('owner', {deleted: true}, undefined, 10)).resolves.toMatchObject({
+		total: 1,
+		items: [{id: photo.id}],
+	})
+	await expect(index.photosGetItem('owner', photo.id, true)).resolves.toMatchObject({path: '/Trash/photo.jpg'})
 })
 
 test('coalesces Photos changes and reports account-scoped indexing progress snapshots', async () => {
@@ -1328,29 +1343,12 @@ test('deduplicates Photos by hash after account authorization and uses a stable 
 	await expect(index.photosGetItem('owner', hashId)).resolves.toMatchObject({isFavorite: true})
 	await expect(index.photosListAlbums('alice')).resolves.toStrictEqual([])
 
-	await index.photosSetDeleted('owner', [hashId], true)
-	const deletionSet = await index.photosResolveDeletedItems('owner', [hashId])
+	const deletionSet = await index.photosResolveItemFiles('owner', [hashId], 'home')
 	expect(deletionSet.map(({path}) => path)).toStrictEqual(['/Home/A/canonical.jpg', '/Home/Z/searchable-sunset.jpg'])
 	expect(deletionSet.some(({path}) => path === '/Users/alice/member-copy.jpg')).toBe(false)
-	const deletedState = new BetterSqlite3(index.umbrelDatabasePath)
-	expect(
-		deletedState
-			.prepare(
-				`SELECT virtual_path FROM photos_deletion_targets
-				WHERE account_id = ? AND content_hash = ? ORDER BY virtual_path`,
-			)
-			.all('owner', duplicateHash),
-	).toStrictEqual([{virtual_path: '/Home/A/canonical.jpg'}, {virtual_path: '/Home/Z/searchable-sunset.jpg'}])
-	expect(
-		deletedState.prepare('SELECT virtual_path FROM photos_deletion_targets WHERE account_id = ?').all('alice'),
-	).toStrictEqual([])
-	deletedState.close()
-	await index.photosSetDeleted('owner', [hashId], false)
-	const restoredState = new BetterSqlite3(index.umbrelDatabasePath)
-	expect(
-		restoredState.prepare('SELECT * FROM photos_deletion_targets WHERE account_id = ?').all('owner'),
-	).toStrictEqual([])
-	restoredState.close()
+	await expect(index.photosResolveItemFiles('alice', [hashId], 'home')).resolves.toMatchObject([
+		{path: '/Users/alice/member-copy.jpg'},
+	])
 
 	const source = (await index.photosListSources('owner'))[0]!
 	await expect(
@@ -1599,7 +1597,7 @@ test('preflights Photos upload duplicates without publishing or rereading the fi
 	photos.close()
 })
 
-test('does not deduplicate uploads against deleted or invalidated durable Photos rows', async () => {
+test('does not deduplicate uploads against missing or invalidated durable Photos rows', async () => {
 	const oldDigest = Buffer.alloc(32, 0x72)
 	const newDigest = Buffer.alloc(32, 0x73)
 	const {index, homeDirectory, dataDirectory} = await fixture()
@@ -1644,7 +1642,7 @@ test('does not deduplicate uploads against deleted or invalidated durable Photos
 	).resolves.toMatchObject({status: 'imported'})
 })
 
-test('pairs live photos, hides their motion companions, and cascades deletion', async () => {
+test('pairs live photos, hides their motion companions, and resolves both files for mutations', async () => {
 	const {index, homeDirectory} = await fixture(undefined, {
 		enrichmentRuntime: {
 			hashFile: async (systemPath) => Buffer.alloc(32, nodePath.basename(systemPath).endsWith('.mov') ? 2 : 1),
@@ -1692,14 +1690,7 @@ test('pairs live photos, hides their motion companions, and cascades deletion', 
 		async () => expect(await index.photosGetItem('owner', page.items[0]!.id)).toMatchObject({subKind: 'live'}),
 		{retries: 200, minTimeout: 10, maxTimeout: 20},
 	)
-	await index.photosSetDeleted('owner', [page.items[0]!.id], true)
-	const deletionSet = await index.photosResolveDeletedItems('owner', [page.items[0]!.id])
-	expect(deletionSet).toHaveLength(2)
-	await fse.remove(photo)
-	await index.removePath(photo)
-	await expect(index.photosResolveDeletedItems('owner', [page.items[0]!.id])).resolves.toEqual(
-		expect.arrayContaining(deletionSet.map(({id}) => expect.objectContaining({id}))),
-	)
+	await expect(index.photosResolveItemFiles('owner', [page.items[0]!.id], 'home')).resolves.toHaveLength(2)
 })
 
 test('pairs a short same-folder motion clip when Apple identifiers are absent', async () => {
@@ -1819,8 +1810,9 @@ test('preserves Photos identity and user state across a watcher-reported rename'
 	)
 })
 
-test('keeps a shared Live Photo companion until the final visible still is deleted', async () => {
-	const {index, homeDirectory} = await fixture(undefined, {
+test('moves a shared Live Photo companion only with every still that references it', async () => {
+	const {index, homeDirectory, trashDirectory} = await fixture(undefined, {
+		includeTrash: true,
 		enrichmentRuntime: {
 			hashFile: async (systemPath) =>
 				Buffer.alloc(
@@ -1859,140 +1851,110 @@ test('keeps a shared Live Photo companion until the final visible still is delet
 	const stills = (await index.photosListItems('owner', {}, undefined, 10)).items
 	expect(stills).toHaveLength(2)
 	expect(stills.every(({subKind}) => subKind === 'live')).toBe(true)
-	await index.photosSetDeleted('owner', [stills[0]!.id], true)
-	await expect(index.photosResolveLiveCompanion('owner', stills[1]!.id)).resolves.toBeDefined()
-	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 1})
-
-	await index.photosSetDeleted('owner', [stills[1]!.id], true)
-	await expect(index.photosListItems('owner', {deleted: true}, undefined, 10)).resolves.toMatchObject({total: 2})
-	const database = new BetterSqlite3(index.umbrelDatabasePath)
-	const deletedCompanion = database
-		.prepare(
-			`SELECT motion_state.deleted_at FROM photos_live_pairs AS pair
-			JOIN photos_content_state AS motion_state ON motion_state.account_id = pair.account_id
-				AND motion_state.content_hash = pair.motion_hash
-			WHERE pair.account_id = ? AND pair.still_hash = ?`,
-		)
-		.get('owner', Buffer.from(stills[1]!.id, 'hex')) as {deleted_at: number | null}
-	expect(deletedCompanion.deleted_at).not.toBeNull()
-	database.close()
-	await expect(index.photosResolveDeletedItems('owner', [stills[0]!.id])).resolves.toEqual(
+	await expect(index.photosResolveItemFiles('owner', [stills[0]!.id], 'home')).resolves.toMatchObject([
+		{id: stills[0]!.id},
+	])
+	await expect(
+		index.photosResolveItemFiles(
+			'owner',
+			stills.map(({id}) => id),
+			'home',
+		),
+	).resolves.toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({id: stills[0]!.id}),
+			expect.objectContaining({id: stills[1]!.id}),
 			expect.objectContaining({id: Buffer.alloc(32, 0x82).toString('hex')}),
 		]),
 	)
-	await index.photosDeleteItems('owner', [stills[0]!.id], false)
-	await expect(index.photosResolveLiveCompanion('owner', stills[1]!.id)).resolves.toBeDefined()
+
+	// Splitting the stills between Home and Trash must not make the motion file
+	// disposable: permanently deleting the Trash-side still later must not erase
+	// the only companion still referenced by the Home-side still.
+	const secondHomePath = nodePath.join(homeDirectory, '2-still.jpg')
+	const secondTrashPath = nodePath.join(trashDirectory, '2-still.jpg')
+	await fse.move(secondHomePath, secondTrashPath)
+	await index.movePath(secondHomePath, secondTrashPath)
+	await expect(index.photosResolveItemFiles('owner', [stills[0]!.id], 'home')).resolves.toMatchObject([
+		{id: stills[0]!.id},
+	])
+	const secondId = Buffer.alloc(32, 2).toString('hex')
+	await expect(index.photosResolveItemFiles('owner', [secondId], 'trash')).resolves.toMatchObject([{id: secondId}])
 })
 
-test('resolves a deleted Photos row after an earlier attempt moved its file', async () => {
-	const {index, homeDirectory} = await fixture(undefined, {
+test('derives Deleted from enriched Trash media and preserves state across moves', async () => {
+	const {index, homeDirectory, trashDirectory} = await fixture(undefined, {
+		includeTrash: true,
 		enrichmentRuntime: {
-			hashFile: async () => Buffer.alloc(32, 19),
-			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
-			extractMediaMetadata: async () => ({
-				kind: 'photo' as const,
-				takenAt: 1_000,
-				createdAt: 500,
-				width: 100,
-				height: 50,
-			}),
-		},
-	})
-	const photo = nodePath.join(homeDirectory, 'retry-delete.jpg')
-	await writeFile(photo, 'photo')
-	const revision = await contentRevision(photo)
-	await index.reconcileRoot('/Home', 'deleted-retry')
-	await index.initializePhotos('owner')
-	index.startBackgroundReconciliation()
-	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
-		retries: 200,
-		minTimeout: 10,
-		maxTimeout: 20,
-	})
-
-	const item = (await index.photosListItems('owner', {}, undefined, 10)).items[0]!
-	await index.photosSetDeleted('owner', [item.id], true)
-	await expect(index.photosResolveDeletedItems('owner', [item.id])).resolves.toStrictEqual([
-		{id: item.id, path: '/Home/retry-delete.jpg', revision},
-	])
-	const database = new BetterSqlite3(index.databasePath)
-	database.prepare("UPDATE entries SET content_id = NULL WHERE relative_path = 'retry-delete.jpg'").run()
-	database.close()
-	await expect(index.photosResolveDeletedItems('owner', [item.id])).resolves.toStrictEqual([
-		{id: item.id, path: '/Home/retry-delete.jpg', recoverOnly: true},
-		{id: item.id, pendingRevision: true},
-	])
-	await fse.remove(photo)
-	await index.removePath(photo)
-
-	await expect(index.photosResolveDeletedItems('owner', [item.id])).resolves.toStrictEqual([
-		{id: item.id, path: '/Home/retry-delete.jpg', recoverOnly: true},
-	])
-	const warmingDatabase = new BetterSqlite3(index.databasePath)
-	warmingDatabase.prepare("UPDATE index_roots SET state = 'warming' WHERE virtual_path = '/Home'").run()
-	warmingDatabase.close()
-	await expect(index.photosResolveDeletedItems('owner', [item.id])).resolves.toStrictEqual([
-		{id: item.id, path: '/Home/retry-delete.jpg', recoverOnly: true},
-		{id: item.id, pendingRevision: true},
-	])
-})
-
-test('keeps a deleted Live Photo retryable when its still is quarantined internally', async () => {
-	const {index, homeDirectory} = await fixture(undefined, {
-		enrichmentRuntime: {
-			hashFile: async (systemPath) => Buffer.alloc(32, systemPath.endsWith('.mov') ? 21 : 20),
+			hashFile: async (systemPath) => {
+				const name = nodePath.basename(systemPath)
+				return Buffer.alloc(32, name.startsWith('home') ? 19 : name.endsWith('.mp4') ? 21 : 20)
+			},
 			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
 			extractMediaMetadata: async (systemPath) => ({
-				kind: systemPath.endsWith('.mov') ? ('video' as const) : ('photo' as const),
+				kind: systemPath.endsWith('.mp4') ? ('video' as const) : ('photo' as const),
 				takenAt: 1_000,
 				createdAt: 500,
 				width: 100,
 				height: 50,
-				liveIdentifier: 'quarantined-live-pair',
-				...(systemPath.endsWith('.mov') ? {durationMs: 3_000} : {}),
 			}),
 		},
 	})
-	const still = nodePath.join(homeDirectory, 'IMG_0003.heic')
-	const motion = nodePath.join(homeDirectory, 'IMG_0003.mov')
-	await Promise.all([writeFile(still, 'still'), writeFile(motion, 'motion')])
-	await index.reconcileRoot('/Home', 'quarantined-live-photo')
+	const homePhoto = nodePath.join(homeDirectory, 'home-photo.jpg')
+	const trashPhoto = nodePath.join(trashDirectory, 'trash-photo.jpg')
+	const trashVideo = nodePath.join(trashDirectory, 'trash-video.mp4')
+	await Promise.all([
+		writeFile(homePhoto, 'home photo'),
+		writeFile(trashPhoto, 'trash photo'),
+		writeFile(trashVideo, 'trash video'),
+		writeFile(nodePath.join(trashDirectory, 'keep.txt'), 'not media'),
+	])
+	await Promise.all([
+		index.reconcileRoot('/Home', 'trash-derived-home'),
+		index.reconcileRoot('/Trash', 'trash-derived-trash'),
+	])
 	await index.initializePhotos('owner')
 	index.startBackgroundReconciliation()
-	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
-		retries: 200,
-		minTimeout: 10,
-		maxTimeout: 20,
-	})
-
-	const item = (await index.photosListItems('owner', {subKind: 'live'}, undefined, 10)).items[0]!
-	await index.photosSetDeleted('owner', [item.id], true)
-	const deletionSet = await index.photosResolveDeletedItems('owner', [item.id])
-	const quarantine = nodePath.join(homeDirectory, 'IMG_0003.heic.test.umbrel-trash')
-	await fse.move(still, quarantine)
-
-	// Parcel can report an atomic rename as one unordered callback. The internal
-	// destination may be tracked as hidden, but must not be reused as an ordinary
-	// Photos rename.
-	index.noteWatcherChanges('/Home', [
-		{path: quarantine, type: 'create'},
-		{path: still, type: 'delete'},
-	])
-	await pRetry(async () => expect(await index.getEntryBySystemPath(still)).toBeUndefined(), {
-		retries: 100,
-		minTimeout: 10,
-		maxTimeout: 20,
-	})
-	await expect(index.getEntryBySystemPath(quarantine)).resolves.toMatchObject({hidden: true})
 	await pRetry(
-		async () =>
-			expect(await index.photosResolveDeletedItems('owner', [item.id])).toEqual(
-				expect.arrayContaining(deletionSet.map(({id}) => expect.objectContaining({id}))),
-			),
-		{retries: 100, minTimeout: 10, maxTimeout: 20},
+		async () => {
+			await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 1})
+			await expect(index.photosListItems('owner', {deleted: true}, undefined, 10)).resolves.toMatchObject({
+				total: 2,
+				items: expect.arrayContaining([
+					expect.objectContaining({kind: 'photo'}),
+					expect.objectContaining({kind: 'video'}),
+				]),
+			})
+		},
+		{retries: 200, minTimeout: 10, maxTimeout: 20},
 	)
+
+	const homeItem = (await index.photosListItems('owner', {}, undefined, 10)).items[0]!
+	await index.photosSetFavorite('owner', [homeItem.id], true)
+	const album = await index.photosCreateAlbum('owner', 'Restorable', [homeItem.id])
+	await fse.move(homePhoto, nodePath.join(trashDirectory, 'home-photo.jpg'))
+	await index.movePath(homePhoto, nodePath.join(trashDirectory, 'home-photo.jpg'))
+
+	await expect(index.photosSummary('owner')).resolves.toMatchObject({
+		counts: {items: 0, favorites: 0, photos: 0, videos: 0, deleted: 3},
+	})
+	await expect(index.photosGetItem('owner', homeItem.id, true)).resolves.toMatchObject({
+		path: '/Trash/home-photo.jpg',
+		isFavorite: true,
+		albums: [{id: album.id, name: 'Restorable'}],
+	})
+	await expect(index.photosListAlbums('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, count: 0}),
+	)
+	await expect(index.photosResolveItemFiles('owner', undefined, 'trash')).resolves.toHaveLength(3)
+
+	await fse.move(nodePath.join(trashDirectory, 'home-photo.jpg'), homePhoto)
+	await index.movePath(nodePath.join(trashDirectory, 'home-photo.jpg'), homePhoto)
+	await expect(index.photosGetItem('owner', homeItem.id)).resolves.toMatchObject({
+		path: '/Home/home-photo.jpg',
+		isFavorite: true,
+	})
+	await expect(index.photosListItems('owner', {deleted: true}, undefined, 10)).resolves.toMatchObject({total: 2})
 })
 
 test('searches Photos filenames and camera metadata through indexed trigrams and short substrings', async () => {

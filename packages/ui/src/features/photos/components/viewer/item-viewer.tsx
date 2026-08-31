@@ -98,7 +98,7 @@ export function ItemViewer() {
 	const inDeleted = filter.deleted === true
 	const confirm = useConfirmation()
 	const {items, hasMore, loadMore} = useItems(filter, {enabled: dialogProps.open})
-	const {data: item} = useItem(id)
+	const {data: item} = useItem(id, inDeleted)
 	const index = items.findIndex((candidate) => candidate.id === id)
 	const {data: apiNeighbors} = useItemNeighbors(index === -1 ? id : undefined, filter)
 	const prevId = index > 0 ? items[index - 1]!.id : apiNeighbors?.prevId

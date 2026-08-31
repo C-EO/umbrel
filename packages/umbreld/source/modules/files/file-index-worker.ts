@@ -202,21 +202,20 @@ async function request(method: FileIndexRequestMethod, args: unknown[]) {
 				numberArg(args, 3),
 			)
 		case 'photosGetItem':
-			return index.photosGetItem(stringArg(args), stringArg(args, 1))
+			return index.photosGetItem(stringArg(args), stringArg(args, 1), booleanArg(args, 2))
 		case 'photosNeighbors':
 			return index.photosNeighbors(stringArg(args), stringArg(args, 1), objectArg<PhotoFilter>(args, 2))
 		case 'photosSetFavorite':
 			return index.photosSetFavorite(stringArg(args), stringsArg(args, 1), booleanArg(args, 2))
-		case 'photosSetDeleted':
-			return index.photosSetDeleted(stringArg(args), stringsArg(args, 1), booleanArg(args, 2))
 		case 'photosResolveItems':
 			return index.photosResolveItems(stringArg(args), stringsArg(args, 1))
-		case 'photosResolveDeletedItems':
-			return index.photosResolveDeletedItems(stringArg(args), optionalStringsArg(args, 1))
+		case 'photosResolveItemFiles': {
+			const rootKind = stringArg(args, 2)
+			if (rootKind !== 'home' && rootKind !== 'trash') throw new TypeError('Expected a Photos root kind')
+			return index.photosResolveItemFiles(stringArg(args), optionalStringsArg(args, 1), rootKind)
+		}
 		case 'photosResolveLiveCompanion':
 			return index.photosResolveLiveCompanion(stringArg(args), stringArg(args, 1))
-		case 'photosDeleteItems':
-			return index.photosDeleteItems(stringArg(args), stringsArg(args, 1), booleanArg(args, 2))
 		case 'photosListAlbums':
 			return index.photosListAlbums(stringArg(args))
 		case 'photosCreateAlbum':

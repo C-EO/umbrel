@@ -1,5 +1,4 @@
 import nodePath from 'node:path'
-import {createHash} from 'node:crypto'
 
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, test} from 'vitest'
 import AdmZip from 'adm-zip'
@@ -21,6 +20,7 @@ describe('Photos account isolation', () => {
 	let watchedItemId: string
 	let memberItemId: string
 	let memberPrivateItemId: string
+	let memberWatchedItemId: string
 	let failed = false
 
 	const ownerPassword = 'moneyprintergobrrr'
@@ -29,7 +29,8 @@ describe('Photos account isolation', () => {
 	let image: Buffer
 	let ownerImage: Buffer
 	let watchedImage: Buffer
-	let interruptedImage: Buffer
+	let trashSelectedImage: Buffer
+	let trashAllImage: Buffer
 	let memberPrivateImage: Buffer
 	let memberWatchedImage: Buffer
 
@@ -96,7 +97,8 @@ describe('Photos account isolation', () => {
 		// deliberately for the one cross-account same-content case.
 		ownerImage = Buffer.concat([image, Buffer.from('owner-private')])
 		watchedImage = Buffer.concat([image, Buffer.from('owner-watched')])
-		interruptedImage = Buffer.concat([image, Buffer.from('interrupted-delete')])
+		trashSelectedImage = Buffer.concat([image, Buffer.from('trash-selected')])
+		trashAllImage = Buffer.concat([image, Buffer.from('trash-all')])
 		memberPrivateImage = Buffer.concat([image, Buffer.from('member-private')])
 		memberWatchedImage = Buffer.concat([image, Buffer.from('member-watched')])
 		umbreld = await createTestVm({device: 'umbrel-home'})
@@ -265,118 +267,72 @@ describe('Photos account isolation', () => {
 		expect(downloaded['renamed-photo.png']).toEqual(watchedImage)
 	})
 
-	test('safely completes or recovers a power-interrupted permanent deletion', async () => {
+	test('uses Files Trash for delete and restore, then permanently deletes only Trash media', async () => {
 		await useSession(ownerSession)
-		const virtualPath = '/Home/Camera/interrupted-delete.png'
-		await umbreld.api.post(`files/upload?path=${encodeURIComponent(virtualPath)}`, {body: interruptedImage})
-		const interrupted = await pRetry(
+		const selectedPath = '/Home/Camera/trash-lifecycle-selected.png'
+		const allPath = '/Home/Camera/trash-lifecycle-all.png'
+		const textPath = '/Home/Camera/trash-lifecycle-keep.txt'
+		await Promise.all([
+			umbreld.api.post(`files/upload?path=${encodeURIComponent(selectedPath)}`, {body: trashSelectedImage}),
+			umbreld.api.post(`files/upload?path=${encodeURIComponent(allPath)}`, {body: trashAllImage}),
+			umbreld.api.post(`files/upload?path=${encodeURIComponent(textPath)}`, {body: 'keep this non-media file'}),
+		])
+		const selected = await photoItemNamed('trash-lifecycle-selected')
+		const all = await photoItemNamed('trash-lifecycle-all')
+
+		// Deleting in Photos performs a real Files move, and the Trash-backed
+		// item remains addressable by the viewer through the deleted projection.
+		await expect(umbreld.client.photos.items.delete.mutate({ids: [selected.id]})).resolves.toBe(1)
+		await expect(umbreld.client.photos.items.get.query({id: selected.id})).rejects.toThrow()
+		await expect(umbreld.client.photos.items.get.query({id: selected.id, deleted: true})).resolves.toMatchObject({
+			id: selected.id,
+			path: '/Trash/trash-lifecycle-selected.png',
+		})
+		expect((await umbreld.client.files.list.query({path: '/Trash'})).files.map(({name}) => name)).toContain(
+			'trash-lifecycle-selected.png',
+		)
+
+		// Restore delegates to Files too, including its original-path metadata.
+		await expect(umbreld.client.photos.items.restore.mutate({ids: [selected.id]})).resolves.toBe(1)
+		await expect(umbreld.client.photos.items.get.query({id: selected.id})).resolves.toMatchObject({path: selectedPath})
+		await expect(umbreld.client.photos.items.get.query({id: selected.id, deleted: true})).rejects.toThrow()
+
+		// Trash changes made in Files flow back into Photos. Keep a non-media file
+		// beside both photos to prove that Photos' all action cannot empty Trash.
+		const selectedTrashPath = await umbreld.client.files.trash.mutate({path: selectedPath})
+		const allTrashPath = await umbreld.client.files.trash.mutate({path: allPath})
+		const textTrashPath = await umbreld.client.files.trash.mutate({path: textPath})
+		await pRetry(
 			async () => {
 				const page = await umbreld.client.photos.items.list.query({
-					filter: {query: 'interrupted-delete'},
+					filter: {deleted: true, query: 'trash-lifecycle'},
 					limit: 10,
 				})
-				expect(page.total).toBe(1)
-				return page.items[0]!
+				expect(page.total).toBe(2)
+				expect(page.items.map(({id}) => id).sort()).toStrictEqual([selected.id, all.id].sort())
 			},
 			{retries: 240, factor: 1, minTimeout: 250, maxTimeout: 250},
 		)
-		await umbreld.client.photos.items.delete.mutate({ids: [interrupted.id]})
-		await umbreld.vm.sshAsRoot('systemctl stop umbrel')
 
-		// Emulate power stopping after the durable claim journal and atomic rename,
-		// but before validation/final movement into Files Trash. Stop umbreld first
-		// so the externally injected partial operation cannot race with ordinary
-		// watcher/index work before the VM is powered off.
-		const systemPath = `${umbreld.vm.dataDirectory}/home/Camera/interrupted-delete.png`
-		const claimId = createHash('sha256').update(systemPath).digest('hex').slice(0, 32)
-		const claimSystemPath = `${umbreld.vm.dataDirectory}/home/Camera/.${claimId}.umbrel-trash`
-		const manifestSystemPath = `${umbreld.vm.dataDirectory}/home/Camera/.${claimId}.json.umbrel-trash`
-		await umbreld.vm.sshAsRoot(`node -e '
-			const fs = require("node:fs")
-			const path = require("node:path")
-			const original = ${JSON.stringify(systemPath)}
-			const claim = ${JSON.stringify(claimSystemPath)}
-			const manifest = ${JSON.stringify(manifestSystemPath)}
-			const temporary = manifest + ".tmp.umbrel-trash"
-			const stats = fs.lstatSync(original, {bigint: true})
-			const value = JSON.stringify({
-				version: 1,
-				originalSystemPath: original,
-				revision: {
-					inode: stats.ino.toString(),
-					size: Number(stats.size),
-					modifiedNs: stats.mtimeNs.toString(),
-					ctimeNs: stats.ctimeNs.toString(),
-				},
-			})
-			const file = fs.openSync(temporary, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY, 0o600)
-			fs.writeFileSync(file, value)
-			fs.fsyncSync(file)
-			fs.closeSync(file)
-			fs.linkSync(temporary, manifest)
-			fs.unlinkSync(temporary)
-			let directory = fs.openSync(path.dirname(original), fs.constants.O_RDONLY)
-			fs.fsyncSync(directory)
-			fs.closeSync(directory)
-			fs.renameSync(original, claim)
-			directory = fs.openSync(path.dirname(original), fs.constants.O_RDONLY)
-			fs.fsyncSync(directory)
-			fs.closeSync(directory)
-		'`)
-		await expect(
-			umbreld.vm.sshAsRoot(
-				`test ! -e '${systemPath}' && test -f '${claimSystemPath}' && test -f '${manifestSystemPath}'`,
-			),
-		).resolves.toBe('')
-		await umbreld.vm.forcePowerOff()
-		await umbreld.vm.powerOn()
-		ownerSession = await login({password: ownerPassword})
-		memberSession = await login({userId: memberId, password: memberPassword})
-		await useSession(ownerSession)
-		await waitForReady()
+		// A selected permanent deletion removes only that media file.
+		await expect(umbreld.client.photos.items.deletePermanently.mutate({ids: [selected.id]})).resolves.toBe(1)
+		let trashNames = (await umbreld.client.files.list.query({path: '/Trash'})).files.map(({name}) => name)
+		expect(trashNames).not.toContain(nodePath.basename(selectedTrashPath))
+		expect(trashNames).toContain(nodePath.basename(allTrashPath))
+		expect(trashNames).toContain(nodePath.basename(textTrashPath))
 
-		try {
-			// Journal replay may leave either side of the atomic rename durable. If
-			// the original pathname survived, the first attempt can finish normally.
-			// If the hidden claim survived, Files restores it and asks Photos to retry
-			// while its durable row still exists.
-			const changes = await umbreld.client.photos.items.deletePermanently.mutate({ids: [interrupted.id]})
-			expect(changes).toBeGreaterThan(0)
-		} catch (error) {
-			expect(error).toHaveProperty('message', expect.stringContaining('[trash-claim-recovered]'))
-			await expect(umbreld.vm.ssh(`sha256sum '${systemPath}' | cut -d ' ' -f 1 | tr -d '\\n'`)).resolves.toBe(
-				createHash('sha256').update(interruptedImage).digest('hex'),
-			)
-			await pRetry(
-				async () => {
-					const page = await umbreld.client.photos.items.list.query({
-						filter: {deleted: true, query: 'interrupted-delete'},
-						limit: 10,
-					})
-					expect(page).toMatchObject({total: 1})
-					expect(page.items[0]).toMatchObject({id: interrupted.id})
-				},
-				{retries: 120, factor: 1, minTimeout: 100, maxTimeout: 100},
-			)
-			await pRetry(
-				async () =>
-					expect(await umbreld.client.photos.items.deletePermanently.mutate({ids: [interrupted.id]})).toBeGreaterThan(
-						0,
-					),
-				{retries: 120, factor: 1, minTimeout: 100, maxTimeout: 100},
-			)
-		}
+		// Omitting ids permanently deletes every remaining photo/video in Trash,
+		// while leaving unrelated Trash entries untouched.
+		await expect(umbreld.client.photos.items.deletePermanently.mutate({})).resolves.toBe(1)
+		trashNames = (await umbreld.client.files.list.query({path: '/Trash'})).files.map(({name}) => name)
+		expect(trashNames).not.toContain(nodePath.basename(allTrashPath))
+		expect(trashNames).toContain(nodePath.basename(textTrashPath))
 		await expect(
-			umbreld.vm.ssh(
-				`sha256sum '${umbreld.vm.dataDirectory}/trash/interrupted-delete.png' | cut -d ' ' -f 1 | tr -d '\\n'`,
-			),
-		).resolves.toBe(createHash('sha256').update(interruptedImage).digest('hex'))
-		await expect(
-			umbreld.vm.sshAsRoot(`test ! -e '${claimSystemPath}' && test ! -e '${manifestSystemPath}'`),
-		).resolves.toBe('')
-		await expect(
-			umbreld.client.photos.items.list.query({filter: {deleted: true, query: 'interrupted-delete'}, limit: 10}),
+			umbreld.client.photos.items.list.query({filter: {deleted: true, query: 'trash-lifecycle'}, limit: 10}),
 		).resolves.toMatchObject({total: 0})
+
+		// Leave the shared stateful VM clean for the account-isolation checks.
+		await expect(umbreld.client.files.delete.mutate({path: textTrashPath})).resolves.toBe(true)
 	})
 
 	test('uses one hash identity across accounts without sharing locations or state', async () => {
@@ -428,6 +384,7 @@ describe('Photos account isolation', () => {
 			{retries: 240, factor: 1, minTimeout: 250, maxTimeout: 250},
 		)
 		const watched = await umbreld.client.photos.items.list.query({filter: {query: 'files-photo'}, limit: 10})
+		memberWatchedItemId = watched.items[0]!.id
 		await expect(umbreld.client.photos.items.get.query({id: watched.items[0]!.id})).resolves.toMatchObject({
 			path: watchedPath,
 		})
@@ -485,7 +442,7 @@ describe('Photos account isolation', () => {
 		await umbreld.client.photos.items.setFavorite.mutate({ids: [memberItemId], favorite: true})
 		await umbreld.client.photos.items.delete.mutate({ids: [memberItemId]})
 		await expect(umbreld.client.photos.library.summary.query()).resolves.toMatchObject({
-			counts: {items: 1, favorites: 0, deleted: 1},
+			counts: {items: 1, favorites: 0, deleted: 2},
 		})
 
 		await useSession(ownerSession)
@@ -510,8 +467,11 @@ describe('Photos account isolation', () => {
 		memberSession = await login({userId: memberId, password: memberPassword})
 		await useSession(memberSession)
 		await expect(umbreld.client.photos.items.list.query({filter: {deleted: true}, limit: 10})).resolves.toMatchObject({
-			total: 1,
-			items: [expect.objectContaining({id: memberItemId, isFavorite: true})],
+			total: 2,
+			items: expect.arrayContaining([
+				expect.objectContaining({id: memberItemId, isFavorite: true}),
+				expect.objectContaining({id: memberWatchedItemId}),
+			]),
 		})
 	})
 })

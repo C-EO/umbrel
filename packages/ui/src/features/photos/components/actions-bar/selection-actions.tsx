@@ -24,8 +24,8 @@ import {formatNumberI18n} from '@/utils/number'
 import {useBreakpoint} from '@/utils/tw'
 
 // What the actions bar offers while items are selected: add to an album (in
-// an album: remove from it), favorite, download, delete — or in Recently
-// Deleted, restore and delete for good — and Done. Deleting asks first; the
+// an album: remove from it), favorite, download, delete — or in Deleted,
+// restore and delete for good — and Done. Deleting asks first; the
 // rest just happen. Actions that leave the items in place (favorite,
 // download) keep the selection — Done ends it — while the others end it
 // themselves. Below xl the actions share one pill as icons with tooltips
