@@ -184,18 +184,36 @@ describe('file index migrations', () => {
 				)
 				.all(),
 		).toStrictEqual([{name: 'contents'}, {name: 'thumbnail_variants'}, {name: 'transient_thumbnail_variants'}])
+		expect(
+			database
+				.prepare('PRAGMA index_info(entries_pending_content_hash)')
+				.all()
+				.map((column: any) => column.name),
+		).toStrictEqual(['root_id', 'hash_retry_at', 'id'])
 
 		const hashPlan = database
 			.prepare(
 				`EXPLAIN QUERY PLAN
-				SELECT id FROM entries INDEXED BY entries_pending_content_hash
-				WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL
-					AND (hash_retry_at IS NULL OR hash_retry_at <= ?)
-				ORDER BY hash_retry_at, id LIMIT 1`,
+				SELECT entries.id
+				FROM index_roots
+				JOIN entries ON entries.id = (
+					SELECT candidate.id
+					FROM entries AS candidate INDEXED BY entries_pending_content_hash
+					WHERE candidate.root_id = index_roots.id
+						AND candidate.thumbnail_identity_kind = 'content'
+						AND candidate.content_id IS NULL
+						AND (candidate.hash_retry_at IS NULL OR candidate.hash_retry_at <= ?)
+					ORDER BY candidate.hash_retry_at, candidate.id
+					LIMIT 1
+				)
+				WHERE index_roots.kind = 'home'
+				ORDER BY entries.hash_retry_at, entries.id LIMIT 1`,
 			)
 			.all(Date.now()) as Array<{detail: string}>
-		expect(hashPlan.some(({detail}) => detail.includes('entries_pending_content_hash'))).toBe(true)
-		expect(hashPlan.some(({detail}) => detail.includes('USE TEMP B-TREE'))).toBe(false)
+		expect(
+			hashPlan.some(({detail}) => detail.includes('entries_pending_content_hash') && detail.includes('root_id=?')),
+		).toBe(true)
+		expect(hashPlan.some(({detail}) => detail === 'SCAN candidate')).toBe(false)
 
 		for (const [state, workIndex, retryPredicate, parameters] of [
 			['pending', 'thumbnail_variants_pending_work', '', []],
@@ -228,11 +246,20 @@ describe('file index migrations', () => {
 				`EXPLAIN QUERY PLAN
 				SELECT MIN(attempt_at) AS attempt_at FROM (
 					SELECT attempt_at FROM (
-						SELECT hash_retry_at AS attempt_at
-						FROM entries INDEXED BY entries_pending_content_hash
-						WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL
-							AND hash_retry_at IS NOT NULL
-						ORDER BY hash_retry_at, id LIMIT 1
+						SELECT entries.hash_retry_at AS attempt_at
+						FROM index_roots
+						JOIN entries ON entries.id = (
+							SELECT candidate.id
+							FROM entries AS candidate INDEXED BY entries_pending_content_hash
+							WHERE candidate.root_id = index_roots.id
+								AND candidate.thumbnail_identity_kind = 'content'
+								AND candidate.content_id IS NULL
+								AND candidate.hash_retry_at IS NOT NULL
+							ORDER BY candidate.hash_retry_at, candidate.id
+							LIMIT 1
+						)
+						WHERE index_roots.kind = 'home'
+						ORDER BY entries.hash_retry_at, entries.id LIMIT 1
 					)
 					UNION ALL
 					SELECT attempt_at FROM (
@@ -247,7 +274,10 @@ describe('file index migrations', () => {
 				)`,
 			)
 			.all(THUMBNAIL_VARIANT, 6 * 60 * 60 * 1000) as Array<{detail: string}>
-		expect(wakePlan.some(({detail}) => detail.includes('entries_pending_content_hash'))).toBe(true)
+		expect(
+			wakePlan.some(({detail}) => detail.includes('entries_pending_content_hash') && detail.includes('root_id=?')),
+		).toBe(true)
+		expect(wakePlan.some(({detail}) => detail === 'SCAN candidate')).toBe(false)
 		expect(wakePlan.some(({detail}) => detail.includes('thumbnail_variants_failed_work'))).toBe(true)
 		expect(wakePlan.some(({detail}) => detail.includes('entries_by_content'))).toBe(true)
 		database.close()
@@ -904,43 +934,143 @@ test('generates all pending Photos renditions together for one content decode', 
 	])
 })
 
-test('does not generate Photos-only variants or metadata for non-Photos roots', async () => {
-	const {index, root, rootDirectory, dataDirectory} = await fixture(undefined, {
-		enrichmentRuntime: {
-			hashFile: async () => Buffer.alloc(32, 0x44),
-			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
-		},
+test('background-enriches Home while leaving other indexed roots on demand', async () => {
+	const hashFile = vi.fn(async (systemPath: string) => {
+		const byte = new Map([
+			['included.jpg', 0x41],
+			['excluded.jpg', 0x42],
+			['trashed.jpg', 0x43],
+			['app-generated.jpg', 0x44],
+			['machine-art.jpg', 0x45],
+		]).get(nodePath.basename(systemPath))
+		if (!byte) throw new Error(`Unexpected hash source: ${systemPath}`)
+		return Buffer.alloc(32, byte)
 	})
+	const generateThumbnails = vi.fn(async (_source: string, outputs: Array<{destination: string; variant: string}>) => {
+		await Promise.all(outputs.map(({destination}) => fse.outputFile(destination, 'thumbnail')))
+	})
+	const extractMediaMetadata = vi.fn(async (_systemPath: string) => ({
+		kind: 'photo' as const,
+		width: 100,
+		height: 50,
+	}))
+	const {index, root, rootDirectory, homeDirectory, dataDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {hashFile, generateThumbnails, extractMediaMetadata},
+	})
+	const trashDirectory = nodePath.join(rootDirectory, 'trash')
 	const appsDirectory = nodePath.join(rootDirectory, 'apps')
-	await fse.outputFile(nodePath.join(appsDirectory, 'private-app-image.jpg'), 'app image')
+	const machinesDirectory = nodePath.join(rootDirectory, 'machines')
+	const paths = {
+		included: nodePath.join(homeDirectory, 'Included', 'included.jpg'),
+		excluded: nodePath.join(homeDirectory, 'Excluded', 'excluded.jpg'),
+		trash: nodePath.join(trashDirectory, 'trashed.jpg'),
+		apps: nodePath.join(appsDirectory, 'jellyfin', 'app-generated.jpg'),
+		machines: nodePath.join(machinesDirectory, 'machine-art.jpg'),
+	}
+	await Promise.all(Object.values(paths).map((path) => fse.outputFile(path, 'image')))
 	await index.setRoots([
 		root,
+		{virtualPath: '/Trash', systemPath: trashDirectory, ownerId: 'owner', kind: 'trash', searchEnabled: false},
 		{virtualPath: '/Apps', systemPath: appsDirectory, ownerId: 'owner', kind: 'apps', searchEnabled: false},
+		{
+			virtualPath: '/Machines',
+			systemPath: machinesDirectory,
+			ownerId: 'owner',
+			kind: 'machines',
+			searchEnabled: false,
+		},
 	])
-	await index.reconcileRoot('/Apps', 'non-photos-variants')
+	for (const rootPath of ['/Home', '/Trash', '/Apps', '/Machines']) {
+		await index.reconcileRoot(rootPath, 'root-scoped-enrichment')
+	}
+
+	// Photos folder visibility is independent of the root-level enrichment
+	// policy: every supported Home file is enriched, including excluded folders.
+	const source = (await index.photosListSources('owner'))[0]!
+	await index.photosUpdateSource('owner', source.id, {mode: 'only', paths: ['/Home/Included']})
 	await index.initializePhotos('owner')
 	index.startBackgroundReconciliation()
-	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
 	await pRetry(
-		() => {
-			const database = new BetterSqlite3(databasePath, {readonly: true})
-			try {
-				expect(
-					database.prepare("SELECT content_id FROM entries WHERE relative_path = 'private-app-image.jpg'").get(),
-				).toMatchObject({
-					content_id: expect.any(Number),
-				})
-			} finally {
-				database.close()
-			}
-		},
+		async () =>
+			await expect(index.status()).resolves.toMatchObject({
+				enrichment: {
+					eligibleEntries: 5,
+					hashedEntries: 2,
+					pendingHashes: 0,
+					readyThumbnails: 6,
+					readyMedia: 2,
+				},
+			}),
 		{retries: 200, minTimeout: 10, maxTimeout: 20},
 	)
-	const database = new BetterSqlite3(databasePath, {readonly: true})
-	expect(database.prepare('SELECT variant FROM thumbnail_variants ORDER BY variant').all()).toStrictEqual([
-		{variant: 'preview-192-webp-v1'},
+	await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'ready', total: 1})
+
+	const backgroundSources = new Set([paths.included, paths.excluded])
+	expect(new Set(hashFile.mock.calls.map(([systemPath]) => systemPath))).toStrictEqual(backgroundSources)
+	expect(new Set(extractMediaMetadata.mock.calls.map(([systemPath]) => systemPath))).toStrictEqual(backgroundSources)
+	expect(new Set(generateThumbnails.mock.calls.map(([systemPath]) => systemPath))).toStrictEqual(backgroundSources)
+	expect(
+		generateThumbnails.mock.calls.every(
+			([, outputs]) =>
+				outputs.length === 3 && new Set(outputs.map(({variant}) => variant)).size === PHOTOS_THUMBNAIL_VARIANTS.length,
+		),
+	).toBe(true)
+
+	const databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
+	const indexedRows = () => {
+		const database = new BetterSqlite3(databasePath, {readonly: true})
+		try {
+			return database
+				.prepare(
+					`SELECT index_roots.virtual_path, entries.relative_path, entries.content_id
+					FROM entries JOIN index_roots ON index_roots.id = entries.root_id
+					WHERE entries.type = 'file'
+					ORDER BY index_roots.virtual_path, entries.relative_path`,
+				)
+				.all()
+		} finally {
+			database.close()
+		}
+	}
+	expect(indexedRows()).toStrictEqual([
+		{virtual_path: '/Apps', relative_path: 'jellyfin/app-generated.jpg', content_id: null},
+		{virtual_path: '/Home', relative_path: 'Excluded/excluded.jpg', content_id: expect.any(Number)},
+		{virtual_path: '/Home', relative_path: 'Included/included.jpg', content_id: expect.any(Number)},
+		{virtual_path: '/Machines', relative_path: 'machine-art.jpg', content_id: null},
+		{virtual_path: '/Trash', relative_path: 'trashed.jpg', content_id: null},
 	])
-	expect(database.prepare('SELECT COUNT(*) AS count FROM media_metadata').get()).toStrictEqual({count: 0})
+
+	// Browsing excluded roots hashes and renders only the requested Files preview.
+	await expect(index.ensureThumbnail(paths.trash)).resolves.toMatchObject({variant: 'preview-192-webp-v1'})
+	expect(hashFile).toHaveBeenCalledTimes(3)
+	expect(hashFile).toHaveBeenLastCalledWith(paths.trash, expect.anything())
+	expect(generateThumbnails).toHaveBeenCalledTimes(3)
+	expect(generateThumbnails.mock.calls.at(-1)?.[0]).toBe(paths.trash)
+	expect(generateThumbnails.mock.calls.at(-1)?.[1].map(({variant}) => variant)).toStrictEqual(['preview-192-webp-v1'])
+	expect(extractMediaMetadata).toHaveBeenCalledTimes(2)
+
+	await expect(index.ensureThumbnail(paths.apps)).resolves.toMatchObject({variant: 'preview-192-webp-v1'})
+	expect(hashFile).toHaveBeenCalledTimes(4)
+	expect(hashFile).toHaveBeenLastCalledWith(paths.apps, expect.anything())
+	expect(generateThumbnails).toHaveBeenCalledTimes(4)
+	expect(generateThumbnails.mock.calls.at(-1)?.[0]).toBe(paths.apps)
+	expect(generateThumbnails.mock.calls.at(-1)?.[1].map(({variant}) => variant)).toStrictEqual(['preview-192-webp-v1'])
+	expect(extractMediaMetadata).toHaveBeenCalledTimes(2)
+
+	const database = new BetterSqlite3(databasePath, {readonly: true})
+	const appContent = database
+		.prepare(
+			`SELECT entries.content_id FROM entries
+			JOIN index_roots ON index_roots.id = entries.root_id
+			WHERE index_roots.virtual_path = '/Apps' AND entries.relative_path = 'jellyfin/app-generated.jpg'`,
+		)
+		.get() as {content_id: number}
+	expect(
+		database.prepare('SELECT variant, state FROM thumbnail_variants WHERE content_id = ?').all(appContent.content_id),
+	).toStrictEqual([{variant: 'preview-192-webp-v1', state: 'ready'}])
+	expect(
+		database.prepare('SELECT 1 FROM media_metadata WHERE content_id = ?').get(appContent.content_id),
+	).toBeUndefined()
 	database.close()
 })
 

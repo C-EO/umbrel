@@ -371,6 +371,17 @@ export const fileIndexMigrations: FileIndexMigration[] = [
 			`)
 		},
 	},
+	{
+		version: 11,
+		up: (database) => {
+			database.exec(`
+				DROP INDEX entries_pending_content_hash;
+				CREATE INDEX entries_pending_content_hash
+					ON entries(root_id, hash_retry_at, id)
+					WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL;
+			`)
+		},
+	},
 ]
 
 export const FILE_INDEX_SCHEMA_VERSION = fileIndexMigrations.at(-1)?.version ?? 0

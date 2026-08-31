@@ -37,6 +37,9 @@ const ALL_THUMBNAIL_VARIANTS = Object.keys(THUMBNAIL_VARIANTS) as ThumbnailVaria
 const PHOTOS_ONLY_VARIANT_SET = new Set<ThumbnailVariant>(
 	PHOTOS_THUMBNAIL_VARIANTS.filter((variant) => variant !== FILES_THUMBNAIL_VARIANT),
 )
+// Every scan-enabled root is indexed, but proactive content I/O is limited to
+// personal Home roots. Other roots are enriched by Files only when browsed.
+const BACKGROUND_ENRICHMENT_ROOT_SQL = "index_roots.kind = 'home'"
 const IMAGE_MAGICK_VIDEO_CODERS = new Map([
 	['.3gp', '3GP'],
 	['.avi', 'AVI'],
@@ -309,35 +312,25 @@ export default class FileIndexEnrichment {
 		await this.#withDatabase((database) => {
 			const insert = database.prepare(
 				`INSERT INTO thumbnail_variants(content_id, variant, state, failure_count, updated_at)
-				SELECT id, ?, 'pending', 0, ? FROM contents WHERE true
+				SELECT DISTINCT entries.content_id, ?, 'pending', 0, ? FROM entries
+				JOIN index_roots ON index_roots.id = entries.root_id
+				WHERE entries.content_id IS NOT NULL AND ${BACKGROUND_ENRICHMENT_ROOT_SQL}
 				ON CONFLICT(content_id, variant) DO NOTHING`,
 			)
-			const insertPhotos = requested.some((variant) => PHOTOS_ONLY_VARIANT_SET.has(variant))
-				? database.prepare(
-						`INSERT INTO thumbnail_variants(content_id, variant, state, failure_count, updated_at)
-						SELECT contents.id, ?, 'pending', 0, ? FROM contents
-						WHERE EXISTS (
-							SELECT 1 FROM entries
-							JOIN index_roots ON index_roots.id = entries.root_id
-							WHERE entries.content_id = contents.id AND index_roots.kind = 'home'
-						) ON CONFLICT(content_id, variant) DO NOTHING`,
-					)
-				: undefined
+			const registerMedia = requested.some((variant) => PHOTOS_ONLY_VARIANT_SET.has(variant))
 			const register = database.transaction(() => {
 				// Reconcile every requested variant against the database even when it
 				// is already enabled in memory. This matters when an OTA changes the
 				// default Files size: the new default starts enabled, but existing
 				// content has rows only for the old variant.
-				for (const variant of requested) {
-					;(PHOTOS_ONLY_VARIANT_SET.has(variant) ? insertPhotos! : insert).run(variant, Date.now())
-				}
-				if (!insertPhotos) return
+				for (const variant of requested) insert.run(variant, Date.now())
+				if (!registerMedia) return
 				const contentRows = database
 					.prepare(
 						`SELECT DISTINCT contents.id, entries.name FROM contents
 						JOIN entries ON entries.content_id = contents.id
 						JOIN index_roots ON index_roots.id = entries.root_id
-						WHERE index_roots.kind = 'home'
+						WHERE ${BACKGROUND_ENRICHMENT_ROOT_SQL}
 							AND NOT EXISTS (SELECT 1 FROM media_metadata WHERE media_metadata.content_id = contents.id)`,
 					)
 					.all() as Array<{id: number; name: string}>
@@ -532,8 +525,10 @@ export default class FileIndexEnrichment {
 					`SELECT
 						COUNT(*) FILTER (WHERE thumbnail_identity_kind IS NOT NULL) AS eligible_entries,
 						COUNT(*) FILTER (WHERE thumbnail_identity_kind = 'content' AND content_id IS NOT NULL) AS hashed_entries,
-						COUNT(*) FILTER (WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL) AS pending_hashes,
-						COUNT(*) FILTER (WHERE thumbnail_identity_kind = 'content' AND hash_error IS NOT NULL) AS hash_failures,
+						COUNT(*) FILTER (WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL
+							AND ${BACKGROUND_ENRICHMENT_ROOT_SQL}) AS pending_hashes,
+						COUNT(*) FILTER (WHERE thumbnail_identity_kind = 'content' AND hash_error IS NOT NULL
+							AND ${BACKGROUND_ENRICHMENT_ROOT_SQL}) AS hash_failures,
 						(SELECT COUNT(*) FROM contents) AS unique_contents,
 						(SELECT COUNT(*) FROM thumbnail_variants WHERE state = 'ready') +
 							(SELECT COUNT(*) FROM transient_thumbnail_variants WHERE state = 'ready') AS ready_thumbnails,
@@ -541,7 +536,8 @@ export default class FileIndexEnrichment {
 							(SELECT COUNT(*) FROM transient_thumbnail_variants WHERE state = 'failed') AS thumbnail_failures,
 						(SELECT COUNT(*) FROM media_metadata WHERE state = 'ready') AS ready_media,
 						(SELECT COUNT(*) FROM media_metadata WHERE state = 'failed') AS media_failures
-					FROM entries`,
+					FROM entries
+					JOIN index_roots ON index_roots.id = entries.root_id`,
 				)
 				.get() as Record<string, number>
 			return {
@@ -714,18 +710,26 @@ export default class FileIndexEnrichment {
 	async #nextEntryNeedingHash() {
 		return this.#withDatabase((database) => {
 			const excludedIds = [...this.#activeHashEntries]
-			const exclusion = excludedIds.length > 0 ? `AND entries.id NOT IN (${excludedIds.map(() => '?').join(', ')})` : ''
+			const exclusion =
+				excludedIds.length > 0 ? `AND candidate.id NOT IN (${excludedIds.map(() => '?').join(', ')})` : ''
 			const row = database
 				.prepare(
 					`SELECT entries.id, entries.device, entries.inode, entries.size, entries.modified_ns,
 						entries.ctime_ns, entries.thumbnail_identity_kind,
 						index_roots.system_path AS root_system_path, entries.relative_path
-					FROM entries INDEXED BY entries_pending_content_hash
-					JOIN index_roots ON index_roots.id = entries.root_id
-					WHERE entries.thumbnail_identity_kind = 'content'
-						AND entries.content_id IS NULL
-						AND (entries.hash_retry_at IS NULL OR entries.hash_retry_at <= ?)
-						${exclusion}
+					FROM index_roots
+					JOIN entries ON entries.id = (
+						SELECT candidate.id
+						FROM entries AS candidate INDEXED BY entries_pending_content_hash
+						WHERE candidate.root_id = index_roots.id
+							AND candidate.thumbnail_identity_kind = 'content'
+							AND candidate.content_id IS NULL
+							AND (candidate.hash_retry_at IS NULL OR candidate.hash_retry_at <= ?)
+							${exclusion}
+						ORDER BY candidate.hash_retry_at, candidate.id
+						LIMIT 1
+					)
+					WHERE ${BACKGROUND_ENRICHMENT_ROOT_SQL}
 					ORDER BY entries.hash_retry_at, entries.id
 					LIMIT 1`,
 				)
@@ -766,6 +770,7 @@ export default class FileIndexEnrichment {
 						JOIN entries INDEXED BY entries_by_content ON entries.content_id = media_metadata.content_id
 						JOIN index_roots ON index_roots.id = entries.root_id
 						WHERE media_metadata.state = '${state}'
+							AND ${BACKGROUND_ENRICHMENT_ROOT_SQL}
 							${state === 'failed' ? 'AND media_metadata.retry_at <= ?' : ''}
 							${exclusion}
 						ORDER BY ${state === 'failed' ? 'media_metadata.retry_at,' : ''} media_metadata.content_id, entries.id
@@ -865,7 +870,7 @@ export default class FileIndexEnrichment {
 				const referenceFailure = referenceFailureKind(error) ?? (await contentReferenceFailure(error, content))
 				if (referenceFailure) {
 					if (referenceFailure === 'stale') await this.#onStalePath(content.systemPath).catch(() => {})
-					const alternative = await this.#nextContentReference(content.id, attemptedEntries, priority)
+					const alternative = await this.#nextContentReference(content.id, attemptedEntries, priority, !onDemand)
 					if (alternative) {
 						content = alternative
 						continue
@@ -911,7 +916,7 @@ export default class FileIndexEnrichment {
 			const excludedContentIds = [...this.#activeThumbnailContents]
 			const excludedMediaIds = [...this.#activeMediaContents]
 			const hashExclusion =
-				excludedEntryIds.length > 0 ? `AND id NOT IN (${excludedEntryIds.map(() => '?').join(', ')})` : ''
+				excludedEntryIds.length > 0 ? `AND candidate.id NOT IN (${excludedEntryIds.map(() => '?').join(', ')})` : ''
 			const thumbnailExclusion =
 				excludedContentIds.length > 0
 					? `AND failed.content_id NOT IN (${excludedContentIds.map(() => '?').join(', ')})`
@@ -924,19 +929,30 @@ export default class FileIndexEnrichment {
 				.prepare(
 					`SELECT MIN(attempt_at) AS attempt_at FROM (
 						SELECT attempt_at FROM (
-							SELECT hash_retry_at AS attempt_at
-							FROM entries INDEXED BY entries_pending_content_hash
-							WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL
-								AND hash_retry_at IS NOT NULL
-								${hashExclusion}
-							ORDER BY hash_retry_at, id LIMIT 1
+							SELECT entries.hash_retry_at AS attempt_at
+							FROM index_roots
+							JOIN entries ON entries.id = (
+								SELECT candidate.id
+								FROM entries AS candidate INDEXED BY entries_pending_content_hash
+								WHERE candidate.root_id = index_roots.id
+									AND candidate.thumbnail_identity_kind = 'content'
+									AND candidate.content_id IS NULL
+									AND candidate.hash_retry_at IS NOT NULL
+									${hashExclusion}
+								ORDER BY candidate.hash_retry_at, candidate.id
+								LIMIT 1
+							)
+							WHERE ${BACKGROUND_ENRICHMENT_ROOT_SQL}
+							ORDER BY entries.hash_retry_at, entries.id LIMIT 1
 						)
 						UNION ALL
 						SELECT attempt_at FROM (
 							SELECT retry_at AS attempt_at
 							FROM thumbnail_variants AS failed INDEXED BY thumbnail_variants_failed_work
 							WHERE variant IN (${variants.map(() => '?').join(', ')}) AND state = 'failed'
-								AND EXISTS (SELECT 1 FROM entries WHERE entries.content_id = failed.content_id)
+								AND EXISTS (SELECT 1 FROM entries
+									JOIN index_roots ON index_roots.id = entries.root_id
+									WHERE entries.content_id = failed.content_id AND ${BACKGROUND_ENRICHMENT_ROOT_SQL})
 								${thumbnailExclusion}
 							ORDER BY retry_at, content_id LIMIT 1
 						)
@@ -945,7 +961,9 @@ export default class FileIndexEnrichment {
 							SELECT retry_at AS attempt_at
 							FROM media_metadata AS failed_media INDEXED BY media_metadata_failed_work
 							WHERE state = 'failed'
-								AND EXISTS (SELECT 1 FROM entries WHERE entries.content_id = failed_media.content_id)
+								AND EXISTS (SELECT 1 FROM entries
+									JOIN index_roots ON index_roots.id = entries.root_id
+									WHERE entries.content_id = failed_media.content_id AND ${BACKGROUND_ENRICHMENT_ROOT_SQL})
 								${mediaExclusion}
 							ORDER BY retry_at, content_id LIMIT 1
 						)
@@ -1021,21 +1039,19 @@ export default class FileIndexEnrichment {
 						VALUES (?, ?, 'pending', 0, ?)
 						ON CONFLICT(content_id, variant) DO NOTHING`,
 				)
-				const photosEntry =
-					this.#photosAvailable() &&
-					Boolean(
-						database
-							.prepare(
-								`SELECT 1 FROM entries
+				const backgroundEntry = Boolean(
+					database
+						.prepare(
+							`SELECT 1 FROM entries
 							JOIN index_roots ON index_roots.id = entries.root_id
-							WHERE entries.id = ? AND index_roots.kind = 'home'`,
-							)
-							.get(candidate.id),
-					)
-				for (const variant of this.#enabledThumbnailVariants) {
-					if (!PHOTOS_ONLY_VARIANT_SET.has(variant) || photosEntry) insertVariant.run(content.id, variant, Date.now())
+							WHERE entries.id = ? AND ${BACKGROUND_ENRICHMENT_ROOT_SQL}`,
+						)
+						.get(candidate.id),
+				)
+				if (backgroundEntry) {
+					for (const variant of this.#enabledThumbnailVariants) insertVariant.run(content.id, variant, Date.now())
 				}
-				if (photosEntry)
+				if (backgroundEntry && this.#photosAvailable())
 					database
 						.prepare(
 							`INSERT INTO media_metadata(content_id, state, kind, failure_count, updated_at)
@@ -1127,6 +1143,7 @@ export default class FileIndexEnrichment {
 						JOIN entries INDEXED BY entries_by_content ON entries.content_id = thumbnail_variants.content_id
 						JOIN index_roots ON index_roots.id = entries.root_id
 						WHERE thumbnail_variants.variant = ? AND thumbnail_variants.state = '${state}'
+							AND ${BACKGROUND_ENRICHMENT_ROOT_SQL}
 							${retryPredicate}
 							${exclusion}
 						ORDER BY ${workOrder}
@@ -1266,7 +1283,7 @@ export default class FileIndexEnrichment {
 									this.logger.error(`Failed to refresh stale thumbnail source '${content.systemPath}'`, refreshError),
 								)
 							}
-							const alternative = await this.#nextContentReference(content.id, attemptedEntries, priority)
+							const alternative = await this.#nextContentReference(content.id, attemptedEntries, priority, !onDemand)
 							if (alternative) {
 								content = alternative
 								continue
@@ -1544,7 +1561,12 @@ export default class FileIndexEnrichment {
 		return acquire(0)
 	}
 
-	async #nextContentReference(contentId: number, excludedEntryIds: Set<number>, priority: number) {
+	async #nextContentReference(
+		contentId: number,
+		excludedEntryIds: Set<number>,
+		priority: number,
+		backgroundOnly = false,
+	) {
 		return this.#withDatabase((database) => {
 			const excluded = [...excludedEntryIds]
 			const placeholders = excluded.map(() => '?').join(', ')
@@ -1558,6 +1580,7 @@ export default class FileIndexEnrichment {
 					JOIN contents ON contents.id = entries.content_id
 					JOIN index_roots ON index_roots.id = entries.root_id
 					WHERE entries.content_id = ? AND entries.thumbnail_identity_kind = 'content'
+						${backgroundOnly ? `AND ${BACKGROUND_ENRICHMENT_ROOT_SQL}` : ''}
 						AND entries.id NOT IN (${placeholders})
 					ORDER BY entries.id LIMIT 1`,
 				)
@@ -1632,8 +1655,15 @@ export default class FileIndexEnrichment {
 			const remove = database.transaction(() => {
 				const pendingHash = database
 					.prepare(
-						`SELECT 1 FROM entries INDEXED BY entries_pending_content_hash
-						WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL AND hash_error IS NULL
+						`SELECT 1 FROM index_roots
+						WHERE ${BACKGROUND_ENRICHMENT_ROOT_SQL}
+							AND EXISTS (
+								SELECT 1 FROM entries AS candidate INDEXED BY entries_pending_content_hash
+								WHERE candidate.root_id = index_roots.id
+									AND candidate.thumbnail_identity_kind = 'content'
+									AND candidate.content_id IS NULL
+									AND candidate.hash_error IS NULL
+							)
 						LIMIT 1`,
 					)
 					.get()
@@ -1857,8 +1887,15 @@ export default class FileIndexEnrichment {
 				Boolean(
 					database
 						.prepare(
-							`SELECT 1 FROM entries INDEXED BY entries_pending_content_hash
-							WHERE thumbnail_identity_kind = 'content' AND content_id IS NULL AND hash_error IS NULL
+							`SELECT 1 FROM index_roots
+							WHERE ${BACKGROUND_ENRICHMENT_ROOT_SQL}
+								AND EXISTS (
+									SELECT 1 FROM entries AS candidate INDEXED BY entries_pending_content_hash
+									WHERE candidate.root_id = index_roots.id
+										AND candidate.thumbnail_identity_kind = 'content'
+										AND candidate.content_id IS NULL
+										AND candidate.hash_error IS NULL
+								)
 							LIMIT 1`,
 						)
 						.get(),
