@@ -31,6 +31,7 @@ export type CredentialAudience =
 	| 'http-api-token'
 	| 'native-access'
 	| 'native-device'
+	| 'photo-backup'
 export type HttpApiScope = 'file-download' | 'file-view' | 'file-thumbnail' | 'logs-download' | 'ca-download'
 export type WebSocketTarget = 'trpc' | 'terminal' | 'machines'
 
@@ -45,6 +46,7 @@ type Credential = {
 	audience: CredentialAudience
 	hash: string
 	expiresAt?: number
+	photoBackupSourceId?: string
 }
 
 type Session = {
@@ -110,6 +112,12 @@ export class InvalidNativeDeviceCredentialError extends Error {
 export class BrowserSessionRequiredError extends Error {
 	constructor() {
 		super('Browser session required')
+	}
+}
+
+export class NativeSessionRequiredError extends Error {
+	constructor() {
+		super('Native session required')
 	}
 }
 
@@ -429,6 +437,111 @@ export default class Auth {
 		return this.#principalForSession(session)
 	}
 
+	async validateNativePrincipal(principal: Principal) {
+		await this.validatePrincipal(principal)
+		const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
+		if (!session || session.accountId !== principal.accountId || !this.#isNativeSession(session)) {
+			throw new NativeSessionRequiredError()
+		}
+		return principal
+	}
+
+	// PhotoKit may upload after the app exits, so it cannot depend on refreshing the
+	// one-hour access credential. The persisted source binding prevents a grant from
+	// writing into another device's managed library.
+	async issuePhotoBackupGrant(principal: Principal, sourceId: string) {
+		await this.validateNativePrincipal(principal)
+
+		let token: string | undefined
+		await this.#store.getWriteLock(async ({set}) => {
+			const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
+			if (!session || session.accountId !== principal.accountId || !this.#isNativeSession(session)) {
+				throw new NativeSessionRequiredError()
+			}
+
+			const existing = session.credentials.find((credential) => credential.audience === 'photo-backup')
+			if (existing?.photoBackupSourceId === sourceId) {
+				token = this.#derivedCredentialToken(session, 'photo-backup')
+				return
+			}
+
+			const grant = this.#createDerivedCredential(session.id, 'photo-backup', {photoBackupSourceId: sourceId})
+			const updatedSession = {
+				...session,
+				credentials: [
+					...session.credentials.filter((credential) => credential.audience !== 'photo-backup'),
+					grant.record,
+				],
+			}
+			const sessions = this.#sessions.map((candidate) => (candidate.id === session.id ? updatedSession : candidate))
+			await set('sessions', sessions)
+			this.#sessions = sessions
+			token = grant.token
+		})
+
+		if (!token) throw new Error('Invalid session')
+		return {token}
+	}
+
+	async authenticatePhotoBackupGrant(token: string) {
+		const principal = await this.authenticate(token, 'photo-backup')
+		const {id} = parseCredential(token)
+		const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
+		const credential = session?.credentials.find(
+			(candidate) => candidate.id === id && candidate.audience === 'photo-backup',
+		)
+		if (!credential?.photoBackupSourceId) throw new Error('Invalid credential')
+		return {...principal, sourceId: credential.photoBackupSourceId}
+	}
+
+	async revokePhotoBackupGrant(principal: Principal) {
+		await this.validateNativePrincipal(principal)
+
+		let revoked = false
+		await this.#store.getWriteLock(async ({set}) => {
+			const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
+			if (!session || session.accountId !== principal.accountId || !this.#isNativeSession(session)) {
+				throw new NativeSessionRequiredError()
+			}
+			const credentials = session.credentials.filter((credential) => credential.audience !== 'photo-backup')
+			revoked = credentials.length !== session.credentials.length
+			if (!revoked) return
+
+			const updatedSession = {...session, credentials}
+			const sessions = this.#sessions.map((candidate) => (candidate.id === session.id ? updatedSession : candidate))
+			await set('sessions', sessions)
+			this.#sessions = sessions
+		})
+		return revoked
+	}
+
+	// Background uploads keep Active Logins useful without rewriting the auth
+	// store for every photo in a batch.
+	async touchSession(principal: Principal) {
+		await this.validatePrincipal(principal)
+		if (principal.actor === 'system') return false
+		const now = Date.now()
+		const current = this.#sessions.find((session) => session.id === principal.sessionId)
+		if (!current || now - current.lastSeenAt < ONE_HOUR) return false
+
+		let touched = false
+		await this.#store.getWriteLock(async ({set}) => {
+			const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
+			if (!session || session.accountId !== principal.accountId || !this.#isSessionActive(session, now)) {
+				throw new Error('Invalid session')
+			}
+			if (now - session.lastSeenAt < ONE_HOUR) return
+
+			const sessions = this.#sessions.map((candidate) =>
+				candidate.id === session.id ? {...candidate, lastSeenAt: now} : candidate,
+			)
+			await set('sessions', sessions)
+			this.#sessions = sessions
+			touched = true
+		})
+		return touched
+	}
+
 	async validatePrincipal(principal: Principal) {
 		if (principal.actor === 'system') return principal
 		const session = this.#sessions.find((candidate) => candidate.id === principal.sessionId)
@@ -718,16 +831,20 @@ export default class Auth {
 		}
 	}
 
-	#createDerivedCredential(sessionId: string, audience: 'http-api-token') {
+	#createDerivedCredential(
+		sessionId: string,
+		audience: 'http-api-token' | 'photo-backup',
+		metadata: Pick<Credential, 'photoBackupSourceId'> = {},
+	) {
 		const id = randomToken(128)
 		const secret = this.#deriveCredentialSecret(sessionId, id, audience)
 		return {
 			token: `umbrel_${id}_${secret}`,
-			record: {id, audience, hash: hash(secret)},
+			record: {id, audience, hash: hash(secret), ...metadata},
 		}
 	}
 
-	#derivedCredentialToken(session: Session, audience: 'http-api-token') {
+	#derivedCredentialToken(session: Session, audience: 'http-api-token' | 'photo-backup') {
 		const credential = session.credentials.find((candidate) => candidate.audience === audience)
 		if (!credential) throw new Error('Invalid session')
 		const secret = this.#deriveCredentialSecret(session.id, credential.id, audience)

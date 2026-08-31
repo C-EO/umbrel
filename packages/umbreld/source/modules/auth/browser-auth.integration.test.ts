@@ -191,6 +191,24 @@ test('native login refreshes and revokes access without weakening browser sessio
 		headers: {Authorization: `Bearer ${native.accessToken}`},
 	})
 	expect(trpcResult<{name: string}>(nativeUser.body)).toMatchObject({name: credentials.name})
+	const sourceId = '11111111-1111-4111-8111-111111111111'
+	type PhotoBackupGrant = {
+		token: string
+		source: {id: string; accountId: string; name: string}
+	}
+	const grantResponse = await umbreld.unauthenticatedApi.post('../trpc/photos.createBackupGrant', {
+		json: {sourceId, suggestedName: "Nate's iPhone"},
+		headers: {Authorization: `Bearer ${native.accessToken}`},
+	})
+	const grant = trpcResult<PhotoBackupGrant>(grantResponse.body)
+	if (!grant) throw new Error('Photo backup grant was not returned')
+	expect(grantResponse.headers['cache-control']).toBe('no-store')
+	expect(grant.source).toMatchObject({id: sourceId, accountId: '0', name: "Nate's iPhone"})
+	await expect(umbreld.instance.auth.authenticatePhotoBackupGrant(grant.token)).resolves.toMatchObject({sourceId})
+	await expect(
+		umbreld.client.photos.createBackupGrant.mutate({sourceId, suggestedName: 'Browser source'}),
+	).rejects.toThrow('Native session required')
+	await expect(umbreld.client.photos.revokeBackupGrant.mutate()).rejects.toThrow('Native session required')
 	const browserRenewalWithNativeAccess = await umbreld.unauthenticatedApi.post('../trpc/user.renewToken', {
 		json: null,
 		headers: {Authorization: `Bearer ${native.accessToken}`},

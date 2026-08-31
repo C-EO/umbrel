@@ -9,6 +9,12 @@ function bearerToken(request: express.Request) {
 	return scheme?.toLowerCase() === 'bearer' && token ? token : undefined
 }
 
+export async function authorizePhotoBackupRequest(umbreld: Umbreld, request: express.Request) {
+	const token = bearerToken(request)
+	if (!token) throw new Error('Missing photo backup credential')
+	return umbreld.auth.authenticatePhotoBackupGrant(token)
+}
+
 export async function authorizeDashboardRequest(umbreld: Umbreld, request: express.Request) {
 	const token = bearerToken(request)
 	if (!token) throw new Error('Missing dashboard credential')

@@ -1,4 +1,6 @@
 // @vm-requires-playwright
+import {Readable} from 'node:stream'
+
 import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from 'vitest'
 import got from 'got'
 import pRetry from 'p-retry'
@@ -10,6 +12,7 @@ import createVmBrowser from '../test-utilities/create-vm-browser.js'
 import * as totp from '../utilities/totp.js'
 
 type TestVm = Awaited<ReturnType<typeof createTestVm>>
+type TrpcResponse<T> = {result: {data: T}}
 
 describe.sequential('LAN ingress', () => {
 	let umbreld: TestVm
@@ -104,6 +107,83 @@ describe.sequential('LAN ingress', () => {
 		await expectIngressResponds(`https://127.0.0.1:${httpsPort}/`, caCertificate)
 		await expectIngressResponds(`http://127.0.0.1:${authPort}/`)
 		await expectIngressResponds(`https://127.0.0.1:${authPort}/`, caCertificate)
+	})
+
+	test('preserves PhotoKit upload responses through HTTPS ingress', async () => {
+		type NativeSession = {accessToken: string}
+		type PhotoGrant = {token: string}
+		const https = {certificateAuthority: caCertificate}
+		const nativeLogin = await got.post<TrpcResponse<NativeSession>>(
+			`https://127.0.0.1:${httpsPort}/trpc/user.loginNative`,
+			{
+				json: {
+					userId: '0',
+					password: 'moneyprintergobrrr',
+					client: {
+						id: 'umbrel',
+						platform: 'ios',
+						deviceClass: 'phone',
+						appVersion: '0.1',
+						appBuild: '20',
+						osVersion: '26.6.1',
+					},
+				},
+				https,
+				responseType: 'json',
+			},
+		)
+		const accessToken = nativeLogin.body.result.data.accessToken
+		const sourceId = '11111111-1111-4111-8111-111111111111'
+		const grantResponse = await got.post<TrpcResponse<PhotoGrant>>(
+			`https://127.0.0.1:${httpsPort}/trpc/photos.createBackupGrant`,
+			{
+				json: {sourceId, suggestedName: 'Test iPhone'},
+				headers: {Authorization: `Bearer ${accessToken}`},
+				https,
+				responseType: 'json',
+			},
+		)
+		const grant = grantResponse.body.result.data.token
+
+		const capabilityProbe = await got(`https://127.0.0.1:${httpsPort}/api/photos/upload`, {
+			method: 'OPTIONS',
+			https,
+			throwHttpErrors: false,
+		})
+		expect(capabilityProbe.statusCode).toBe(501)
+
+		const uploadedKey = 'a'.repeat(64)
+		const uploaded = await got.post(`https://127.0.0.1:${httpsPort}/api/photos/upload`, {
+			body: 'photo',
+			headers: {
+				Authorization: `Bearer ${grant}`,
+				'X-Umbrel-Photo-Backup-Key': uploadedKey,
+				'X-Umbrel-Photo-Backup-Extension': 'heic',
+			},
+			https,
+		})
+		expect(uploaded.headers['cache-control']).toBe('no-store')
+		expect(uploaded.headers['x-umbrel-photo-backup-key']).toBe(uploadedKey)
+		expect(uploaded.headers['x-umbrel-upload-path']).toBe(`${sourceId}/${uploadedKey}.heic`)
+		expect(uploaded.headers['x-umbrel-upload-bytes']).toBe('5')
+
+		// Reject before consuming the body, exercising the ingress behavior that
+		// previously converted an early 507 into a lost client connection.
+		const rejectedKey = 'b'.repeat(64)
+		const rejected = await got.post(`https://127.0.0.1:${httpsPort}/api/photos/upload`, {
+			body: Readable.from([Buffer.alloc(1024)]),
+			headers: {
+				Authorization: `Bearer ${grant}`,
+				'Content-Length': String(500 * 1024 ** 4),
+				'X-Umbrel-Photo-Backup-Key': rejectedKey,
+				'X-Umbrel-Photo-Backup-Extension': 'heic',
+			},
+			https,
+			throwHttpErrors: false,
+		})
+		expect(rejected.statusCode).toBe(507)
+		expect(rejected.headers['x-umbrel-photo-backup-error']).toBe('insufficient-storage')
+		expect(JSON.parse(rejected.body)).toEqual({error: '[not-enough-space]'})
 	})
 
 	test('resets the local CA without breaking dashboard or auth ingress', async () => {

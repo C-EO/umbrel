@@ -1,9 +1,65 @@
 import {randomBytes} from 'node:crypto'
+import nodePath from 'node:path'
+
+import fse from 'fs-extra'
 
 import type Umbreld from '../../index.js'
 
 import type {PhotoFilter, PhotoScopeMode} from './types.js'
 import type {PublishedFileRevision} from '../files/file-index-enrichment.js'
+
+export type PhotoBackupSource = {
+	id: string
+	accountId: string
+	name: string
+	createdAt: number
+}
+
+export type PhotoBackupResourceDescriptor = {
+	resourceKey: string
+	fileExtension: string
+}
+
+export type PhotoBackupResourceReceipt = {
+	resourceKey: string
+	path: string
+	bytes: number
+}
+
+export const PHOTO_BACKUP_SOURCE_ID_PATTERN =
+	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+export const PHOTO_RESOURCE_KEY_PATTERN = /^[0-9a-f]{64}$/
+export const PHOTO_FILE_EXTENSION_PATTERN = /^[a-z0-9]{1,16}$/
+const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
+
+const normalizeBackupSourceId = (sourceId: string) => {
+	const normalized = sourceId.toLowerCase()
+	if (!PHOTO_BACKUP_SOURCE_ID_PATTERN.test(normalized)) throw new Error('Invalid photo backup source id')
+	return normalized
+}
+
+const normalizeBackupSourceName = (sourceName: string) => {
+	const normalized = sourceName.trim()
+	if (!normalized || normalized.length > 100 || CONTROL_CHARACTER_PATTERN.test(normalized)) {
+		throw new Error('Invalid photo backup source name')
+	}
+	return normalized
+}
+
+const validateAccountId = (accountId: string) => {
+	// Account ids are server-issued, but keep the storage boundary safe without
+	// duplicating the User module's naming policy.
+	if (
+		!accountId ||
+		accountId === '.' ||
+		accountId === '..' ||
+		CONTROL_CHARACTER_PATTERN.test(accountId) ||
+		nodePath.basename(accountId) !== accountId
+	) {
+		throw new Error('Invalid Photos account id')
+	}
+	return accountId
+}
 
 export default class Photos {
 	#umbreld: Umbreld
@@ -15,12 +71,110 @@ export default class Photos {
 		this.logger = umbreld.logger.createChildLogger('photos')
 	}
 
+	get mediaDirectory() {
+		return nodePath.join(this.#umbreld.dataDirectory, 'photos', 'media')
+	}
+
 	async start() {
 		this.logger.log('Starting photos')
 		await this.#umbreld.files.fileIndex.initializePhotos()
 	}
 
 	async stop() {}
+
+	async registerBackupSource({
+		accountId,
+		sourceId,
+		suggestedName,
+	}: {
+		accountId: string
+		sourceId: string
+		suggestedName: string
+	}): Promise<PhotoBackupSource> {
+		accountId = validateAccountId(accountId)
+		sourceId = normalizeBackupSourceId(sourceId)
+		const name = normalizeBackupSourceName(suggestedName)
+		let source: PhotoBackupSource = {id: sourceId, accountId, name, createdAt: Date.now()}
+
+		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
+			const sources = (await get('photos.backupSources')) ?? []
+			const existing = sources.find((candidate) => candidate.accountId === accountId && candidate.id === sourceId)
+			if (existing) {
+				source = existing
+				return
+			}
+			await set('photos.backupSources', [...sources, source])
+		})
+
+		// The store owns backup source identity. Its media directory is derived and
+		// can be recreated after an interrupted registration or missing disk state.
+		await fse.ensureDir(this.backupSourceMediaDirectory(source), {mode: 0o700})
+		return source
+	}
+
+	async deleteAccount(accountId: string) {
+		accountId = validateAccountId(accountId)
+
+		// Remove media before its ownership records. If either step fails, account
+		// deletion remains pending and safely retries this idempotent sequence.
+		await fse.remove(this.#accountMediaDirectory(accountId))
+		await this.#umbreld.store.getWriteLock(async ({get, set}) => {
+			const sources = (await get('photos.backupSources')) ?? []
+			const remaining = sources.filter((source) => source.accountId !== accountId)
+			if (remaining.length !== sources.length) await set('photos.backupSources', remaining)
+		})
+	}
+
+	async confirmedBackupResources({
+		accountId,
+		sourceId,
+		resources,
+	}: {
+		accountId: string
+		sourceId: string
+		resources: PhotoBackupResourceDescriptor[]
+	}): Promise<PhotoBackupResourceReceipt[]> {
+		accountId = validateAccountId(accountId)
+		sourceId = normalizeBackupSourceId(sourceId)
+		const unique = new Map<string, PhotoBackupResourceDescriptor>()
+		for (const resource of resources) {
+			const resourceKey = resource.resourceKey.toLowerCase()
+			const fileExtension = resource.fileExtension.toLowerCase()
+			if (!PHOTO_RESOURCE_KEY_PATTERN.test(resourceKey) || !PHOTO_FILE_EXTENSION_PATTERN.test(fileExtension)) {
+				throw new Error('Invalid photo backup resource')
+			}
+			unique.set(`${resourceKey}.${fileExtension}`, {resourceKey, fileExtension})
+		}
+		const sources = (await this.#umbreld.store.get('photos.backupSources')) ?? []
+		const source = sources.find((candidate) => candidate.accountId === accountId && candidate.id === sourceId)
+		if (!source) return []
+
+		// A regular file at the derived final path is the durable receipt: it only
+		// appears after the upload body has been atomically promoted.
+		const directory = this.backupSourceMediaDirectory(source)
+		const receipts = await Promise.all(
+			[...unique.values()].map(async ({resourceKey, fileExtension}) => {
+				const fileName = `${resourceKey}.${fileExtension}`
+				try {
+					const stats = await fse.lstat(nodePath.join(directory, fileName))
+					if (!stats.isFile()) return undefined
+					return {resourceKey, path: `${source.id}/${fileName}`, bytes: stats.size}
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+					throw error
+				}
+			}),
+		)
+		return receipts.filter((receipt): receipt is PhotoBackupResourceReceipt => receipt !== undefined)
+	}
+
+	backupSourceMediaDirectory(source: Pick<PhotoBackupSource, 'accountId' | 'id'>) {
+		return nodePath.join(this.#accountMediaDirectory(source.accountId), normalizeBackupSourceId(source.id))
+	}
+
+	#accountMediaDirectory(accountId: string) {
+		return nodePath.join(this.mediaDirectory, validateAccountId(accountId))
+	}
 
 	async createDownloadTicket(accountId: string, ids: string[]) {
 		const uniqueIds = [...new Set(ids)]

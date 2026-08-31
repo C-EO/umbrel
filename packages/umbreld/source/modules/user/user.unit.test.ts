@@ -29,6 +29,7 @@ describe('member lifecycle', () => {
 		vi.spyOn(umbreld.files.memberShares, 'removeUserFromShares').mockResolvedValue()
 		vi.spyOn(umbreld.apps, 'removeUserFromMemberShares').mockResolvedValue()
 		vi.spyOn(umbreld.auth, 'revokeAllForAccount').mockResolvedValue(0)
+		vi.spyOn(umbreld.photos, 'deleteAccount').mockResolvedValue()
 		vi.spyOn(umbreld.hardware.raid, 'hasConfigStore').mockResolvedValue(false)
 	})
 
@@ -66,10 +67,14 @@ describe('member lifecycle', () => {
 		})
 		expect(await umbreld.user.listDeletedMemberIds()).toEqual(['Alice'])
 		expect(umbreld.files.cloud.removeUser).toHaveBeenCalledWith('Alice')
+		expect(umbreld.photos.deleteAccount).toHaveBeenCalledWith('Alice')
 		expect(umbreld.files.deleteMemberDirectories).toHaveBeenCalledWith('Alice')
 		expect(umbreld.files.memberShares.removeUserFromShares).toHaveBeenCalledWith('Alice')
 		expect(umbreld.apps.removeUserFromMemberShares).toHaveBeenCalledWith('Alice')
 		expect(vi.mocked(umbreld.files.cloud.removeUser).mock.invocationCallOrder[0]).toBeLessThan(
+			vi.mocked(umbreld.photos.deleteAccount).mock.invocationCallOrder[0],
+		)
+		expect(vi.mocked(umbreld.photos.deleteAccount).mock.invocationCallOrder[0]).toBeLessThan(
 			vi.mocked(umbreld.files.deleteMemberDirectories).mock.invocationCallOrder[0],
 		)
 	})
@@ -86,11 +91,13 @@ describe('member lifecycle', () => {
 		vi.spyOn(restarted.files.memberShares, 'removeUserFromShares').mockResolvedValue()
 		vi.spyOn(restarted.apps, 'removeUserFromMemberShares').mockResolvedValue()
 		vi.spyOn(restarted.auth, 'revokeAllForAccount').mockResolvedValue(0)
+		vi.spyOn(restarted.photos, 'deleteAccount').mockResolvedValue()
 
 		await restarted.user.finishPendingDeletions()
 
 		expect(restarted.auth.revokeAllForAccount).toHaveBeenCalledWith('Grace')
 		expect(restarted.files.cloud.removeUser).toHaveBeenCalledWith('Grace')
+		expect(restarted.photos.deleteAccount).toHaveBeenCalledWith('Grace')
 		expect(restarted.files.deleteMemberDirectories).toHaveBeenCalledWith('Grace')
 		expect(await restarted.store.get('members')).toEqual([{id: 'Grace', deleted: true, cleanupComplete: true}])
 	})
@@ -104,6 +111,21 @@ describe('member lifecycle', () => {
 		expect(umbreld.files.cloud.removeUser).toHaveBeenCalledWith(member.userId)
 		expect(umbreld.files.deleteMemberDirectories).not.toHaveBeenCalled()
 		expect(await umbreld.store.get('members')).toEqual([{id: member.userId, deleted: true}])
+	})
+
+	test('retries member deletion when Photos cleanup fails', async () => {
+		const member = await umbreld.user.createUser('Alice', 'passwordpassword')
+		vi.mocked(umbreld.photos.deleteAccount).mockRejectedValueOnce(new Error('photos cleanup unavailable'))
+
+		await expect(umbreld.user.deleteUser(member.userId)).rejects.toThrow('photos cleanup unavailable')
+
+		expect(umbreld.photos.deleteAccount).toHaveBeenCalledWith(member.userId)
+		expect(umbreld.files.deleteMemberDirectories).not.toHaveBeenCalled()
+		expect(await umbreld.store.get('members')).toEqual([{id: member.userId, deleted: true}])
+
+		await expect(umbreld.user.deleteUser(member.userId)).resolves.toBe(true)
+		expect(umbreld.photos.deleteAccount).toHaveBeenCalledTimes(2)
+		expect(umbreld.files.deleteMemberDirectories).toHaveBeenCalledWith(member.userId)
 	})
 
 	test('removes a deleted member avatar directory and retries an interrupted avatar cleanup', async () => {

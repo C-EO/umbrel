@@ -386,6 +386,9 @@ export default class User {
 			)
 		}
 
+		// Managed Photos data lives outside the member's Home directory.
+		await this.#umbreld.photos.deleteAccount(userId)
+
 		// Delete the user's private Home, trash, and associated metadata.
 		await this.#umbreld.files.deleteMemberDirectories(userId)
 

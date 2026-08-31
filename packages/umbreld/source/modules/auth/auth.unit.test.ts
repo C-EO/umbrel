@@ -144,6 +144,51 @@ describe('Auth', () => {
 		})
 	})
 
+	test('keeps a photo backup grant bound to one native source until it is replaced or revoked', async () => {
+		const firstSourceId = '11111111-1111-4111-8111-111111111111'
+		const secondSourceId = '22222222-2222-4222-8222-222222222222'
+		const native = await auth.createNativeSession({nativeClient})
+		const browser = await auth.createSession()
+
+		const first = await auth.issuePhotoBackupGrant(native.principal, firstSourceId)
+		const retry = await auth.issuePhotoBackupGrant(native.principal, firstSourceId)
+		expect(retry).toEqual(first)
+		await expect(auth.authenticatePhotoBackupGrant(first.token)).resolves.toEqual({
+			...native.principal,
+			sourceId: firstSourceId,
+		})
+		await expect(auth.issuePhotoBackupGrant(browser.principal, firstSourceId)).rejects.toThrow(
+			'Native session required',
+		)
+		await auth.stop()
+		auth = new Auth(umbreld)
+		await auth.start()
+		await expect(auth.authenticatePhotoBackupGrant(first.token)).resolves.toMatchObject({sourceId: firstSourceId})
+
+		const replacement = await auth.issuePhotoBackupGrant(native.principal, secondSourceId)
+		expect(replacement.token).not.toBe(first.token)
+		await expect(auth.authenticatePhotoBackupGrant(first.token)).rejects.toThrow('Invalid credential')
+		await expect(auth.authenticatePhotoBackupGrant(replacement.token)).resolves.toMatchObject({
+			sourceId: secondSourceId,
+		})
+		await expect(auth.revokePhotoBackupGrant(native.principal)).resolves.toBe(true)
+		await expect(auth.authenticatePhotoBackupGrant(replacement.token)).rejects.toThrow('Invalid credential')
+		await expect(auth.revokePhotoBackupGrant(native.principal)).resolves.toBe(false)
+	})
+
+	test('records background session activity at most once per hour', async () => {
+		vi.useFakeTimers()
+		vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+		const native = await auth.createNativeSession({nativeClient})
+
+		vi.advanceTimersByTime(60 * 60 * 1000 - 1)
+		await expect(auth.touchSession(native.principal)).resolves.toBe(false)
+		vi.advanceTimersByTime(1)
+		await expect(auth.touchSession(native.principal)).resolves.toBe(true)
+		await expect(auth.touchSession(native.principal)).resolves.toBe(false)
+		expect((await auth.listSessions(native.principal))[0]?.lastSeenAt).toBe(Date.now())
+	})
+
 	test('can safely retry the same device credential after a lost response and server restart', async () => {
 		const session = await auth.createNativeSession({nativeClient})
 		const lostResponse = await auth.refreshNativeAccess(session.deviceToken, nativeClient)

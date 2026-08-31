@@ -5,23 +5,142 @@
 //   GET  /api/photos/original/:id[?download]
 //   GET  /api/photos/live/:id
 //   GET  /api/photos/download?ticket=…
-//   POST /api/photos/upload?name=IMG_1234.jpg&album=<id>
+//   POST /api/photos/upload?name=IMG_1234.jpg&album=<id> (browser import)
+//   POST /api/photos/upload + X-Umbrel-Photo-Backup-* headers (PhotoKit backup)
 //
+import {randomBytes} from 'node:crypto'
+import {constants} from 'node:fs'
+import {open} from 'node:fs/promises'
 import nodePath from 'node:path'
 import {pipeline} from 'node:stream/promises'
 
 import express from 'express'
+import fse from 'fs-extra'
 import mime from 'mime-types'
 
 import type Umbreld from '../../index.js'
 import type {Principal} from '../auth/auth.js'
-import {authorizeDashboardRequest, authorizeHttpRequest} from '../auth/http-request.js'
+import {authorizeDashboardRequest, authorizeHttpRequest, authorizePhotoBackupRequest} from '../auth/http-request.js'
 import {receiveUpload} from '../files/api.js'
 import type UploadDiskPreflight from '../server/upload-disk-preflight.js'
 import type {ThumbnailVariant} from '../files/thumbnail-support.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 
+import {PHOTO_FILE_EXTENSION_PATTERN, PHOTO_RESOURCE_KEY_PATTERN} from './photos.js'
 import {supportsPhotos} from './types.js'
+
+const INSUFFICIENT_STORAGE_HEADER = 'X-Umbrel-Photo-Backup-Error'
+
+type PhotoBackupPrincipal = Awaited<ReturnType<Umbreld['auth']['authenticatePhotoBackupGrant']>>
+
+function isInsufficientStorageError(error: unknown) {
+	const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined
+	return code === 'ENOSPC' || code === 'EDQUOT'
+}
+
+function rejectInsufficientStorage(response: express.Response) {
+	response.setHeader(INSUFFICIENT_STORAGE_HEADER, 'insufficient-storage')
+	return response.status(507).json({error: '[not-enough-space]'})
+}
+
+async function receivePhotoBackupUpload(
+	umbreld: Umbreld,
+	uploadDiskPreflight: UploadDiskPreflight,
+	request: express.Request,
+	response: express.Response,
+) {
+	const resourceKey = request.get('X-Umbrel-Photo-Backup-Key')
+	const fileExtension = request.get('X-Umbrel-Photo-Backup-Extension')?.toLowerCase()
+	const rawContentLength = request.get('Content-Length')
+	const contentLength = Number(rawContentLength)
+	if (
+		!resourceKey ||
+		!PHOTO_RESOURCE_KEY_PATTERN.test(resourceKey) ||
+		!fileExtension ||
+		!PHOTO_FILE_EXTENSION_PATTERN.test(fileExtension) ||
+		!rawContentLength ||
+		!/^\d+$/.test(rawContentLength) ||
+		!Number.isSafeInteger(contentLength) ||
+		contentLength <= 0
+	) {
+		response.setHeader('Connection', 'close')
+		return response.status(400).json({error: 'invalid photo backup request'})
+	}
+
+	const principal = response.locals.photoBackupPrincipal as PhotoBackupPrincipal
+	const directory = umbreld.photos.backupSourceMediaDirectory({
+		accountId: principal.accountId,
+		id: principal.sourceId,
+	})
+	const fileName = `${resourceKey}.${fileExtension}`
+	const systemPath = nodePath.join(directory, fileName)
+	const temporarySystemPath = nodePath.join(directory, `.${fileName}.${randomBytes(16).toString('hex')}.umbrel-upload`)
+
+	if (!(await uploadDiskPreflight.admit(temporarySystemPath, contentLength))) {
+		return rejectInsufficientStorage(response)
+	}
+
+	let promoted = false
+	try {
+		await fse.ensureDir(directory, {mode: 0o700})
+		await fse.chmod(directory, 0o700)
+		let temporaryFile: Awaited<ReturnType<typeof open>> | undefined
+		try {
+			temporaryFile = await open(
+				temporarySystemPath,
+				constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+				0o600,
+			)
+			const writeStream = temporaryFile.createWriteStream()
+			temporaryFile = undefined
+			await pipeline(request, writeStream)
+
+			// A successful response is a permanent backup receipt on the phone.
+			// Flush both the bytes and their final directory entry before sending it.
+			const syncHandle = await open(temporarySystemPath, constants.O_RDONLY | constants.O_NOFOLLOW)
+			try {
+				await syncHandle.sync()
+			} finally {
+				await syncHandle.close()
+			}
+		} finally {
+			await temporaryFile?.close().catch(() => {})
+		}
+
+		await fse.rename(temporarySystemPath, systemPath)
+		promoted = true
+		const directoryHandle = await open(directory, constants.O_RDONLY)
+		try {
+			await directoryHandle.sync()
+		} finally {
+			await directoryHandle.close()
+		}
+		const receiptPath = `${principal.sourceId}/${fileName}`
+		response.setHeader('Cache-Control', 'no-store')
+		response.setHeader('X-Umbrel-Photo-Backup-Key', resourceKey)
+		response.setHeader('X-Umbrel-Upload-Path', receiptPath)
+		response.setHeader('X-Umbrel-Upload-Bytes', String(contentLength))
+		await umbreld.auth
+			.touchSession(principal)
+			.catch((error) => umbreld.logger.error('Failed to update photo backup session activity', error))
+		return response.status(200).json({key: resourceKey, path: receiptPath, bytes: contentLength})
+	} catch (error) {
+		if (isInsufficientStorageError(error)) return rejectInsufficientStorage(response)
+		response.setHeader('Connection', 'close')
+		return response.status(500).json({error: 'error writing photo backup'})
+	} finally {
+		let restoreCapacity = false
+		if (!promoted) {
+			try {
+				await fse.remove(temporarySystemPath)
+				restoreCapacity = true
+			} catch {
+				// Keep the reservation because the partial file may remain.
+			}
+		}
+		await uploadDiskPreflight.release(temporarySystemPath, {restoreCapacity})
+	}
+}
 
 const THUMB_VARIANTS: Record<string, ThumbnailVariant> = {
 	'192': 'preview-192-webp-v1',
@@ -65,10 +184,19 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 	const api = express.Router()
 
 	// Deny-by-default, like Files' router: adding a handler below also requires
-	// an explicit policy here. Media GETs use the URL-token authorization (an
-	// <img>/<video> can't send headers); upload keeps the dashboard session.
+	// an explicit policy here. Media GETs use URL-token authorization; browser
+	// imports use the dashboard session, while PhotoKit uses a source-bound grant.
 	api.use((request, response, next) => {
 		const path = request.path.replace(/\/+$/, '') || '/'
+		if (request.method === 'OPTIONS' && path === '/upload') return next()
+		if (request.method === 'POST' && path === '/upload' && request.get('X-Umbrel-Photo-Backup-Key')) {
+			return authorizePhotoBackupRequest(umbreld, request)
+				.then((principal) => {
+					response.locals.photoBackupPrincipal = principal
+					next()
+				})
+				.catch(() => response.status(401).json({error: 'unauthorized'}))
+		}
 		let authorization: Promise<Principal> | undefined
 		if (request.method === 'GET' && path.startsWith('/thumb/')) {
 			authorization = authorizeHttpRequest(umbreld, request, 'file-thumbnail', path)
@@ -87,6 +215,10 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 			})
 			.catch(() => response.status(401).json({error: 'unauthorized'}))
 	})
+
+	// Apple probes for a resumable upload protocol before falling back to the
+	// ordinary request body used by the native backup extension.
+	api.options('/upload', (_request, response) => response.sendStatus(501))
 
 	// Resolve the account-scoped content hash, then re-authorize the current
 	// virtual path at the Files boundary before touching the original.
@@ -227,6 +359,9 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 	// keep-both collisions, ownership).
 	// 2xx answers {status: 'imported' | 'duplicate'}; unsupported types → 415.
 	api.post('/upload', async (request, response) => {
+		if (response.locals.photoBackupPrincipal) {
+			return receivePhotoBackupUpload(umbreld, uploadDiskPreflight, request, response)
+		}
 		// `Connection: close` on early errors so the browser doesn't stream the
 		// whole body before reading the verdict (see Files' uploadFile)
 		const name = typeof request.query.name === 'string' ? nodePath.basename(request.query.name) : ''

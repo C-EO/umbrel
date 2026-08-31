@@ -1,10 +1,33 @@
 import {TRPCError} from '@trpc/server'
 import z from 'zod'
 
-import type {Principal} from '../auth/auth.js'
+import {NativeSessionRequiredError, type Principal} from '../auth/auth.js'
 import {privateProcedureWithMembers, router} from '../server/trpc/trpc.js'
 
+import {PHOTO_BACKUP_SOURCE_ID_PATTERN, PHOTO_FILE_EXTENSION_PATTERN, PHOTO_RESOURCE_KEY_PATTERN} from './photos.js'
 import {PHOTO_KINDS, PHOTO_SCOPE_MODES, PHOTO_SUB_KINDS} from './types.js'
+
+const backupSourceInput = z.object({
+	sourceId: z.string().regex(PHOTO_BACKUP_SOURCE_ID_PATTERN),
+	suggestedName: z
+		.string()
+		.trim()
+		.min(1)
+		.max(100)
+		.regex(/^[^\u0000-\u001f\u007f]*$/),
+})
+
+const backupResourceReceiptsInput = z.object({
+	sourceId: z.string().regex(PHOTO_BACKUP_SOURCE_ID_PATTERN),
+	resources: z
+		.array(
+			z.object({
+				resourceKey: z.string().regex(PHOTO_RESOURCE_KEY_PATTERN),
+				fileExtension: z.string().regex(PHOTO_FILE_EXTENSION_PATTERN),
+			}),
+		)
+		.max(256),
+})
 
 const filterSchema = z.object({
 	query: z.string().optional(),
@@ -23,6 +46,47 @@ const accountId = (context: {principal?: Principal}) => {
 }
 
 export default router({
+	createBackupGrant: privateProcedureWithMembers.input(backupSourceInput).mutation(async ({ctx, input}) => {
+		if (!ctx.request || !ctx.response) {
+			throw new TRPCError({code: 'METHOD_NOT_SUPPORTED', message: 'HTTP transport required'})
+		}
+
+		await ctx.umbreld.auth.validateNativePrincipal(ctx.principal!).catch((error) => {
+			if (error instanceof NativeSessionRequiredError) {
+				throw new TRPCError({code: 'FORBIDDEN', message: error.message})
+			}
+			throw error
+		})
+		const source = await ctx.umbreld.photos.registerBackupSource({
+			accountId: ctx.principal!.accountId,
+			...input,
+		})
+		const grant = await ctx.umbreld.auth.issuePhotoBackupGrant(ctx.principal!, source.id)
+		ctx.response.set('Cache-Control', 'no-store')
+		return {token: grant.token, source}
+	}),
+
+	revokeBackupGrant: privateProcedureWithMembers.mutation(async ({ctx}) => {
+		return ctx.umbreld.auth.revokePhotoBackupGrant(ctx.principal!).catch((error) => {
+			if (error instanceof NativeSessionRequiredError) {
+				throw new TRPCError({code: 'FORBIDDEN', message: error.message})
+			}
+			throw error
+		})
+	}),
+
+	// tRPC mutations use POST, keeping a bounded batch of resource keys out of the
+	// URL. This procedure is read-only and safe for native clients to replay after a
+	// route change.
+	confirmedBackupResources: privateProcedureWithMembers
+		.input(backupResourceReceiptsInput)
+		.mutation(async ({ctx, input}) => {
+			return ctx.umbreld.photos.confirmedBackupResources({
+				accountId: ctx.principal!.accountId,
+				...input,
+			})
+		}),
+
 	library: router({
 		summary: privateProcedureWithMembers.query(({ctx}) => ctx.umbreld.photos.summary(accountId(ctx))),
 		status: privateProcedureWithMembers.query(({ctx}) => ctx.umbreld.photos.indexingState(accountId(ctx))),

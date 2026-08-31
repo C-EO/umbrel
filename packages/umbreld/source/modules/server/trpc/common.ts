@@ -11,6 +11,9 @@ export const httpOnlyPaths = [
 	// native auth exchanges read request metadata and set no-store response headers
 	'user.loginNative',
 	'user.refreshNativeAccess',
+	// native photo-backup grant exchanges require request authentication; issuance also sets no-store
+	'photos.createBackupGrant',
+	'photos.revokeBackupGrant',
 	// reads the Authorization header and browser-session cookie
 	'user.isLoggedIn',
 	// extends the session and its browser-session cookie
