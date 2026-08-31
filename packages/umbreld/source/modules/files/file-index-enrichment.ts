@@ -4,13 +4,13 @@ import {availableParallelism as nodeAvailableParallelism} from 'node:os'
 import nodePath from 'node:path'
 import {createHash, randomUUID} from 'node:crypto'
 
-import {Blake3Hasher} from '@napi-rs/blake-hash'
 import type DatabaseTypes from 'better-sqlite3'
 import {execa} from 'execa'
 import fse from 'fs-extra'
 import PQueue from 'p-queue'
 
 import {photoKind, type PhotoKind, type PhotoSubKind} from '../photos/types.js'
+import {Blake3Hasher} from './blake3.js'
 import {foldSearchName} from './file-index/migrations.js'
 import {
 	FILES_THUMBNAIL_VARIANT,
