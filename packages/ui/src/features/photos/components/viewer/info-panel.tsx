@@ -21,8 +21,8 @@ import {tw} from '@/utils/tw'
 // The folder drawn the way Files' path bar draws it (icons and carets), as
 // the cloud dialogs do; Files' icon set is loaded only when a panel opens
 const FolderBreadcrumbs = lazy(() =>
-	import('@/features/files/components/dialogs/cloud-add-dialog/destination-step').then((m) => ({
-		default: m.DestinationBreadcrumbs,
+	import('@/features/photos/components/viewer/folder-breadcrumb-scroller').then((m) => ({
+		default: m.FolderBreadcrumbScroller,
 	})),
 )
 
@@ -150,7 +150,9 @@ export function InfoPanel({item, onClose, sheet = false}: {item: ItemDetail; onC
 				{item.exif?.userComment && (
 					<div className={cn(cardClass, 'flex items-start gap-2.5')}>
 						<MessageSquareText className='mt-0.5 size-4 shrink-0 text-white/70' />
-						<p className='text-13 whitespace-pre-wrap text-white/85'>{item.exif.userComment}</p>
+						<p className='min-w-0 flex-1 text-13 [overflow-wrap:anywhere] whitespace-pre-wrap text-white/85'>
+							{item.exif.userComment}
+						</p>
 					</div>
 				)}
 
@@ -218,14 +220,14 @@ export function InfoPanel({item, onClose, sheet = false}: {item: ItemDetail; onC
 				>
 					{/* The Files app's own icon, as in the dock */}
 					<img src='/assets/dock/dock-files.webp' alt='' className='size-7 shrink-0 rounded-[7px]' />
-					<span className='min-w-0 flex-1'>
+					<div className='min-w-0 flex-1'>
 						<span className='block text-12 text-white/55'>{t('photos-item.show-in-files')}</span>
-						<span className='mt-0.5 block text-13'>
+						<div className='mt-0.5 text-13'>
 							<Suspense fallback={<span className='block truncate'>{folder}</span>}>
 								<FolderBreadcrumbs path={folder} homePath={homePath} />
 							</Suspense>
-						</span>
-					</span>
+						</div>
+					</div>
 				</button>
 			</div>
 		</section>
