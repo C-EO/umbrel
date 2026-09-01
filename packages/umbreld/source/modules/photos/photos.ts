@@ -3,12 +3,12 @@ import {constants as fsConstants} from 'node:fs'
 import {lstat, open} from 'node:fs/promises'
 import nodePath from 'node:path'
 
-import {Blake3Hasher} from '@napi-rs/blake-hash'
 import fse from 'fs-extra'
 import isValidFilename from 'valid-filename'
 
 import type Umbreld from '../../index.js'
 import type {Principal} from '../auth/auth.js'
+import {Blake3Hasher} from '../files/blake3.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 
 import type {PhotoFilter, PhotoScopeMode} from './types.js'

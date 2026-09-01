@@ -1,3 +1,7 @@
+import {readdir, readFile} from 'node:fs/promises'
+import nodePath from 'node:path'
+import {fileURLToPath} from 'node:url'
+
 import {expect, test, vi} from 'vitest'
 
 import {isRaspberryPiCpuInfo, loadBlake3Hasher, type Blake3HasherConstructor} from './blake3.js'
@@ -16,6 +20,27 @@ test('detects Raspberry Pi hardware from cpuinfo', () => {
 	expect(isRaspberryPiCpuInfo('Model\t: Raspberry Pi 4 Model B Rev 1.5')).toBe(true)
 	expect(isRaspberryPiCpuInfo('Model\t: Raspberry Pi 5 Model B Rev 1.0')).toBe(true)
 	expect(isRaspberryPiCpuInfo('model name\t: AMD Ryzen 7 7840U')).toBe(false)
+})
+
+test('all BLAKE3 consumers use the Pi-safe wrapper', async () => {
+	const sourceDirectory = nodePath.resolve(nodePath.dirname(fileURLToPath(import.meta.url)), '../..')
+	const allowedDirectImports = new Set(['modules/files/blake3.ts', 'modules/files/blake3.unit.test.ts'])
+	const sourceFiles = (await readdir(sourceDirectory, {recursive: true})).filter(
+		(relativePath) => relativePath.endsWith('.ts') && !allowedDirectImports.has(relativePath),
+	)
+	const directImplementationImport =
+		/(?:from\s+|import\s*\(|require\s*\()\s*['"](?:@napi-rs\/blake-hash|blake3-wasm-rs)['"]/
+	const offenders = (
+		await Promise.all(
+			sourceFiles.map(async (relativePath) =>
+				directImplementationImport.test(await readFile(nodePath.join(sourceDirectory, relativePath), 'utf8'))
+					? relativePath
+					: undefined,
+			),
+		)
+	).filter((relativePath): relativePath is string => relativePath !== undefined)
+
+	expect(offenders).toEqual([])
 })
 
 test('loads the existing native implementation on non-Pi hardware', async () => {

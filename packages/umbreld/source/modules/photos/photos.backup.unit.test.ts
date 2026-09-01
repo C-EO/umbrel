@@ -1,10 +1,10 @@
 import nodePath from 'node:path'
 
-import {Blake3Hasher} from '@napi-rs/blake-hash'
 import fse from 'fs-extra'
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 
 import Umbreld from '../../index.js'
+import {Blake3Hasher} from '../files/blake3.js'
 import temporaryDirectory from '../utilities/temporary-directory.js'
 
 const SOURCE_ID = '11111111-1111-4111-8111-111111111111'
