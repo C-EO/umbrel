@@ -201,6 +201,7 @@ FROM debian:${DEBIAN_VERSION}-${DEBIAN_IMAGE_SNAPSHOT_DATE} AS watchman-build
 
 ARG APT_SNAPSHOT_DATE
 ARG WATCHMAN_VERSION=2026.05.11.00
+ARG HOMEBREW_BREW_COMMIT=76ca8d74e4a180badad438bf245ddfc740d68a8e
 ARG WATCHMAN_HOMEBREW_CORE_COMMIT=a33d7e6eed67d79d55b3d45050c6f45646116393
 
 COPY packages/os/build-steps /build-steps
@@ -226,7 +227,11 @@ ENV HOMEBREW_NO_ENV_HINTS=1
 ENV HOMEBREW_NO_INSTALL_CLEANUP=1
 ENV HOMEBREW_NO_INSTALL_FROM_API=1
 
-RUN git clone --depth=1 https://github.com/Homebrew/brew "${HOMEBREW_REPOSITORY}" && \
+RUN git init "${HOMEBREW_REPOSITORY}" && \
+    git -C "${HOMEBREW_REPOSITORY}" remote add origin https://github.com/Homebrew/brew.git && \
+    git -C "${HOMEBREW_REPOSITORY}" fetch --depth=1 origin "${HOMEBREW_BREW_COMMIT}" && \
+    git -C "${HOMEBREW_REPOSITORY}" checkout --detach FETCH_HEAD && \
+    test "$(git -C "${HOMEBREW_REPOSITORY}" rev-parse HEAD)" = "${HOMEBREW_BREW_COMMIT}" && \
     mkdir -p \
         "${HOMEBREW_PREFIX}/bin" \
         "${HOMEBREW_PREFIX}/etc" \
@@ -246,7 +251,11 @@ RUN git clone --depth=1 https://github.com/Homebrew/brew "${HOMEBREW_REPOSITORY}
 RUN if [ "$(uname -m)" = "x86_64" ] && \
        grep -q '^Features.*asimd' /proc/cpuinfo && \
        ! grep -qE '^(flags|Features).*\bssse3\b' /proc/cpuinfo; then \
+        grep -qE 'if ! grep -qE .*ssse3.*\/proc\/cpuinfo' \
+            "${HOMEBREW_REPOSITORY}/Library/Homebrew/brew.sh" && \
         sed -i '/if ! grep -qE .*ssse3.*\/proc\/cpuinfo/,/    fi/c\    :' \
+            "${HOMEBREW_REPOSITORY}/Library/Homebrew/brew.sh" && \
+        ! grep -qE 'if ! grep -qE .*ssse3.*\/proc\/cpuinfo' \
             "${HOMEBREW_REPOSITORY}/Library/Homebrew/brew.sh"; \
     fi
 
