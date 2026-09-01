@@ -1,206 +1,163 @@
-import {expect, test, beforeEach, afterEach} from 'vitest'
+import {utimes} from 'node:fs/promises'
+
 import fse from 'fs-extra'
-import {delay} from 'es-toolkit'
+import {afterEach, beforeEach, expect, test} from 'vitest'
+
 import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
 
 let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
 
-// Create new umbreld instance for each test to clear recent state
 beforeEach(async () => {
 	umbreld = await createTestUmbreld()
 	await umbreld.registerAndLogin()
 })
 
-// Clean up after each test
 afterEach(async () => {
 	await umbreld.cleanup()
 })
+
+async function reconcileHome(reason: string) {
+	await umbreld.instance.files.fileIndex.reconcileRoot('/Home', reason)
+}
+
+async function recentNames() {
+	return (await umbreld.client.files.recents.query()).map(({name}) => name)
+}
 
 test('recents() throws invalid error without auth token', async () => {
 	await expect(umbreld.unauthenticatedClient.files.recents.query()).rejects.toThrow('Invalid token')
 })
 
-test('recents() returns recently modified files in correct order', async () => {
-	// Create test directory and files
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/recents-test`
-	await fse.mkdir(testDirectory)
+test('recents() returns files by indexed modification time rather than event order', async () => {
+	const directory = `${umbreld.instance.dataDirectory}/home/recents-order-test`
+	const newest = `${directory}/newest.txt`
+	const middle = `${directory}/middle.txt`
+	const oldest = `${directory}/oldest.txt`
+	await Promise.all([
+		fse.outputFile(newest, 'newest'),
+		fse.outputFile(middle, 'middle'),
+		fse.outputFile(oldest, 'oldest'),
+	])
+	await Promise.all([
+		utimes(newest, new Date('2025-01-03T00:00:00Z'), new Date('2025-01-03T00:00:00Z')),
+		utimes(middle, new Date('2025-01-02T00:00:00Z'), new Date('2025-01-02T00:00:00Z')),
+		utimes(oldest, new Date('2025-01-01T00:00:00Z'), new Date('2025-01-01T00:00:00Z')),
+	])
+	await reconcileHome('recents-order-test')
 
-	// Create files with different timestamps
-	await fse.writeFile(`${testDirectory}/file1.txt`, 'content1')
-	await fse.writeFile(`${testDirectory}/file2.txt`, 'content2')
-	await fse.writeFile(`${testDirectory}/file3.txt`, 'content3')
-
-	// Allow time for events to fire
-	await delay(100)
-
-	// Get recent files
-	const recentFiles = await umbreld.client.files.recents.query()
-
-	// Verify the order (most recent first)
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['file3.txt', 'file2.txt', 'file1.txt'])
+	await expect(recentNames()).resolves.toStrictEqual(['newest.txt', 'middle.txt', 'oldest.txt'])
 })
 
-test('recents() updates when files are modified', async () => {
-	// Create test directory and file
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/recents-update-test`
-	await fse.mkdir(testDirectory)
-	await fse.writeFile(`${testDirectory}/original.txt`, 'original content')
+test('recents() updates when indexed file modification times change', async () => {
+	const directory = `${umbreld.instance.dataDirectory}/home/recents-update-test`
+	const changed = `${directory}/changed.txt`
+	const initiallyNewest = `${directory}/initially-newest.txt`
+	await Promise.all([fse.outputFile(changed, 'old'), fse.outputFile(initiallyNewest, 'new')])
+	await Promise.all([
+		utimes(changed, new Date('2025-01-01T00:00:00Z'), new Date('2025-01-01T00:00:00Z')),
+		utimes(initiallyNewest, new Date('2025-01-02T00:00:00Z'), new Date('2025-01-02T00:00:00Z')),
+	])
+	await reconcileHome('recents-update-initial')
+	await expect(recentNames()).resolves.toStrictEqual(['initially-newest.txt', 'changed.txt'])
 
-	// Allow time for events to fire
-	await delay(100)
+	await fse.writeFile(changed, 'updated')
+	const updated = new Date('2025-01-03T00:00:00Z')
+	await utimes(changed, updated, updated)
+	await umbreld.instance.files.fileIndex.reconcilePath(changed)
 
-	// Get initial recent files
-	let recentFiles = await umbreld.client.files.recents.query()
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['original.txt'])
-
-	// Modify the file
-	await fse.writeFile(`${testDirectory}/original.txt`, 'modified content')
-
-	// Allow time for events to fire
-	await delay(100)
-
-	// Get updated recent files
-	recentFiles = await umbreld.client.files.recents.query()
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['original.txt'])
+	await expect(recentNames()).resolves.toStrictEqual(['changed.txt', 'initially-newest.txt'])
 })
 
-test('recents() removes deleted files', async () => {
-	// Create test directory and files
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/recents-delete-test`
-	await fse.mkdir(testDirectory)
-	await fse.writeFile(`${testDirectory}/to-delete.txt`, 'temporary content')
-	await fse.writeFile(`${testDirectory}/keep.txt`, 'keeping this')
+test('recents() removes files deleted from the index', async () => {
+	const directory = `${umbreld.instance.dataDirectory}/home/recents-delete-test`
+	const removed = `${directory}/removed.txt`
+	const kept = `${directory}/kept.txt`
+	await Promise.all([fse.outputFile(removed, 'remove'), fse.outputFile(kept, 'keep')])
+	await reconcileHome('recents-delete-initial')
+	await expect(recentNames()).resolves.toEqual(expect.arrayContaining(['removed.txt', 'kept.txt']))
 
-	// Wait for watcher to process the creation
-	await delay(100)
+	await fse.remove(removed)
+	await umbreld.instance.files.fileIndex.reconcilePath(removed)
 
-	// Verify files are in recent list
-	let recentFiles = await umbreld.client.files.recents.query()
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['to-delete.txt', 'keep.txt'])
-
-	// Delete one file
-	await fse.remove(`${testDirectory}/to-delete.txt`)
-
-	// Wait for watcher to process the deletion
-	await delay(100)
-
-	// Verify deleted file is removed from recents
-	recentFiles = await umbreld.client.files.recents.query()
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['keep.txt'])
+	await expect(recentNames()).resolves.toStrictEqual(['kept.txt'])
 })
 
-test('recents() ignores hidden files', async () => {
-	// Create test directory and files
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/recents-hidden-test`
-	await fse.mkdir(testDirectory)
-	await fse.writeFile(`${testDirectory}/.DS_Store`, 'hidden content')
-	await fse.writeFile(`${testDirectory}/visible.txt`, 'visible content')
+test('recents() returns only visible regular files from Home', async () => {
+	const home = `${umbreld.instance.dataDirectory}/home`
+	const appData = `${umbreld.instance.dataDirectory}/app-data`
+	await Promise.all([
+		fse.outputFile(`${home}/visible.txt`, 'visible'),
+		fse.outputFile(`${home}/.DS_Store`, 'hidden'),
+		fse.ensureDir(`${home}/directory`),
+		fse.outputFile(`${appData}/app-file.txt`, 'app'),
+	])
+	await Promise.all([
+		reconcileHome('recents-visible-files'),
+		umbreld.instance.files.fileIndex.reconcileRoot('/Apps', 'recents-visible-files'),
+	])
 
-	// Allow time for events to fire
-	await delay(100)
-
-	// Get recent files
-	const recentFiles = await umbreld.client.files.recents.query()
-
-	// Verify only visible file is included
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['visible.txt'])
+	await expect(recentNames()).resolves.toStrictEqual(['visible.txt'])
 })
 
-test('recents() ignores files after they are sent to trash', async () => {
-	// Create test directory and files
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/recents-trash-test`
-	await fse.mkdir(testDirectory)
-	await fse.writeFile(`${testDirectory}/to-trash.txt`, 'trash content')
-	await fse.writeFile(`${testDirectory}/keep.txt`, 'keep content')
+test('recents() excludes files inside Umbrel backup directories at any depth', async () => {
+	const home = `${umbreld.instance.dataDirectory}/home`
+	const backupName = umbreld.instance.backups.backupDirectoryName
+	await Promise.all([
+		fse.outputFile(`${home}/visible.txt`, 'visible'),
+		fse.outputFile(`${home}/${backupName}/root-backup.txt`, 'backup'),
+		fse.outputFile(`${home}/nested/${backupName}/nested-backup.txt`, 'nested backup'),
+		fse.outputFile(`${home}/ordinary/${backupName}`, 'ordinary file'),
+	])
+	await reconcileHome('recents-backup-filter')
 
-	// Allow time for events to fire
-	await delay(100)
-
-	// Verify files are in recent list
-	let recentFiles = await umbreld.client.files.recents.query()
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['to-trash.txt', 'keep.txt'])
-
-	// Move file to trash using the RPC client
-	const virtualPath = `/Home/recents-trash-test/to-trash.txt`
-	await umbreld.client.files.trash.mutate({path: virtualPath})
-
-	// Allow time for events to fire
-	await delay(100)
-
-	// Verify trashed file is removed from recents
-	recentFiles = await umbreld.client.files.recents.query()
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['keep.txt'])
+	const names = await recentNames()
+	expect(names).toHaveLength(2)
+	expect(names).toEqual(expect.arrayContaining(['visible.txt', backupName]))
 })
 
-test('recents() persists after umbreld restart', async () => {
-	// Create test directory and file
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/recents-persist-test`
-	await fse.mkdir(testDirectory)
-	await fse.writeFile(`${testDirectory}/persist.txt`, 'persist content')
+test('recents() excludes files moved to Trash', async () => {
+	const directory = `${umbreld.instance.dataDirectory}/home/recents-trash-test`
+	const trashed = `${directory}/trashed.txt`
+	const kept = `${directory}/kept.txt`
+	await Promise.all([fse.outputFile(trashed, 'trash'), fse.outputFile(kept, 'keep')])
+	await reconcileHome('recents-trash-initial')
+	await expect(recentNames()).resolves.toEqual(expect.arrayContaining(['trashed.txt', 'kept.txt']))
 
-	// Allow time for events to fire
-	await delay(100)
+	await umbreld.client.files.trash.mutate({path: '/Home/recents-trash-test/trashed.txt'})
+	await Promise.all([
+		reconcileHome('recents-trash-home'),
+		umbreld.instance.files.fileIndex.reconcileRoot('/Trash', 'recents-trash-trash'),
+	])
 
-	// Verify file is in recents
-	let recentFiles = await umbreld.client.files.recents.query()
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['persist.txt'])
+	await expect(recentNames()).resolves.toStrictEqual(['kept.txt'])
+})
 
-	// Check changes are not yet persisted
-	let recentFileInStore = await umbreld.instance.store.get('files.recents')
-	expect(recentFileInStore).toHaveLength(0)
+test('recents() survives restart through the durable index without writing a recents snapshot', async () => {
+	const path = `${umbreld.instance.dataDirectory}/home/persist.txt`
+	await fse.writeFile(path, 'persist')
+	await reconcileHome('recents-restart')
+	await expect(recentNames()).resolves.toStrictEqual(['persist.txt'])
+	await expect((umbreld.instance.store as any).get('files.recents')).resolves.toBeUndefined()
 
-	// Stop umbreld
 	await umbreld.instance.stop()
+	await umbreld.instance.start()
 
-	// Check changes were persisted
-	recentFileInStore = await umbreld.instance.store.get('files.recents')
-	expect(recentFileInStore).toHaveLength(1)
-	expect(recentFileInStore[0].endsWith('persist.txt')).toBe(true)
+	await expect(recentNames()).resolves.toStrictEqual(['persist.txt'])
+	await expect((umbreld.instance.store as any).get('files.recents')).resolves.toBeUndefined()
 })
 
-test('recents() ignores app data files', async () => {
-	// Create test files in both home and app data directories
-	const homeDirectory = `${umbreld.instance.dataDirectory}/home/recents-app-test`
-	const appDirectory = `${umbreld.instance.dataDirectory}/app-data/recents-app-test`
-	await fse.mkdir(homeDirectory)
-	await fse.mkdir(appDirectory)
-
-	// Create files in both directories
-	await fse.writeFile(`${homeDirectory}/home-file.txt`, 'home content')
-	await fse.writeFile(`${appDirectory}/app-file.txt`, 'app content')
-
-	// Allow time for events to fire
-	await delay(100)
-
-	// Get recent files
-	const recentFiles = await umbreld.client.files.recents.query()
-
-	// Verify only home file is included, app file is ignored
-	expect(recentFiles.map((file) => file.name)).toStrictEqual(['home-file.txt'])
-})
-
-test('recents() respects maximum number of entries', async () => {
-	// Create test directory
-	const testDirectory = `${umbreld.instance.dataDirectory}/home/recents-max-test`
-	await fse.mkdir(testDirectory)
-
-	// Create one more file than the maximum limit
-	const maxRecents = 50
-	for (let i = 1; i <= maxRecents + 1; i++) {
-		await fse.writeFile(`${testDirectory}/file${i}.txt`, '')
-		// Allow time for events to fire
-		await delay(100)
+test('recents() returns at most the 50 most recently modified files', async () => {
+	const directory = `${umbreld.instance.dataDirectory}/home/recents-limit-test`
+	await fse.ensureDir(directory)
+	const epoch = Date.parse('2025-01-01T00:00:00Z')
+	for (let number = 1; number <= 51; number++) {
+		const path = `${directory}/file${number}.txt`
+		await fse.writeFile(path, '')
+		const modified = new Date(epoch + number * 1000)
+		await utimes(path, modified, modified)
 	}
+	await reconcileHome('recents-limit')
 
-	// Get recent files
-	const recentFiles = await umbreld.client.files.recents.query()
-
-	// Verify we only get the maximum number of entries
-	expect(recentFiles.length).toBe(maxRecents)
-
-	// Verify the most recent files are included (highest numbers)
-	const fileNames = recentFiles.map((file) => file.name)
-	// ['file 51.txt', 'file50.txt', ..., 'file2.txt']
-	const expectedFileNames = Array.from({length: maxRecents}, (_, i) => `file${maxRecents + 1 - i}.txt`)
-	expect(fileNames).toStrictEqual(expectedFileNames)
+	const expected = Array.from({length: 50}, (_, index) => `file${51 - index}.txt`)
+	await expect(recentNames()).resolves.toStrictEqual(expected)
 })

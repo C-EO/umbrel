@@ -393,6 +393,16 @@ export const fileIndexMigrations: FileIndexMigration[] = [
 			`)
 		},
 	},
+	{
+		version: 13,
+		up: (database) => {
+			database.exec(`
+				CREATE INDEX entries_by_recent_modification
+					ON entries(root_id, modified_ms DESC, id DESC)
+					WHERE type = 'file' AND hidden = 0;
+			`)
+		},
+	},
 ]
 
 export const FILE_INDEX_SCHEMA_VERSION = fileIndexMigrations.at(-1)?.version ?? 0

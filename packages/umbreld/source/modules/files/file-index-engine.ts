@@ -1953,6 +1953,55 @@ export default class FileIndexEngine {
 		})) as SearchCandidate[]
 	}
 
+	async recentCandidates(
+		virtualRoot: string,
+		maxResults: number,
+		excludedDirectoryNames: readonly string[] = [],
+	): Promise<SearchCandidate[]> {
+		if (!Number.isSafeInteger(maxResults) || maxResults <= 0) {
+			throw new TypeError('File recents maxResults must be a positive integer')
+		}
+		if (
+			excludedDirectoryNames.some(
+				(name) => !name || name === '.' || name === '..' || name.includes('/') || name.includes('\0'),
+			)
+		) {
+			throw new TypeError('Excluded file recents directories must be single directory names')
+		}
+		const root = this.#roots.get(virtualRoot)
+		if (!root?.id || root.kind !== 'home' || !this.#available) {
+			throw new Error(`File index home root '${virtualRoot}' is unavailable`)
+		}
+		const rootId = root.id
+
+		return (await this.#mutationQueue.add(() => {
+			const reservedTrashExclusion = hasReservedMemberTrashPath(root)
+				? `AND entries.relative_path != 'Trash' AND entries.relative_path NOT GLOB 'Trash/*'`
+				: ''
+			const exclusions = excludedDirectoryNames
+				.map(() => `AND instr('/' || entries.relative_path, '/' || ? || '/') = 0`)
+				.join('\n')
+			const rows = all(
+				this.#requireDatabase(),
+				`SELECT id, name, relative_path
+				FROM entries
+				WHERE root_id = ? AND type = 'file' AND hidden = 0
+				${reservedTrashExclusion}
+				${exclusions}
+				ORDER BY modified_ms DESC, id DESC
+				LIMIT ?`,
+				rootId,
+				...excludedDirectoryNames,
+				maxResults,
+			) as Array<{id: number; name: string; relative_path: string}>
+			return rows.map((row) => ({
+				id: Number(row.id),
+				name: row.name,
+				virtualPath: joinVirtualPath(root.virtualPath, row.relative_path),
+			}))
+		})) as SearchCandidate[]
+	}
+
 	async status() {
 		let entryCount = 0
 		let enrichment = {
@@ -2366,12 +2415,12 @@ function isPhotosRootKind(kind: string): kind is 'home' | 'trash' {
 	return kind === 'home' || kind === 'trash'
 }
 
+function hasReservedMemberTrashPath(root: FileIndexRoot) {
+	return root.kind === 'home' && root.virtualPath === `/Users/${root.ownerId}`
+}
+
 function isReservedMemberTrashPath(root: FileIndexRoot, relativePath: string) {
-	return (
-		root.kind === 'home' &&
-		root.virtualPath === `/Users/${root.ownerId}` &&
-		(relativePath === 'Trash' || relativePath.startsWith('Trash/'))
-	)
+	return hasReservedMemberTrashPath(root) && (relativePath === 'Trash' || relativePath.startsWith('Trash/'))
 }
 
 function relativePathWithin(rootSystemPath: string, systemPath: string) {

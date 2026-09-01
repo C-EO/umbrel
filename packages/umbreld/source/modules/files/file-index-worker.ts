@@ -268,6 +268,8 @@ async function request(method: FileIndexRequestMethod, args: unknown[]) {
 			return index.photosRemoveSource(stringArg(args), stringArg(args, 1), booleanArg(args, 2))
 		case 'matchesThumbnail':
 			return index.matchesThumbnail(stringArg(args), stringArg(args, 1), stringArg(args, 2), stringArg(args, 3))
+		case 'recentCandidates':
+			return index.recentCandidates(stringArg(args), numberArg(args, 1), stringsArg(args, 2))
 		case 'searchCandidates':
 			return index.searchCandidates(stringArg(args), stringArg(args, 1), numberArg(args, 2))
 		case 'status':

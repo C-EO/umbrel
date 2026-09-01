@@ -592,6 +592,10 @@ export default class FileIndex {
 		return this.#request<SearchCandidate[]>('searchCandidates', [virtualRoot, query, maxResults])
 	}
 
+	async recentCandidates(virtualRoot: string, maxResults: number, excludedDirectoryNames: readonly string[] = []) {
+		return this.#request<SearchCandidate[]>('recentCandidates', [virtualRoot, maxResults, excludedDirectoryNames])
+	}
+
 	async status() {
 		if (!this.#workerReady) {
 			return {

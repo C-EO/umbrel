@@ -65,6 +65,9 @@ test('owns crawling, SQLite, and search in a dedicated worker', async () => {
 	await expect(index.searchCandidates('/Home', 'worker-result', 10)).resolves.toEqual([
 		expect.objectContaining({name: 'worker-result.txt'}),
 	])
+	await expect(index.recentCandidates('/Home', 10, [])).resolves.toEqual([
+		expect.objectContaining({name: 'worker-result.txt'}),
+	])
 	await expect(index.searchCandidates('/Home', 'hidden', 10)).resolves.toStrictEqual([])
 	await expect(index.status()).resolves.toMatchObject({
 		available: true,
@@ -199,7 +202,7 @@ class FakeWorker extends EventEmitter {
 			this.emitMessage({
 				type: 'response',
 				id: message.id,
-				result: message.method === 'searchCandidates' ? [] : undefined,
+				result: ['recentCandidates', 'searchCandidates'].includes(message.method) ? [] : undefined,
 			})
 		})
 	}
@@ -386,6 +389,7 @@ test('does not dispatch public work until worker initialization completes', asyn
 	const starting = index.start()
 	await vi.waitFor(() => expect(worker.messages).toContainEqual(expect.objectContaining({method: 'setRoots'})))
 	await expect(index.searchCandidates('/Home', 'photo', 10)).rejects.toThrow('File index worker is unavailable')
+	await expect(index.recentCandidates('/Home', 10)).rejects.toThrow('File index worker is unavailable')
 	await expect(index.movePathRequired('/home/source', '/home/destination')).rejects.toThrow('[file-index-unavailable]')
 	await expect(index.ensureThumbnail('/data/photo.jpg')).rejects.toThrow('File index worker is unavailable')
 	await expect(index.getExistingThumbnail('/data/photo.jpg')).resolves.toBeUndefined()
@@ -393,11 +397,15 @@ test('does not dispatch public work until worker initialization completes', asyn
 	expect(worker.messages.some((message) => message.type === 'request' && message.method === 'searchCandidates')).toBe(
 		false,
 	)
+	expect(worker.messages.some((message) => message.type === 'request' && message.method === 'recentCandidates')).toBe(
+		false,
+	)
 	expect(worker.messages.some((message) => message.type === 'notification')).toBe(false)
 
 	worker.release('setRoots')
 	await starting
 	await expect(index.searchCandidates('/Home', 'photo', 10)).resolves.toStrictEqual([])
+	await expect(index.recentCandidates('/Home', 10)).resolves.toStrictEqual([])
 })
 
 test('stops without waiting for a worker stalled during boot', async () => {

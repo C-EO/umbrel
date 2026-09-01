@@ -54,6 +54,7 @@ export type FileIndexRequestMethod =
 	| 'photosUpdateSource'
 	| 'photosSourceRemovalFiles'
 	| 'photosRemoveSource'
+	| 'recentCandidates'
 	| 'searchCandidates'
 	| 'status'
 

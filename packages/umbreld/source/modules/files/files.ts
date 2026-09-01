@@ -264,7 +264,6 @@ export default class Files {
 		await this.memberShares.start().catch((error) => this.logger.error(`Failed to start member shares`, error))
 		await this.externalStorage.start().catch((error) => this.logger.error(`Failed to start external storage`, error))
 		await this.networkStorage.start().catch((error) => this.logger.error(`Failed to start network storage`, error))
-		await this.recents.start().catch((error) => this.logger.error(`Failed to start recents`, error))
 		await this.favorites.start().catch((error) => this.logger.error(`Failed to start favorites`, error))
 		await this.thumbnails.start().catch((error) => this.logger.error(`Failed to start thumbnails`, error))
 		await this.cloud.start({background: true}).catch((error) => this.logger.error(`Failed to start cloud`, error))
@@ -292,7 +291,6 @@ export default class Files {
 
 		// Stop submodules
 		await this.cloud.stop().catch((error) => this.logger.error(`Failed to stop cloud`, error))
-		await this.recents.stop().catch((error) => this.logger.error(`Failed to stop recents`, error))
 		await this.favorites.stop().catch((error) => this.logger.error(`Failed to stop favorites`, error))
 		await this.thumbnails.stop().catch((error) => this.logger.error(`Failed to stop thumbnails`, error))
 		await this.externalStorage.stop().catch((error) => this.logger.error(`Failed to stop external storage`, error))

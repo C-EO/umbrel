@@ -98,7 +98,6 @@ type StoreSchema = {
 			sortOrder: 'ascending' | 'descending'
 		}
 		favorites: string[]
-		recents: string[]
 		shares: {
 			name: string
 			path: string

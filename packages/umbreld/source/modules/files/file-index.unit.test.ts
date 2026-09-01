@@ -203,6 +203,24 @@ describe('file index migrations', () => {
 				.all()
 				.map((column: any) => column.name),
 		).toStrictEqual(['root_id', 'hash_retry_at', 'id'])
+		expect(
+			database
+				.prepare('PRAGMA index_info(entries_by_recent_modification)')
+				.all()
+				.map((column: any) => column.name),
+		).toStrictEqual(['root_id', 'modified_ms', 'id'])
+
+		const recentsPlan = database
+			.prepare(
+				`EXPLAIN QUERY PLAN
+				SELECT id FROM entries
+				WHERE root_id = ? AND type = 'file' AND hidden = 0
+				ORDER BY modified_ms DESC, id DESC
+				LIMIT ?`,
+			)
+			.all(1, 50) as Array<{detail: string}>
+		expect(recentsPlan.some(({detail}) => detail.includes('entries_by_recent_modification'))).toBe(true)
+		expect(recentsPlan.some(({detail}) => detail.includes('USE TEMP B-TREE FOR ORDER BY'))).toBe(false)
 
 		const hashPlan = database
 			.prepare(
@@ -4402,6 +4420,111 @@ test('waits for background sources to be quiet without letting an active writer 
 	})
 })
 
+test('returns bounded recent files by modification time with a deterministic tie break', async () => {
+	const {index, homeDirectory} = await fixture()
+	const oldest = nodePath.join(homeDirectory, 'oldest.txt')
+	const tiedFirst = nodePath.join(homeDirectory, 'tied-first.txt')
+	const tiedLast = nodePath.join(homeDirectory, 'tied-last.txt')
+	const newest = nodePath.join(homeDirectory, 'newest.txt')
+	await Promise.all([
+		writeFile(oldest, 'oldest'),
+		writeFile(tiedFirst, 'tied first'),
+		writeFile(tiedLast, 'tied last'),
+		writeFile(newest, 'newest'),
+	])
+	const base = new Date('2025-01-01T00:00:00.000Z')
+	const tied = new Date('2025-01-02T00:00:00.000Z')
+	await Promise.all([
+		utimes(oldest, base, base),
+		utimes(tiedFirst, tied, tied),
+		utimes(tiedLast, tied, tied),
+		utimes(newest, new Date('2025-01-03T00:00:00.000Z'), new Date('2025-01-03T00:00:00.000Z')),
+	])
+	// Reconcile tied entries in a known order so their ids provide a stable
+	// ordering when the filesystem exposes the same millisecond mtime.
+	for (const path of [oldest, tiedFirst, tiedLast, newest]) await index.reconcilePath(path)
+
+	await expect(index.recentCandidates('/Home', 3)).resolves.toMatchObject([
+		{name: 'newest.txt'},
+		{name: 'tied-last.txt'},
+		{name: 'tied-first.txt'},
+	])
+
+	const latest = new Date('2025-01-04T00:00:00.000Z')
+	await utimes(oldest, latest, latest)
+	await index.reconcilePath(oldest)
+	await expect(index.recentCandidates('/Home', 2)).resolves.toMatchObject([{name: 'oldest.txt'}, {name: 'newest.txt'}])
+
+	await fse.remove(oldest)
+	await index.reconcilePath(oldest)
+	await expect(index.recentCandidates('/Home', 10)).resolves.not.toEqual(
+		expect.arrayContaining([expect.objectContaining({name: 'oldest.txt'})]),
+	)
+})
+
+test('scopes recent files to a visible Home root and excludes named directory trees', async () => {
+	const {index, homeDirectory, trashDirectory} = await fixture(undefined, {includeTrash: true})
+	const visible = nodePath.join(homeDirectory, 'visible.txt')
+	const hidden = nodePath.join(homeDirectory, '.hidden.txt')
+	const directory = nodePath.join(homeDirectory, 'folder')
+	const linkPath = nodePath.join(homeDirectory, 'visible-link')
+	const backup = nodePath.join(homeDirectory, 'Umbrel Backup.backup', 'backup.txt')
+	const nestedBackup = nodePath.join(homeDirectory, 'nested', 'Umbrel Backup.backup', 'nested-backup.txt')
+	const sameNamedFile = nodePath.join(homeDirectory, 'ordinary', 'Umbrel Backup.backup')
+	const literalWildcardDirectory = nodePath.join(homeDirectory, 'excluded_[100%]', 'excluded.txt')
+	const similarDirectory = nodePath.join(homeDirectory, 'excluded_X100Y', 'included.txt')
+	const trashFile = nodePath.join(trashDirectory, 'trashed.txt')
+	await Promise.all([
+		writeFile(visible, 'visible'),
+		writeFile(hidden, 'hidden'),
+		fse.ensureDir(directory),
+		fse.outputFile(backup, 'backup'),
+		fse.outputFile(nestedBackup, 'nested backup'),
+		fse.outputFile(sameNamedFile, 'ordinary file'),
+		fse.outputFile(literalWildcardDirectory, 'excluded'),
+		fse.outputFile(similarDirectory, 'included'),
+		writeFile(trashFile, 'trash'),
+	])
+	await symlink(visible, linkPath)
+	await Promise.all([index.reconcileRoot('/Home', 'recents-filter'), index.reconcileRoot('/Trash', 'recents-filter')])
+
+	await expect(index.recentCandidates('/Home', 50, ['Umbrel Backup.backup', 'excluded_[100%]'])).resolves.toEqual(
+		expect.arrayContaining([
+			expect.objectContaining({name: 'visible.txt'}),
+			expect.objectContaining({name: 'included.txt'}),
+			expect.objectContaining({name: 'Umbrel Backup.backup'}),
+		]),
+	)
+	const names = (await index.recentCandidates('/Home', 50, ['Umbrel Backup.backup', 'excluded_[100%]'])).map(
+		({name}) => name,
+	)
+	expect(names).not.toEqual(
+		expect.arrayContaining([
+			'.hidden.txt',
+			'folder',
+			'visible-link',
+			'backup.txt',
+			'nested-backup.txt',
+			'excluded.txt',
+			'trashed.txt',
+		]),
+	)
+})
+
+test('rejects invalid recent-file queries and non-Home roots', async () => {
+	const {index} = await fixture(undefined, {includeTrash: true})
+
+	await expect(index.recentCandidates('/Home', 0)).rejects.toThrow('positive integer')
+	await expect(index.recentCandidates('/Home', 1.5)).rejects.toThrow('positive integer')
+	for (const name of ['', '.', '..', 'nested/name', 'nul\0name']) {
+		await expect(index.recentCandidates('/Home', 10, [name])).rejects.toThrow('single directory names')
+	}
+	await expect(index.recentCandidates('/Trash', 10)).rejects.toThrow("home root '/Trash' is unavailable")
+	await expect(index.recentCandidates('/Users/missing', 10)).rejects.toThrow(
+		"home root '/Users/missing' is unavailable",
+	)
+})
+
 test('scores indexed filenames with the established fuzzy matcher', async () => {
 	const {index, homeDirectory} = await fixture()
 	const decomposedCafe = 'café.jpg'.normalize('NFD')
@@ -5229,6 +5352,7 @@ test('excludes the reserved Trash subtree from member-home indexing', async () =
 
 	await expect(index.searchCandidates('/Users/alice', 'visible', 10)).resolves.toMatchObject([{name: 'visible.txt'}])
 	await expect(index.searchCandidates('/Users/alice', 'shadowed', 10)).resolves.toStrictEqual([])
+	await expect(index.recentCandidates('/Users/alice', 10)).resolves.toMatchObject([{name: 'visible.txt'}])
 	await expect(index.getEntryBySystemPath(shadowedFile)).resolves.toBeUndefined()
 	await expect(index.getEntryBySystemPath(realTrashFile)).resolves.toMatchObject({name: 'trashed.txt'})
 

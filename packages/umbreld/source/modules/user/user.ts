@@ -21,7 +21,6 @@ export type Member = {
 	temperatureUnit?: string
 	viewPreferences?: Partial<ViewPreferences>
 	favorites?: string[]
-	recents?: string[]
 	// Enabled desktop widgets. Undefined means the member has never changed
 	// them and gets the defaults at read time.
 	widgets?: string[]
@@ -697,19 +696,6 @@ export default class User {
 		})
 		if (!found) throw new Error('User not found')
 		return true
-	}
-
-	// Recents follow the same account boundary as favorites. The Recents module
-	// serializes writes, so replacing the current snapshot is sufficient.
-	async getAccountRecents(userId: string): Promise<string[] | undefined> {
-		if (userId === OWNER_USER_ID) return this.#store.get('files.recents')
-		const member = await this.getMember(userId)
-		return member?.recents
-	}
-
-	async setAccountRecents(userId: string, recents: string[]) {
-		if (userId === OWNER_USER_ID) return this.#store.set('files.recents', recents)
-		return this.#updateMember(userId, {recents})
 	}
 
 	// Desktop widgets follow the same account boundary as favorites. Undefined
