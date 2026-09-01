@@ -5,8 +5,8 @@
 // compositor for free and this only redraws when the band itself has to move.
 // Every tile is one instance of a unit quad: the vertex shader places it and
 // works out which cell of the atlas it samples, and the fragment shader draws
-// the rounded corner, the hover wash and the selection ring as an SDF, which
-// on a GPU is the same fragment either way. Ten thousand tiles is one buffer
+// the rounded corner, the hover wash, a video's play badge and the selection
+// ring as SDFs, which on a GPU is the same fragment either way. Ten thousand tiles is one buffer
 // upload and one `drawArraysInstanced` — a fifth of a millisecond — which is
 // why the cost here is the size of the screen and not the number of photos.
 //
@@ -40,6 +40,7 @@ const WARM_MS = 800
 const UPLOAD_PER_FRAME_LIVE = 4
 const UPLOAD_BUDGET_MS = 3
 // Floats per instance: x, y, size, radius | slot, tint, flags, fade
+// (flags is a bitfield: selected 1, hovered 2, video 4)
 const STRIDE = 8
 // A cell with no colour of its own yet, matching the DOM tile's `bg-white/6`
 const NO_TINT = -1
@@ -59,6 +60,7 @@ out float vAlpha;
 out float vFade;
 out float vSelected;
 out float vHovered;
+out vec4 vBadge;
 
 void main() {
 	vec2 corner = vec2(float(gl_VertexID & 1), float((gl_VertexID >> 1) & 1));
@@ -90,6 +92,18 @@ void main() {
 	float flags = aStyle.z;
 	vSelected = mod(flags, 2.0);
 	vHovered = mod(floor(flags / 2.0), 2.0);
+
+	// The play badge a video's tile wears, like the DOM tiles' bottom-left
+	// mark: centre and radius in the tile's own px, and how present it is at
+	// rest — scaled to the tile and pinned to a legible size, easing out
+	// below ~26px of tile where a mark on every video would read as noise
+	// (the fragment still shows it under the pointer). w is −1 on a photo.
+	float video = mod(floor(flags / 4.0), 2.0);
+	float badgeRadius = clamp(aRect.z * 0.12, 4.5, 8.0);
+	float badgeInset = clamp(aRect.z * 0.085, 2.0, 4.0) + badgeRadius;
+	vBadge = video < 0.5
+		? vec4(0.0, 0.0, 0.0, -1.0)
+		: vec4(badgeInset - vHalf, vHalf - badgeInset, badgeRadius, smoothstep(18.0, 26.0, aRect.z));
 }`
 
 const FRAGMENT = `#version 300 es
@@ -104,6 +118,7 @@ in float vAlpha;
 in float vFade;
 in float vSelected;
 in float vHovered;
+in vec4 vBadge;
 uniform sampler2DArray uAtlas;
 uniform vec3 uBrand;
 uniform float uPixel;
@@ -123,14 +138,34 @@ void main() {
 
 	vec3 color = mix(vTint, texture(uAtlas, vUvw).rgb, vFade);
 	color += vHovered * 0.08;
+	float base = max(vAlpha, vFade);
+	vec4 shaded = vec4(color * base, base);
+
+	// A video's play badge — the DOM tiles' black-scrim circle and white
+	// glyph, as SDFs, composited over (premultiplied) so it holds its own
+	// even on the translucent placeholder tint. Present at rest where it
+	// reads (vBadge.w); under the pointer regardless, as an affordance.
+	float badge = vBadge.w < 0.0 ? 0.0 : max(vBadge.w, vHovered);
+	if (badge > 0.0) {
+		vec2 p = vLocal - vBadge.xy;
+		float R = vBadge.z;
+		float scrim = 1.0 - smoothstep(-uPixel, uPixel, length(p) - R);
+		// A rightward triangle, symmetric over |y|, nudged right of centre
+		// the way a play glyph is optically centred
+		vec2 q = vec2(p.x - 0.08 * R, abs(p.y));
+		float slant = dot(q - vec2(0.46 * R, 0.0), normalize(vec2(0.46, 0.74)));
+		float glyph = 1.0 - smoothstep(-uPixel, uPixel, max(-q.x - 0.28 * R, slant));
+		shaded = mix(shaded, vec4(0.0, 0.0, 0.0, 1.0), 0.55 * scrim * badge);
+		shaded = mix(shaded, vec4(1.0), glyph * badge);
+	}
+
 	// The ring follows the tile: two device pixels of brand on a fourteen
 	// pixel tile would be a quarter of the photograph
 	float ring = max(1.0, vHalf * 0.16);
 	float within = 1.0 - smoothstep(-ring - uPixel, -ring + uPixel, d);
-	color = mix(color, uBrand, vSelected * (1.0 - within));
+	shaded = mix(shaded, vec4(uBrand, 1.0), vSelected * (1.0 - within));
 
-	float alpha = max(vAlpha, vFade) * inside;
-	outColor = vec4(color * alpha, alpha);
+	outColor = shaded * inside;
 }`
 
 // One frame of the grid, in the scroller's own coordinates. Everything here
@@ -281,7 +316,8 @@ export function createRenderer(canvas: HTMLCanvasElement, plan: AtlasPlan, cell:
 			instances[offset + 3] = tileRadius(rect.size)
 			instances[offset + 4] = resident ? slot : -1
 			instances[offset + 5] = item.tint ?? NO_TINT
-			instances[offset + 6] = (selected.has(item.id) ? 1 : 0) + (hovered === item.id ? 2 : 0)
+			instances[offset + 6] =
+				(selected.has(item.id) ? 1 : 0) + (hovered === item.id ? 2 : 0) + (item.kind === 'video' ? 4 : 0)
 			instances[offset + 7] = fade
 			offset += STRIDE
 		}

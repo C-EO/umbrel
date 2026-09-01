@@ -12,26 +12,27 @@ const SheetTrigger = SheetPrimitive.Trigger
 const SheetPortal = (props: SheetPrimitive.DialogPortalProps) => <SheetPrimitive.Portal {...props} />
 SheetPortal.displayName = SheetPrimitive.Portal.displayName
 
-const sheetVariants = cva(
-	'fixed z-30 gap-4 contrast-more:bg-black overflow-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-100 data-[state=open]:duration-100 outline-hidden data-[state=closed]:fade-out data-[state=closed]:ease-in fill-mode-both',
-	{
-		variants: {
-			side: {
-				top: 'inset-x-0 top-0 border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
-				bottom:
-					'inset-x-0 bottom-0 data-[state=closed]:slide-out-to-bottom-1/2 data-[state=open]:slide-in-from-bottom-1/2',
-				'bottom-zoom':
-					'inset-x-0 bottom-0 data-[state=closed]:zoom-out-75 data-[state=open]:zoom-in-90 data-[state=open]:duration-200 data-[state=closed]:duration-100',
-				left: 'inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm',
-				right:
-					'inset-y-0 right-0 h-full w-3/4  border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm',
-			},
-		},
-		defaultVariants: {
-			side: 'bottom',
+// The bottom-zoom side animates via the bespoke umbrel-sheet-zoom rules in
+// index.css rather than these tw-animate utilities: tw-animate's shared
+// enter/exit keyframes also animate `filter`, which is costly on a layer this
+// large (see the rules for details)
+const slideSheetAnimation =
+	'data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:duration-100 data-[state=open]:duration-100 data-[state=closed]:fade-out data-[state=closed]:ease-in fill-mode-both'
+
+const sheetVariants = cva('fixed z-30 gap-4 contrast-more:bg-black overflow-hidden outline-hidden', {
+	variants: {
+		side: {
+			top: `inset-x-0 top-0 border-b data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top ${slideSheetAnimation}`,
+			bottom: `inset-x-0 bottom-0 data-[state=closed]:slide-out-to-bottom-1/2 data-[state=open]:slide-in-from-bottom-1/2 ${slideSheetAnimation}`,
+			'bottom-zoom': 'inset-x-0 bottom-0 umbrel-sheet-zoom',
+			left: `inset-y-0 left-0 h-full w-3/4 border-r data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm ${slideSheetAnimation}`,
+			right: `inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm ${slideSheetAnimation}`,
 		},
 	},
-)
+	defaultVariants: {
+		side: 'bottom',
+	},
+})
 
 interface SheetContentProps
 	extends React.ComponentPropsWithoutRef<typeof SheetPrimitive.Content>, VariantProps<typeof sheetVariants> {
@@ -60,7 +61,9 @@ function SheetContent({
 				ref={ref}
 				className={cn(
 					sheetVariants({side}),
-					'umbrel-window-shadow umbrel-window-surface-top transform-gpu will-change-[transform]',
+					// will-change alone keeps the layer promoted; a static transform here
+					// would force the zoom keyframes through matrix interpolation
+					'umbrel-window-shadow umbrel-window-surface-top will-change-[transform]',
 					className,
 				)}
 				{...props}

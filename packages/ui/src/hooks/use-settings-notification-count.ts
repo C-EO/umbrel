@@ -38,7 +38,6 @@ export function useSettingsNotificationCount() {
 			utils.system.cpuTemperature.fetch(),
 			utils.system.systemMemoryUsage.fetch(),
 			utils.system.systemDiskUsage.fetch(),
-			utils.hardware.umbrelPro.isUmbrelPro.fetch(),
 			utils.hardware.raid.getStatus.fetch(),
 			utils.hardware.internalStorage.getDevices.fetch(),
 		])
@@ -46,17 +45,8 @@ export function useSettingsNotificationCount() {
 		const toastIds: (string | number)[] = []
 
 		res.then((allData) => {
-			const [
-				checkUpdateResult,
-				cpuTempResult,
-				memoryResult,
-				diskResult,
-				isUmbrelProResult,
-				raidStatusResult,
-				devicesResult,
-			] = allData ?? []
-
-			const isUmbrelPro = isUmbrelProResult?.status === 'fulfilled' && isUmbrelProResult.value
+			const [checkUpdateResult, cpuTempResult, memoryResult, diskResult, raidStatusResult, devicesResult] =
+				allData ?? []
 
 			let currCount = 0
 
@@ -156,36 +146,40 @@ export function useSettingsNotificationCount() {
 				}
 			}
 
-			// Storage notifications only show on Umbrel Pro (Storage Manager is Pro-only)
 			// TODO: Consider adding real-time notifications via eventBus subscription for RAID status changes
-			if (isUmbrelPro) {
-				// Check RAID status for issues
-				if (raidStatusResult?.status === 'fulfilled') {
-					const raidStatus = raidStatusResult.value
+			// Check RAID status for issues
+			if (raidStatusResult?.status === 'fulfilled') {
+				const raidStatus = raidStatusResult.value
 
-					if (raidStatus.exists && raidStatus.status && raidStatus.status !== 'ONLINE') {
-						currCount++
-						const id = toast.warning(t('notifications.raid.issue.title'), {
-							...storageManagerToastOptions,
-							description: t('notifications.raid.issue.description'),
-						})
-						toastIds.push(id)
-					}
+				if (raidStatus.exists && raidStatus.status && raidStatus.status !== 'ONLINE') {
+					currCount++
+					const id = toast.warning(t('notifications.raid.issue.title'), {
+						...storageManagerToastOptions,
+						description: t('notifications.raid.issue.description'),
+					})
+					toastIds.push(id)
 				}
+			}
 
-				// Check SSD health for issues (temperature, wear, SMART status)
-				if (devicesResult?.status === 'fulfilled') {
-					const devices = devicesResult.value
-					const hasHealthIssue = devices.some((device) => getDeviceHealth(device).hasWarning)
+			// Check drive health for issues (temperature, wear, SMART status). SSD wording
+			// only when every affected device is an SSD - HDDs get generic drive wording.
+			// Translation keys stay literal inside t() so CI's unused-key scan finds them.
+			if (devicesResult?.status === 'fulfilled') {
+				const unhealthyDevices = devicesResult.value.filter((device) => getDeviceHealth(device).hasWarning)
 
-					if (hasHealthIssue) {
-						currCount++
-						const id = toast.warning(t('notifications.ssd.health.title'), {
+				if (unhealthyDevices.length > 0) {
+					const allSsd = unhealthyDevices.every((device) => device.type === 'ssd')
+					currCount++
+					const id = toast.warning(
+						allSsd ? t('notifications.ssd.health.title') : t('notifications.drive.health.title'),
+						{
 							...storageManagerToastOptions,
-							description: t('notifications.ssd.health.description'),
-						})
-						toastIds.push(id)
-					}
+							description: allSsd
+								? t('notifications.ssd.health.description')
+								: t('notifications.drive.health.description'),
+						},
+					)
+					toastIds.push(id)
 				}
 			}
 

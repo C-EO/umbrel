@@ -13,12 +13,14 @@ export function SidebarItem({
 	isActive,
 	disabled,
 	onClick,
+	trailing,
 }: {
 	label: string
 	icon: React.ReactNode
 	isActive: boolean
 	disabled?: boolean
 	onClick: () => void
+	trailing?: React.ReactNode
 }) {
 	return (
 		<button
@@ -31,7 +33,8 @@ export function SidebarItem({
 			)}
 		>
 			<span className='flex h-5 w-5 shrink-0 items-center justify-center'>{icon}</span>
-			<span className='truncate'>{label}</span>
+			<span className='min-w-0 flex-1 truncate text-left'>{label}</span>
+			{trailing}
 		</button>
 	)
 }

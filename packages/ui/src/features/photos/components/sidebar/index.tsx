@@ -24,6 +24,7 @@ import {contextMenuClasses} from '@/components/ui/shared/menu'
 import {AlbumCard} from '@/features/photos/components/albums/album-card'
 import {LivePhotoIcon} from '@/features/photos/components/live-photo-icon'
 import {usePhotosSelection} from '@/features/photos/components/selection-context'
+import {EnrichmentIndicator} from '@/features/photos/components/sidebar/enrichment-indicator'
 import {SidebarItem} from '@/features/photos/components/sidebar/sidebar-item'
 import {SourceItem} from '@/features/photos/components/sidebar/source-item'
 import {SourcesRootItem} from '@/features/photos/components/sidebar/sources-root-item'
@@ -76,6 +77,9 @@ export function Sidebar({className}: {className?: string}) {
 				icon={<Icon className='h-4 w-4' strokeWidth={1.75} />}
 				isActive={pathname === sectionPath(section)}
 				onClick={() => navigate(sectionPath(section))}
+				// While media is still being prepared, the Library row carries the
+				// progress ring — the whole library is what enrichment is filling
+				trailing={section === 'all' ? <EnrichmentIndicator /> : undefined}
 			/>
 		)
 	}

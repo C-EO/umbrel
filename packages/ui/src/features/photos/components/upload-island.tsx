@@ -114,11 +114,17 @@ function ExpandedContent() {
 					className='absolute top-1/2 size-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_0_12px_2px_rgba(255,255,255,0.45)] transition-[left] duration-200 ease-linear'
 					style={{left: `${percent}%`}}
 				/>
-				{/* The wire's pace, tucked under the track's far end */}
+				{/* The wire's pace tucked under the track: speed at its near end,
+				    time remaining at its far end */}
 				{wire && (
-					<span className='absolute top-[calc(50%+10px)] right-0 text-11 whitespace-nowrap text-white/40'>
-						{formatFilesystemSize(speed)}/s · {secondsToEta(etaSeconds)}
-					</span>
+					<>
+						<span className='absolute top-[calc(50%+10px)] left-0 text-11 whitespace-nowrap text-white/40'>
+							{formatFilesystemSize(speed)}/s
+						</span>
+						<span className='absolute top-[calc(50%+10px)] right-0 text-11 whitespace-nowrap text-white/40'>
+							{secondsToEta(etaSeconds)}
+						</span>
+					</>
 				)}
 				{/* The current photo floating over the fill's leading edge, riding a
 				    little past the pill's top; nothing at all when there is no

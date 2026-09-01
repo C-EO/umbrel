@@ -152,6 +152,24 @@ export function trackColumns(track: ZoomTrack, position: number): number {
 	return seam - ((position - share) / (1 - share)) * (seam - min)
 }
 
+// One click of − or + (and each tick of holding one down). A click moves the
+// thumb by a slice of the track rather than by a column: the track is the
+// control's perceptual coordinate — the mosaic's dozens of stops take a fifth
+// of it, the sizes people browse at keep the rest — so a fixed slice feels
+// the same size wherever the thumb is, where a fixed column count kept the
+// browse range pleasant and made the mosaic sixty clicks deep. Never less
+// than a whole column (`atLeast` of them for a paging key), so a click always
+// visibly moves the grid; the slider itself keeps every stop for precision.
+const CLICK_SLICE = 0.05
+
+export function clickColumns(track: ZoomTrack, columns: number, by: 1 | -1, atLeast = 1): number {
+	const position = trackPosition(track, columns)
+	const slid = Math.round(trackColumns(track, Math.min(1, Math.max(0, position - by * CLICK_SLICE))))
+	const least = columns + by * atLeast
+	const next = by > 0 ? Math.max(slid, least) : Math.min(slid, least)
+	return Math.min(track.max, Math.max(track.min, next))
+}
+
 // ── Grouping ──────────────────────────────────────────────────────────────
 
 // A cheap, numeric UTC key per item, matching the backend's calendar summary
@@ -189,6 +207,8 @@ export type Timeline = {
 	// after a reflow, a page append or a delete
 	indexOf: Map<string, number>
 	hasMore: boolean
+	// Whether a footer line follows the last row once every page is loaded
+	footer: boolean
 }
 
 export function groupItems({
@@ -196,11 +216,13 @@ export function groupItems({
 	zoom,
 	hasMore,
 	language,
+	footer = false,
 }: {
 	items: Item[]
 	zoom: Zoom
 	hasMore: boolean
 	language: string
+	footer?: boolean
 }): Timeline {
 	const sections: Section[] = []
 	const indexOf = new Map<string, number>()
@@ -217,13 +239,14 @@ export function groupItems({
 		}
 		open.count++
 	}
-	return {items, sections, indexOf, hasMore}
+	return {items, sections, indexOf, hasMore, footer}
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────
 
 export const HEADER_HEIGHT = 38 // 10px top space + 20px title + 8px below
 export const LOADER_HEIGHT = 48
+export const FOOTER_HEIGHT = 48
 
 export type Layout = Timeline & {
 	// Whole at rest; fractional while a pinch is between two stops, when this
@@ -235,6 +258,8 @@ export type Layout = Timeline & {
 	tops: number[]
 	// Where the trailing loader sits, while more pages exist
 	loaderTop?: number
+	// Where the footer line sits, once every page is loaded
+	footerTop?: number
 	total: number
 	// A blended layout keeps the two it lies between. Section geometry above
 	// is already interpolated — so everything that reads a section reads it
@@ -250,7 +275,7 @@ export type Layout = Timeline & {
 // `inset` px down: the actions bar floats over the top of the scroller, and
 // that is the space tiles scroll under it into.
 export function layoutAt(timeline: Timeline, columns: number, tile: number, gap: number, inset = 0): Layout {
-	const {sections, hasMore} = timeline
+	const {sections, hasMore, footer} = timeline
 	const pitch = tile + gap
 	const tops = new Array<number>(sections.length)
 	let top = inset
@@ -265,7 +290,8 @@ export function layoutAt(timeline: Timeline, columns: number, tile: number, gap:
 		gap,
 		tops,
 		loaderTop: hasMore ? top : undefined,
-		total: top + (hasMore ? LOADER_HEIGHT : 0),
+		footerTop: !hasMore && footer ? top : undefined,
+		total: top + (hasMore ? LOADER_HEIGHT : footer ? FOOTER_HEIGHT : 0),
 	}
 }
 
@@ -287,6 +313,7 @@ export function blend(lo: Layout, hi: Layout, t: number): Layout {
 		gap: mix(lo.gap, hi.gap, t),
 		tops: lo.tops.map((top, index) => mix(top, hi.tops[index]!, t)),
 		loaderTop: lo.loaderTop === undefined ? undefined : mix(lo.loaderTop, hi.loaderTop!, t),
+		footerTop: lo.footerTop === undefined ? undefined : mix(lo.footerTop, hi.footerTop!, t),
 		total: mix(lo.total, hi.total, t),
 		between: {lo, hi, t},
 	}

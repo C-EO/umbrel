@@ -34,3 +34,20 @@ export function useRouteFilter(): ItemFilter {
 		[parameters.section, parameters.sourceId, parameters.albumId, search.filter],
 	)
 }
+
+// Whether a filter narrows nothing at all — the whole-library listing, the
+// one the library calendar describes. By value, never by key count: a search
+// contributes every one of its fields as undefined, so even the bare library
+// route's filter carries keys.
+export function isWholeLibrary(filter: ItemFilter) {
+	return (
+		!filter.query &&
+		filter.kind === undefined &&
+		filter.subKind === undefined &&
+		filter.favorite === undefined &&
+		!filter.deleted &&
+		!filter.sourceIds?.length &&
+		!filter.albumIds?.length &&
+		!filter.dates?.length
+	)
+}

@@ -261,6 +261,35 @@ html {
 		border: var(--window-edge-width) solid rgb(255 255 255 / var(--window-edge-opacity));
 	}
 
+	/* Sheet open/close. Bespoke keyframes instead of tw-animate's animate-in/out:
+	   the shared enter/exit keyframes also animate `filter`, which puts a render
+	   surface on this near-fullscreen layer for every animation frame. The origin
+	   sits on the bottom edge and the travel is a rise/sink, so the sheet grows
+	   out of the dock that opened it and settles back toward it. The ease-out
+	   quint's punchy start keeps the response feeling instant; its long tail is
+	   what reads as the settle. The close duration must match
+	   SHEET_EXIT_DURATION_MS in layouts/sheet.tsx, which navigates away
+	   (unmounting the route) once the animation lands. */
+	.umbrel-sheet-zoom {
+		transform-origin: 50% 100%;
+	}
+
+	.umbrel-sheet-zoom[data-state='open'] {
+		animation: umbrel-sheet-in 300ms cubic-bezier(0.23, 1, 0.32, 1) both;
+	}
+
+	.umbrel-sheet-zoom[data-state='closed'] {
+		animation: umbrel-sheet-out 200ms cubic-bezier(0.32, 0.72, 0, 1) both;
+	}
+
+	/* Compositor-driven so it can't stutter while the sheet's route mounts on the
+	   main thread. Animates `translate`, leaving `transform` to the magnification
+	   spring's inline scale. Duration matches BOUNCE_DURATION in dock-item.tsx,
+	   which times the open pill's fade-in off the bounce. */
+	.umbrel-dock-bounce {
+		animation: umbrel-dock-bounce 400ms ease-in-out;
+	}
+
 	/* Rows darken progressively down each section, bottoming out at tone 6 —
 	   rows past the sixth stay at the darkest tone. */
 	.settings-list-group > .settings-list-row {
@@ -324,6 +353,12 @@ html {
 	   transitions and stays functional */
 	[data-sonner-toast] {
 		animation-duration: 0.01ms !important;
+	}
+
+	.umbrel-sheet-zoom[data-state='open'],
+	.umbrel-sheet-zoom[data-state='closed'],
+	.umbrel-dock-bounce {
+		animation: none;
 	}
 }
 
@@ -722,6 +757,11 @@ html {
 		calc(100% - var(--umbrel-photos-scrollbar, 0px)) 100%,
 		var(--umbrel-photos-scrollbar, 0px) 100%;
 }
+/* While the time rail shows it owns the right edge alone (see time-rail.tsx);
+   scrollbar-width is set inline, this covers WebKit engines without it */
+.umbrel-photos-scroller[data-umbrel-time-rail]::-webkit-scrollbar {
+	display: none;
+}
 
 .umbrel-divide-y > * {
 	@apply relative;
@@ -747,6 +787,47 @@ html {
 @keyframes slide-down {
 	to {
 		transform: translateY(100px);
+	}
+}
+
+/* Transform + opacity only — both run on the compositor. Fade and motion are
+   deliberately decoupled: with both on one full-length ease-out curve the fade
+   dominates (the eye keys on the luminance flash of a near-fullscreen surface,
+   not the small scale delta) and the open reads as a blink. So on open the
+   fade resolves in the first 45% while the rise carries the full arc, and on
+   close opacity holds through the first 30% so the sheet visibly detaches and
+   sinks before it dissolves. Unspecified ends fall back to the element's
+   resting style. */
+@keyframes umbrel-sheet-in {
+	from {
+		transform: translateY(28px) scale(0.94);
+		opacity: 0;
+	}
+
+	45% {
+		opacity: 1;
+	}
+}
+
+@keyframes umbrel-sheet-out {
+	30% {
+		opacity: 1;
+	}
+
+	to {
+		transform: translateY(20px) scale(0.96);
+		opacity: 0;
+	}
+}
+
+@keyframes umbrel-dock-bounce {
+	0%,
+	100% {
+		translate: 0 0;
+	}
+
+	50% {
+		translate: 0 -20px;
 	}
 }
 

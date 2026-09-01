@@ -4,21 +4,31 @@ import {useEffect, useRef, useState, useSyncExternalStore} from 'react'
 import {useTranslation} from 'react-i18next'
 
 import {PillButtonGroup, PillButtonGroupItem} from '@/components/ui/edge-controls'
-import {columnValue, trackColumns, trackPosition, zoomTrack} from '@/features/photos/components/listing/timeline-rows'
+import {
+	clickColumns,
+	columnValue,
+	trackColumns,
+	trackPosition,
+	zoomTrack,
+} from '@/features/photos/components/listing/timeline-rows'
 import {usePhotosView} from '@/features/photos/components/view-context'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 
-// Keyboard steps, in columns. The track runs from the widest grid on the left
-// to the biggest tiles on the right, so → and ↑ zoom in; Home/End go to its
-// ends.
+// Keyboard steps, in columns — the arrows keep single-stop precision. The
+// track runs from the widest grid on the left to the biggest tiles on the
+// right, so → and ↑ zoom in; Home/End go to its ends, and the Page keys take
+// the buttons' perceptual step (see clickColumns), three columns at the least.
 const KEY_STEPS: Record<string, number> = {
 	ArrowRight: -1,
 	ArrowUp: -1,
 	ArrowLeft: 1,
 	ArrowDown: 1,
-	PageUp: -3,
-	PageDown: 3,
 }
+const PAGE_STEPS: Record<string, 1 | -1> = {PageUp: -1, PageDown: 1}
+// Holding − or + keeps zooming, stepper-style: one step on the press, the
+// rest on a timer while the pointer stays down
+const HOLD_DELAY_MS = 350
+const HOLD_REPEAT_MS = 100
 // A wheel over the slider zooms by distance: a step per this much scrolling,
 // whether it comes as one notch of a mouse wheel or as a run of small
 // trackpad deltas — a step per event would let a flick cross the whole
@@ -31,11 +41,15 @@ const WHEEL_IDLE_MS = 200
 // No grid, no live zoom to hear
 const noLiveColumns = () => () => {}
 
-// Grid zoom: −, a slider, +. The slider spans every column count the timeline
-// can show at its current width — all the way out to what its renderer can
-// draw, which on the canvas is far past what elements can — laid along the
-// track so that the mosaic takes the first fifth of it and the sizes people
-// browse at keep the rest (see `zoomTrack`). Dragging it *is* a zoom gesture:
+// Grid zoom: −, a slider, +. The buttons step by feel rather than by column —
+// a slice of the track per click (see clickColumns), and holding one repeats
+// it — so the far end of the mosaic is a few clicks away, not sixty; the
+// slider keeps every stop for precision. The slider spans every column count
+// the timeline can show at its current width — all the way out to what its
+// renderer can draw, which on the canvas is far past what elements can — laid
+// along the track so that the mosaic takes the first fifth of it and the
+// sizes people browse at keep the rest (see `zoomTrack`). Dragging it *is* a
+// zoom gesture:
 // the grid follows the thumb continuously and settles on the nearest whole
 // count when it is let go. What persists is the tile size that position gives, which
 // carries over to other widths and devices as the nearest stop.
@@ -79,14 +93,57 @@ export function ZoomSlider() {
 	const columns = Math.round(value)
 	const zoomTo = (columns: number, live: boolean) =>
 		grid?.setColumns(Math.min(track.max, Math.max(track.min, columns)), live)
-	// A step from a button, a key or the wheel: the thumb takes the stop at
-	// once, so a run of steps counts from where the last one is headed rather
-	// than from where the grid has got to
+	// A step from a key or the wheel: the thumb takes the stop at once, so a
+	// run of steps counts from where the last one is headed rather than from
+	// where the grid has got to
 	const step = (by: number) => {
 		const next = Math.min(track.max, Math.max(track.min, columns + by))
 		if (next === columns) return
 		setHeld({columns: next, live: false})
 		zoomTo(next, false)
+	}
+	// A click of − or +: a perceptual step (see clickColumns), taken the same way
+	const click = (by: 1 | -1, atLeast = 1) => {
+		const next = clickColumns(track, columns, by, atLeast)
+		if (next === columns) return
+		setHeld({columns: next, live: false})
+		zoomTo(next, false)
+	}
+	// A held button repeats its click. The session counts from its own running
+	// target, so repeats stack up even while the spring is still carrying the
+	// grid to the last one; a step that can go no further ends it. Release is
+	// watched on the window, because at the track's end the button under the
+	// pointer disables (pointer-events: none) and would never deliver its own
+	// pointerup.
+	const hold = useRef<(() => void) | null>(null)
+	useEffect(() => () => hold.current?.(), [])
+	const press = (by: 1 | -1) => (event: {button: number}) => {
+		if (event.button !== 0 || hold.current) return
+		let target = columns
+		const advance = () => {
+			const next = clickColumns(track, target, by)
+			if (next === target) return false
+			target = next
+			setHeld({columns: next, live: false})
+			zoomTo(next, false)
+			return true
+		}
+		let timer = 0
+		const stop = () => {
+			clearTimeout(timer)
+			removeEventListener('pointerup', stop)
+			removeEventListener('pointercancel', stop)
+			hold.current = null
+		}
+		const tick = () => {
+			if (advance()) timer = window.setTimeout(tick, HOLD_REPEAT_MS)
+			else stop()
+		}
+		addEventListener('pointerup', stop)
+		addEventListener('pointercancel', stop)
+		hold.current = stop
+		advance()
+		timer = window.setTimeout(tick, HOLD_DELAY_MS)
 	}
 
 	return (
@@ -95,7 +152,10 @@ export function ZoomSlider() {
 				icon={Minus}
 				aria-label={t('photos-actions.zoom-out')}
 				disabled={disabled || columns >= track.max}
-				onClick={() => step(1)}
+				className='touch-none'
+				onPointerDown={press(1)}
+				// Keyboard activation arrives as a click with no pointer behind it
+				onClick={(event) => event.detail === 0 && click(1)}
 			/>
 			<SliderPrimitive.Root
 				className='relative hidden h-8 w-24 touch-none items-center px-1.5 select-none data-disabled:opacity-50 xl:flex'
@@ -130,6 +190,12 @@ export function ZoomSlider() {
 					step(steps)
 				}}
 				onKeyDown={(event) => {
+					const page = PAGE_STEPS[event.key]
+					if (page !== undefined) {
+						event.preventDefault()
+						click(page, 3)
+						return
+					}
 					const by = event.key === 'Home' ? Infinity : event.key === 'End' ? -Infinity : KEY_STEPS[event.key]
 					if (by === undefined) return
 					event.preventDefault()
@@ -147,7 +213,9 @@ export function ZoomSlider() {
 				icon={Plus}
 				aria-label={t('photos-actions.zoom-in')}
 				disabled={disabled || columns <= track.min}
-				onClick={() => step(-1)}
+				className='touch-none'
+				onPointerDown={press(-1)}
+				onClick={(event) => event.detail === 0 && click(-1)}
 			/>
 		</PillButtonGroup>
 	)

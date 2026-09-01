@@ -6,6 +6,8 @@ import {TbActivityHeartbeat, TbAlertTriangle} from 'react-icons/tb'
 
 import {FadeScroller} from '@/components/fade-scroller'
 import {Dialog, DialogHeader, DialogScrollableContent, DialogTitle} from '@/components/ui/dialog'
+import {useTemperatureUnit} from '@/hooks/use-temperature-unit'
+import {formatTemperature} from '@/utils/temperature'
 import {tw} from '@/utils/tw'
 
 import {formatSize, getDeviceHealth, StorageDevice} from './use-raid-setup'
@@ -27,6 +29,8 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange}: SsdHea
 	// Get health status from shared helper
 	const {smartUnhealthy, lifeRemaining, lifeWarning, tempWarning, tempCritical} = getDeviceHealth(device)
 	const isSsd = device.type === 'ssd'
+	// Falls back to the browser locale's unit when there's no signed-in user preference yet
+	const [temperatureUnit] = useTemperatureUnit()
 
 	// Determine health status display label
 	const healthStatus =
@@ -53,15 +57,25 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange}: SsdHea
 		})
 	}
 
+	// The airflow advice mentioning the magnetic bottom cover only makes sense on Umbrel Pro
+	// (slotNumber set) - generic hardware gets device-neutral advice
+	const tempAdvice =
+		slotNumber !== undefined
+			? t('storage-manager.health.warning-temp-advice')
+			: t('storage-manager.health.warning-temp-advice-generic')
 	if (tempCritical) {
 		warnings.push({
-			message: t('storage-manager.health.warning-temp-critical', {temperature: `${device.temperature}°C`}),
-			advice: t('storage-manager.health.warning-temp-advice'),
+			message: t('storage-manager.health.warning-temp-critical', {
+				temperature: formatTemperature(device.temperature, temperatureUnit),
+			}),
+			advice: tempAdvice,
 		})
 	} else if (tempWarning) {
 		warnings.push({
-			message: t('storage-manager.health.warning-temp-overheating', {temperature: `${device.temperature}°C`}),
-			advice: t('storage-manager.health.warning-temp-advice'),
+			message: t('storage-manager.health.warning-temp-overheating', {
+				temperature: formatTemperature(device.temperature, temperatureUnit),
+			}),
+			advice: tempAdvice,
 		})
 	}
 
@@ -72,7 +86,9 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange}: SsdHea
 					<DialogHeader>
 						<div className='flex items-center gap-2'>
 							<TbActivityHeartbeat className='size-5' />
-							<DialogTitle>{t('storage-manager.health.title')}</DialogTitle>
+							<DialogTitle>
+								{isSsd ? t('storage-manager.health.title') : t('storage-manager.health.title-drive')}
+							</DialogTitle>
 						</div>
 					</DialogHeader>
 
@@ -232,7 +248,7 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange}: SsdHea
 												} as React.CSSProperties
 											}
 										/>
-										{device.temperature}°C
+										{formatTemperature(device.temperature, temperatureUnit)}
 										{tempCritical && ` · ${t('storage-manager.health.critical')}`}
 										{tempWarning && ` · ${t('storage-manager.health.overheating')}`}
 									</span>
@@ -240,13 +256,15 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange}: SsdHea
 								{isSsd && device.temperatureWarning !== undefined && (
 									<div className={listItemClass}>
 										<span>{t('storage-manager.health.warning-threshold')}</span>
-										<span className='font-normal'>{device.temperatureWarning}°C</span>
+										<span className='font-normal'>{formatTemperature(device.temperatureWarning, temperatureUnit)}</span>
 									</div>
 								)}
 								{isSsd && device.temperatureCritical !== undefined && (
 									<div className={listItemClass}>
 										<span>{t('storage-manager.health.critical-threshold')}</span>
-										<span className='font-normal'>{device.temperatureCritical}°C</span>
+										<span className='font-normal'>
+											{formatTemperature(device.temperatureCritical, temperatureUnit)}
+										</span>
 									</div>
 								)}
 							</div>

@@ -15,6 +15,10 @@ import {useAfterDelayedClose} from '@/utils/dialog'
 
 import {getSheetScrollRestorationAction} from './sheet-scroll-restoration'
 
+// Matches the umbrel-sheet-out duration in index.css, so the route unmounts
+// (and the desktop takes back over) right as the close animation lands
+const SHEET_EXIT_DURATION_MS = 200
+
 export function SheetLayout() {
 	const {t} = useTranslation()
 	const navigate = useNavigate()
@@ -46,9 +50,13 @@ export function SheetLayout() {
 		if (isSettingsRoute) scrollRef.current?.scrollTo(0, 0)
 	}, [isSettingsRoute])
 
-	useAfterDelayedClose(open, () => {
-		navigate('/')
-	})
+	useAfterDelayedClose(
+		open,
+		() => {
+			navigate('/')
+		},
+		SHEET_EXIT_DURATION_MS,
+	)
 
 	// Only the wallpaper's margins show around the sheet. Keyed on `open` rather
 	// than mount so motion is back before the close animation reveals the desktop.

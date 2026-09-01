@@ -1,6 +1,7 @@
 import {ChevronDown, Eye, EyeOff, Pencil, TriangleAlert} from 'lucide-react'
-import {motion} from 'motion/react'
+import {AnimatePresence, motion} from 'motion/react'
 import {lazy, Suspense, useEffect, useId, useState} from 'react'
+import {FaLock} from 'react-icons/fa6'
 import {Navigate, useNavigate, useSearchParams} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
@@ -449,28 +450,52 @@ export default function CreateMachine() {
 										</span>
 									)}
 									{requiresPassword && (
-										<div className='relative'>
-											<Input
-												type={passwordVisible ? 'text' : 'password'}
-												value={password}
-												onValueChange={setPassword}
-												placeholder={t('machines.password')}
-												disabled={isCreating}
-												maxLength={128}
-												autoComplete='new-password'
-												sizeVariant='short'
-												aria-label={t('machines.password')}
-												className='pr-10'
-											/>
-											<button
-												type='button'
-												className='absolute top-1/2 right-2 grid size-6 -translate-y-1/2 place-items-center rounded-full text-white/40 transition-colors hover:bg-white/10 hover:text-white'
-												onClick={() => setPasswordVisible((visible) => !visible)}
-												aria-label={passwordVisible ? t('machines.password-hide') : t('machines.password-show')}
-											>
-												{passwordVisible ? <EyeOff className='size-3.5' /> : <Eye className='size-3.5' />}
-											</button>
-										</div>
+										<>
+											<div className='relative'>
+												<Input
+													type={passwordVisible ? 'text' : 'password'}
+													value={password}
+													onValueChange={setPassword}
+													placeholder={t('machines.password')}
+													disabled={isCreating}
+													maxLength={128}
+													autoComplete='new-password'
+													sizeVariant='short'
+													aria-label={t('machines.password')}
+													className='pr-10'
+												/>
+												<button
+													type='button'
+													className='absolute top-1/2 right-2 grid size-6 -translate-y-1/2 place-items-center rounded-full text-white/40 transition-colors hover:bg-white/10 hover:text-white'
+													onClick={() => setPasswordVisible((visible) => !visible)}
+													aria-label={passwordVisible ? t('machines.password-hide') : t('machines.password-show')}
+												>
+													{passwordVisible ? <EyeOff className='size-3.5' /> : <Eye className='size-3.5' />}
+												</button>
+											</div>
+											{/* These credentials can't be recovered after creation, so the save-it
+											    nudge (same one-time light sweep as onboarding's password note)
+											    appears from the first typed character. -mt-2 cancels the column's
+											    gap while pt-2 restores it inside, so the reveal grows from zero. */}
+											<AnimatePresence initial={false}>
+												{password !== '' && (
+													<motion.div
+														className='-mt-2 overflow-hidden'
+														initial={{height: 0, opacity: 0}}
+														animate={{height: 'auto', opacity: 1}}
+														exit={{height: 0, opacity: 0}}
+														transition={{duration: 0.35, ease: [0.16, 1, 0.3, 1]}}
+													>
+														<p className='px-1 pt-2 text-center text-12 leading-snug font-medium -tracking-2'>
+															<FaLock className='mr-1.5 inline-block size-[11px] align-[-0.1em] text-white/40' />
+															<span className='animate-text-shine bg-[linear-gradient(90deg,rgba(255,255,255,0.45)_0%,rgba(255,255,255,0.45)_40%,rgba(255,255,255,1)_50%,rgba(255,255,255,0.45)_60%,rgba(255,255,255,0.45)_100%)] bg-[length:300%_100%] bg-clip-text bg-no-repeat text-transparent'>
+																{t('machines.configure-sign-in-save-note', {name: trimmedName || sourceName})}
+															</span>
+														</p>
+													</motion.div>
+												)}
+											</AnimatePresence>
+										</>
 									)}
 								</div>
 							</SpecRow>

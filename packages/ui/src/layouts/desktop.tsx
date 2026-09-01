@@ -8,6 +8,7 @@ import {AppRequiresHttpsDialog} from '@/modules/app-store/app-page/app-requires-
 import {DefaultCredentialsDialog} from '@/modules/app-store/app-page/default-credentials-dialog'
 import {AppShareUsersDialog} from '@/modules/desktop/app-share-users-dialog'
 import {DesktopContent} from '@/modules/desktop/desktop-content'
+import {prefetchRouteChunks} from '@/modules/desktop/prefetch-route-chunks'
 import {WelcomeDesktop} from '@/modules/desktop/welcome-desktop'
 import {DesktopWifiButtonConnected} from '@/modules/wifi/desktop-wifi-button-connected'
 import {useApps} from '@/providers/apps'
@@ -68,20 +69,6 @@ function WelcomeDesktopPage() {
 			<DesktopWifiButtonConnected className={topRightPositionerClass} />
 		</>
 	)
-}
-
-function prefetchRouteChunks() {
-	import('@/features/app-store')
-	import('@/features/app-store/components/discover')
-	import('@/features/app-store/components/app-page')
-	import('@/features/app-store/components/category')
-	// The settings route itself is statically bundled; its content is the lazy chunk
-	import('@/routes/settings/_components/settings-content')
-	import('@/routes/settings/_components/settings-content-mobile')
-	import('@/features/files')
-	import('@/features/machines')
-	import('@/features/machines/components/machines-index')
-	import('@/routes/edit-widgets')
 }
 
 function DesktopPage() {

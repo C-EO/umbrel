@@ -54,6 +54,12 @@ export default [
 		},
 	},
 	{
+		files: ['scripts/**/*.{js,mjs,cjs}'],
+		languageOptions: {
+			globals: globals.node,
+		},
+	},
+	{
 		files: ['src/modules/app-store/**/*.{js,jsx,ts,tsx}'],
 		rules: {
 			'no-restricted-imports': [

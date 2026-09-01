@@ -261,10 +261,13 @@ export function AcceleratorSection({
 							action={replaceAction(right)}
 						/>
 					) : (
+						/* No size to suggest when the surviving member's physical device is detached */
 						<PairPlaceholderCell
-							title={t('storage-manager.ssd-acceleration.pair-placeholder', {
-								size: left?.device ? formatStorageSize(left.device.size) : '',
-							})}
+							title={
+								left?.device
+									? t('storage-manager.ssd-acceleration.pair-placeholder', {size: formatStorageSize(left.device.size)})
+									: t('storage-manager.ssd-acceleration.pair-placeholder-no-size')
+							}
 							description={t('storage-manager.ssd-acceleration.pair-note')}
 						/>
 					)

@@ -155,7 +155,7 @@ export function SystemDriveCard({device, onClick}: {device: StorageDevice; onCli
 			)}
 		>
 			{device.type === 'ssd' ? (
-				<SsdChip sizeLabel={formatStorageSize(device.size)} />
+				<SsdChip sizeLabel={formatStorageSize(device.size)} led={hasWarning ? 'red' : 'green'} />
 			) : (
 				<HardDriveIcon led={hasWarning ? 'red' : 'green'} />
 			)}

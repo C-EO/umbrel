@@ -1,3 +1,4 @@
+import {useLayoutEffect, useRef} from 'react'
 import {TbLoader} from 'react-icons/tb'
 import {useNavigate} from 'react-router-dom'
 
@@ -8,6 +9,12 @@ import {BASE_ROUTE_PATH} from '@/features/photos/constants'
 import {useAlbums} from '@/features/photos/hooks/use-library'
 import {DockSpacer} from '@/modules/desktop/dock'
 
+// The listing unmounts whenever an album is opened (the routes swap the
+// whole view), so its scroll position is kept here for the session and put
+// back before paint — coming back from an album, or from choosing its
+// cover, lands where the user left, not at the top.
+const scrollPositions = new Map<string, number>()
+
 // Albums as cover cards; each opens the album's timeline. Laid out like the
 // timeline: edge to edge on the listing surface, starting under the actions
 // bar and dissolving into it when scrolled.
@@ -17,6 +24,19 @@ import {DockSpacer} from '@/modules/desktop/dock'
 export function CollectionsListing({kind}: {kind: 'albums'}) {
 	const navigate = useNavigate()
 	const albums = useAlbums({enabled: kind === 'albums'})
+	// The scroller only exists once the albums have loaded, so the restore
+	// waits for that render; the card grid's height is pure CSS (aspect-ratio
+	// tiles), already laid out when this runs
+	const scrollerRef = useRef<HTMLDivElement>(null)
+	const loaded = !albums.isLoading
+	useLayoutEffect(() => {
+		const el = scrollerRef.current
+		if (!el) return
+		el.scrollTop = scrollPositions.get(kind) ?? 0
+		return () => {
+			scrollPositions.set(kind, el.scrollTop)
+		}
+	}, [kind, loaded])
 
 	return (
 		<ListingSurface>
@@ -26,7 +46,7 @@ export function CollectionsListing({kind}: {kind: 'albums'}) {
 						<TbLoader className='size-6 animate-spin opacity-50 shadow-xs' />
 					</div>
 				) : (
-					<FadedScroller frame={frame}>
+					<FadedScroller ref={scrollerRef} frame={frame}>
 						{/* A little side room, so a card lifting on hover isn't clipped at the scroller's edges */}
 						<div
 							className='grid grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2.5 px-1.5 lg:grid-cols-[repeat(auto-fill,minmax(240px,1fr))]'

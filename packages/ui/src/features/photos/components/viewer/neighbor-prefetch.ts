@@ -10,9 +10,10 @@ import {trpcReact} from '@/trpc/trpc'
 const DWELL_MS = 300
 
 // Warm the two items a step would land on, so ←/→ (and a swipe) shows the
-// resting image at once: their detail — the file name the header shows — and,
-// for stills, the 1280 rendition's bytes, through a detached <img> the
-// stage's own <img> then picks up from the browser's cache. Videos are never
+// resting image at once: their detail — the file name the header shows, and
+// everything the info panel tells (EXIF, albums, location) — and, for
+// stills, the 1280 rendition's bytes, through a detached <img> the stage's
+// own <img> then picks up from the browser's cache. Videos are never
 // prefetched: the player streams what it needs once it is actually looked
 // at, where a skipped-over video would have sunk a file of any size — their
 // warmed detail only spares a step onto one the detail round trip (the
@@ -22,18 +23,33 @@ const DWELL_MS = 300
 // own original on screen — so it never competes for the wire with what the
 // eye is on, and only after a beat of rest. A step retargets it, and a leap
 // somewhere else abandons whatever is still in flight.
+// The info panel's location map lives in a lazy chunk with a sizeable atlas
+// behind it; both are session-wide singletons, so warming is idempotent and
+// a repeat call costs nothing
+const warmLocationMap = () =>
+	import('@/features/photos/components/viewer/offline-location-map').then((m) => m.loadAtlas()).catch(() => undefined)
+
 export function useNeighborPrefetch({
 	open,
 	settled,
 	currentId,
 	prevId,
 	nextId,
+	deleted,
+	infoShowing,
 }: {
 	open: boolean
 	settled: boolean
 	currentId: string | undefined
 	prevId: string | undefined
 	nextId: string | undefined
+	// Whether the lightbox is in Recently Deleted — the detail must be asked
+	// for with the same flag the stage's own query carries, or it lands in a
+	// cache entry the step never reads
+	deleted: boolean
+	// The map is worth its bytes only when the open inspector would actually
+	// show it on arrival
+	infoShowing: boolean
 }) {
 	const utils = trpcReact.useUtils()
 	// Prefetches by item id — held while loading so they can be abandoned,
@@ -54,10 +70,16 @@ export function useNeighborPrefetch({
 		const handle = setTimeout(async () => {
 			// Next first: the likelier direction of travel
 			for (const id of [nextId, prevId]) {
-				if (!id || prefetches.current.has(id)) continue
-				const detail = await utils.photos.items.get.ensureData({id}).catch(() => undefined)
+				if (!id) continue
+				// Cache-served once fetched, so asking again for an item whose
+				// image is already in hand (below) costs nothing
+				const detail = await utils.photos.items.get.ensureData({id, deleted}).catch(() => undefined)
 				if (stale) return
-				if (!detail || detail.kind === 'video') continue
+				if (!detail) continue
+				// A located neighbour with the inspector open: the step will
+				// want the map, chunk and atlas both (videos included)
+				if (infoShowing && detail.location) void warmLocationMap()
+				if (prefetches.current.has(id) || detail.kind === 'video') continue
 				const token = await utils.user.getHttpApiToken.ensureData().catch(() => undefined)
 				if (stale) return
 				if (!token) continue
@@ -70,7 +92,7 @@ export function useNeighborPrefetch({
 			stale = true
 			clearTimeout(handle)
 		}
-	}, [open, settled, currentId, prevId, nextId, utils])
+	}, [open, settled, currentId, prevId, nextId, deleted, infoShowing, utils])
 
 	return {
 		// Whether an item's original is already in hand — its prefetch holds the

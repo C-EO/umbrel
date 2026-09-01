@@ -111,6 +111,11 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 	const hasRaidIssue = raidStatusQ.data?.exists && raidStatusQ.data?.status && raidStatusQ.data?.status !== 'ONLINE'
 	const hasHealthIssue = devicesQ.data?.some((device) => getDeviceHealth(device).hasWarning)
 	const hasStorageIssue = hasRaidIssue || hasHealthIssue
+	// SSD wording only when the machine is known to be SSD-only - HDD, mixed, and not-yet-loaded
+	// setups get generic drive wording (correct for any device type)
+	const storageIssueLabel = devicesQ.data?.every((device) => device.type === 'ssd')
+		? t('storage-manager.health.title')
+		: t('storage-manager.health.title-drive')
 	const {settingsDialog} = useParams<{settingsDialog: 'wallpaper' | 'language' | 'software-update'}>()
 	const ownerFirstName = userQ.data?.name ? firstNameFromFullName(userQ.data.name) : ''
 	const ownerHeading = ownerFirstName ? `${ownerFirstName}’s ${t('umbrel')}` : t('umbrel')
@@ -231,7 +236,7 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 							<span className='flex items-center gap-1.5'>
 								{item.title}
 								{hasStorageIssue && (
-									<span className='relative size-2.5' role='img' aria-label={t('storage-manager.health.title')}>
+									<span className='relative size-2.5' role='img' aria-label={storageIssueLabel}>
 										<span className='absolute inset-0 rounded-full bg-[#FF3434]' />
 										<span className='absolute inset-0 animate-ping rounded-full bg-[#FF3434] opacity-75' />
 									</span>

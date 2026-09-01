@@ -24,6 +24,7 @@ import {EnsureNoRaidMountFailure} from './modules/auth/ensure-no-raid-mount-fail
 import {EnsureProDevice} from './modules/auth/ensure-pro-device'
 import {EnsureUserDoesntExist, EnsureUserExists} from './modules/auth/ensure-user-exists'
 import {Dock, DockBottomPositioner} from './modules/desktop/dock'
+import {NavigationShortcuts} from './modules/desktop/navigation-shortcuts'
 import {FloatingIslandContainer} from './modules/floating-island/container'
 import {AppsProvider} from './providers/apps'
 import {AvailableAppsProvider} from './providers/available-apps'
@@ -72,6 +73,8 @@ export const router = createBrowserRouter([
 											<Desktop />
 										</DesktopContextMenu>
 										<CmdkMenu />
+										{/* Alt/Option+letter dock shortcuts; inside CmdkProvider so they stand down while the palette is open */}
+										<NavigationShortcuts />
 									</CmdkProvider>
 									<Suspense>
 										<Outlet />

@@ -245,6 +245,7 @@ export function createSettingsCatalog(
 				t('storage-manager.mode.full-storage.description'),
 				t('storage-manager.available-storage'),
 				t('storage-manager.health.title'),
+				t('storage-manager.health.title-drive'),
 				t('storage-manager.health.health-status'),
 				t('storage-manager.health.estimated-life'),
 				t('storage-manager.health.temperature'),

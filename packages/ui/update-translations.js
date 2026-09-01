@@ -242,6 +242,11 @@ async function removeUnusedTranslations(englishReferenceContent) {
 				`i18nKey="${keyToTest}"`,
 				`TKey: '${keyToTest}'`,
 			]
+
+			// The storage dialogs' dv() helpers resolve to `key` or `key-drive` at
+			// runtime, so dv('key') uses both the base key and its -drive variant
+			const dvKeyToTest = keyToTest.endsWith('-drive') ? keyToTest.slice(0, -6) : keyToTest
+			keyPatterns.push(`dv('${dvKeyToTest}'`, `dv("${dvKeyToTest}"`)
 			if (keyPatterns.some((pattern) => content.includes(pattern))) {
 				isKeyUsed = true
 				break

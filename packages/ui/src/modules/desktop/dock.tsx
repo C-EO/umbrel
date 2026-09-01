@@ -17,6 +17,7 @@ import {tw} from '@/utils/tw'
 
 import {DockItem} from './dock-item'
 import {LogoutDialog} from './logout-dialog'
+import {prefetchRouteChunks} from './prefetch-route-chunks'
 
 const LiveUsageDialog = React.lazy(() => import('@/routes/live-usage'))
 const WhatsNewModal = React.lazy(() => import('@/routes/whats-new-modal').then((m) => ({default: m.WhatsNewModal})))
@@ -93,6 +94,9 @@ export function Dock() {
 				initial={{translateY: 80, opacity: 0}}
 				animate={{translateY: 0, opacity: 1}}
 				transition={{type: 'spring', stiffness: 200, damping: 20, delay: 0.2, duration: 0.2}}
+				// The pointer reaching the dock precedes a click by a few hundred ms —
+				// enough to finish warming a route chunk the idle prefetch didn't get to
+				onPointerEnter={prefetchRouteChunks}
 				onPointerMove={(e) => e.pointerType === 'mouse' && mouseX.set(e.pageX)}
 				onPointerLeave={() => mouseX.set(Infinity)}
 				className='shrink-0 transform-gpu will-change-transform'

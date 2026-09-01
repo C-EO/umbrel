@@ -6,11 +6,13 @@ import {
 	anchoredScrollTop,
 	blend,
 	clampTileSize,
+	clickColumns,
 	columnRange,
 	columnValue,
 	DEFAULT_TILE_SIZE,
 	defaultFocalY,
 	findAnchor,
+	FOOTER_HEIGHT,
 	gridLayout,
 	groupItems,
 	HEADER_HEIGHT,
@@ -99,6 +101,42 @@ describe('gridLayout', () => {
 		expect(min).toBe(3)
 		expect(max).toBeGreaterThan(columnRange(1200, false).max)
 		expect(tileSizeFor(1200, max)).toBeGreaterThanOrEqual(TILE_SIZE.desktop.floor)
+	})
+
+	it('steps a click as a slice of the track, never less than a column', () => {
+		const track = zoomTrack(1200, false, TILE_SIZE.desktop.floor) // {min: 3, seam: 24, max: 85}
+		// Crossing the mosaic is a handful of clicks, not sixty-one
+		let out = track.seam
+		let outward = 0
+		while (out < track.max) {
+			out = clickColumns(track, out, 1)
+			outward++
+		}
+		expect(outward).toBeLessThanOrEqual(6)
+		let back = track.max
+		let inward = 0
+		while (back > track.seam) {
+			back = clickColumns(track, back, -1)
+			inward++
+		}
+		expect(inward).toBeLessThanOrEqual(6)
+		// … while the browse range keeps the single-column feel it always had
+		expect(clickColumns(track, 10, 1)).toBe(11)
+		expect(clickColumns(track, 10, -1)).toBe(9)
+		// Every click moves, in the direction asked, and the ends hold
+		for (let columns = track.min; columns < track.max; columns++)
+			expect(clickColumns(track, columns, 1)).toBeGreaterThan(columns)
+		for (let columns = track.max; columns > track.min; columns--)
+			expect(clickColumns(track, columns, -1)).toBeLessThan(columns)
+		expect(clickColumns(track, track.max, 1)).toBe(track.max)
+		expect(clickColumns(track, track.min, -1)).toBe(track.min)
+		// A paging key asks for at least three columns
+		expect(clickColumns(track, 10, 1, 3)).toBe(13)
+		expect(clickColumns(track, 10, -1, 3)).toBe(7)
+		// Without a canvas the control still walks its whole-column stops
+		const dom = zoomTrack(1200, false)
+		expect(clickColumns(dom, 10, 1)).toBe(11)
+		expect(clickColumns(dom, dom.max, 1)).toBe(dom.max)
 	})
 
 	it('maps a tile size to a column value, clamped to the stops', () => {
@@ -235,6 +273,26 @@ describe('layoutAt / visibleItems', () => {
 		const withLoader = layoutOf(items, 1, 100, 3, 0, true)
 		expect(withLoader.loaderTop).toBe(385)
 		expect(withLoader.total).toBe(385 + LOADER_HEIGHT)
+	})
+
+	it('reserves the footer band only once every page is loaded', () => {
+		const footered = layoutAt(
+			groupItems({items, zoom: 'months', hasMore: false, language: 'en-US', footer: true}),
+			1,
+			100,
+			3,
+		)
+		expect(footered.footerTop).toBe(385)
+		expect(footered.total).toBe(385 + FOOTER_HEIGHT)
+		const stillLoading = layoutAt(
+			groupItems({items, zoom: 'months', hasMore: true, language: 'en-US', footer: true}),
+			1,
+			100,
+			3,
+		)
+		expect(stillLoading.footerTop).toBeUndefined()
+		expect(stillLoading.total).toBe(385 + LOADER_HEIGHT)
+		expect(layout.footerTop).toBeUndefined()
 	})
 
 	it('places every tile from the section it is in', () => {

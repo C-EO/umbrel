@@ -41,7 +41,9 @@ export default function SingleDriveStorageManager({devices}: {devices: StorageDe
 	const totalBytes = diskUsageQ.data?.size ?? bootDrive?.size ?? 0
 	const usedBytes = diskUsageQ.data?.totalUsed ?? 0
 	const freeBytes = Math.max(0, totalBytes - usedBytes)
-	const isLoading = diskUsageQ.isLoading
+	// A failed query would otherwise render a healthy, completely empty drive - keep the
+	// skeletons up instead and let react-query's refetches recover
+	const isLoading = diskUsageQ.isLoading || diskUsageQ.isError
 
 	const healthDialog = useSsdHealthDialog()
 	const healthDialogDevice = devices.find((device) => device.id === healthDialog.selectedDevice?.deviceId)
@@ -63,9 +65,12 @@ export default function SingleDriveStorageManager({devices}: {devices: StorageDe
 
 	const artwork = bootDrive ? (
 		bootDrive.type === 'hdd' ? (
-			<HardDriveIcon led='green' />
+			<HardDriveIcon led={getDeviceHealth(bootDrive).hasWarning ? 'red' : 'green'} />
 		) : (
-			<SsdChip sizeLabel={formatStorageSize(bootDrive.size)} />
+			<SsdChip
+				sizeLabel={formatStorageSize(bootDrive.size)}
+				led={getDeviceHealth(bootDrive).hasWarning ? 'red' : 'none'}
+			/>
 		)
 	) : isRaspberryPi ? (
 		<img src={sdCard} alt='' draggable={false} className='h-12 w-9 shrink-0' />

@@ -45,7 +45,7 @@ export function SourcesOverview() {
 						<button
 							type='button'
 							onClick={() => navigate(linkToDialog('photos-add-source'))}
-							className='flex min-h-[150px] flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 p-4 text-white/50 transition-colors hover:border-white/30 hover:bg-white/5 hover:text-white focus-visible:ring-2 focus-visible:ring-white/25 focus-visible:outline-hidden'
+							className='flex aspect-square flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-white/15 p-4 text-white/50 transition-colors hover:border-white/30 hover:bg-white/5 hover:text-white focus-visible:ring-2 focus-visible:ring-white/25 focus-visible:outline-hidden'
 						>
 							<span className='flex size-10 items-center justify-center rounded-full bg-white/10'>
 								<Plus className='size-5' />
@@ -72,7 +72,7 @@ function SourceTile({source, onOpen, onManage}: {source: PhotoSource; onOpen: ()
 					<button
 						type='button'
 						onClick={onOpen}
-						className='flex min-h-[150px] w-full flex-col items-center gap-1 rounded-2xl border border-transparent bg-white/5 px-3 py-4 text-center transition-colors hover:border-white/6 hover:bg-white/8 focus-visible:border-white/10 focus-visible:ring-1 focus-visible:ring-white/40 focus-visible:outline-hidden'
+						className='flex aspect-square w-full flex-col items-center justify-center gap-1 rounded-2xl border border-transparent bg-white/5 px-3 py-4 text-center transition-colors hover:border-white/6 hover:bg-white/8 focus-visible:border-white/10 focus-visible:ring-1 focus-visible:ring-white/40 focus-visible:outline-hidden'
 					>
 						<SourceIcon type={source.type} size={44} />
 						<span className='mt-2 w-full truncate text-13 font-medium'>{source.name}</span>
@@ -86,9 +86,11 @@ function SourceTile({source, onOpen, onManage}: {source: PhotoSource; onOpen: ()
 								}),
 							})}
 						</span>
-						{source.lastImportAt && (
-							<span className='text-12 text-white/40'>{timeAgo(source.lastImportAt, i18n.language)}</span>
-						)}
+						{/* Reserved even when there's no backup yet (the umbrel source never has one),
+						    so the centered tiles in a row keep their icons at the same height */}
+						<span className='text-12 text-white/40'>
+							{source.lastImportAt ? timeAgo(source.lastImportAt, i18n.language) : '\u00A0'}
+						</span>
 					</button>
 				</ContextMenuTrigger>
 				<button

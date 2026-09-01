@@ -118,7 +118,8 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 								WebkitMaskImage: 'linear-gradient(to right, black 60%, transparent 100%)',
 							}}
 						>
-							<img src='/assets/onboarding/ssd-info.webp' alt='SSD' draggable={false} className='ml-auto w-[95%]' />
+							{/* Decorative - the size, slot, and model are overlaid as real text below */}
+							<img src='/assets/onboarding/ssd-info.webp' alt='' draggable={false} className='ml-auto w-[95%]' />
 							<div className='absolute flex flex-col' style={{left: '20%', top: '50%', transform: 'translateY(-50%)'}}>
 								<span
 									className='leading-tight font-bold'
@@ -148,7 +149,7 @@ export function SsdHealthDialog({device, slotNumber, open, onOpenChange, raidDev
 							<div className='mb-3 flex items-center gap-2 text-[#FF3434]'>
 								<TbAlertTriangleFilled className='size-5' />
 								<span className='font-semibold'>
-									Status:{' '}
+									{t('storage-manager.health.status')}{' '}
 									{raidStatusLabels[raidDevice.raidStatus]
 										? t(raidStatusLabels[raidDevice.raidStatus])
 										: raidDevice.raidStatus}

@@ -6,7 +6,6 @@ import {
 	SpringOptions,
 	useSpring,
 	useTransform,
-	Variants,
 } from 'motion/react'
 import {useEffect, useRef, useState} from 'react'
 import {Link, LinkProps} from 'react-router-dom'
@@ -30,6 +29,8 @@ type DockItemProps = {
 	onClick?: (e: React.MouseEvent) => void
 } & HTMLDivProps
 
+// Matches the umbrel-dock-bounce duration in index.css; the open pill waits
+// out the bounce before fading in
 const BOUNCE_DURATION = 0.4
 
 export function DockItem({
@@ -72,26 +73,6 @@ export function DockItem({
 	const scaleSync = useTransform(distance, [-150, 0, 150], [1, iconSizeZoomed / iconSize, 1])
 	const transform = useSpring(scaleSync, springOptions)
 
-	// Config from:
-	// https://github.com/ysj151215/big-sur-dock/blob/04a7244beb0d35d22d1bb18ad91b4c0021bf5ec4/components/dock/DockItem.tsx
-	const variants: Variants = {
-		open: {
-			transition: {
-				default: {
-					duration: 0.2,
-				},
-				translateY: {
-					duration: BOUNCE_DURATION,
-					ease: 'easeInOut',
-					times: [0, 0.5, 1],
-				},
-			},
-			translateY: [0, -20, 0],
-		},
-		closed: {},
-	}
-	const variant = open && clickedOpen ? 'open' : 'closed'
-
 	return (
 		<motion.div
 			ref={ref}
@@ -131,6 +112,9 @@ export function DockItem({
 			<motion.div
 				className={cn(
 					'relative origin-top-left bg-cover transition-[filter] has-[:focus-visible]:brightness-125',
+					// CSS bounce (see index.css) instead of a motion variant: a JS-driven
+					// bounce stutters while the sheet's route mounts on the main thread
+					open && clickedOpen && 'umbrel-dock-bounce',
 					className,
 				)}
 				style={{
@@ -144,8 +128,6 @@ export function DockItem({
 					...style,
 				}}
 				{...props}
-				variants={variants}
-				animate={variant}
 			>
 				<Link
 					to={to || '/'}

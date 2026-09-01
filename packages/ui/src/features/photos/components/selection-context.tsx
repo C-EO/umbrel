@@ -44,6 +44,10 @@ type PhotosSelection = {
 	// While it's on, the selection itself is inert — nothing accumulates.
 	coveringFor: string | undefined
 	coverFor: (albumId: string) => void
+	// Ends cover mode after a choice. When `coverFor` navigated to the album's
+	// page (the albums grid, another view's sidebar card), the choice returns
+	// the user where they came from; choosing from the album's own page stays.
+	coverChosen: () => void
 }
 
 const EMPTY: ReadonlySet<string> = new Set()
@@ -62,6 +66,9 @@ export function PhotosSelectionProvider({children}: {children: ReactNode}) {
 	const [explicit, setExplicit] = useState(false)
 	const [pickingFor, setPickingFor] = useState<string>()
 	const [coveringFor, setCoveringFor] = useState<string>()
+	// Where `coverFor` navigated from, when it did: a chosen cover returns
+	// there. Cancelling stays put, and leaving the page cancels instead.
+	const coveringFrom = useRef<string>(undefined)
 	// Read by the otherwise-stable callbacks, so entering cover mode doesn't
 	// change their identity for every consumer that lists them as deps
 	const covering = useRef<string>(undefined)
@@ -95,6 +102,7 @@ export function PhotosSelectionProvider({children}: {children: ReactNode}) {
 		if (pathname === `${BASE_ROUTE_PATH}/albums/${coveringFor}`) coveringArrived.current = coveringFor
 		else if (coveringArrived.current === coveringFor) {
 			coveringArrived.current = undefined
+			coveringFrom.current = undefined
 			setCoveringFor(undefined)
 		}
 	}, [pathname, coveringFor])
@@ -105,11 +113,13 @@ export function PhotosSelectionProvider({children}: {children: ReactNode}) {
 		setExplicit(false)
 		setPickingFor(undefined)
 		setCoveringFor(undefined)
+		coveringFrom.current = undefined
 	}, [])
 	const pickFor = useCallback(
 		(albumId: string) => {
 			setIds(EMPTY)
 			setCoveringFor(undefined)
+			coveringFrom.current = undefined
 			setPickingFor(albumId)
 			navigate(BASE_ROUTE_PATH)
 		},
@@ -124,10 +134,16 @@ export function PhotosSelectionProvider({children}: {children: ReactNode}) {
 			// Already on the album's page (its own sidebar card): navigating
 			// again would only push a dead history entry
 			const path = `${BASE_ROUTE_PATH}/albums/${albumId}`
+			coveringFrom.current = pathname !== path ? pathname : undefined
 			if (pathname !== path) navigate(path)
 		},
 		[navigate, pathname],
 	)
+	const coverChosen = useCallback(() => {
+		const returnTo = coveringFrom.current
+		done()
+		if (returnTo) navigate(returnTo)
+	}, [done, navigate])
 	const toggle = useCallback(
 		(id: string) =>
 			setIds((prev) => {
@@ -162,8 +178,9 @@ export function PhotosSelectionProvider({children}: {children: ReactNode}) {
 			pickFor,
 			coveringFor,
 			coverFor,
+			coverChosen,
 		}),
-		[ids, explicit, start, done, toggle, set, retain, pickingFor, pickFor, coveringFor, coverFor],
+		[ids, explicit, start, done, toggle, set, retain, pickingFor, pickFor, coveringFor, coverFor, coverChosen],
 	)
 	return <PhotosSelectionContext value={value}>{children}</PhotosSelectionContext>
 }

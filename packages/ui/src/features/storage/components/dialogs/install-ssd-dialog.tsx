@@ -52,9 +52,9 @@ export function InstallSsdDialog({open, onOpenChange, isUmbrelPro, isHdd = false
 				dv('storage-manager.install-ssd.step-return'),
 			]
 		: [
-				t('storage-manager.install-ssd.step-shut-down', {deviceName: 'device'}),
+				t('storage-manager.install-ssd.step-shut-down', {deviceName: t('storage-manager.device')}),
 				dv('storage-manager.install-ssd.step-insert'),
-				t('storage-manager.install-ssd.step-power-on', {deviceName: 'device'}),
+				t('storage-manager.install-ssd.step-power-on', {deviceName: t('storage-manager.device')}),
 				dv('storage-manager.install-ssd.step-return'),
 			]
 

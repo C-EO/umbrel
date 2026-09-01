@@ -67,7 +67,7 @@ export function SwapDialog({
 	const [selectedReplacementId, setSelectedReplacementId] = useState<string | null>(null)
 	const [showShutdownConfirmation, setShowShutdownConfirmation] = useState(false)
 
-	const deviceName = isUmbrelPro ? 'Umbrel Pro' : 'device'
+	const deviceName = isUmbrelPro ? t('storage-manager.umbrel-pro') : t('storage-manager.device')
 	const isStorageMode = raidType === 'storage'
 	const maxSlots = 4
 	// Only Umbrel Pro has a fixed number of physical slots
@@ -161,14 +161,30 @@ export function SwapDialog({
 							<DialogDescription>{dv('storage-manager.swap.description-replace')}</DialogDescription>
 						</DialogHeader>
 
-						{/* Info banner */}
-						<div className='flex items-start gap-3 rounded-12 bg-brand/10 p-3'>
-							<TbInfoCircle className='mt-0.5 size-5 shrink-0 text-brand' />
-							<div className='flex flex-col gap-1'>
-								<span className='text-13 font-semibold text-brand'>{t('storage-manager.swap.no-data-loss')}</span>
-								<span className='text-12 text-white/60'>{dv('storage-manager.swap.no-data-loss-description')}</span>
+						{oldDeviceFailed ? (
+							/* Full Storage has no redundancy - a failed member means data is already at
+							   risk, so don't promise a lossless copy */
+							<div className='flex items-start gap-3 rounded-12 bg-destructive2/10 p-3'>
+								<TbAlertTriangle className='mt-0.5 size-5 shrink-0 text-destructive2' />
+								<div className='flex flex-col gap-1'>
+									<span className='text-13 font-semibold text-destructive2'>
+										{isGenericDrive
+											? t('storage-manager.replace-failed.degraded-storage-drive')
+											: t('storage-manager.replace-failed.degraded-storage')}
+									</span>
+									<span className='text-12 text-white/60'>{dv('storage-manager.swap.failed-description-storage')}</span>
+								</div>
 							</div>
-						</div>
+						) : (
+							/* Info banner */
+							<div className='flex items-start gap-3 rounded-12 bg-brand/10 p-3'>
+								<TbInfoCircle className='mt-0.5 size-5 shrink-0 text-brand' />
+								<div className='flex flex-col gap-1'>
+									<span className='text-13 font-semibold text-brand'>{t('storage-manager.swap.no-data-loss')}</span>
+									<span className='text-12 text-white/60'>{dv('storage-manager.swap.no-data-loss-description')}</span>
+								</div>
+							</div>
+						)}
 
 						{/* Drive selection - show all available, disable those too small */}
 						<div className='flex flex-col gap-2'>
@@ -276,18 +292,23 @@ export function SwapDialog({
 	// Storage mode with free slot but NO available devices - we show "add a drive first" instructions.
 	// Umbrel Pro gets the installation photo with prose instead of a step list.
 	if (isStorageMode && hasFreeSlot) {
+		// The re-entry step names the button that reopens this dialog, which reads Replace
+		// for a failed member and Swap otherwise (matching the title above)
+		const returnStep = oldDeviceFailed
+			? t('storage-manager.swap.step-return-to-replace')
+			: t('storage-manager.swap.step-return-to-swap')
 		// Hot-swappable bays skip the shutdown/power-on steps in favor of a note
 		const steps = canHotSwap
 			? [
 					dv('storage-manager.swap.step-power-off-if-needed'),
 					dv('storage-manager.swap.step-insert-new-ssd'),
-					t('storage-manager.swap.step-return-to-swap'),
+					returnStep,
 				]
 			: [
 					t('storage-manager.swap.step-shut-down', {deviceName}),
 					dv('storage-manager.swap.step-insert-new-ssd'),
 					t('storage-manager.swap.step-power-on', {deviceName}),
-					t('storage-manager.swap.step-return-to-swap'),
+					returnStep,
 				]
 
 		return (
@@ -371,7 +392,8 @@ export function SwapDialog({
 
 	if (isStorageMode) {
 		// No free slot because all 4 slots are in use - you would need to use backup, factory reset, and restore workflow
-		const ssdLabel = slot ? `SSD ${slot}` : 'the SSD'
+		// "SSD" slot labels are not translated - they match the physical device markings
+		const ssdLabel = slot ? `SSD ${slot}` : t('storage-manager.swap.the-old-ssd')
 		const steps = [
 			{
 				title: t('storage-manager.swap.step-backup'),

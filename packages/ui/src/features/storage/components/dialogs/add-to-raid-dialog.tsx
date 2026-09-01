@@ -77,16 +77,22 @@ function InfoText({
 		return (
 			<div className='flex flex-col gap-2'>
 				<p className='text-[13px] text-white/50'>
-					<Trans
-						t={t}
-						i18nKey={
-							isHdd
-								? 'storage-manager.add-to-raid.info-capacity-added-drive'
-								: 'storage-manager.add-to-raid.info-capacity-added'
-						}
-						values={{size: availableSize}}
-						components={transComponents}
-					/>
+					{/* i18nKey stays literal per branch so CI's unused-key scan finds both keys */}
+					{isHdd ? (
+						<Trans
+							t={t}
+							i18nKey='storage-manager.add-to-raid.info-capacity-added-drive'
+							values={{size: availableSize}}
+							components={transComponents}
+						/>
+					) : (
+						<Trans
+							t={t}
+							i18nKey='storage-manager.add-to-raid.info-capacity-added'
+							values={{size: availableSize}}
+							components={transComponents}
+						/>
+					)}
 					{showFailSafeOption && ` ${t('storage-manager.add-to-raid.info-no-protection')}`}
 				</p>
 				{showFailSafeOption && (

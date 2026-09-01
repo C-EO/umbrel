@@ -67,7 +67,6 @@ function SsdStorageManager({isUmbrelPro}: {isUmbrelPro: boolean}) {
 	const {
 		allDevices,
 		raidDevices,
-		availableDevices,
 		availableSsds,
 		ssdSlots,
 		readyToAddIds,
@@ -691,7 +690,10 @@ function SsdStorageManager({isUmbrelPro}: {isUmbrelPro: boolean}) {
 				)}
 				isUmbrelPro={isUmbrelPro}
 				raidDriveCount={raidDriveCount}
-				availableDevices={isUmbrelPro ? availableDevices : availableSsds}
+				// SSD pools must be offered SSD replacements only - an unpooled rotational disk
+				// would be rejected by the backend's type check
+				availableDevices={availableSsds}
+				missingDeviceType='ssd'
 				allDevices={allDevices}
 				replaceDeviceAsync={replaceDeviceAsync}
 			/>

@@ -71,6 +71,14 @@ export const ItemTile = memo(function ItemTile({
 		>
 			<ItemThumbnail item={item} size={thumbSize} warmUntil={warmUntil} className='h-full w-full' />
 			{live && <LiveTileClip id={item.id} active={live === 'playing'} />}
+			{/* Below the sizes that carry the full badges, a video still wears a
+			    small play mark — the same one the canvas draws past the seam, so
+			    crossing it never pops the mark in or out */}
+			{item.kind === 'video' && (
+				<span className='absolute bottom-1 left-1 flex size-3 items-center justify-center rounded-full bg-black/55 text-white @min-[88px]:hidden'>
+					<Play className='size-1.5' fill='currentColor' strokeWidth={0} />
+				</span>
+			)}
 			{/* Badges only once the tile is big enough to carry them (see TileSlot's container).
 			    One corner shares them: 360° and duration can coexist on a video, Live is photos-only. */}
 			{(item.subKind === 'live' || item.subKind === 'spherical' || item.durationMs !== undefined) && (

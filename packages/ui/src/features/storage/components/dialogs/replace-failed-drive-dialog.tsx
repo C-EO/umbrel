@@ -188,16 +188,17 @@ export function ReplaceFailedDriveDialog({
 										? t('storage-manager.replace-failed.too-small-drive')
 										: t('storage-manager.replace-failed.too-small')}
 								</span>
+								{/* Keys stay literal inside t() so CI's unused-key scan finds them */}
 								<span className='text-12 text-white/60'>
-									{t(
-										isHdd
-											? 'storage-manager.replace-failed.too-small-description-drive'
-											: 'storage-manager.replace-failed.too-small-description',
-										{
-											deviceSize: formatStorageSize(newDevice.size),
-											minSize: formatStorageSize(minRoundedDriveSize),
-										},
-									)}
+									{isHdd
+										? t('storage-manager.replace-failed.too-small-description-drive', {
+												deviceSize: formatStorageSize(newDevice.size),
+												minSize: formatStorageSize(minRoundedDriveSize),
+											})
+										: t('storage-manager.replace-failed.too-small-description', {
+												deviceSize: formatStorageSize(newDevice.size),
+												minSize: formatStorageSize(minRoundedDriveSize),
+											})}
 								</span>
 							</div>
 						</div>

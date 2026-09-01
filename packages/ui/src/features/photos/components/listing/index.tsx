@@ -1,4 +1,4 @@
-import {Plus, TriangleAlert, Upload} from 'lucide-react'
+import {Plus, Upload} from 'lucide-react'
 import {useRef, type ReactNode} from 'react'
 import {useTranslation} from 'react-i18next'
 import {TbLoader} from 'react-icons/tb'
@@ -17,7 +17,7 @@ import {usePhotoSources} from '@/features/photos/hooks/use-photo-sources'
 import {useUpload} from '@/features/photos/hooks/use-upload'
 import {useLinkToDialog} from '@/utils/dialog'
 
-import {useRouteFilter} from './route-filter'
+import {isWholeLibrary, useRouteFilter} from './route-filter'
 
 export {useRouteFilter} from './route-filter'
 
@@ -31,18 +31,22 @@ function Timeline() {
 	const filter = useRouteFilter()
 	const {search} = usePhotosView()
 	const {data: indexingState, isLoading: isLoadingState} = useLibraryStatus()
-	const hasShownReadyLibrary = useRef(false)
-	if (indexingState?.phase === 'ready') hasShownReadyLibrary.current = true
-	// While a search is refining, the last results stay up until the next
-	// arrive — the grid narrows in steps rather than blinking through a
-	// spinner on every applied keystroke
-	const incrementalEnrichment = indexingState?.phase === 'enriching' && hasShownReadyLibrary.current
+	// The grid shows whatever is ready and fills in as enrichment progresses;
+	// the Library sidebar row carries the progress ring meanwhile
 	const libraryQueryable =
-		indexingState?.phase === 'ready' || indexingState?.phase === 'degraded' || incrementalEnrichment
-	const {items, isLoading, hasMore, loadMore} = useItems(filter, {
+		indexingState?.phase === 'ready' || indexingState?.phase === 'degraded' || indexingState?.phase === 'enriching'
+	// `keepPrevious` while a search is refining: the last results stay up until
+	// the next arrive — the grid narrows in steps rather than blinking through
+	// a spinner on every applied keystroke
+	const {items, total, isLoading, hasMore, loadMore} = useItems(filter, {
 		enabled: libraryQueryable,
 		keepPrevious: search.active,
 	})
+	// A bare library that is empty mid-enrichment is still filling — keep the
+	// spinner up rather than flashing the empty-library invitation. Filtered
+	// views keep their own empty screens: a section may genuinely have nothing.
+	// By value (see isWholeLibrary): the filter always carries its keys.
+	const stillFilling = indexingState?.phase === 'enriching' && isWholeLibrary(filter)
 	// A new filter is a new list: remount so scroll position and row cache start clean
 	const listKey = JSON.stringify(filter)
 
@@ -51,32 +55,29 @@ function Timeline() {
 			{(frame) =>
 				indexingState?.phase === 'indexing' ? (
 					<Indexing frame={frame} />
-				) : indexingState?.phase === 'enriching' && !incrementalEnrichment ? (
-					<Enriching frame={frame} percentage={indexingState.percentage} />
-				) : isLoadingState || isLoading ? (
+				) : isLoadingState || isLoading || (items.length === 0 && stillFilling) ? (
 					<div className='relative isolate flex h-full items-center justify-center' style={{paddingTop: frame.inset}}>
 						<GhostGrid />
 						<TbLoader className='size-6 animate-spin opacity-50 shadow-xs' />
 					</div>
 				) : items.length === 0 ? (
-					<>
-						{indexingState?.phase === 'degraded' && <DegradedNotice />}
-						{incrementalEnrichment && <EnrichmentNotice percentage={indexingState.percentage} />}
-						<Empty filter={filter} frame={frame} />
-					</>
+					<Empty filter={filter} frame={frame} />
 				) : (
-					<>
-						{indexingState?.phase === 'degraded' && <DegradedNotice />}
-						{incrementalEnrichment && <EnrichmentNotice percentage={indexingState.percentage} />}
-						<TimelineGrid
-							key={listKey}
-							items={items}
-							hasMore={hasMore}
-							loadMore={loadMore}
-							frame={frame}
-							inDeleted={filter.deleted === true}
-						/>
-					</>
+					<TimelineGrid
+						key={listKey}
+						items={items}
+						total={total}
+						filter={filter}
+						hasMore={hasMore}
+						loadMore={loadMore}
+						frame={frame}
+						inDeleted={filter.deleted === true}
+						footer={
+							indexingState?.phase === 'degraded' ? (
+								<DegradedFooter completed={indexingState.completed} total={indexingState.total} />
+							) : undefined
+						}
+					/>
 				)
 			}
 		</ListingSurface>
@@ -127,23 +128,15 @@ function GhostGrid() {
 	)
 }
 
-function EnrichmentNotice({percentage}: {percentage: number}) {
+// Where Photos.app puts its iCloud status: a quiet line after the last row,
+// read only once you've scrolled past everything that did prepare.
+function DegradedFooter({completed, total}: {completed?: number; total?: number}) {
 	const {t} = useTranslation()
+	const failed = completed !== undefined && total !== undefined ? total - completed : 0
 	return (
-		<div className='pointer-events-none absolute top-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-white/10 bg-black/70 px-3 py-1.5 text-12 text-white/70 shadow-lg backdrop-blur-xl'>
-			<TbLoader className='size-3.5 animate-spin' />
-			{t('photos-enriching.background', {percentage})}
-		</div>
-	)
-}
-
-function DegradedNotice() {
-	const {t} = useTranslation()
-	return (
-		<div className='pointer-events-none absolute top-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-2 rounded-full border border-amber-300/15 bg-amber-950/80 px-3 py-1.5 text-12 text-amber-100 shadow-lg backdrop-blur-xl'>
-			<TriangleAlert className='size-3.5' />
-			{t('photos-degraded.description')}
-		</div>
+		<p className='text-12 text-white/40'>
+			{failed > 0 ? t('photos-degraded.footer', {count: failed}) : t('photos-degraded.description')}
+		</p>
 	)
 }
 
@@ -156,25 +149,7 @@ function Indexing({frame}: {frame: Frame}) {
 		>
 			<GhostGrid />
 			<TbLoader className='size-6 animate-spin opacity-50 shadow-xs' />
-			<p className='text-15 font-medium text-white/80'>{t('photos-indexing.title')}</p>
 			<p className='text-13 text-white/50'>{t('photos-indexing.description')}</p>
-		</div>
-	)
-}
-
-function Enriching({frame, percentage}: {frame: Frame; percentage: number}) {
-	const {t} = useTranslation()
-	return (
-		<div
-			className='relative isolate flex h-full flex-col items-center justify-center gap-2 p-6 text-center'
-			style={{paddingTop: frame.inset}}
-		>
-			<GhostGrid />
-			<p className='text-15 font-medium text-white/80'>{t('photos-enriching.title')}</p>
-			<p className='text-13 text-white/50'>{t('photos-enriching.description', {percentage})}</p>
-			<div className='mt-2 h-1.5 w-52 overflow-hidden rounded-full bg-white/10'>
-				<div className='h-full rounded-full bg-white/70 transition-[width]' style={{width: `${percentage}%`}} />
-			</div>
 		</div>
 	)
 }

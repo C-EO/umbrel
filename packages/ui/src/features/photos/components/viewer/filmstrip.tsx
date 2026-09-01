@@ -104,11 +104,36 @@ export function Filmstrip({
 	// after — unless the user is scrubbing, in which case the id is following
 	// the strip, not the other way round
 	const settledRef = useRef(false)
+	// The (id, index) pair the strip last laid out for, to tell a navigation
+	// (new id) from the library shifting under a stationary item (same id,
+	// new index) — photos landing from an upload ahead of this one
+	const anchorRef = useRef<{id: string; index: number} | null>(null)
 	useLayoutEffect(() => {
-		if (width === 0 || currentIndex < 0 || scrubbing.current) return
+		const el = containerRef.current
+		if (!el || width === 0 || currentIndex < 0) return
+		const anchor = anchorRef.current
+		anchorRef.current = {id: currentId, index: currentIndex}
+		if (settledRef.current && anchor?.id === currentId) {
+			const delta = currentIndex - anchor.index
+			if (delta === 0) return
+			// Same item, new slot: the list changed around it, not a navigation.
+			// Every thumb just moved by the same distance, so move the viewport
+			// with them — before paint, and no matter who owns the scroll — and
+			// the strip stands perfectly still. Scroll anchoring, by hand: the
+			// browser's can't see absolutely-positioned thumbs move.
+			el.scrollLeft += delta * SLOT
+			if (settling.current)
+				centerOn(currentIndex, 'smooth') // re-aim a settle mid-flight
+			else if (!scrubbing.current) settling.current = {target: el.scrollLeft} // the echo isn't a scrub
+			// The pointer hasn't moved, so neither may the grown thumb
+			setHovered((h) => (h === null ? null : h + delta))
+			updateRange()
+			return
+		}
+		if (scrubbing.current) return
 		centerOn(currentIndex, settledRef.current ? 'smooth' : 'instant')
 		settledRef.current = true
-	}, [currentIndex, width, centerOn])
+	}, [currentId, currentIndex, width, centerOn, updateRange])
 
 	const onScroll = () => {
 		updateRange()
@@ -168,10 +193,14 @@ export function Filmstrip({
 			onScroll={onScroll}
 			onPointerDown={takeOver}
 			onPointerLeave={() => setHovered(null)}
-			// 48px thumb + 8px bottom inset + 24px growth headroom + 8px so the ring clears the clip edge
-			className='umbrel-hide-scrollbar relative h-[88px] w-full overflow-x-auto overflow-y-hidden overscroll-x-contain'
+			// 48px thumb + 8px bottom inset + 24px growth headroom + 8px so the ring clears the clip edge.
+			// The headroom overlaps the lightbox stage (the viewer pulls the footer up over it), where
+			// it would swallow clicks on a video's seek bar — so the box is transparent to hits, and
+			// only the visible band below re-enables them (scrolls and wheels on it bubble to this box)
+			className='umbrel-hide-scrollbar pointer-events-none relative h-[88px] w-full overflow-x-auto overflow-y-hidden overscroll-x-contain'
 		>
 			<div className='relative h-full' style={{width: items.length * SLOT - GAP + pad * 2}}>
+				<div className='pointer-events-auto absolute bottom-0 h-14 w-full' />
 				{items.slice(range.start, range.end + 1).map((item, i) => {
 					const index = range.start + i
 					// Neighbours make room: left ones slide left, right ones slide right
@@ -227,7 +256,7 @@ const Thumb = memo(function Thumb({
 				zIndex: scale > 1 ? 2 : 1,
 			}}
 			className={cn(
-				'absolute bottom-2 overflow-hidden rounded-md ring-white outline-hidden transition-[transform,box-shadow,opacity] duration-200 ease-out focus-visible:ring-2',
+				'pointer-events-auto absolute bottom-2 overflow-hidden rounded-md ring-white outline-hidden transition-[transform,box-shadow,opacity] duration-200 ease-out focus-visible:ring-2',
 				current ? 'opacity-100 ring-2' : 'opacity-75 hover:opacity-100',
 			)}
 		>

@@ -41,15 +41,15 @@ export function afterDelayedClose(cb?: () => void) {
 	return (open: boolean) => !open && sleep(EXIT_DURATION_MS).then(cb)
 }
 
-export function useAfterDelayedClose(open: boolean, cb: () => void) {
+export function useAfterDelayedClose(open: boolean, cb: () => void, delayMs: number = EXIT_DURATION_MS) {
 	useEffect(() => {
 		const id = setTimeout(() => {
 			if (!open) cb()
-		}, EXIT_DURATION_MS)
+		}, delayMs)
 
 		// Cancel the timeout if the component unmounts or the `open` prop changes.
 		return () => clearTimeout(id)
-	}, [open, cb])
+	}, [open, cb, delayMs])
 }
 
 /** Allow controlling dialog from query params */

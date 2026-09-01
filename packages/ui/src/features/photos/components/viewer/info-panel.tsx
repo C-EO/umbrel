@@ -1,4 +1,4 @@
-import {Camera, MapPin, MessageSquareText, X} from 'lucide-react'
+import {Camera, MessageSquareText, X} from 'lucide-react'
 import {lazy, Suspense} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useNavigate} from 'react-router-dom'
@@ -23,6 +23,14 @@ import {tw} from '@/utils/tw'
 const FolderBreadcrumbs = lazy(() =>
 	import('@/features/photos/components/viewer/folder-breadcrumb-scroller').then((m) => ({
 		default: m.FolderBreadcrumbScroller,
+	})),
+)
+
+// Map code and its bundled atlas stay out of the viewer until a photograph
+// actually carries a location.
+const OfflineLocationMap = lazy(() =>
+	import('@/features/photos/components/viewer/offline-location-map').then((m) => ({
+		default: m.OfflineLocationMap,
 	})),
 )
 
@@ -156,29 +164,17 @@ export function InfoPanel({item, onClose, sheet = false}: {item: ItemDetail; onC
 					</div>
 				)}
 
-				{/* Where it was taken: the raw coordinates, and a way to see them on a
-				    map — an outward link the user chooses to follow, never an embedded
-				    map (third-party tile servers would be sent the photo's location on
-				    every panel open; the mini-map ships with Locations on self-hosted
-				    tiles, see CONTRACT.md) */}
+				{/* Where it was taken, rendered only from the bundled Natural Earth atlas. */}
 				{item.location && (
 					<Facts label={t('photos-item.fact-place')}>
-						<Chip
-							icon={<MapPin className='size-3.5 text-white/70' />}
-							title={t('photos-item.open-in-maps')}
-							onClick={() =>
-								window.open(
-									`https://www.openstreetmap.org/?mlat=${item.location!.lat}&mlon=${item.location!.lng}#map=14/${item.location!.lat}/${item.location!.lng}`,
-									'_blank',
-									'noopener,noreferrer',
-								)
-							}
-						>
-							{formatCoordinates(item.location.lat, item.location.lng)}
-							{item.location.altitude === undefined
-								? ''
-								: ` · ${formatNumberI18n({n: item.location.altitude, showDecimals: true, locale: i18n.language})} m`}
-						</Chip>
+						<Suspense fallback={<div className='h-36 w-full animate-pulse rounded-xl bg-white/6' />}>
+							<OfflineLocationMap
+								lat={item.location.lat}
+								lng={item.location.lng}
+								altitude={item.location.altitude}
+								locale={i18n.language}
+							/>
+						</Suspense>
 					</Facts>
 				)}
 
@@ -235,14 +231,6 @@ export function InfoPanel({item, onClose, sheet = false}: {item: ItemDetail; onC
 }
 
 const cardClass = tw`rounded-xl bg-white/6 p-3`
-
-// "38.7223° N, 9.1393° W" — hemispheres instead of signs, four decimals
-// (≈10m), which is what the raw coordinates honestly are without a gazetteer
-function formatCoordinates(lat: number, lng: number) {
-	const part = (value: number, positive: string, negative: string) =>
-		`${Math.abs(value).toFixed(4)}° ${value < 0 ? negative : positive}`
-	return `${part(lat, 'N', 'S')}, ${part(lng, 'E', 'W')}`
-}
 
 function Facts({label, children}: {label: string; children: React.ReactNode}) {
 	return (

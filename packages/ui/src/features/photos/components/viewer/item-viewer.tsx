@@ -60,6 +60,30 @@ const FILMSTRIP_MODE: FilmstripMode = (() => {
 	}
 })()
 
+// Whether the inspector opens with the lightbox, remembered across sessions —
+// a desktop preference (the phone sheet covers the picture, so it never opens
+// itself). Told true it opens for everything, told false for nothing, and
+// until the user has said either way it opens for photos only: info suits a
+// still, a video wants the stage to itself. A hand on the panel — the toolbar
+// button, `i`, its close button — is what says; closing the lightbox says
+// nothing.
+const INFO_OPEN_KEY = 'photos:info-open'
+const readInfoOpen = (): boolean | undefined => {
+	try {
+		const stored = localStorage.getItem(INFO_OPEN_KEY)
+		return stored === 'true' ? true : stored === 'false' ? false : undefined
+	} catch {
+		return undefined
+	}
+}
+const writeInfoOpen = (open: boolean) => {
+	try {
+		localStorage.setItem(INFO_OPEN_KEY, String(open))
+	} catch {
+		// The preference just won't stick
+	}
+}
+
 // How the lightbox opens: the picture takes off from its tile (see
 // usePictureFlight) over a backdrop fading up beneath it, and a beat later
 // the chrome — title, actions, filmstrip — rises in from the edge it lives
@@ -69,6 +93,13 @@ const CHROME_DELAY = tw`motion-safe:[animation-delay:120ms]`
 const chromeEnter = {
 	top: tw`motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2 motion-safe:duration-250 motion-safe:fill-mode-both`,
 	bottom: tw`motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2 motion-safe:duration-250 motion-safe:fill-mode-both`,
+	// The inspector's arrival, when a session opens with it: chrome like the
+	// rest, rising from the edge it docks at. Transform and opacity only — its
+	// box is reserved from the first commit (the flight measures the stage
+	// against it), so the entrance may never move the layout. Backwards fill,
+	// not both: a forwards fill would keep the finished animation owning
+	// transform, and the hand-toggle's slide beneath it would never move.
+	right: tw`motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-right-2 motion-safe:duration-250 motion-safe:fill-mode-backwards`,
 }
 const chromeLeave = tw`motion-safe:animate-out motion-safe:fade-out motion-safe:duration-150 motion-safe:fill-mode-forwards`
 const backdropEnter = tw`motion-safe:animate-in motion-safe:fade-in motion-safe:duration-300 motion-safe:fill-mode-both`
@@ -116,16 +147,46 @@ export function ItemViewer() {
 	// … and is only built once it has been asked for in this session
 	const [infoUsed, setInfoUsed] = useState(false)
 	if (showInfo && !infoUsed) setInfoUsed(true)
-	// The inspector stays open while stepping through items; a new session starts without it
-	useEffect(() => {
-		setShowInfo(false)
-		setInfoUsed(false)
-	}, [dialogProps.open])
+	// Opening or closing the inspector by hand is the preference the next
+	// session opens under (see readInfoOpen)
+	const setInfoByHand = useCallback(
+		(open: boolean) => {
+			if (!isMobile) writeInfoOpen(open)
+			setShowInfo(open)
+		},
+		[isMobile],
+	)
 
 	// What the picture is: the list's item the moment the lightbox opens (its
 	// thumbnail is the tile's, already decoded), the fetched detail otherwise
 	const shown = items[index] ?? item
 	const isVideo = shown?.kind === 'video'
+	// The inspector stays open while stepping through items; whether a session
+	// starts with it is decided once per open, and in render so the first
+	// commit already holds the panel — the flight must measure a stage of its
+	// final width. The remembered preference answers by itself; unset, the
+	// default depends on what is being looked at, so a cold deep link decides
+	// only once the item is known (and the panel slides in after the fact).
+	const [infoDecided, setInfoDecided] = useState(false)
+	// … and whether this session arrived with it: the arrival plays the
+	// chrome's entrance (see chromeEnter.right), which belongs to the
+	// lightbox's own opening — a later hand-open slides instead
+	const [openedWithInfo, setOpenedWithInfo] = useState(false)
+	if (!dialogProps.open) {
+		if (infoDecided) setInfoDecided(false)
+		if (openedWithInfo) setOpenedWithInfo(false)
+		if (showInfo) setShowInfo(false)
+		if (infoUsed) setInfoUsed(false)
+	} else if (!infoDecided) {
+		const stored = readInfoOpen()
+		if (stored !== undefined || shown) {
+			setInfoDecided(true)
+			if (!isMobile && (stored ?? shown!.kind !== 'video')) {
+				setShowInfo(true)
+				setOpenedWithInfo(true)
+			}
+		}
+	}
 	const {grid} = usePhotosView()
 	// Every URL is derived from the id (CONTRACT.md). The stage rests on the
 	// 1280 rendition — the true original is only ever downloaded, and videos
@@ -182,11 +243,28 @@ export function ItemViewer() {
 	const aspect = measured && (measured.url === measureUrl || flight.arrived) ? measured.aspect : undefined
 	const [closing, setClosing] = useState(false)
 	const closingRef = useRef(false)
+	// The inspector dock's box, pinned for the length of the close. The flight
+	// home is measured once against the stage as it stands when the close
+	// begins, so the stage must not move under it — but hiding the panel
+	// collapses the dock and re-centres the stage mid-flight, and the picture
+	// lands half the panel's width from its tile. Pinned, the panel slides out
+	// within a frozen box (a transform, no layout) and the stage reclaims the
+	// space only when the lightbox unmounts. Measured rather than assumed
+	// open-width, so a close that catches the dock mid-slide freezes it where
+	// the flight saw it.
+	const asideRef = useRef<HTMLElement | null>(null)
+	const [closingAside, setClosingAside] = useState<{width: number; marginLeft: number} | null>(null)
 	// `from` is a drag-to-dismiss's final transform, for the flight to carry
 	// on from the finger (see useStageGestures)
 	const close = async (from?: string) => {
 		if (closingRef.current) return
 		closingRef.current = true
+		const aside = asideRef.current
+		if (aside)
+			setClosingAside({
+				width: aside.getBoundingClientRect().width,
+				marginLeft: parseFloat(getComputedStyle(aside).marginLeft) || 0,
+			})
 		setClosing(true)
 		setShowInfo(false)
 		// Stepping may have walked far from the tile the lightbox opened on:
@@ -196,6 +274,7 @@ export function ItemViewer() {
 		await Promise.all([flight.back(from), new Promise((resolve) => setTimeout(resolve, reduceMotion ? 0 : LEAVE_MS))])
 		dialogProps.onOpenChange(false)
 		setClosing(false)
+		setClosingAside(null)
 		closingRef.current = false
 	}
 
@@ -261,6 +340,8 @@ export function ItemViewer() {
 		currentId: id,
 		prevId,
 		nextId,
+		deleted: inDeleted,
+		infoShowing: showInfo,
 	})
 
 	// The id that has been looked at for a beat (REST_MS): the stage requests
@@ -279,11 +360,11 @@ export function ItemViewer() {
 			if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
 			if (e.key === 'ArrowLeft') goTo(prevId)
 			else if (e.key === 'ArrowRight') goTo(nextId)
-			else if (e.key === 'i') setShowInfo((v) => !v)
+			else if (e.key === 'i') setInfoByHand(!showInfo)
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
-	}, [dialogProps.open, prevId, nextId, goTo])
+	}, [dialogProps.open, prevId, nextId, goTo, showInfo, setInfoByHand])
 
 	// The item leaves this list: move on to a neighbour, or close
 	const mutationFailed = () => toast.error(t('photos-selection.failed'), {area: 'photos'})
@@ -419,7 +500,7 @@ export function ItemViewer() {
 				icon={Info}
 				label={t('photos-item.info')}
 				active={showInfo}
-				onClick={() => setShowInfo((v) => !v)}
+				onClick={() => setInfoByHand(!showInfo)}
 			/>
 			<LightboxButton icon={X} label={t('close')} onClick={() => void close()} />
 		</div>
@@ -577,24 +658,35 @@ export function ItemViewer() {
 							{/* Desktop: the inspector docks at the window's edge — the dock takes the
 							    stage's margin as its own padding, so the panel slides in from the
 							    edge of the screen; closed, it is exactly that margin, so the stage
-							    stays centred */}
+							    stays centred. While the lightbox is closing the dock's box is
+							    pinned (see closingAside) so the stage holds still under the
+							    picture's flight home; the panel still slides out within it. */}
 							{!isMobile && (
 								<aside
+									ref={asideRef}
 									inert={!showInfo}
 									className={cn(
-										'-mr-6 shrink-0 overflow-hidden transition-[width,margin-left] duration-300 ease-out motion-reduce:transition-none',
-										showInfo ? 'ml-4' : 'ml-0',
+										'-mr-6 shrink-0 overflow-hidden',
+										closingAside
+											? 'transition-none'
+											: 'transition-[width,margin-left] duration-300 ease-out motion-reduce:transition-none',
+										!closingAside && (showInfo ? 'ml-4' : 'ml-0'),
 									)}
-									style={{width: showInfo ? INSPECTOR_WIDTH + STAGE_MARGIN : STAGE_MARGIN}}
+									style={closingAside ?? {width: showInfo ? INSPECTOR_WIDTH + STAGE_MARGIN : STAGE_MARGIN}}
 								>
 									<div
 										className={cn(
 											'h-full pr-6 transition-transform duration-300 ease-out motion-reduce:transition-none',
 											showInfo ? 'translate-x-0' : 'translate-x-full',
+											// The arrival plays once, with the chrome, in sessions
+											// that open with the panel; a hand-toggle slides on the
+											// transition above, and the close slides the panel out
+											// the same way (within the pinned dock, see closingAside)
+											!closing && openedWithInfo && cn(chromeEnter.right, CHROME_DELAY),
 										)}
 										style={{width: INSPECTOR_WIDTH + STAGE_MARGIN}}
 									>
-										{item && infoUsed && <InfoPanel item={item} onClose={() => setShowInfo(false)} />}
+										{item && infoUsed && <InfoPanel item={item} onClose={() => setInfoByHand(false)} />}
 									</div>
 								</aside>
 							)}
@@ -604,9 +696,12 @@ export function ItemViewer() {
 						{FILMSTRIP_MODE === 'off' ? (
 							<footer className='h-4' />
 						) : (
-							<footer className={cn('-mt-6 pt-2 pb-2', chrome('bottom'))}>
+							<footer className={cn('pointer-events-none -mt-6 pt-2 pb-2', chrome('bottom'))}>
 								{/* The strip box keeps 32px of headroom for the hover growth (and its ring);
-								    pulling it up by 24px keeps the visible thumb-to-stage gap at 16px, same as the edge */}
+								    pulling it up by 24px keeps the visible thumb-to-stage gap at 16px, same as the edge.
+								    That overlap sits over the stage — exactly where a height-constrained video draws
+								    its seek bar — so the footer must not catch hits; the strip re-enables them over
+								    its visible band (see Filmstrip) */}
 								{id && items.length > 0 ? (
 									<Filmstrip
 										items={items}
@@ -635,7 +730,7 @@ export function ItemViewer() {
 									showInfo ? 'translate-y-0' : 'translate-y-full',
 								)}
 							>
-								{item && infoUsed && <InfoPanel item={item} onClose={() => setShowInfo(false)} sheet />}
+								{item && infoUsed && <InfoPanel item={item} onClose={() => setInfoByHand(false)} sheet />}
 							</div>
 						)}
 					</div>

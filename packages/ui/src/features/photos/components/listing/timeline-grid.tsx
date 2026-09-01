@@ -1,5 +1,15 @@
 import {useReducedMotion} from 'motion/react'
-import {memo, useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState} from 'react'
+import {
+	memo,
+	useCallback,
+	useEffect,
+	useLayoutEffect,
+	useMemo,
+	useReducer,
+	useRef,
+	useState,
+	type ReactNode,
+} from 'react'
 import {useTranslation} from 'react-i18next'
 import {TbLoader} from 'react-icons/tb'
 
@@ -19,8 +29,16 @@ import {LIVE_MIN_TILE, useLiveHover} from '@/features/photos/components/listing/
 import {useMarquee} from '@/features/photos/components/listing/marquee'
 import {attachPinch} from '@/features/photos/components/listing/pinch'
 import {ReflowMotion} from '@/features/photos/components/listing/reflow-motion'
+import {isWholeLibrary} from '@/features/photos/components/listing/route-filter'
 import type {Frame} from '@/features/photos/components/listing/surface'
 import {TileLayer} from '@/features/photos/components/listing/tile-layer'
+import {monthsFromItems, railDomain} from '@/features/photos/components/listing/time-rail/rail-scale'
+import {
+	RAIL_HIDE_VIEWPORTS,
+	RAIL_SHOW_VIEWPORTS,
+	TimeRail,
+} from '@/features/photos/components/listing/time-rail/time-rail'
+import {useSeek} from '@/features/photos/components/listing/time-rail/use-seek'
 import {
 	anchoredScrollTop,
 	blend,
@@ -28,6 +46,7 @@ import {
 	columnValue,
 	defaultFocalY,
 	findAnchor,
+	FOOTER_HEIGHT,
 	gridLayout,
 	groupItems,
 	HEADER_HEIGHT,
@@ -51,7 +70,8 @@ import {
 import {ZoomGesture} from '@/features/photos/components/listing/zoom-gesture'
 import {usePhotosSelection} from '@/features/photos/components/selection-context'
 import {usePhotosView} from '@/features/photos/components/view-context'
-import type {Item, ThumbSize} from '@/features/photos/hooks/use-items'
+import type {Item, ItemFilter, ThumbSize} from '@/features/photos/hooks/use-items'
+import {useLibrarySummary} from '@/features/photos/hooks/use-library'
 import {useContainerSize} from '@/hooks/use-container-size'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useDockClearance} from '@/modules/desktop/dock'
@@ -147,22 +167,34 @@ type Slot = {item: Item; x: number; y: number; size: number}
 // (useMarquee); ⌘A takes every loaded item and Escape leaves.
 export function TimelineGrid({
 	items,
+	total,
+	filter,
 	hasMore,
 	loadMore,
 	frame,
 	inDeleted,
+	footer,
 }: {
 	items: Item[]
+	// The filter's full match count, beyond the pages loaded so far — what
+	// decides whether the listing is long enough to earn the time rail
+	total?: number
+	// The filter this list was asked with: the rail's seek pages the same
+	// query, and the whole-library filter is the one the calendar describes
+	filter: ItemFilter
 	hasMore: boolean
 	loadMore: () => void
 	frame: Frame
 	inDeleted: boolean
+	// A quiet status line after the last row, once every page is loaded —
+	// the layout reserves its band (see FOOTER_HEIGHT)
+	footer?: ReactNode
 }) {
 	const {inset, handoff} = frame
 	const {t, i18n} = useTranslation()
 	const isMobile = useIsMobile()
 	const reduceMotion = useReducedMotion() ?? false
-	const {zoom, tileSize, setTileSize, setGrid, setSection} = usePhotosView()
+	const {zoom, tileSize, setTileSize, setGrid, setSection, pageSize} = usePhotosView()
 	const selection = usePhotosSelection()
 	const scrollerRef = useRef<HTMLDivElement>(null)
 	const contentRef = useRef<HTMLDivElement>(null)
@@ -213,9 +245,10 @@ export function TimelineGrid({
 	const grouping: Zoom = gpu ? 'years' : zoom
 	// Grouping depends on the list and not on the column count, so it survives
 	// every zoom stop; the layout below is a running sum over its sections
+	const hasFooter = footer !== undefined
 	const timeline = useMemo(
-		() => groupItems({items, zoom: grouping, hasMore, language: i18n.language}),
-		[items, grouping, hasMore, i18n.language],
+		() => groupItems({items, zoom: grouping, hasMore, language: i18n.language, footer: hasFooter}),
+		[items, grouping, hasMore, i18n.language, hasFooter],
 	)
 	// The first row is the current section's (empty) header: it sits in the
 	// faded band under the bar, so tiles start at the inset itself
@@ -223,6 +256,51 @@ export function TimelineGrid({
 		() => layoutAt(timeline, columns, tile, gap, Math.max(0, inset - HEADER_HEIGHT)),
 		[timeline, columns, tile, gap, inset],
 	)
+
+	// ── The time rail ──
+	//
+	// Only listings long enough that scrolling is work get one (measured in
+	// viewports, below), and it replaces the scrollbar on that edge rather
+	// than fighting it for the pixels. Its domain is the library calendar when
+	// this listing is the whole library — exact to the month before a single
+	// page beyond the first has loaded — and otherwise the loaded months plus
+	// a tail estimated from what remains, refining as pages land.
+	const {data: librarySummary, isError: summaryFailed} = useLibrarySummary()
+	const wholeLibrary = useMemo(() => isWholeLibrary(filter), [filter])
+	const seek = useSeek({filter, pageSize})
+	const loadedMonths = useMemo(() => monthsFromItems(items), [items])
+	const railBuckets = useMemo(
+		() =>
+			railDomain({
+				loaded: loadedMonths,
+				calendar: wholeLibrary ? librarySummary?.months : undefined,
+				shape: librarySummary?.months,
+				total,
+			}),
+		[loadedMonths, wholeLibrary, librarySummary, total],
+	)
+	// How long the whole timeline is, in viewports of scrolling: the loaded
+	// layout's height extrapolated over the filter's total — rows are uniform,
+	// so height scales with the item count. This is what the rail's threshold
+	// actually means (see RAIL_SHOW_VIEWPORTS), and it makes the gate follow
+	// the zoom and the window on its own.
+	const railViewports = useMemo(() => {
+		if (height === 0 || items.length === 0) return 0
+		return (layout.total * ((total ?? items.length) / items.length)) / height
+	}, [layout, total, items.length, height])
+	const [showRail, setShowRail] = useState(false)
+	useEffect(() => {
+		// No span floor: a short domain changes what the rail labels (months,
+		// days in the pill), never whether a long scroll gets an index. The
+		// rail does hold off until the summary has answered: its first frame
+		// should carry the real domain, not a density guess that reformats a
+		// beat later — a slightly later fade-in over a visible snap.
+		const domainReady = librarySummary !== undefined || summaryFailed
+		const eligible = !isMobile && domainReady && railBuckets.length > 0
+		setShowRail((on) =>
+			on ? eligible && railViewports > RAIL_HIDE_VIEWPORTS : eligible && railViewports >= RAIL_SHOW_VIEWPORTS,
+		)
+	}, [isMobile, librarySummary, summaryFailed, railBuckets, railViewports])
 
 	// The committed view. A new layout is adopted here, before paint, together
 	// with the scroll position that keeps the focal tile still and the row
@@ -414,12 +492,14 @@ export function TimelineGrid({
 	// Fetch ahead of the render window. `loadMore` is idempotent while a page is
 	// in flight, so re-running on every window change is harmless. This also
 	// tops up a first page too short to scroll, which would never ask for more.
+	// While the rail's seek is paging it stands down: both would chain a fetch
+	// from the same tail cursor, and the same page would splice in twice.
 	useEffect(() => {
-		if (!view || !hasMore) return
+		if (!view || !hasMore || seek.busy) return
 		const {start, end} = view.items
 		const bottom = end < start ? 0 : rectOf(view.layout, end).y + view.layout.tile
 		if (bottom >= view.layout.total - LOAD_AHEAD_VIEWPORTS * view.height) loadMore()
-	}, [view, hasMore, loadMore])
+	}, [view, hasMore, loadMore, seek.busy])
 
 	// ── Selection ──
 	const selectedIds = selection.ids
@@ -860,99 +940,133 @@ export function TimelineGrid({
 	const formattedCount = formatNumberI18n({n: items.length, showDecimals: false, locale: i18n.language})
 	const loaderTop = view?.layout.loaderTop
 	const showLoader = view !== null && loaderTop !== undefined && view.items.end >= view.layout.items.length - 1
+	const footerTop = view?.layout.footerTop
+	const showFooter =
+		footer !== undefined && view !== null && footerTop !== undefined && view.items.end >= view.layout.items.length - 1
 
 	return (
 		// The scroller is the grid's box: rows are laid out for its client size
 		// (a classic scrollbar excluded — FadedScroller reserves its gutter where one takes space, so it
-		// can't come and go with the content and resize the grid)
-		<FadedScroller
-			ref={scrollerRef}
-			className='touch-pan-y'
-			frame={frame}
-			onScroll={onScroll}
-			{...marquee.handlers}
-			// While a cover is being chosen a drag has nothing to select — the
-			// mode takes single clicks only — so no marquee session starts
-			onPointerDown={(event) => {
-				if (!selection.coveringFor) marquee.handlers.onPointerDown(event)
-			}}
-			onPointerMove={(event) => {
-				marquee.handlers.onPointerMove(event)
-				trackHover(event)
-			}}
-			onPointerLeave={leaveHover}
-		>
-			{view && (
-				<div
-					ref={contentRef}
-					className='relative select-none'
-					{...liveHover.handlers}
-					// Corner radius follows the tile size, like the gap (see tileRadius)
-					style={{
-						height: view.layout.total + endSpacer,
-						['--umbrel-photos-tile-radius' as string]: `${tileRadius(view.layout.tile)}px`,
-					}}
-				>
-					{headers.map((header) => (
-						<GroupHeader key={header.key} header={header} registry={headerEls} />
-					))}
-					<TileLayer
-						ref={layerRef}
-						items={itemById}
-						inDeleted={inDeleted}
-						selecting={selection.selecting}
-						selected={selectedIds}
-						itemAtPoint={itemAtPoint}
-						onSelect={select}
-					>
-						{view.gpu && plan ? (
-							// One image, and it says so: a screen reader announcing
-							// ten thousand buttons would be worse than useless, and
-							// the zoom control — which is keyboard operable and
-							// announces "N per row" — is always one control away
-							<div role='img' aria-label={t('photos-listing.zoomed-out-label', {count: items.length, formattedCount})}>
-								<TileCanvas
-									ref={canvasRef}
-									plan={plan}
-									cell={cellForBand(view.layout.tile, dpr, plan, bandFor({width, height}))}
-									onLost={onContextLost}
-								/>
-							</div>
-						) : (
-							slots.map(({item, x, y, size}) => (
-								<TileSlot
-									key={item.id}
-									item={item}
-									x={x}
-									y={y}
-									size={size}
-									thumbSize={thumbSize}
-									warmUntil={view.warmUntil}
-									live={liveHover.clip?.id === item.id ? (liveHover.clip.active ? 'playing' : 'ending') : undefined}
-									registry={tileEls}
-									selected={selectedIds.has(item.id)}
-									selectable={selection.selecting}
-								/>
-							))
-						)}
-					</TileLayer>
-					{/* The marquee, in the grid's coordinates so it scrolls with it; useMarquee shows and sizes it */}
+		// can't come and go with the content and resize the grid). The time rail
+		// sits over it as a sibling, so its pointer never starts a marquee, and
+		// while it shows it owns the right edge alone: the scrollbar is hidden
+		// (scrollbar-width inline; the WebKit rule rides the data attribute).
+		<div className='relative h-full w-full'>
+			<FadedScroller
+				ref={scrollerRef}
+				className='touch-pan-y'
+				frame={frame}
+				style={showRail ? {scrollbarWidth: 'none'} : undefined}
+				data-umbrel-time-rail={showRail ? '' : undefined}
+				onScroll={onScroll}
+				{...marquee.handlers}
+				// While a cover is being chosen a drag has nothing to select — the
+				// mode takes single clicks only — so no marquee session starts
+				onPointerDown={(event) => {
+					if (!selection.coveringFor) marquee.handlers.onPointerDown(event)
+				}}
+				onPointerMove={(event) => {
+					marquee.handlers.onPointerMove(event)
+					trackHover(event)
+				}}
+				onPointerLeave={leaveHover}
+			>
+				{view && (
 					<div
-						ref={marquee.boxRef}
-						aria-hidden
-						className='pointer-events-none absolute top-0 left-0 z-10 hidden rounded-sm border border-white/40 bg-white/10'
-					/>
-					{showLoader && (
-						<div
-							className='absolute inset-x-0 flex items-center justify-center'
-							style={{top: loaderTop, height: LOADER_HEIGHT}}
+						ref={contentRef}
+						className='relative select-none'
+						{...liveHover.handlers}
+						// Corner radius follows the tile size, like the gap (see tileRadius)
+						style={{
+							height: view.layout.total + endSpacer,
+							['--umbrel-photos-tile-radius' as string]: `${tileRadius(view.layout.tile)}px`,
+						}}
+					>
+						{headers.map((header) => (
+							<GroupHeader key={header.key} header={header} registry={headerEls} />
+						))}
+						<TileLayer
+							ref={layerRef}
+							items={itemById}
+							inDeleted={inDeleted}
+							selecting={selection.selecting}
+							selected={selectedIds}
+							itemAtPoint={itemAtPoint}
+							onSelect={select}
 						>
-							<TbLoader className='size-4 animate-spin opacity-50 shadow-xs' />
-						</div>
-					)}
-				</div>
+							{view.gpu && plan ? (
+								// One image, and it says so: a screen reader announcing
+								// ten thousand buttons would be worse than useless, and
+								// the zoom control — which is keyboard operable and
+								// announces "N per row" — is always one control away
+								<div
+									role='img'
+									aria-label={t('photos-listing.zoomed-out-label', {count: items.length, formattedCount})}
+								>
+									<TileCanvas
+										ref={canvasRef}
+										plan={plan}
+										cell={cellForBand(view.layout.tile, dpr, plan, bandFor({width, height}))}
+										onLost={onContextLost}
+									/>
+								</div>
+							) : (
+								slots.map(({item, x, y, size}) => (
+									<TileSlot
+										key={item.id}
+										item={item}
+										x={x}
+										y={y}
+										size={size}
+										thumbSize={thumbSize}
+										warmUntil={view.warmUntil}
+										live={liveHover.clip?.id === item.id ? (liveHover.clip.active ? 'playing' : 'ending') : undefined}
+										registry={tileEls}
+										selected={selectedIds.has(item.id)}
+										selectable={selection.selecting}
+									/>
+								))
+							)}
+						</TileLayer>
+						{/* The marquee, in the grid's coordinates so it scrolls with it; useMarquee shows and sizes it */}
+						<div
+							ref={marquee.boxRef}
+							aria-hidden
+							className='pointer-events-none absolute top-0 left-0 z-10 hidden rounded-sm border border-white/40 bg-white/10'
+						/>
+						{showLoader && (
+							<div
+								className='absolute inset-x-0 flex items-center justify-center'
+								style={{top: loaderTop, height: LOADER_HEIGHT}}
+							>
+								<TbLoader className='size-4 animate-spin opacity-50 shadow-xs' />
+							</div>
+						)}
+						{showFooter && (
+							<div
+								className='absolute inset-x-0 flex items-center justify-center'
+								style={{top: footerTop, height: FOOTER_HEIGHT}}
+							>
+								{footer}
+							</div>
+						)}
+					</div>
+				)}
+			</FadedScroller>
+			{showRail && (
+				<TimeRail
+					buckets={railBuckets}
+					scrollerRef={scrollerRef}
+					contentRef={contentRef}
+					viewRef={viewRef}
+					frame={frame}
+					height={height}
+					endSpacer={endSpacer}
+					hasMore={hasMore}
+					seek={seek}
+				/>
 			)}
-		</FadedScroller>
+		</div>
 	)
 }
 

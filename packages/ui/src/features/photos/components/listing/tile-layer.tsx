@@ -94,7 +94,7 @@ export function TileLayer({
 	const commitCover = (item: Item) => {
 		const albumId = selection.coveringFor
 		if (!albumId) return
-		selection.done()
+		selection.coverChosen()
 		act(setCover({id: albumId, itemId: item.id}))
 	}
 	const purge = async () => {
