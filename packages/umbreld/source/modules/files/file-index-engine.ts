@@ -346,20 +346,13 @@ export default class FileIndexEngine {
 					if (!this.#photosAvailable) return
 					const accountIds = await this.#mutate((database) => {
 						this.#photos.attachContentHash(database, entryId, hash)
-						const entry = database.prepare('SELECT content_id FROM entries WHERE id = ?').get(entryId) as
-							| {content_id: number | null}
-							| undefined
-						if (entry?.content_id) this.#photos.refreshLivePairs(database, entry.content_id)
 						return this.#photos.accountIdsForEntry(database, entryId)
 					})
 					this.#notifyPhotosChanged(accountIds)
 				},
 				onMediaMetadataReady: async (contentId) => {
 					if (!this.#photosAvailable) return
-					const accountIds = await this.#mutate((database) => {
-						this.#photos.refreshLivePairs(database, contentId)
-						return this.#photos.accountIdsForContent(database, contentId)
-					})
+					const accountIds = await this.#mutate((database) => this.#photos.accountIdsForContent(database, contentId))
 					this.#notifyPhotosChanged(accountIds)
 				},
 				onThumbnailReady: async (contentId) => {
@@ -942,9 +935,6 @@ export default class FileIndexEngine {
 							)`,
 						root.id,
 					)
-					if (this.#photosAvailable && isPhotosRootKind(root.kind)) {
-						this.#photos.refreshLivePairsForAccount(database, root.ownerId)
-					}
 					run(database, 'DELETE FROM reconciliation_seen')
 					run(
 						database,
@@ -1351,16 +1341,10 @@ export default class FileIndexEngine {
 		const photosChangedAccountIds = new Set<string>()
 		const apply = database.transaction((mutation: PathMutation) => {
 			if (mutation.type === 'delete') {
-				const root = this.#photosAvailable
-					? (database.prepare('SELECT owner_id, kind FROM index_roots WHERE id = ?').get(mutation.rootId) as
-							| {owner_id: string; kind: string}
-							| undefined)
-					: undefined
 				if (this.#photosAvailable) this.#photos.detachPath(database, mutation.rootId, mutation.relativePath)
 				if (mutation.relativePath === '') {
 					run(database, 'DELETE FROM entries WHERE root_id = ?', mutation.rootId)
 					run(database, 'DELETE FROM reconciliation_seen WHERE root_id = ?', mutation.rootId)
-					if (root && isPhotosRootKind(root.kind)) this.#photos.refreshLivePairsForAccount(database, root.owner_id)
 					return
 				}
 				// SQLite's default binary ordering places every `path/...`
@@ -1396,7 +1380,6 @@ export default class FileIndexEngine {
 					prefix,
 					prefixEnd,
 				)
-				if (root && isPhotosRootKind(root.kind)) this.#photos.refreshLivePairsForAccount(database, root.owner_id)
 				return
 			}
 

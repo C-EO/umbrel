@@ -27,6 +27,7 @@ test('creates and idempotently migrates the durable Photos schema', () => {
 		{module: PHOTOS_MIGRATION_MODULE, version: 1},
 		{module: PHOTOS_MIGRATION_MODULE, version: 2},
 		{module: PHOTOS_MIGRATION_MODULE, version: 3},
+		{module: PHOTOS_MIGRATION_MODULE, version: 4},
 	])
 	expect(
 		database
@@ -38,8 +39,6 @@ test('creates and idempotently migrates the durable Photos schema', () => {
 		{name: 'photos_albums_by_account'},
 		{name: 'photos_content_state'},
 		{name: 'photos_content_state_by_account'},
-		{name: 'photos_live_pairs'},
-		{name: 'photos_live_pairs_by_motion'},
 		{name: 'photos_source_resources'},
 		{name: 'photos_source_resources_by_content'},
 		{name: 'photos_sources'},
@@ -143,10 +142,70 @@ test('migrates v1 state while discarding obsolete deletion markers', () => {
 	database.close()
 })
 
+test('migrates v3 by discarding derived Live Photo pairs without touching backup identity', () => {
+	const database = new BetterSqlite3(':memory:')
+	const hash = Buffer.alloc(32, 1)
+	database.exec(`
+		CREATE TABLE schema_migrations(
+			module TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			applied_at INTEGER NOT NULL,
+			PRIMARY KEY(module, version)
+		);
+		INSERT INTO schema_migrations VALUES ('photos', 1, 1), ('photos', 2, 2), ('photos', 3, 3);
+		CREATE TABLE photos_sources(
+			id TEXT PRIMARY KEY,
+			account_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			name TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
+		INSERT INTO photos_sources VALUES ('source', 'alice', 'iphone', 'Phone', 1);
+		CREATE TABLE photos_source_resources(
+			account_id TEXT NOT NULL,
+			source_id TEXT NOT NULL REFERENCES photos_sources(id) ON DELETE CASCADE,
+			resource_key TEXT NOT NULL,
+			content_hash BLOB NOT NULL,
+			PRIMARY KEY(account_id, source_id, resource_key)
+		) WITHOUT ROWID;
+		CREATE TABLE photos_live_pairs(
+			account_id TEXT NOT NULL,
+			still_hash BLOB NOT NULL,
+			motion_hash BLOB NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY(account_id, still_hash)
+		) WITHOUT ROWID;
+		CREATE INDEX photos_live_pairs_by_motion ON photos_live_pairs(account_id, motion_hash);
+	`)
+	database.prepare("INSERT INTO photos_source_resources VALUES ('alice', 'source', ?, ?)").run('a'.repeat(64), hash)
+	database.prepare("INSERT INTO photos_live_pairs VALUES ('alice', ?, ?, 3)").run(hash, Buffer.alloc(32, 2))
+
+	expect(migratePhotos(database)).toBe(PHOTOS_SCHEMA_VERSION)
+	expect(database.prepare("SELECT name FROM sqlite_schema WHERE name = 'photos_live_pairs'").get()).toBeUndefined()
+	expect(database.prepare("SELECT id, account_id, name FROM photos_sources WHERE id = 'source'").get()).toStrictEqual({
+		id: 'source',
+		account_id: 'alice',
+		name: 'Phone',
+	})
+	expect(
+		database.prepare('SELECT source_id, resource_key, content_hash FROM photos_source_resources').get(),
+	).toStrictEqual({source_id: 'source', resource_key: 'a'.repeat(64), content_hash: hash})
+	expect(
+		database.prepare("SELECT version FROM schema_migrations WHERE module = 'photos' ORDER BY version").all(),
+	).toStrictEqual([{version: 1}, {version: 2}, {version: 3}, {version: 4}])
+	expect(
+		database
+			.prepare('PRAGMA table_info(photos_source_resources)')
+			.all()
+			.map((column: any) => column.name),
+	).toStrictEqual(['account_id', 'source_id', 'resource_key', 'content_hash'])
+	database.close()
+})
+
 test('migrates an upstream v2 database by adding the durable backup resource identity relation', () => {
 	const database = new BetterSqlite3(':memory:')
 	migratePhotos(database)
-	database.prepare("DELETE FROM schema_migrations WHERE module = 'photos' AND version = 3").run()
+	database.prepare("DELETE FROM schema_migrations WHERE module = 'photos' AND version >= 3").run()
 	database.exec('DROP TABLE photos_source_resources')
 
 	expect(migratePhotos(database)).toBe(PHOTOS_SCHEMA_VERSION)
@@ -163,7 +222,7 @@ test('migrates the backup-source v2 lineage while preserving its durable resourc
 	const database = new BetterSqlite3(':memory:')
 	const hash = Buffer.alloc(32, 0xef)
 	migratePhotos(database)
-	database.prepare("DELETE FROM schema_migrations WHERE module = 'photos' AND version = 3").run()
+	database.prepare("DELETE FROM schema_migrations WHERE module = 'photos' AND version >= 3").run()
 	database.exec(`
 		ALTER TABLE photos_content_state ADD COLUMN deleted_at INTEGER;
 		CREATE TABLE photos_deletion_targets(
@@ -225,6 +284,7 @@ test('keeps Photos migration versions independent from other umbrel.db modules',
 		{module: PHOTOS_MIGRATION_MODULE, version: 1},
 		{module: PHOTOS_MIGRATION_MODULE, version: 2},
 		{module: PHOTOS_MIGRATION_MODULE, version: 3},
+		{module: PHOTOS_MIGRATION_MODULE, version: 4},
 	])
 	database.close()
 })

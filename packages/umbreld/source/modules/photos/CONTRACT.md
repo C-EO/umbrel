@@ -163,10 +163,12 @@ type Source = {
 
 ## SubKinds & live pairs
 
-Derived once at import, from the same metadata pass that reads dates and
-dimensions; one nullable column. When heuristics overlap the first match wins,
-in this order — a photo sphere is ~2:1 equirectangular, so the panorama
-heuristic would also match it, and the tag must win:
+Spherical, screenshot and panorama tags are derived once at import, from the
+same metadata pass that reads dates and dimensions; Live Photos are derived
+from the indexed still and motion metadata when the library is queried. When
+heuristics overlap the first match wins, in this order — a photo sphere is ~2:1
+equirectangular, so the panorama heuristic would also match it, and the tag must
+win:
 
 1. `spherical` — the spherical video box (v1 `Spherical`/`ProjectionType` XML
    or v2 `sv3d`/`proj`) on videos; XMP `GPano:ProjectionType` on photos.
@@ -178,13 +180,15 @@ heuristic would also match it, and the tag must win:
 **Live pairs.** An Apple live photo lands as two files sharing one identifier:
 `MakerNotes:ContentIdentifier` on the HEIC/JPEG, and
 `com.apple.quicktime.content.identifier` on the MOV (fallback pairing: same
-basename + folder + a short MOV). Pair them at import: the still gets
-`subKind: 'live'`; the companion MOV is marked as such and excluded from every
-listing, count and search — the pair reads as one photo everywhere. `delete`/
-`restore`/`deletePermanently` on the still cascade to the companion; favorites
+basename + folder + a short MOV). Enrichment stores only those file-level facts
+in the disposable index. Queries derive the pair on demand within the account
+and Home/Trash projection, prefer an exact identifier match, expose the still as
+`subKind: 'live'`, and exclude the companion MOV from every listing, count and
+search — no separate pair state is persisted or refreshed. `delete`/`restore`/
+`deletePermanently` derive the same pair and cascade to the companion; favorites
 and album membership are still-only. Thumbnails and tint come from the still
-like any photo; the motion clip is served at `GET /api/photos/live/:id`. All
-playback UX is the frontend's.
+like any photo; the motion clip is looked up from the same indexed metadata and
+served at `GET /api/photos/live/:id`. All playback UX is the frontend's.
 
 ## tRPC procedures — `photos.*`
 

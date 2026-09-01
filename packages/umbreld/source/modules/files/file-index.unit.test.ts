@@ -1648,26 +1648,25 @@ test('does not deduplicate uploads against missing or invalidated durable Photos
 })
 
 test('pairs live photos, hides their motion companions, and resolves both files for mutations', async () => {
-	const {index, homeDirectory} = await fixture(undefined, {
-		enrichmentRuntime: {
-			hashFile: async (systemPath) => Buffer.alloc(32, nodePath.basename(systemPath).endsWith('.mov') ? 2 : 1),
-			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
-			extractMediaMetadata: async (systemPath) => {
-				const video = systemPath.endsWith('.mov')
-				return {
-					kind: video ? ('video' as const) : ('photo' as const),
-					takenAt: 1_000,
-					createdAt: 500,
-					width: 100,
-					height: 50,
-					liveIdentifier: 'apple-live-pair',
-					...(video ? {durationMs: 3_000} : {}),
-				}
-			},
+	const runtime = {
+		hashFile: async (systemPath: string) => Buffer.alloc(32, nodePath.basename(systemPath).endsWith('.mov') ? 2 : 1),
+		generateThumbnail: async (_source: string, destination: string) => fse.outputFile(destination, 'thumbnail'),
+		extractMediaMetadata: async (systemPath: string) => {
+			const video = systemPath.endsWith('.mov')
+			return {
+				kind: video ? ('video' as const) : ('photo' as const),
+				takenAt: 1_000,
+				createdAt: 500,
+				width: 100,
+				height: 50,
+				liveIdentifier: 'apple-live-pair',
+				...(video ? {durationMs: 3_000} : {}),
+			}
 		},
-	})
-	const photo = nodePath.join(homeDirectory, 'IMG_0001.heic')
-	const motion = nodePath.join(homeDirectory, 'IMG_0001.mov')
+	}
+	const {index, root, homeDirectory, dataDirectory} = await fixture(undefined, {enrichmentRuntime: runtime})
+	const photo = nodePath.join(homeDirectory, 'STILL.heic')
+	const motion = nodePath.join(homeDirectory, 'MOTION.mov')
 	await Promise.all([writeFile(photo, 'still'), writeFile(motion, 'motion')])
 	await index.reconcileRoot('/Home', 'live-photo')
 	await index.initializePhotos('owner')
@@ -1682,7 +1681,7 @@ test('pairs live photos, hides their motion companions, and resolves both files 
 	expect(page).toMatchObject({total: 1, items: [{kind: 'photo', subKind: 'live', tint: 0x112233}]})
 	await expect(index.photosResolveLiveCompanion('owner', page.items[0]!.id)).resolves.toStrictEqual({
 		id: expect.any(String),
-		path: '/Home/IMG_0001.mov',
+		path: '/Home/MOTION.mov',
 	})
 	await fse.remove(motion)
 	await index.removePath(motion)
@@ -1696,6 +1695,31 @@ test('pairs live photos, hides their motion companions, and resolves both files 
 		{retries: 200, minTimeout: 10, maxTimeout: 20},
 	)
 	await expect(index.photosResolveItemFiles('owner', [page.items[0]!.id], 'home')).resolves.toHaveLength(2)
+
+	// Pairing is reconstructed entirely from the disposable file index. No pair
+	// mapping in umbrel.db is needed to restore logical listing or playback.
+	await index.stop()
+	await fse.remove(nodePath.join(dataDirectory, 'file-index'))
+	const rebuilt = new FileIndex({dataDirectory, logger, isHidden: () => false, enrichmentRuntime: runtime})
+	indexes.push(rebuilt)
+	await rebuilt.start()
+	await rebuilt.setRoots([root])
+	await rebuilt.reconcileRoot('/Home', 'live-photo-rebuilt')
+	await rebuilt.initializePhotos('owner')
+	rebuilt.startBackgroundReconciliation()
+	await pRetry(async () => expect(await rebuilt.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await expect(rebuilt.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({
+		total: 1,
+		items: [{id: page.items[0]!.id, kind: 'photo', subKind: 'live'}],
+	})
+	await expect(rebuilt.photosResolveLiveCompanion('owner', page.items[0]!.id)).resolves.toStrictEqual({
+		id: expect.any(String),
+		path: '/Home/MOTION.mov',
+	})
 })
 
 test('pairs a short same-folder motion clip when Apple identifiers are absent', async () => {

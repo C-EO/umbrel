@@ -1,6 +1,6 @@
 import type BetterSqlite3 from 'better-sqlite3'
 
-export const PHOTOS_SCHEMA_VERSION = 3
+export const PHOTOS_SCHEMA_VERSION = 4
 export const PHOTOS_MIGRATION_MODULE = 'photos'
 
 export class UnsupportedPhotosSchemaError extends Error {}
@@ -72,15 +72,6 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 				added_at INTEGER NOT NULL,
 				PRIMARY KEY(album_id, content_hash)
 			) WITHOUT ROWID;
-
-			CREATE TABLE photos_live_pairs (
-				account_id TEXT NOT NULL,
-				still_hash BLOB NOT NULL CHECK (length(still_hash) = 32),
-				motion_hash BLOB NOT NULL CHECK (length(motion_hash) = 32),
-				updated_at INTEGER NOT NULL,
-				PRIMARY KEY(account_id, still_hash)
-			) WITHOUT ROWID;
-			CREATE INDEX photos_live_pairs_by_motion ON photos_live_pairs(account_id, motion_hash);
 			`)
 			database
 				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 1, ?)')
@@ -114,7 +105,7 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 					ON photos_content_state(account_id, is_favorite, content_hash);
 			`)
 		}
-		if (version < 3) {
+		if (version < 4) {
 			database.exec(`
 				CREATE TABLE IF NOT EXISTS photos_source_resources (
 					account_id TEXT NOT NULL,
@@ -135,9 +126,23 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 2, ?)')
 				.run(PHOTOS_MIGRATION_MODULE, Date.now())
 		}
-		database
-			.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 3, ?)')
-			.run(PHOTOS_MIGRATION_MODULE, Date.now())
+		if (version < 3) {
+			database
+				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 3, ?)')
+				.run(PHOTOS_MIGRATION_MODULE, Date.now())
+		}
+		if (version < 4) {
+			// Live Photo pairs are a projection of disposable file-index metadata.
+			// Removing the durable cache prevents stale pair rows from surviving an
+			// index rebuild; listing and file operations now derive pairs on demand.
+			database.exec(`
+				DROP INDEX IF EXISTS photos_live_pairs_by_motion;
+				DROP TABLE IF EXISTS photos_live_pairs;
+			`)
+			database
+				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 4, ?)')
+				.run(PHOTOS_MIGRATION_MODULE, Date.now())
+		}
 	})
 	migrate.immediate()
 	return PHOTOS_SCHEMA_VERSION

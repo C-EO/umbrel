@@ -13,7 +13,7 @@ import type {
 	PhotoScopeMode,
 	PhotoSource,
 } from './types.js'
-import {supportsPhotos} from './types.js'
+import {PHOTO_EXTENSIONS, supportsPhotos, VIDEO_EXTENSIONS} from './types.js'
 
 type Database = DatabaseTypes.Database
 
@@ -64,18 +64,8 @@ type ItemDetailRow = ItemRow & {
 type Query = {sql: string; parameters: unknown[]}
 type PhotoRootKind = 'home' | 'trash'
 
-type LivePairLocation = {
-	account_id: string
-	content_id: number
-	content_hash: Buffer
-	root_virtual_path: string
-	relative_path: string
-	kind: 'photo' | 'video'
-	live_identifier: string | null
-	duration_ms: number | null
-}
-
 const HASH_PATTERN = /^[a-f0-9]{64}$/
+const LIVE_FALLBACK_STEM_SQL = filenameStemSql('entries.name', [...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS])
 
 const PHOTO_LIBRARY_CTE = `
 	WITH indexed_locations AS (
@@ -86,13 +76,16 @@ const PHOTO_LIBRARY_CTE = `
 			entries.id AS entry_id, entries.content_id, entries.name, entries.search_name_folded,
 			entries.size, entries.modified_ms, entries.birthtime_ms, entries.relative_path,
 			index_roots.virtual_path AS root_virtual_path,
-			media_metadata.kind, media_metadata.sub_kind, media_metadata.taken_at,
+			media_metadata.kind, media_metadata.sub_kind, media_metadata.live_identifier, media_metadata.taken_at,
 			media_metadata.taken_at_offset_minutes, media_metadata.created_at,
 			media_metadata.width, media_metadata.height, media_metadata.duration_ms, media_metadata.tint,
 			media_metadata.camera_make, media_metadata.camera_model, media_metadata.lens,
 			media_metadata.focal_length, media_metadata.aperture, media_metadata.exposure,
 			media_metadata.iso, media_metadata.latitude, media_metadata.longitude,
-			media_metadata.altitude, media_metadata.user_comment, media_metadata.search_text
+			media_metadata.altitude, media_metadata.user_comment, media_metadata.search_text,
+			substr(entries.relative_path, 1, length(entries.relative_path) - length(entries.name))
+				AS live_fallback_parent,
+			${LIVE_FALLBACK_STEM_SQL} AS live_fallback_stem
 		FROM index_roots
 		JOIN entries ON entries.root_id = index_roots.id
 		JOIN contents ON contents.id = entries.content_id
@@ -135,9 +128,41 @@ const PHOTO_LIBRARY_CTE = `
 	canonical_locations AS (
 		SELECT * FROM ranked_locations WHERE location_rank = 1
 	),
+	live_pair_candidates AS (
+		SELECT still.account_id, still.content_hash AS still_hash,
+			motion.content_hash AS motion_hash, motion.root_virtual_path AS motion_root_virtual_path,
+			motion.relative_path AS motion_relative_path, 0 AS match_rank
+		FROM authorized_locations AS still
+		JOIN authorized_locations AS motion ON motion.account_id = still.account_id
+			AND motion.kind = 'video' AND motion.live_identifier = still.live_identifier
+		WHERE still.kind = 'photo' AND still.live_identifier IS NOT NULL
+
+		UNION ALL
+
+		SELECT still.account_id, still.content_hash AS still_hash,
+			motion.content_hash AS motion_hash, motion.root_virtual_path AS motion_root_virtual_path,
+			motion.relative_path AS motion_relative_path, 1 AS match_rank
+		FROM authorized_locations AS still
+		JOIN authorized_locations AS motion ON motion.account_id = still.account_id
+			AND motion.kind = 'video' AND motion.root_virtual_path = still.root_virtual_path
+			AND motion.live_fallback_parent = still.live_fallback_parent
+			AND motion.live_fallback_stem = still.live_fallback_stem
+		WHERE still.kind = 'photo' AND motion.duration_ms <= 10000
+	),
+	ranked_live_pairs AS (
+		SELECT *, ROW_NUMBER() OVER (
+			PARTITION BY account_id, still_hash
+			ORDER BY match_rank, motion_root_virtual_path, motion_relative_path, motion_hash
+		) AS pair_rank
+		FROM live_pair_candidates
+	),
+	derived_live_pairs AS (
+		SELECT account_id, still_hash, motion_hash
+		FROM ranked_live_pairs WHERE pair_rank = 1
+	),
 	active_live_pairs AS (
 		SELECT pair.account_id, pair.still_hash, pair.motion_hash, location_kind.root_kind
-		FROM umbrel.photos_live_pairs AS pair
+		FROM derived_live_pairs AS pair
 		CROSS JOIN (SELECT 'home' AS root_kind UNION ALL SELECT 'trash') AS location_kind
 		WHERE EXISTS (
 			SELECT 1 FROM authorized_locations AS still
@@ -194,15 +219,12 @@ export default class PhotosRepository {
 		if (entry.type !== 'file' || entry.hidden || !supportsPhotos(entry.name)) return true
 		const content = database
 			.prepare(
-				`SELECT contents.blake3, entries.content_id FROM entries
+				`SELECT contents.blake3 FROM entries
 				JOIN contents ON contents.id = entries.content_id
 				WHERE entries.root_id = ? AND entries.relative_path = ?`,
 			)
-			.get(entry.rootId, entry.relativePath) as {blake3: Buffer; content_id: number} | undefined
-		if (content) {
-			this.#ensureContentState(database, root.owner_id, content.blake3)
-			this.refreshLivePairs(database, content.content_id)
-		}
+			.get(entry.rootId, entry.relativePath) as {blake3: Buffer} | undefined
+		if (content) this.#ensureContentState(database, root.owner_id, content.blake3)
 		return true
 	}
 
@@ -241,7 +263,6 @@ export default class PhotosRepository {
 				)
 				.run(ownerId, sourceId, ownerId)
 			changed = result.changes > 0 || changed
-			changed = this.refreshLivePairsForAccount(database, ownerId) || changed
 		}
 		return changed
 	}
@@ -540,44 +561,6 @@ export default class PhotosRepository {
 		return {status: 'duplicate' as const, itemId: hashToId(hash)}
 	}
 
-	refreshLivePairs(database: Database, contentId: number) {
-		const accounts = this.accountIdsForContent(database, contentId)
-		let changed = false
-		for (const accountId of accounts)
-			changed = this.#refreshLivePairsTouchingContent(database, accountId, contentId) || changed
-		return changed
-	}
-
-	refreshLivePairsForAccount(database: Database, accountId: string) {
-		const previous = database
-			.prepare('SELECT still_hash, motion_hash FROM umbrel.photos_live_pairs WHERE account_id = ? ORDER BY still_hash')
-			.all(accountId) as Array<{still_hash: Buffer; motion_hash: Buffer}>
-		const stillGroups = new Map<string, LivePairLocation[]>()
-		for (const location of this.#liveLocations(database, accountId, 'photo')) {
-			const key = hashToId(location.content_hash)
-			stillGroups.set(key, [...(stillGroups.get(key) ?? []), location])
-		}
-		const videos = this.#liveLocations(database, accountId, 'video')
-		const replace = database.transaction(() => {
-			database.prepare('DELETE FROM umbrel.photos_live_pairs WHERE account_id = ?').run(accountId)
-			const insert = database.prepare(
-				`INSERT INTO umbrel.photos_live_pairs(account_id, still_hash, motion_hash, updated_at)
-				VALUES (?, ?, ?, ?)
-				ON CONFLICT(account_id, still_hash) DO UPDATE SET motion_hash = excluded.motion_hash,
-					updated_at = excluded.updated_at`,
-			)
-			for (const stills of stillGroups.values()) {
-				const candidate = bestLiveCandidate(stills, videos)
-				if (candidate) insert.run(accountId, stills[0]!.content_hash, candidate.content_hash, Date.now())
-			}
-		})
-		replace.immediate()
-		const current = database
-			.prepare('SELECT still_hash, motion_hash FROM umbrel.photos_live_pairs WHERE account_id = ? ORDER BY still_hash')
-			.all(accountId) as Array<{still_hash: Buffer; motion_hash: Buffer}>
-		return !samePairRows(previous, current)
-	}
-
 	moveItems(
 		_database: Database,
 		_source: {accountId: string; rootVirtualPath: string; relativePath: string},
@@ -824,15 +807,15 @@ export default class PhotosRepository {
 			.prepare(
 				`${PHOTO_LIBRARY_CTE} SELECT lower(hex(pair.motion_hash)) AS id,
 					motion.root_virtual_path, motion.relative_path
-				FROM umbrel.photos_live_pairs AS pair
+				FROM active_live_pairs AS pair
+				JOIN logical_items AS still ON still.content_hash = pair.still_hash
+					AND still.account_id = pair.account_id AND still.root_kind = pair.root_kind
 				JOIN authorized_locations AS motion ON motion.content_hash = pair.motion_hash
-				WHERE pair.account_id = ? AND pair.still_hash = ?
-					AND EXISTS (SELECT 1 FROM logical_items WHERE logical_items.content_hash = pair.still_hash)
-				ORDER BY motion.root_virtual_path, motion.relative_path LIMIT 1`,
+					AND motion.account_id = pair.account_id AND motion.root_kind = pair.root_kind
+				WHERE pair.still_hash = ?
+				ORDER BY pair.root_kind = 'home' DESC, motion.root_virtual_path, motion.relative_path LIMIT 1`,
 			)
-			.get(accountId, accountId, stillHash) as
-			| {id: string; root_virtual_path: string; relative_path: string}
-			| undefined
+			.get(accountId, stillHash) as {id: string; root_virtual_path: string; relative_path: string} | undefined
 		return row ? {id: row.id, path: joinVirtualPath(row.root_virtual_path, row.relative_path)} : undefined
 	}
 
@@ -1043,7 +1026,6 @@ export default class PhotosRepository {
 
 	removeAccount(database: Database, accountId: string) {
 		const remove = database.transaction(() => {
-			database.prepare('DELETE FROM umbrel.photos_live_pairs WHERE account_id = ?').run(accountId)
 			database.prepare('DELETE FROM umbrel.photos_content_state WHERE account_id = ?').run(accountId)
 			database.prepare('DELETE FROM umbrel.photos_albums WHERE account_id = ?').run(accountId)
 			return database.prepare('DELETE FROM umbrel.photos_sources WHERE account_id = ?').run(accountId).changes
@@ -1136,91 +1118,19 @@ export default class PhotosRepository {
 		const placeholders = unique.map(() => '?').join(', ')
 		const companions = database
 			.prepare(
-				`SELECT selected.motion_hash FROM umbrel.photos_live_pairs AS selected
-				WHERE selected.account_id = ? AND selected.still_hash IN (${placeholders})
-				AND EXISTS (SELECT 1 FROM entries
-					JOIN index_roots ON index_roots.id = entries.root_id
-					JOIN contents ON contents.id = entries.content_id
-					WHERE index_roots.owner_id = ? AND index_roots.kind = ?
-						AND contents.blake3 = selected.motion_hash
-						AND entries.type = 'file' AND entries.hidden = 0)
+				`${PHOTO_LIBRARY_CTE}
+				SELECT DISTINCT selected.motion_hash FROM active_live_pairs AS selected
+				WHERE selected.root_kind = ? AND selected.still_hash IN (${placeholders})
 				AND NOT EXISTS (
 					-- A shared motion file stays protected while any unselected still
 					-- remains visible in either Photos projection.
-					SELECT 1 FROM umbrel.photos_live_pairs AS other
-					WHERE other.account_id = selected.account_id AND other.motion_hash = selected.motion_hash
+					SELECT 1 FROM derived_live_pairs AS other
+					WHERE other.motion_hash = selected.motion_hash
 						AND other.still_hash NOT IN (${placeholders})
-						AND EXISTS (SELECT 1 FROM entries
-							JOIN index_roots ON index_roots.id = entries.root_id
-							JOIN contents ON contents.id = entries.content_id
-							WHERE index_roots.owner_id = ? AND index_roots.kind IN ('home', 'trash')
-								AND contents.blake3 = other.still_hash
-								AND entries.type = 'file' AND entries.hidden = 0)
 				)`,
 			)
-			.all(accountId, ...unique, accountId, rootKind, ...unique, accountId) as Array<{motion_hash: Buffer}>
+			.all(accountId, rootKind, ...unique, ...unique) as Array<{motion_hash: Buffer}>
 		return uniqueBuffers([...unique, ...companions.map(({motion_hash}) => motion_hash)])
-	}
-
-	#refreshLivePairsTouchingContent(database: Database, accountId: string, contentId: number) {
-		const metadata = database
-			.prepare("SELECT kind FROM media_metadata WHERE content_id = ? AND state = 'ready'")
-			.get(contentId) as {kind: 'photo' | 'video'} | undefined
-		if (!metadata) return false
-		if (metadata.kind === 'photo') return this.#refreshStillContent(database, accountId, contentId)
-		const videos = this.#liveLocations(database, accountId, 'video')
-		const changedVideo = videos.find((video) => video.content_id === contentId)
-		if (!changedVideo) return false
-		let changed = false
-		const stillIds = new Set<number>()
-		for (const still of this.#liveLocations(database, accountId, 'photo')) {
-			if (!liveLocationsMatch(still, changedVideo)) continue
-			stillIds.add(still.content_id)
-		}
-		for (const stillId of stillIds) changed = this.#refreshStillContent(database, accountId, stillId) || changed
-		return changed
-	}
-
-	#refreshStillContent(database: Database, accountId: string, contentId: number) {
-		const stillRows = this.#liveLocations(database, accountId, 'photo').filter((row) => row.content_id === contentId)
-		if (stillRows.length === 0) return false
-		const stillHash = stillRows[0]!.content_hash
-		const previous = database
-			.prepare('SELECT motion_hash FROM umbrel.photos_live_pairs WHERE account_id = ? AND still_hash = ?')
-			.get(accountId, stillHash) as {motion_hash: Buffer} | undefined
-		const candidate = bestLiveCandidate(stillRows, this.#liveLocations(database, accountId, 'video'))
-		if (!candidate) {
-			database
-				.prepare('DELETE FROM umbrel.photos_live_pairs WHERE account_id = ? AND still_hash = ?')
-				.run(accountId, stillHash)
-			return Boolean(previous)
-		}
-		database
-			.prepare(
-				`INSERT INTO umbrel.photos_live_pairs(account_id, still_hash, motion_hash, updated_at)
-				VALUES (?, ?, ?, ?)
-				ON CONFLICT(account_id, still_hash) DO UPDATE SET motion_hash = excluded.motion_hash,
-					updated_at = excluded.updated_at`,
-			)
-			.run(accountId, stillHash, candidate.content_hash, Date.now())
-		return !previous || !previous.motion_hash.equals(candidate.content_hash)
-	}
-
-	#liveLocations(database: Database, accountId: string, kind: 'photo' | 'video') {
-		return database
-			.prepare(
-				`SELECT index_roots.owner_id AS account_id, contents.id AS content_id, contents.blake3 AS content_hash,
-					index_roots.virtual_path AS root_virtual_path, entries.relative_path,
-					media_metadata.kind, media_metadata.live_identifier, media_metadata.duration_ms
-				FROM index_roots
-				JOIN entries ON entries.root_id = index_roots.id
-				JOIN contents ON contents.id = entries.content_id
-				JOIN media_metadata ON media_metadata.content_id = entries.content_id AND media_metadata.state = 'ready'
-				WHERE index_roots.owner_id = ? AND index_roots.kind IN ('home', 'trash')
-					AND entries.type = 'file' AND entries.hidden = 0 AND media_metadata.kind = ?
-				ORDER BY index_roots.virtual_path, entries.relative_path`,
-			)
-			.all(accountId, kind) as LivePairLocation[]
 	}
 
 	#addAlbumHash(database: Database, accountId: string, albumId: string, hash: Buffer) {
@@ -1444,56 +1354,20 @@ function uniqueBuffers(values: Buffer[]) {
 	return [...new Map(values.map((value) => [hashToId(value), value])).values()]
 }
 
-function livePathParts(relativePath: string) {
-	const parent = nodePath.posix.dirname(relativePath)
-	return {
-		parent: parent === '.' ? '' : parent,
-		stem: nodePath.posix.basename(relativePath, nodePath.posix.extname(relativePath)).toLocaleLowerCase(),
+function filenameStemSql(nameSql: string, extensions: string[]) {
+	const extensionsByLength = new Map<number, string[]>()
+	for (const extension of new Set(extensions)) {
+		extensionsByLength.set(extension.length, [...(extensionsByLength.get(extension.length) ?? []), extension])
 	}
-}
-
-function exactLiveIdentifierMatch(still: LivePairLocation, motion: LivePairLocation) {
-	return Boolean(still.live_identifier && still.live_identifier === motion.live_identifier)
-}
-
-function liveLocationsMatch(still: LivePairLocation, motion: LivePairLocation) {
-	if (exactLiveIdentifierMatch(still, motion)) return true
-	if (motion.duration_ms === null || Number(motion.duration_ms) > 10_000) return false
-	const stillPath = livePathParts(still.relative_path)
-	const motionPath = livePathParts(motion.relative_path)
-	return (
-		still.root_virtual_path === motion.root_virtual_path &&
-		stillPath.parent === motionPath.parent &&
-		stillPath.stem === motionPath.stem
-	)
-}
-
-function bestLiveCandidate(stills: LivePairLocation[], videos: LivePairLocation[]) {
-	return videos
-		.filter((video) => stills.some((still) => liveLocationsMatch(still, video)))
-		.toSorted((left, right) => {
-			const leftExact = Number(stills.some((still) => exactLiveIdentifierMatch(still, left)))
-			const rightExact = Number(stills.some((still) => exactLiveIdentifierMatch(still, right)))
-			return (
-				rightExact - leftExact ||
-				left.root_virtual_path.localeCompare(right.root_virtual_path) ||
-				left.relative_path.localeCompare(right.relative_path) ||
-				Buffer.compare(left.content_hash, right.content_hash)
-			)
-		})[0]
-}
-
-function samePairRows(
-	left: Array<{still_hash: Buffer; motion_hash: Buffer}>,
-	right: Array<{still_hash: Buffer; motion_hash: Buffer}>,
-) {
-	return (
-		left.length === right.length &&
-		left.every(
-			(row, index) =>
-				row.still_hash.equals(right[index]!.still_hash) && row.motion_hash.equals(right[index]!.motion_hash),
+	const branches = [...extensionsByLength]
+		.toSorted(([left], [right]) => right - left)
+		.map(
+			([length, values]) =>
+				`WHEN substr(lower(${nameSql}), -${length}) IN (${values.map((value) => `'${value}'`).join(', ')}) ` +
+				`THEN substr(lower(${nameSql}), 1, length(${nameSql}) - ${length})`,
 		)
-	)
+		.join('\n\t\t\t')
+	return `CASE ${branches} ELSE lower(${nameSql}) END`
 }
 
 function ftsTrigramExpression(term: string) {
