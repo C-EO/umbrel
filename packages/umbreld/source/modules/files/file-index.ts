@@ -579,6 +579,10 @@ export default class FileIndex {
 		await this.#request('movePath', [sourceSystemPath, destinationSystemPath])
 	}
 
+	async createUmbrelDatabaseBackup(destinationPath: string) {
+		await this.#request('createUmbrelDatabaseBackup', [destinationPath])
+	}
+
 	async getEntryByVirtualPath(virtualPath: string) {
 		if (!this.#workerReady) return undefined
 		return this.#request<IndexedEntry | undefined>('getEntryByVirtualPath', [virtualPath])

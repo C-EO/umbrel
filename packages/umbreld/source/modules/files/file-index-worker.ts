@@ -174,6 +174,8 @@ async function request(method: FileIndexRequestMethod, args: unknown[]) {
 			return index.removePath(stringArg(args))
 		case 'movePath':
 			return index.movePath(stringArg(args), stringArg(args, 1))
+		case 'createUmbrelDatabaseBackup':
+			return index.createUmbrelDatabaseBackup(stringArg(args))
 		case 'getEntryByVirtualPath':
 			return index.getEntryByVirtualPath(stringArg(args))
 		case 'getEntryBySystemPath':

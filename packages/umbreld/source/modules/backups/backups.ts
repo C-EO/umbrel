@@ -3,6 +3,7 @@ import {statfs} from 'node:fs/promises'
 import nodePath from 'node:path'
 import {setTimeout} from 'node:timers/promises'
 
+import BetterSqlite3 from 'better-sqlite3'
 import {execa, ExecaError, ExecaChildProcess} from 'execa'
 import fse from 'fs-extra'
 import pQueue from 'p-queue'
@@ -43,6 +44,21 @@ export type RestoreStatus = ProgressStatus & {
 export type BackupsInProgress = BackupProgress[]
 
 const constrainedKopiaCacheFilesystemInodes = 5_000_000
+export const UMBREL_DATABASE_BACKUP_DIRECTORY = '.umbrel-backup'
+export const UMBREL_DATABASE_BACKUP_FILENAME = 'umbrel.db'
+
+function validateUmbrelDatabaseBackup(databasePath: string) {
+	let database: BetterSqlite3.Database | undefined
+	try {
+		database = new BetterSqlite3(databasePath, {readonly: true, fileMustExist: true})
+		const result = database.pragma('quick_check') as Array<Record<string, unknown>>
+		if (result.length !== 1 || Object.values(result[0] ?? {})[0] !== 'ok') {
+			throw new Error('[backup-database-invalid] Umbrel database backup failed SQLite quick_check')
+		}
+	} finally {
+		database?.close()
+	}
+}
 
 export function kopiaCacheSizeFlagsForInodes(totalInodes: number) {
 	if (totalInodes <= 0 || totalInodes > constrainedKopiaCacheFilesystemInodes) return []
@@ -72,8 +88,11 @@ export default class Backups {
 	startedAt?: number
 	backupInterval = 1000 * 60 * 60 // 1 hour
 	backupJobPromise?: Promise<void>
+	backupQueue = new pQueue({concurrency: 1})
 	kopiaQueue = new pQueue({concurrency: 1})
 	backupDirectoryName = 'Umbrel Backup.backup'
+	umbrelDatabaseBackupDirectory: string
+	umbrelDatabaseBackupPath: string
 	runningKopiaProcesses: ExecaChildProcess[] = []
 
 	constructor(umbreld: Umbreld) {
@@ -82,6 +101,8 @@ export default class Backups {
 		this.logger = umbreld.logger.createChildLogger(name.toLocaleLowerCase())
 		this.internalMountPath = nodePath.join(umbreld.dataDirectory, 'backup-mounts')
 		this.backupRoot = umbreld.files.getBaseDirectory('/Backups')
+		this.umbrelDatabaseBackupDirectory = nodePath.join(umbreld.dataDirectory, UMBREL_DATABASE_BACKUP_DIRECTORY)
+		this.umbrelDatabaseBackupPath = nodePath.join(this.umbrelDatabaseBackupDirectory, UMBREL_DATABASE_BACKUP_FILENAME)
 	}
 
 	async start() {
@@ -91,6 +112,9 @@ export default class Backups {
 
 		// Cleanup any left over backup mounts
 		await this.unmountAll().catch((error) => this.logger.error('Error unmounting backups', error))
+		await this.releaseUmbrelDatabaseBackup().catch((error) =>
+			this.logger.error('Error cleaning up the Umbrel database backup staging directory', error),
+		)
 
 		// Fire off background backup process
 		this.backupJobPromise = this.backupOnInterval().catch((error) =>
@@ -390,6 +414,7 @@ export default class Backups {
 				this.#umbreld.eventBus.emit('backups:restore-progress', this.restoreStatus)
 				this.logger.log(`Restored 100% of backup`)
 			}
+			await this.promoteUmbrelDatabaseBackup(temporaryData)
 			// We mark that the next boot is the first start after a backup restore.
 			// Cloud uses this marker on the next boot to pause restored syncs before
 			// they can run, so failing to persist it must fail the restore.
@@ -513,8 +538,57 @@ export default class Backups {
 		return {used, capacity, available}
 	}
 
-	// Backup the umbrel data directory to a repository
+	async prepareUmbrelDatabaseBackup() {
+		await fse.remove(this.umbrelDatabaseBackupDirectory)
+		await fse.ensureDir(this.umbrelDatabaseBackupDirectory)
+		try {
+			await this.#umbreld.files.fileIndex.createUmbrelDatabaseBackup(this.umbrelDatabaseBackupPath)
+			validateUmbrelDatabaseBackup(this.umbrelDatabaseBackupPath)
+			await Promise.all([
+				fse.remove(`${this.umbrelDatabaseBackupPath}-wal`),
+				fse.remove(`${this.umbrelDatabaseBackupPath}-shm`),
+				fse.remove(`${this.umbrelDatabaseBackupPath}-journal`),
+			])
+		} catch (error) {
+			await fse.remove(this.umbrelDatabaseBackupDirectory).catch(() => {})
+			throw error
+		}
+	}
+
+	async releaseUmbrelDatabaseBackup() {
+		await fse.remove(this.umbrelDatabaseBackupDirectory)
+	}
+
+	async promoteUmbrelDatabaseBackup(dataDirectory: string) {
+		const backupDirectory = nodePath.join(dataDirectory, UMBREL_DATABASE_BACKUP_DIRECTORY)
+		const backupPath = nodePath.join(backupDirectory, UMBREL_DATABASE_BACKUP_FILENAME)
+		if (!(await fse.pathExists(backupPath))) return false
+
+		validateUmbrelDatabaseBackup(backupPath)
+		await Promise.all([
+			fse.remove(`${backupPath}-wal`),
+			fse.remove(`${backupPath}-shm`),
+			fse.remove(`${backupPath}-journal`),
+		])
+
+		const databasePath = nodePath.join(dataDirectory, UMBREL_DATABASE_BACKUP_FILENAME)
+		await Promise.all([
+			fse.remove(`${databasePath}-wal`),
+			fse.remove(`${databasePath}-shm`),
+			fse.remove(`${databasePath}-journal`),
+		])
+		await fse.move(backupPath, databasePath, {overwrite: true})
+		await fse.remove(backupDirectory)
+		return true
+	}
+
+	// Serialize backups because they share VM and database snapshot staging state.
 	async backup(repositoryId: string) {
+		return this.backupQueue.add(() => this.#backup(repositoryId))
+	}
+
+	// Backup the umbrel data directory to a repository
+	async #backup(repositoryId: string) {
 		const repository = await this.getRepository(repositoryId)
 		this.logger.log(`Backing up to ${repository.path}`)
 
@@ -552,7 +626,12 @@ export default class Backups {
 		try {
 			let failure: unknown
 			let machinesPrepared = false
+			let umbrelDatabasePrepared = false
 			try {
+				// Materialize a standalone SQLite snapshot before Kopia scans the live
+				// data directory. The live database and WAL files are ignored below.
+				await this.prepareUmbrelDatabaseBackup()
+				umbrelDatabasePrepared = true
 				// Running VMs continuously mutate large disk, firmware, and TPM files.
 				// Pivot their writes into external overlays so Kopia sees a coherent,
 				// restorable machine directory while guests continue running.
@@ -582,6 +661,13 @@ export default class Backups {
 					await this.#umbreld.machines.releaseBackup()
 				} catch (error) {
 					failure = failure ? new AggregateError([failure, error], '[backup-machine-snapshot-release-failed]') : error
+				}
+			}
+			if (umbrelDatabasePrepared) {
+				try {
+					await this.releaseUmbrelDatabaseBackup()
+				} catch (error) {
+					failure = failure ? new AggregateError([failure, error], '[backup-database-snapshot-release-failed]') : error
 				}
 			}
 			if (failure) throw failure
@@ -660,6 +746,14 @@ export default class Backups {
 
 		// Ignore temporary migration directory
 		ignoreFileContents.push('.temporary-migration')
+
+		// SQLite's database, WAL, and shared-memory files cannot be copied
+		// independently while writes and checkpoints continue. Back up only the
+		// standalone snapshot materialized in UMBREL_DATABASE_BACKUP_DIRECTORY.
+		ignoreFileContents.push('umbrel.db')
+		ignoreFileContents.push('umbrel.db-wal')
+		ignoreFileContents.push('umbrel.db-shm')
+		ignoreFileContents.push('umbrel.db-journal')
 
 		// Downloaded source images are re-derivable caches; every created VM is
 		// flattened into its own canonical disk. Machine operation journals and

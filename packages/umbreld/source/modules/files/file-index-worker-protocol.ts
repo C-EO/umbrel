@@ -22,6 +22,7 @@ export type FileIndexRequestMethod =
 	| 'reconcilePath'
 	| 'removePath'
 	| 'movePath'
+	| 'createUmbrelDatabaseBackup'
 	| 'getEntryByVirtualPath'
 	| 'getEntryBySystemPath'
 	| 'ensureThumbnail'

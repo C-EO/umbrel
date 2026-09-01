@@ -3,7 +3,7 @@ import {setTimeout} from 'node:timers/promises'
 import {expect, beforeAll, beforeEach, afterAll, afterEach, describe, test} from 'vitest'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
-import {kopiaCacheSizeFlagsForInodes, type BackupsInProgress} from './backups.js'
+import {kopiaCacheSizeFlagsForInodes, UMBREL_DATABASE_BACKUP_DIRECTORY, type BackupsInProgress} from './backups.js'
 import {
 	bootWithExternalStorage,
 	createNetworkBackupShare,
@@ -208,7 +208,8 @@ NODE
 
 		const files = await umbreld.client.backups.listBackupFiles.query({backupId: backups[0].id})
 		expect(files).toContain('umbrel.yaml')
-		expect(files).toContain('umbrel.db')
+		expect(files).toContain(UMBREL_DATABASE_BACKUP_DIRECTORY)
+		expect(files).not.toContain('umbrel.db')
 		expect(files).toContain('app-data')
 		expect(files).toContain('home')
 		expect(files).toContain('secrets')

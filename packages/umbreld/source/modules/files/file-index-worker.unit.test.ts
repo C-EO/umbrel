@@ -106,7 +106,7 @@ test('rebuilds the filesystem index and enrichment artifacts from scratch', asyn
 })
 
 test('routes the complete Photos repository surface through the worker boundary', async () => {
-	const {index} = await fixture()
+	const {dataDirectory, index} = await fixture()
 	await index.start()
 	await index.reconcileRoot('/Home', 'photos-worker')
 	await index.initializePhotos('owner')
@@ -120,6 +120,15 @@ test('routes the complete Photos repository surface through the worker boundary'
 	await expect(index.photosListSources('owner')).resolves.toContainEqual(
 		expect.objectContaining({type: 'umbrel', stats: {photos: 0, videos: 0, sizeBytes: 0}}),
 	)
+
+	const backupPath = nodePath.join(dataDirectory, '.umbrel-backup', 'umbrel.db')
+	await index.createUmbrelDatabaseBackup(backupPath)
+	const snapshot = new BetterSqlite3(backupPath, {readonly: true})
+	expect(snapshot.pragma('quick_check', {simple: true})).toBe('ok')
+	expect(snapshot.prepare('SELECT name FROM photos_albums WHERE id = ?').get(album.id)).toStrictEqual({
+		name: 'Worker album',
+	})
+	snapshot.close()
 })
 
 test('keeps the main event loop responsive during CPU-heavy fuzzy searches', async () => {

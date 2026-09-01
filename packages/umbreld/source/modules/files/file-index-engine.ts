@@ -545,6 +545,20 @@ export default class FileIndexEngine {
 		}
 	}
 
+	async createUmbrelDatabaseBackup(destinationPath: string) {
+		return this.#mutationQueue.add(async () => {
+			this.#requirePhotos()
+			await fse.ensureDir(nodePath.dirname(destinationPath))
+			await fse.remove(destinationPath)
+			const source = new BetterSqlite3(this.umbrelDatabasePath, {readonly: true, fileMustExist: true, timeout: 5000})
+			try {
+				await source.backup(destinationPath)
+			} finally {
+				source.close()
+			}
+		})
+	}
+
 	#schedulePhotosRecovery() {
 		if (this.#stopping || !this.#started || this.#photosAvailable || this.#photosRecoveryTimer) return
 		const delay = Math.min(this.#recoveryRetryMs * 2 ** this.#photosRecoveryAttempts, MAX_RECOVERY_RETRY_MS)

@@ -15,7 +15,7 @@ import {
 	VM_CLOUD_WEBDAV_USERNAME,
 	writeVmCloudFixture,
 } from '../files/cloud.vm-test-helpers.js'
-import type {RestoreStatus} from './backups.js'
+import {UMBREL_DATABASE_BACKUP_DIRECTORY, UMBREL_DATABASE_BACKUP_FILENAME, type RestoreStatus} from './backups.js'
 import {
 	bootWithExternalStorage,
 	expectRestoreProgressEvents,
@@ -124,6 +124,15 @@ describe.sequential('Backup restore on current install', () => {
 		})
 		restoredPhotoAlbumId = photoAlbum.id
 		await umbreld.client.photos.items.delete.mutate({ids: [restoredPhotoId]})
+		await expect(
+			umbreld.vm.sshAsRoot(`
+set -eu
+test -f '${umbreld.vm.dataDirectory}/umbrel.db'
+test -f '${umbreld.vm.dataDirectory}/umbrel.db-wal'
+test -f '${umbreld.vm.dataDirectory}/umbrel.db-shm'
+printf 'wal database is live'
+`),
+		).resolves.toBe('wal database is live')
 
 		repositoryId = await umbreld.client.backups.createRepository.mutate({
 			path: externalPath,
@@ -133,11 +142,66 @@ describe.sequential('Backup restore on current install', () => {
 		await expect(umbreld.client.backups.listBackups.query({repositoryId})).resolves.toHaveLength(1)
 		const snapshot = await latestBackup(umbreld, repositoryId)
 		const backupFiles = await umbreld.client.backups.listBackupFiles.query({backupId: snapshot.id})
-		expect(backupFiles).toContain('umbrel.db')
-		expect(backupFiles).toContain('umbrel.db-wal')
-		expect(backupFiles).toContain('umbrel.db-shm')
+		expect(backupFiles).toContain(UMBREL_DATABASE_BACKUP_DIRECTORY)
+		expect(backupFiles).not.toContain('umbrel.db')
+		expect(backupFiles).not.toContain('umbrel.db-wal')
+		expect(backupFiles).not.toContain('umbrel.db-shm')
 		expect(backupFiles).not.toContain('file-index')
 		expect(backupFiles).not.toContain('thumbnails')
+		const databaseBackupFiles = await umbreld.client.backups.listBackupFiles.query({
+			backupId: snapshot.id,
+			path: `/${UMBREL_DATABASE_BACKUP_DIRECTORY}`,
+		})
+		expect(databaseBackupFiles).toContain(UMBREL_DATABASE_BACKUP_FILENAME)
+		expect(databaseBackupFiles).not.toContain(`${UMBREL_DATABASE_BACKUP_FILENAME}-wal`)
+		expect(databaseBackupFiles).not.toContain(`${UMBREL_DATABASE_BACKUP_FILENAME}-shm`)
+		await expect(
+			umbreld.vm.sshAsRoot(`test ! -e '${umbreld.vm.dataDirectory}/${UMBREL_DATABASE_BACKUP_DIRECTORY}'`),
+		).resolves.toBe('')
+
+		// Inspect the actual standalone SQLite file inside the Kopia snapshot. It
+		// must be internally valid and contain the exact durable Photos state that
+		// the restore assertions below expect to recover.
+		const directoryName = await umbreld.client.backups.mountBackup.mutate({backupId: snapshot.id})
+		try {
+			const albumId = Buffer.from(restoredPhotoAlbumId).toString('base64')
+			const databaseState = JSON.parse(
+				await umbreld.vm.sshAsRoot(`
+set -eu
+snapshot_database='${umbreld.vm.dataDirectory}/backup-mounts/${directoryName}/${UMBREL_DATABASE_BACKUP_DIRECTORY}/${UMBREL_DATABASE_BACKUP_FILENAME}'
+temporary_database=$(mktemp /tmp/umbrel-database-backup.XXXXXX)
+trap 'rm -f "$temporary_database" "$temporary_database-wal" "$temporary_database-shm"' EXIT
+cp "$snapshot_database" "$temporary_database"
+cd /opt/umbreld
+TEMPORARY_DATABASE="$temporary_database" node --input-type=module <<'NODE'
+import Database from 'better-sqlite3'
+
+const database = new Database(process.env.TEMPORARY_DATABASE, {readonly: true})
+const albumId = Buffer.from('${albumId}', 'base64').toString()
+const state = database.prepare(\`
+\tSELECT albums.name AS albumName,
+\t\tlower(hex(items.content_hash)) AS photoId,
+\t\tcontent.is_favorite AS isFavorite
+\tFROM photos_albums AS albums
+\tJOIN photos_album_items AS items ON items.album_id = albums.id
+\tJOIN photos_content_state AS content
+\t\tON content.account_id = albums.account_id AND content.content_hash = items.content_hash
+\tWHERE albums.id = ?
+\`).get(albumId)
+console.log(JSON.stringify({quickCheck: database.pragma('quick_check', {simple: true}), ...state}))
+database.close()
+NODE
+`),
+			) as {quickCheck: string; albumName: string; photoId: string; isFavorite: number}
+			expect(databaseState).toStrictEqual({
+				quickCheck: 'ok',
+				albumName: 'Restored album',
+				photoId: restoredPhotoId,
+				isFavorite: 1,
+			})
+		} finally {
+			await umbreld.client.backups.unmountBackup.mutate({directoryName})
+		}
 
 		// Diverge durable Photos state after the snapshot so restore must recover it.
 		await umbreld.client.photos.items.restore.mutate({ids: [restoredPhotoId]})
@@ -216,6 +280,19 @@ describe.sequential('Backup restore on current install', () => {
 		await expect(umbreld.client.photos.albums.list.query()).resolves.toContainEqual(
 			expect.objectContaining({id: restoredPhotoAlbumId, name: 'Restored album'}),
 		)
+		await expect(
+			umbreld.vm.sshAsRoot(`
+set -eu
+test ! -e '${umbreld.vm.dataDirectory}/${UMBREL_DATABASE_BACKUP_DIRECTORY}'
+cd /opt/umbreld
+DATABASE_PATH='${umbreld.vm.dataDirectory}/umbrel.db' node --input-type=module <<'NODE'
+import Database from 'better-sqlite3'
+const database = new Database(process.env.DATABASE_PATH, {readonly: true})
+process.stdout.write(database.pragma('quick_check', {simple: true}))
+database.close()
+NODE
+`),
+		).resolves.toBe('ok')
 		await umbreld.client.photos.items.restore.mutate({ids: [restoredPhotoId]})
 		await expect(umbreld.client.photos.albums.list.query()).resolves.toContainEqual(
 			expect.objectContaining({id: restoredPhotoAlbumId, count: 1, coverId: restoredPhotoId}),

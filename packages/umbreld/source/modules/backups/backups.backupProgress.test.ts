@@ -4,6 +4,7 @@ import fse from 'fs-extra'
 import {delay} from 'es-toolkit'
 
 import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import {UMBREL_DATABASE_BACKUP_DIRECTORY} from './backups.js'
 
 let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
 
@@ -23,7 +24,10 @@ describe(`backupProgress()`, () => {
 
 		expect(ignore).toContain('file-index')
 		expect(ignore).toContain('thumbnails')
-		expect(ignore).not.toMatch(/^umbrel\.db(?:-wal|-shm)?$/m)
+		expect(ignore).toMatch(/^\/umbrel\.db$/m)
+		expect(ignore).toMatch(/^\/umbrel\.db-wal$/m)
+		expect(ignore).toMatch(/^\/umbrel\.db-shm$/m)
+		expect(ignore).not.toContain(`/${UMBREL_DATABASE_BACKUP_DIRECTORY}`)
 		expect(ignore).toContain('machines/*/operations')
 		expect(ignore).toContain('machines/*/media')
 	})

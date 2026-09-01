@@ -137,6 +137,33 @@ test('uses one durable Umbrel database and a separate disposable file index', as
 	await expect(fse.pathExists(nodePath.join(dataDirectory, 'photos', 'photos.sqlite3'))).resolves.toBe(false)
 })
 
+test('creates a standalone point-in-time backup of the live WAL-mode Umbrel database', async () => {
+	const {index, dataDirectory} = await fixture()
+	await index.initializePhotos('owner')
+	const album = await index.photosCreateAlbum('owner', 'Before backup')
+	await expect(fse.pathExists(`${index.umbrelDatabasePath}-wal`)).resolves.toBe(true)
+	await expect(fse.pathExists(`${index.umbrelDatabasePath}-shm`)).resolves.toBe(true)
+
+	const backupPath = nodePath.join(dataDirectory, '.umbrel-backup', 'umbrel.db')
+	const backup = index.createUmbrelDatabaseBackup(backupPath)
+	const laterMutation = index.photosRenameAlbum('owner', album.id, 'After backup')
+	await Promise.all([backup, laterMutation])
+
+	await expect(fse.pathExists(backupPath)).resolves.toBe(true)
+	await expect(fse.pathExists(`${backupPath}-wal`)).resolves.toBe(false)
+	await expect(fse.pathExists(`${backupPath}-shm`)).resolves.toBe(false)
+	const snapshot = new BetterSqlite3(backupPath, {readonly: true})
+	expect(snapshot.pragma('quick_check', {simple: true})).toBe('ok')
+	expect(snapshot.prepare('SELECT name FROM photos_albums WHERE id = ?').get(album.id)).toStrictEqual({
+		name: 'Before backup',
+	})
+	snapshot.close()
+
+	await expect(index.photosListAlbums('owner')).resolves.toContainEqual(
+		expect.objectContaining({id: album.id, name: 'After backup'}),
+	)
+})
+
 function noteWatcherChanges(index: FileIndex, paths: string[], type: WatcherChange['type'] = 'create') {
 	index.noteWatcherChanges(
 		'/Home',
