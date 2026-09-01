@@ -14,7 +14,6 @@ import AsyncBurstCache from '../utilities/async-burst-cache.js'
 
 const WATCHER_SNAPSHOT_TTL_MS = 1000
 const OWNER_SAMBA_USERNAME = 'umbrel'
-const MEMBER_SAMBA_USERNAME_PREFIX = 'umbrel-user-'
 const MANAGED_MEMBER_USERNAME_PREFIX = 'umbrel-smb-'
 const USERNAME_MAP_PATH = '/etc/samba/username.map'
 
@@ -165,7 +164,15 @@ export default class Samba {
 	}
 
 	getShareUsername(userId: string = OWNER_USER_ID) {
-		return userId === OWNER_USER_ID ? OWNER_SAMBA_USERNAME : `${MEMBER_SAMBA_USERNAME_PREFIX}${userId}`
+		if (userId === OWNER_USER_ID) return OWNER_SAMBA_USERNAME
+
+		const username = userId.toLowerCase()
+		// Keep member aliases distinct from the historic owner login and the
+		// private Unix usernames on the left-hand side of username.map.
+		if (username === OWNER_SAMBA_USERNAME || username.startsWith(MANAGED_MEMBER_USERNAME_PREFIX)) {
+			return `member-${username}`
+		}
+		return username
 	}
 
 	async setSharePassword(userId: string, password: string) {

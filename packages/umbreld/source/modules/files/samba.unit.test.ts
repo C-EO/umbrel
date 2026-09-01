@@ -66,11 +66,12 @@ describe('multi-account Samba policy', () => {
 		})
 	})
 
-	test('keeps member client usernames in a namespace distinct from the owner and managed Unix users', () => {
+	test('uses lowercase member ids as client usernames and isolates reserved names', () => {
 		expect(umbreld.files.samba.getShareUsername('0')).toBe('umbrel')
-		expect(umbreld.files.samba.getShareUsername('Umbrel')).toBe('umbrel-user-Umbrel')
-		expect(umbreld.files.samba.getShareUsername('Umbrel').toLowerCase()).not.toBe('umbrel')
-		expect(umbreld.files.samba.getShareUsername('Smb-deadbeef')).not.toMatch(/^umbrel-smb-/i)
+		expect(umbreld.files.samba.getShareUsername('Alice')).toBe('alice')
+		expect(umbreld.files.samba.getShareUsername('Alice-2')).toBe('alice-2')
+		expect(umbreld.files.samba.getShareUsername('Umbrel')).toBe('member-umbrel')
+		expect(umbreld.files.samba.getShareUsername('Umbrel-smb-deadbeef')).toBe('member-umbrel-smb-deadbeef')
 	})
 
 	test('gives case-colliding member display names unique identity-derived Home sharenames', async () => {

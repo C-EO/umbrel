@@ -203,8 +203,8 @@ describe.sequential('account-scoped Samba access', () => {
 		aliceId = alice.userId
 		bobId = bob.userId
 		expect(aliceId).toBe('Umbrel')
-		aliceSambaUsername = `umbrel-user-${aliceId}`
-		bobSambaUsername = `umbrel-user-${bobId}`
+		aliceSambaUsername = 'member-umbrel'
+		bobSambaUsername = 'bob'
 
 		await umbreld.client.files.setMemberSambaAccess.mutate({userId: aliceId, enabled: true})
 		await umbreld.client.files.setMemberSambaAccess.mutate({userId: bobId, enabled: true})

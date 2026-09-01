@@ -15,7 +15,7 @@ function createCaller(accountId: string) {
 		setMemberAccess: vi.fn(async (userId: string, enabled: boolean) => ({
 			userId,
 			enabled,
-			username: `umbrel-user-${userId}`,
+			username: userId.toLowerCase(),
 		})),
 	}
 	const umbreld = {
@@ -63,7 +63,7 @@ describe('account-scoped Samba routes', () => {
 		await expect(owner.caller.setMemberSambaAccess({userId: 'Alice', enabled: true})).resolves.toEqual({
 			userId: 'Alice',
 			enabled: true,
-			username: 'umbrel-user-Alice',
+			username: 'alice',
 		})
 	})
 
