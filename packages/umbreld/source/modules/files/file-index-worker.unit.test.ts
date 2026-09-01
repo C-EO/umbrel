@@ -73,6 +73,34 @@ test('owns crawling, SQLite, and search in a dedicated worker', async () => {
 	})
 })
 
+test('rebuilds the filesystem index and enrichment artifacts from scratch', async () => {
+	const {dataDirectory, homeDirectory, index} = await fixture()
+	const sourcePath = nodePath.join(homeDirectory, 'rebuild.png')
+	await writeFile(sourcePath, 'image-like source')
+
+	await index.start()
+	await index.reconcileRoot('/Home', 'rebuild-fixture')
+	const indexSentinel = nodePath.join(dataDirectory, 'file-index', 'stale-index-state')
+	const thumbnailSentinel = nodePath.join(dataDirectory, 'thumbnails', 'stale-enrichment-artifact')
+	await writeFile(indexSentinel, 'stale')
+	await writeFile(thumbnailSentinel, 'stale')
+
+	await index.rebuild()
+
+	await expect(fse.pathExists(indexSentinel)).resolves.toBe(false)
+	await expect(fse.pathExists(thumbnailSentinel)).resolves.toBe(false)
+	await expect(fse.pathExists(sourcePath)).resolves.toBe(true)
+	await pRetry(
+		async () => {
+			await expect(index.getEntryByVirtualPath('/Home/rebuild.png')).resolves.toMatchObject({
+				name: 'rebuild.png',
+			})
+			await expect(index.status()).resolves.toMatchObject({enrichment: {hashedEntries: 1}})
+		},
+		{retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100},
+	)
+})
+
 test('routes the complete Photos repository surface through the worker boundary', async () => {
 	const {index} = await fixture()
 	await index.start()

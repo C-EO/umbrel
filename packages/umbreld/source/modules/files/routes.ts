@@ -428,6 +428,12 @@ export default router({
 			ctx.umbreld.files.search.search(input.query, input.maxResults, ctx.principal?.accountId),
 		),
 
+	// Owner-only recovery hook for rebuilding all disposable file index state.
+	rebuildIndex: privateProcedure.mutation(async ({ctx}) => {
+		await ctx.umbreld.files.fileIndex.rebuild()
+		return {status: 'rebuilding' as const}
+	}),
+
 	// List network shares
 	listNetworkShares: publicProcedureWhenNoUserExists.query(async ({ctx}) =>
 		ctx.umbreld.files.networkStorage.getShareInfo(),

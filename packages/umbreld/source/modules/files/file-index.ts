@@ -1,6 +1,8 @@
 import nodePath from 'node:path'
 import {Worker, type WorkerOptions} from 'node:worker_threads'
 
+import fse from 'fs-extra'
+
 import {
 	DEFAULT_WATCHER_BULK_THRESHOLD,
 	type FileIndexLogger,
@@ -77,6 +79,8 @@ export default class FileIndex {
 	readonly logger: FileIndexLogger
 	readonly databasePath: string
 
+	#indexDirectory: string
+	#thumbnailDirectory: string
 	#workerData: FileIndexWorkerData
 	#createWorker: WorkerFactory
 	#workerRestartDelayMs: number
@@ -101,6 +105,7 @@ export default class FileIndex {
 	#enabledThumbnailVariants = new Set<ThumbnailVariant>()
 	#onPhotosChange?: (accountIds: string[]) => void
 	#onPhotosIndexingProgress?: (progress: PhotoIndexingProgress[]) => void
+	#rebuild?: Promise<void>
 
 	constructor(
 		{
@@ -123,7 +128,9 @@ export default class FileIndex {
 		}: FileIndexRuntime = {},
 	) {
 		this.logger = logger
-		this.databasePath = nodePath.join(dataDirectory, 'file-index', 'index.db')
+		this.#indexDirectory = nodePath.join(dataDirectory, 'file-index')
+		this.#thumbnailDirectory = nodePath.join(dataDirectory, 'thumbnails')
+		this.databasePath = nodePath.join(this.#indexDirectory, 'index.db')
 		this.#workerData = {
 			dataDirectory,
 			hiddenFiles: [...hiddenFiles],
@@ -622,6 +629,31 @@ export default class FileIndex {
 			}>
 		}>('status', [])
 		return {...status, workerThreadId: this.#workerThreadId}
+	}
+
+	async rebuild() {
+		if (this.#rebuild) return this.#rebuild
+		const rebuild = this.#performRebuild()
+		this.#rebuild = rebuild
+		try {
+			await rebuild
+		} finally {
+			if (this.#rebuild === rebuild) this.#rebuild = undefined
+		}
+	}
+
+	async #performRebuild() {
+		this.logger.log('Rebuilding file index and enrichment artifacts')
+		await this.stop()
+		try {
+			await Promise.all([fse.remove(this.#indexDirectory), fse.remove(this.#thumbnailDirectory)])
+		} finally {
+			// Do not leave the index offline if either disposable directory could
+			// not be removed. A regular reconciliation can still repair stale state.
+			await this.start()
+			this.startBackgroundReconciliation()
+		}
+		this.logger.log('Recreated file index; full reconciliation and enrichment started')
 	}
 
 	async stop() {
