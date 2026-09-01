@@ -1552,6 +1552,8 @@ test('classifies wide screenshots before panoramas while preserving spherical me
 		'wide-export.png': 2,
 		'wide-photo.jpg': 3,
 		'Screenshot sphere.jpg': 4,
+		'FullSizeRender.jpeg': 5,
+		'edited-export.jpeg': 6,
 	}
 	const {index, homeDirectory} = await fixture(undefined, {
 		enrichmentRuntime: {
@@ -1564,6 +1566,8 @@ test('classifies wide screenshots before panoramas while preserving spherical me
 					width: 300,
 					height: 100,
 					subKind: name === 'Screenshot sphere.jpg' ? ('spherical' as const) : ('panorama' as const),
+					...(name === 'FullSizeRender.jpeg' ? {userComment: 'Screenshot'} : {}),
+					...(name === 'edited-export.jpeg' ? {userComment: 'Cropped ScReEn ShOt from iPhone'} : {}),
 					...(name === 'wide-export.png' ? {} : {cameraMake: 'Camera', cameraModel: 'Model'}),
 				}
 			},
@@ -1584,7 +1588,12 @@ test('classifies wide screenshots before panoramas while preserving spherical me
 		const details = await Promise.all(page.items.map(({id}) => index.photosGetItem('owner', id)))
 		return details.map((item) => item!.fileName).sort()
 	}
-	expect(await namesForSubKind('screenshot')).toStrictEqual(['Screenshot wide.jpg', 'wide-export.png'])
+	expect(await namesForSubKind('screenshot')).toStrictEqual([
+		'FullSizeRender.jpeg',
+		'Screenshot wide.jpg',
+		'edited-export.jpeg',
+		'wide-export.png',
+	])
 	expect(await namesForSubKind('panorama')).toStrictEqual(['wide-photo.jpg'])
 	expect(await namesForSubKind('spherical')).toStrictEqual(['Screenshot sphere.jpg'])
 })

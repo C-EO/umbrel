@@ -217,6 +217,8 @@ const PHOTO_LIBRARY_CTE = `
 				WHEN live_pair.still_hash IS NOT NULL OR canonical_locations.sub_kind = 'live' THEN 'live'
 				WHEN lower(canonical_locations.name) LIKE 'screenshot%'
 					OR lower(canonical_locations.name) LIKE 'screen shot%'
+					OR lower(canonical_locations.user_comment) LIKE '%screenshot%'
+					OR lower(canonical_locations.user_comment) LIKE '%screen shot%'
 					OR (lower(canonical_locations.name) GLOB '*.png'
 						AND canonical_locations.camera_make IS NULL AND canonical_locations.camera_model IS NULL)
 				THEN 'screenshot'

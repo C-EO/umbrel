@@ -201,7 +201,8 @@ win:
 1. `spherical` — the spherical video box (v1 `Spherical`/`ProjectionType` XML
    or v2 `sv3d`/`proj`) on videos; XMP `GPano:ProjectionType` on photos.
 2. `live` — the still of an Apple live pair (below).
-3. `screenshot` — `Screenshot*`/`Screen Shot*` file names, or a PNG with no
+3. `screenshot` — `Screenshot*`/`Screen Shot*` file names, a `UserComment`
+   containing `screenshot`/`screen shot` (case-insensitive), or a PNG with no
    camera `Make`/`Model` EXIF.
 4. `panorama` — aspect ratio ≥ 2:1.
 
