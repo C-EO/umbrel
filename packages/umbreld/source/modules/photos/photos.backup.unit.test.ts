@@ -174,6 +174,8 @@ describe('Photos backup storage', () => {
 			targetPath,
 			blake3('raw photo'),
 			expect.objectContaining({size: 9}),
+			undefined,
+			undefined,
 		)
 		await expect(umbreld.store.get('photos.backupSources')).resolves.toEqual([source])
 	})
@@ -306,9 +308,14 @@ describe('Photos backup storage', () => {
 		const otherAccountKey = 'b'.repeat(64)
 		const confirmedSystemPath = nodePath.join(dataDirectory, 'home', 'Moved', 'photo.heic')
 		await fse.outputFile(confirmedSystemPath, 'photo')
-		const confirmed = {resourceKey: confirmedKey, path: '/Home/Moved/photo.heic', bytes: 5}
+		const confirmed = {resourceKey: confirmedKey, bytes: 5}
 		vi.spyOn(umbreld.files.fileIndex, 'photosConfirmedBackupResources').mockResolvedValue([
-			{...confirmed, contentHash: Buffer.alloc(32, 1), revision: await indexedRevision(confirmedSystemPath)},
+			{
+				...confirmed,
+				path: '/Home/Moved/photo.heic',
+				contentHash: Buffer.alloc(32, 1),
+				revision: await indexedRevision(confirmedSystemPath),
+			},
 		])
 
 		await expect(
@@ -359,9 +366,8 @@ describe('Photos backup storage', () => {
 			},
 		])
 		const register = vi.spyOn(umbreld.files.fileIndex, 'photosRegisterBackupResource')
-
 		await expect(
-			umbreld.photos.registerMatchingBackupResource(source, resourceKey, baseVirtualPath, hash),
+			umbreld.photos.registerMatchingBackupResource(source, resourceKey, baseVirtualPath, hash, 'IMG_1234.HEIC'),
 		).resolves.toEqual({
 			receipt: {resourceKey, path: keepBothVirtualPath, bytes: Buffer.byteLength('phone original')},
 			revision,
@@ -414,7 +420,7 @@ describe('Photos backup storage', () => {
 				sourceId: SOURCE_ID,
 				resources: [{resourceKey, fileExtension: 'aae'}],
 			}),
-		).resolves.toEqual([{resourceKey, path: virtualPath, bytes: Buffer.byteLength(contents)}])
+		).resolves.toEqual([{resourceKey, bytes: Buffer.byteLength(contents)}])
 	})
 
 	test('deletes one account source records without deleting Home outside the Files lifecycle', async () => {

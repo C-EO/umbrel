@@ -17,7 +17,7 @@ test('creates and idempotently migrates the durable Photos schema', () => {
 			.prepare('PRAGMA table_info(photos_content_state)')
 			.all()
 			.map((column: any) => column.name),
-	).toStrictEqual(['account_id', 'content_hash', 'source_id', 'is_favorite', 'imported_at'])
+	).toStrictEqual(['account_id', 'content_hash', 'source_id', 'is_favorite', 'imported_at', 'source_created_at'])
 	expect(
 		database.prepare("SELECT name FROM sqlite_schema WHERE name = 'photos_deletion_targets'").get(),
 	).toBeUndefined()
@@ -28,6 +28,7 @@ test('creates and idempotently migrates the durable Photos schema', () => {
 		{module: PHOTOS_MIGRATION_MODULE, version: 2},
 		{module: PHOTOS_MIGRATION_MODULE, version: 3},
 		{module: PHOTOS_MIGRATION_MODULE, version: 4},
+		{module: PHOTOS_MIGRATION_MODULE, version: 5},
 	])
 	expect(
 		database
@@ -161,6 +162,14 @@ test('migrates v3 by discarding derived Live Photo pairs without touching backup
 			created_at INTEGER NOT NULL
 		);
 		INSERT INTO photos_sources VALUES ('source', 'alice', 'iphone', 'Phone', 1);
+		CREATE TABLE photos_content_state(
+			account_id TEXT NOT NULL,
+			content_hash BLOB NOT NULL,
+			source_id TEXT NOT NULL REFERENCES photos_sources(id),
+			is_favorite INTEGER NOT NULL,
+			imported_at INTEGER NOT NULL,
+			PRIMARY KEY(account_id, content_hash)
+		) WITHOUT ROWID;
 		CREATE TABLE photos_source_resources(
 			account_id TEXT NOT NULL,
 			source_id TEXT NOT NULL REFERENCES photos_sources(id) ON DELETE CASCADE,
@@ -192,13 +201,77 @@ test('migrates v3 by discarding derived Live Photo pairs without touching backup
 	).toStrictEqual({source_id: 'source', resource_key: 'a'.repeat(64), content_hash: hash})
 	expect(
 		database.prepare("SELECT version FROM schema_migrations WHERE module = 'photos' ORDER BY version").all(),
-	).toStrictEqual([{version: 1}, {version: 2}, {version: 3}, {version: 4}])
+	).toStrictEqual([{version: 1}, {version: 2}, {version: 3}, {version: 4}, {version: 5}])
 	expect(
 		database
 			.prepare('PRAGMA table_info(photos_source_resources)')
 			.all()
 			.map((column: any) => column.name),
-	).toStrictEqual(['account_id', 'source_id', 'resource_key', 'content_hash'])
+	).toStrictEqual(['account_id', 'source_id', 'resource_key', 'content_hash', 'original_filename'])
+	database.close()
+})
+
+test('migrates staging v4 by adding managed backup presentation metadata', () => {
+	const database = new BetterSqlite3(':memory:')
+	const hash = Buffer.alloc(32, 2)
+	database.exec(`
+		CREATE TABLE schema_migrations(
+			module TEXT NOT NULL,
+			version INTEGER NOT NULL,
+			applied_at INTEGER NOT NULL,
+			PRIMARY KEY(module, version)
+		);
+		INSERT INTO schema_migrations VALUES
+			('photos', 1, 1), ('photos', 2, 2), ('photos', 3, 3), ('photos', 4, 4);
+		CREATE TABLE photos_sources(
+			id TEXT PRIMARY KEY,
+			account_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			name TEXT NOT NULL,
+			created_at INTEGER NOT NULL
+		);
+		INSERT INTO photos_sources VALUES ('source', 'alice', 'iphone', 'Phone', 1);
+		CREATE TABLE photos_content_state(
+			account_id TEXT NOT NULL,
+			content_hash BLOB NOT NULL,
+			source_id TEXT NOT NULL REFERENCES photos_sources(id),
+			is_favorite INTEGER NOT NULL,
+			imported_at INTEGER NOT NULL,
+			PRIMARY KEY(account_id, content_hash)
+		) WITHOUT ROWID;
+		CREATE TABLE photos_source_resources(
+			account_id TEXT NOT NULL,
+			source_id TEXT NOT NULL REFERENCES photos_sources(id) ON DELETE CASCADE,
+			resource_key TEXT NOT NULL,
+			content_hash BLOB NOT NULL,
+			PRIMARY KEY(account_id, source_id, resource_key)
+		) WITHOUT ROWID;
+	`)
+	database.prepare("INSERT INTO photos_content_state VALUES ('alice', ?, 'source', 1, 2)").run(hash)
+	database.prepare("INSERT INTO photos_source_resources VALUES ('alice', 'source', ?, ?)").run('b'.repeat(64), hash)
+
+	expect(migratePhotos(database)).toBe(PHOTOS_SCHEMA_VERSION)
+	expect(
+		database
+			.prepare('PRAGMA table_info(photos_content_state)')
+			.all()
+			.map((column: any) => column.name),
+	).toStrictEqual(['account_id', 'content_hash', 'source_id', 'is_favorite', 'imported_at', 'source_created_at'])
+	expect(
+		database
+			.prepare('PRAGMA table_info(photos_source_resources)')
+			.all()
+			.map((column: any) => column.name),
+	).toStrictEqual(['account_id', 'source_id', 'resource_key', 'content_hash', 'original_filename'])
+	expect(
+		database.prepare('SELECT source_id, imported_at, source_created_at FROM photos_content_state').get(),
+	).toStrictEqual({source_id: 'source', imported_at: 2, source_created_at: null})
+	expect(
+		database.prepare('SELECT source_id, resource_key, original_filename FROM photos_source_resources').get(),
+	).toStrictEqual({source_id: 'source', resource_key: 'b'.repeat(64), original_filename: null})
+	expect(
+		database.prepare("SELECT version FROM schema_migrations WHERE module = 'photos' ORDER BY version").all(),
+	).toStrictEqual([{version: 1}, {version: 2}, {version: 3}, {version: 4}, {version: 5}])
 	database.close()
 })
 
@@ -214,7 +287,7 @@ test('migrates an upstream v2 database by adding the durable backup resource ide
 			.prepare('PRAGMA table_info(photos_source_resources)')
 			.all()
 			.map((column: any) => column.name),
-	).toStrictEqual(['account_id', 'source_id', 'resource_key', 'content_hash'])
+	).toStrictEqual(['account_id', 'source_id', 'resource_key', 'content_hash', 'original_filename'])
 	database.close()
 })
 
@@ -285,6 +358,7 @@ test('keeps Photos migration versions independent from other umbrel.db modules',
 		{module: PHOTOS_MIGRATION_MODULE, version: 2},
 		{module: PHOTOS_MIGRATION_MODULE, version: 3},
 		{module: PHOTOS_MIGRATION_MODULE, version: 4},
+		{module: PHOTOS_MIGRATION_MODULE, version: 5},
 	])
 	database.close()
 })

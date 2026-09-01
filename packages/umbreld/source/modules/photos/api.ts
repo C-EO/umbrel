@@ -22,10 +22,12 @@ import type UploadDiskPreflight from '../server/upload-disk-preflight.js'
 import type {ThumbnailVariant} from '../files/thumbnail-support.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 
-import {PHOTO_FILE_EXTENSION_PATTERN, PHOTO_RESOURCE_KEY_PATTERN} from './photos.js'
+import {PHOTO_FILE_EXTENSION_PATTERN, PHOTO_ORIGINAL_FILENAME_MAX_BYTES, PHOTO_RESOURCE_KEY_PATTERN} from './photos.js'
 import {supportsPhotos} from './types.js'
 
 const INSUFFICIENT_STORAGE_HEADER = 'X-Umbrel-Photo-Backup-Error'
+const MIN_PHOTO_CREATION_DATE = -62_135_596_800_000
+const MAX_PHOTO_CREATION_DATE = 253_402_300_799_999
 
 type PhotoBackupPrincipal = Awaited<ReturnType<Umbreld['auth']['authenticatePhotoBackupGrant']>>
 
@@ -36,6 +38,19 @@ function isInsufficientStorageError(error: unknown) {
 
 class InactivePhotoBackupSourceError extends Error {}
 
+function decodeOriginalFilename(encoded: string | undefined) {
+	if (!encoded) return
+	const bytes = Buffer.from(encoded, 'base64')
+	if (bytes.length === 0 || bytes.length > PHOTO_ORIGINAL_FILENAME_MAX_BYTES || bytes.toString('base64') !== encoded) {
+		return
+	}
+	const filename = bytes.toString('utf8')
+	if (!Buffer.from(filename, 'utf8').equals(bytes) || /[\u0000-\u001f\u007f]/.test(filename)) {
+		return
+	}
+	return filename
+}
+
 async function receivePhotoBackupUpload(
 	umbreld: Umbreld,
 	uploadDiskPreflight: UploadDiskPreflight,
@@ -44,13 +59,22 @@ async function receivePhotoBackupUpload(
 ) {
 	const resourceKey = request.get('X-Umbrel-Photo-Backup-Key')
 	const fileExtension = request.get('X-Umbrel-Photo-Backup-Extension')?.toLowerCase()
+	const originalFilename = decodeOriginalFilename(request.get('X-Umbrel-Photo-Original-Filename-Base64'))
+	const rawSourceCreationDate = request.get('X-Umbrel-Photo-Creation-Date-Ms')
+	const sourceCreationDate = rawSourceCreationDate === undefined ? undefined : Number(rawSourceCreationDate)
 	const rawContentLength = request.get('Content-Length')
 	const contentLength = Number(rawContentLength)
 	if (
 		!resourceKey ||
 		!PHOTO_RESOURCE_KEY_PATTERN.test(resourceKey) ||
+		!originalFilename ||
 		!fileExtension ||
 		!PHOTO_FILE_EXTENSION_PATTERN.test(fileExtension) ||
+		(rawSourceCreationDate !== undefined &&
+			(!/^-?\d+$/.test(rawSourceCreationDate) ||
+				!Number.isSafeInteger(sourceCreationDate) ||
+				sourceCreationDate! < MIN_PHOTO_CREATION_DATE ||
+				sourceCreationDate! > MAX_PHOTO_CREATION_DATE)) ||
 		!rawContentLength ||
 		!/^\d+$/.test(rawContentLength) ||
 		!Number.isSafeInteger(contentLength) ||
@@ -59,7 +83,6 @@ async function receivePhotoBackupUpload(
 		response.setHeader('Connection', 'close')
 		return response.status(400).json({error: 'invalid photo backup request'})
 	}
-
 	const principal = response.locals.photoBackupPrincipal as PhotoBackupPrincipal
 	const stagedSource = await umbreld.photos.getBackupSource(principal.accountId, principal.sourceId)
 	if (!stagedSource) {
@@ -110,7 +133,14 @@ async function receivePhotoBackupUpload(
 						if (source.createdAt !== stagedSource.createdAt) throw new InactivePhotoBackupSourceError()
 						activeSource = source
 						matchingResource = staged.blake3
-							? await umbreld.photos.registerMatchingBackupResource(source, resourceKey, virtualPath, staged.blake3)
+							? await umbreld.photos.registerMatchingBackupResource(
+									source,
+									resourceKey,
+									virtualPath,
+									staged.blake3,
+									originalFilename,
+									sourceCreationDate,
+								)
 							: undefined
 						return publish()
 					},
@@ -126,6 +156,8 @@ async function receivePhotoBackupUpload(
 					published.systemPath,
 					published.blake3,
 					published.revision,
+					originalFilename,
+					sourceCreationDate,
 				)
 			},
 		})
@@ -133,12 +165,11 @@ async function receivePhotoBackupUpload(
 		if (!receipt) throw new Error('Photo backup registration did not complete')
 		response.setHeader('Cache-Control', 'no-store')
 		response.setHeader('X-Umbrel-Photo-Backup-Key', resourceKey)
-		response.setHeader('X-Umbrel-Upload-Path', encodeURI(receipt.path))
 		response.setHeader('X-Umbrel-Upload-Bytes', String(receipt.bytes))
 		await umbreld.auth
 			.touchSession(principal)
 			.catch((error) => umbreld.logger.error('Failed to update photo backup session activity', error))
-		return response.status(200).json({key: resourceKey, path: receipt.path, bytes: receipt.bytes})
+		return response.status(200).json({resourceKey, bytes: receipt.bytes})
 	} catch (error) {
 		if (!response.headersSent) {
 			if (error instanceof InactivePhotoBackupSourceError) {

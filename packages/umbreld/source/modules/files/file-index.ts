@@ -401,6 +401,8 @@ export default class FileIndex {
 		systemPath: string,
 		hash: Buffer,
 		expectedRevision: PublishedFileRevision,
+		originalFilename?: string,
+		sourceCreationDate?: number,
 	) {
 		return this.#request<{resourceKey: string; path: string; bytes: number}>('photosRegisterBackupResource', [
 			accountId,
@@ -409,6 +411,8 @@ export default class FileIndex {
 			systemPath,
 			hash,
 			expectedRevision,
+			originalFilename,
+			sourceCreationDate,
 		])
 	}
 

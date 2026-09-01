@@ -159,15 +159,14 @@ describe.sequential('LAN ingress', () => {
 				Authorization: `Bearer ${grant}`,
 				'X-Umbrel-Photo-Backup-Key': uploadedKey,
 				'X-Umbrel-Photo-Backup-Extension': 'heic',
+				'X-Umbrel-Photo-Original-Filename-Base64': Buffer.from('IMG_1234.HEIC').toString('base64'),
 			},
 			https,
 		})
 		expect(uploaded.headers['cache-control']).toBe('no-store')
 		expect(uploaded.headers['x-umbrel-photo-backup-key']).toBe(uploadedKey)
-		expect(uploaded.headers['x-umbrel-upload-path']).toBe(
-			encodeURI(`/Home/Photos/Test iPhone/${uploadedKey.slice(0, 2)}/${uploadedKey}.heic`),
-		)
 		expect(uploaded.headers['x-umbrel-upload-bytes']).toBe('5')
+		expect(JSON.parse(uploaded.body)).toEqual({resourceKey: uploadedKey, bytes: 5})
 
 		// Reject before consuming the body, exercising the ingress behavior that
 		// previously converted an early 507 into a lost client connection.
@@ -179,6 +178,7 @@ describe.sequential('LAN ingress', () => {
 				'Content-Length': String(500 * 1024 ** 4),
 				'X-Umbrel-Photo-Backup-Key': rejectedKey,
 				'X-Umbrel-Photo-Backup-Extension': 'heic',
+				'X-Umbrel-Photo-Original-Filename-Base64': Buffer.from('IMG_1235.HEIC').toString('base64'),
 			},
 			https,
 			throwHttpErrors: false,

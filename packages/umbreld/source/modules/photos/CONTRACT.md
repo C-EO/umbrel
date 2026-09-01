@@ -20,6 +20,13 @@ upload-routing state, not identity.
 resolves that hash to whichever accessible path currently contains the bytes.
 The client must assign a distinct resource key to every resource within a
 source, including separate keys for a Live Photo's still and motion resources.
+New uploads also carry the original filename because the resource-key storage
+path cannot preserve it. They carry PhotoKit's creation date only as a fallback
+for resources whose bytes contain no capture date. Media type, other capture
+metadata, and Live Photo relationships are derived from the uploaded files by
+the indexer rather than duplicated in the client contract. Mutable library state
+such as favorites and album membership is deliberately not part of the
+byte-upload receipt.
 Moving or renaming an uploaded media file therefore does not lose its iPhone
 source attribution or backup receipt. Before returning a receipt, the server
 reopens the indexed path and verifies that it is still the exact indexed file
@@ -27,6 +34,10 @@ revision; an index row alone is never treated as proof that the bytes remain on
 disk. Exact upload retries reuse matching bytes. If the same resource key later
 contains different bytes, or the user edited its ordinary Home file, publication
 uses Files' keep-both naming instead of overwriting either version.
+
+Client receipts contain only the stable resource key and byte count. Filesystem
+paths remain an internal implementation detail because users can move or rename
+the corresponding Home file without changing its backup identity.
 
 The backup transport accepts PhotoKit resources with any protocol-valid file
 extension, including formats the Photos library cannot yet enrich (for example,
@@ -88,7 +99,7 @@ type Item = {
 	id: string // lowercase 64-character BLAKE3 hex digest
 	kind: Kind
 	subKind?: SubKind
-	takenAt: number // epoch ms; embedded capture time, else indexed birth time, else modification time
+	takenAt: number // epoch ms; embedded capture time, else source date, indexed birth time, or modification time
 	// The offset matching the selected EXIF date as minutes east of UTC, when present.
 	takenAtOffsetMinutes?: number
 	width: number // pixels, after EXIF orientation
@@ -104,7 +115,7 @@ type ItemDetail = Item & {
 	sizeBytes: number
 	source: {id: string; name: string; type: SourceType}
 	path: string // virtual path in the selected Home or Trash projection ("Show in Files")
-	createdAt: number // embedded creation/capture time, else indexed birth time, else modification time
+	createdAt: number // embedded creation/capture time, else source date, indexed birth time, or modification time
 	importedAt: number // epoch ms the import wrote the row
 	// Partial camera metadata plus EXIF UserComment. Camera values are
 	// display-ready strings, except iso.

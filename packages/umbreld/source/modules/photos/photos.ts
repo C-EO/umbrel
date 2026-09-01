@@ -37,7 +37,6 @@ export type PhotoBackupResourceDescriptor = {
 
 export type PhotoBackupResourceReceipt = {
 	resourceKey: string
-	path: string
 	bytes: number
 }
 
@@ -45,6 +44,7 @@ export const PHOTO_BACKUP_SOURCE_ID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 export const PHOTO_RESOURCE_KEY_PATTERN = /^[0-9a-f]{64}$/
 export const PHOTO_FILE_EXTENSION_PATTERN = /^[a-z0-9]{1,16}$/
+export const PHOTO_ORIGINAL_FILENAME_MAX_BYTES = 255
 const PHOTO_BACKUP_FILENAME_PATTERN = /^([0-9a-f]{64})\.([a-z0-9]{1,16})$/
 const PHOTO_BACKUP_SHARD_PATTERN = /^[0-9a-f]{2}$/
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u001f\u007f]/
@@ -311,7 +311,7 @@ export default class Photos {
 					resource.revision !== undefined &&
 					(await this.backupResourceRevisionIsCurrent(accountId, resource.path, resource.revision))
 				) {
-					receipts.push({resourceKey: resource.resourceKey, path: resource.path, bytes: resource.bytes})
+					receipts.push({resourceKey: resource.resourceKey, bytes: resource.bytes})
 					continue
 				}
 
@@ -321,7 +321,7 @@ export default class Photos {
 				const virtualPath = this.backupResourceVirtualPath(source, descriptor.resourceKey, descriptor.fileExtension)
 				const uploaded = await this.#hashBackupFile(accountId, virtualPath).catch(() => undefined)
 				if (uploaded?.hash.equals(resource.contentHash)) {
-					receipts.push({resourceKey: resource.resourceKey, path: virtualPath, bytes: uploaded.revision.size})
+					receipts.push({resourceKey: resource.resourceKey, bytes: uploaded.revision.size})
 				}
 			}
 			return receipts
@@ -402,6 +402,8 @@ export default class Photos {
 		systemPath: string,
 		hash: Buffer,
 		revision: PublishedFileRevision,
+		originalFilename?: string,
+		sourceCreationDate?: number,
 	) {
 		const receipt = await this.#umbreld.files.fileIndex.photosRegisterBackupResource(
 			source.accountId,
@@ -410,6 +412,8 @@ export default class Photos {
 			systemPath,
 			hash,
 			revision,
+			originalFilename,
+			sourceCreationDate,
 		)
 		this.#changed(source.accountId)
 		return receipt
@@ -420,6 +424,8 @@ export default class Photos {
 		resourceKey: string,
 		virtualPath: string,
 		hash: Buffer,
+		originalFilename: string,
+		sourceCreationDate?: number,
 	) {
 		// A changed resource is published with keep-both naming, so its current
 		// path may no longer be the deterministic base path. Reuse the durable
@@ -452,6 +458,8 @@ export default class Photos {
 			uploaded.systemPath,
 			uploaded.hash,
 			uploaded.revision,
+			originalFilename,
+			sourceCreationDate,
 		)
 		return {receipt, revision: uploaded.revision}
 	}

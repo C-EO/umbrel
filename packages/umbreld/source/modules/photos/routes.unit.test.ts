@@ -89,7 +89,7 @@ test.each(['00000000-0000-0000-0000-000000000000', '11111111-1111-0111-8111-1111
 test('checks a bounded batch of resource receipts within the signed-in account', async () => {
 	const sourceId = '11111111-1111-4111-8111-111111111111'
 	const resourceKey = 'a'.repeat(64)
-	const receipt = {resourceKey, path: `${sourceId}/${resourceKey}.heic`, bytes: 5}
+	const receipt = {resourceKey, bytes: 5}
 	const confirmedBackupResources = vi.fn(async () => [receipt])
 	const context = contextFor({}, {confirmedBackupResources})
 	const caller = routes.createCaller(context)

@@ -1603,6 +1603,8 @@ export default class FileIndexEngine {
 		systemPath: string,
 		hash: Buffer,
 		expectedRevision: PublishedFileRevision,
+		originalFilename?: string,
+		sourceCreationDate?: number,
 	) {
 		this.#requirePhotos()
 		await this.reconcilePath(systemPath)
@@ -1630,6 +1632,8 @@ export default class FileIndexEngine {
 					resourceKey,
 					entry.id,
 					hash,
+					originalFilename,
+					sourceCreationDate,
 				),
 			)
 			return register.immediate()

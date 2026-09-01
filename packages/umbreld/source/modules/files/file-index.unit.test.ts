@@ -2327,6 +2327,8 @@ test('attributes iPhone resources by durable hash after their files move', async
 	const sourceId = 'iphone:test-source'
 	await index.photosUpsertBackupSource('owner', sourceId, "Luke's iPhone", 123)
 	const resourceKey = 'a'.repeat(64)
+	const originalFilename = 'IMG_1234.HEIC'
+	const sourceCreationDate = 1_706_990_400_000
 	const original = nodePath.join(
 		homeDirectory,
 		'Photos',
@@ -2342,6 +2344,18 @@ test('attributes iPhone resources by durable hash after their files move', async
 		original,
 		hash,
 		await contentRevision(original),
+		originalFilename,
+		sourceCreationDate,
+	)
+	await index.photosRegisterBackupResource(
+		'owner',
+		sourceId,
+		resourceKey,
+		original,
+		hash,
+		await contentRevision(original),
+		'conflicting.mov',
+		sourceCreationDate + 1,
 	)
 	index.startBackgroundReconciliation()
 	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
@@ -2351,7 +2365,10 @@ test('attributes iPhone resources by durable hash after their files move', async
 	})
 
 	const item = (await index.photosListItems('owner', {sourceIds: [sourceId]}, undefined, 10)).items[0]!
+	expect(item.takenAt).toBe(1)
 	await expect(index.photosGetItem('owner', item.id)).resolves.toMatchObject({
+		fileName: 'IMG_1234.HEIC',
+		createdAt: 1,
 		source: {id: sourceId, name: "Luke's iPhone", type: 'iphone'},
 		path: `/Home/Photos/Luke's iPhone/${resourceKey.slice(0, 2)}/${resourceKey}.heic`,
 	})
@@ -2381,6 +2398,7 @@ test('attributes iPhone resources by durable hash after their files move', async
 		},
 	])
 	await expect(index.photosGetItem('owner', item.id)).resolves.toMatchObject({
+		fileName: 'IMG_1234.HEIC',
 		source: {id: sourceId, name: "Luke's iPhone", type: 'iphone'},
 		path: '/Home/Trips/Iceland.heic',
 	})
@@ -2400,13 +2418,25 @@ test('attributes iPhone resources by durable hash after their files move', async
 	expect(
 		durable
 			.prepare(
-				`SELECT account_id, source_id, resource_key, lower(hex(content_hash)) AS content_hash
+				`SELECT account_id, source_id, resource_key, lower(hex(content_hash)) AS content_hash,
+					original_filename
 				FROM photos_source_resources`,
 			)
 			.all(),
 	).toStrictEqual([
-		{account_id: 'owner', source_id: sourceId, resource_key: resourceKey, content_hash: hash.toString('hex')},
+		{
+			account_id: 'owner',
+			source_id: sourceId,
+			resource_key: resourceKey,
+			content_hash: hash.toString('hex'),
+			original_filename: originalFilename,
+		},
 	])
+	expect(
+		durable
+			.prepare('SELECT source_created_at FROM photos_content_state WHERE account_id = ? AND content_hash = ?')
+			.get('owner', hash),
+	).toStrictEqual({source_created_at: sourceCreationDate})
 	durable.close()
 
 	await index.stop()
@@ -2453,6 +2483,47 @@ test('attributes iPhone resources by durable hash after their files move', async
 	})
 	await expect(rebuilt.photosConfirmedBackupResources('owner', sourceId, [resourceKey])).resolves.toStrictEqual([])
 	await expect(rebuilt.photosListSources('owner')).resolves.not.toContainEqual(expect.objectContaining({id: sourceId}))
+})
+
+test('uses an iPhone source date only when the uploaded bytes have no capture date', async () => {
+	const hash = Buffer.alloc(32, 0x32)
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => hash,
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async () => ({kind: 'photo' as const, width: 10, height: 10}),
+		},
+	})
+	await index.initializePhotos('owner')
+	const sourceId = 'iphone:date-fallback'
+	const resourceKey = 'b'.repeat(64)
+	const sourceCreationDate = 1_706_990_400_000
+	await index.photosUpsertBackupSource('owner', sourceId, 'Phone', 123)
+	const uploaded = nodePath.join(homeDirectory, 'Photos', 'Phone', resourceKey.slice(0, 2), `${resourceKey}.jpg`)
+	await fse.outputFile(uploaded, 'photo without embedded date')
+	await index.photosRegisterBackupResource(
+		'owner',
+		sourceId,
+		resourceKey,
+		uploaded,
+		hash,
+		await contentRevision(uploaded),
+		'IMG_1234.JPG',
+		sourceCreationDate,
+	)
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+
+	const item = (await index.photosListItems('owner', {sourceIds: [sourceId]}, undefined, 10)).items[0]!
+	expect(item.takenAt).toBe(sourceCreationDate)
+	await expect(index.photosGetItem('owner', item.id)).resolves.toMatchObject({
+		fileName: 'IMG_1234.JPG',
+		createdAt: sourceCreationDate,
+	})
 })
 
 test('preserves independently kept duplicate files when removing an iPhone source', async () => {

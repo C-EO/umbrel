@@ -54,6 +54,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 const SOURCE_ID = '11111111-1111-4111-8111-111111111111'
 const RESOURCE_KEY = 'a'.repeat(64)
+const ORIGINAL_FILENAME = 'IMG_1234.HEIC'
+
+function filenameHeader(originalFilename = ORIGINAL_FILENAME) {
+	return {
+		'X-Umbrel-Photo-Original-Filename-Base64': Buffer.from(originalFilename).toString('base64'),
+	}
+}
 
 function blake3(contents: Buffer | string) {
 	const hasher = new Blake3Hasher()
@@ -86,6 +93,8 @@ describe('photo backup API', () => {
 			systemPath: string,
 			hash: Buffer,
 			revision: {inode: string; size: number; modifiedNs: string; ctimeNs: string},
+			_originalFilename?: string,
+			_sourceCreationDate?: number,
 		) => {
 			const receipt = {
 				resourceKey,
@@ -97,7 +106,14 @@ describe('photo backup API', () => {
 		},
 	)
 	const registerMatchingBackupResource = vi.fn(
-		async (backupSource: typeof source, resourceKey: string, virtualPath: string, hash: Buffer) => {
+		async (
+			backupSource: typeof source,
+			resourceKey: string,
+			virtualPath: string,
+			hash: Buffer,
+			originalFilename: string,
+			sourceCreationDate?: number,
+		) => {
 			const registered = registeredResources.get(resourceKey)
 			if (registered?.hash.equals(hash)) {
 				const stats = await fse
@@ -123,7 +139,15 @@ describe('photo backup API', () => {
 				modifiedNs: stats.mtimeNs.toString(),
 				ctimeNs: stats.ctimeNs.toString(),
 			}
-			const receipt = await registerBackupResource(backupSource, resourceKey, systemPath, hash, revision)
+			const receipt = await registerBackupResource(
+				backupSource,
+				resourceKey,
+				systemPath,
+				hash,
+				revision,
+				originalFilename,
+				sourceCreationDate,
+			)
 			return {receipt, revision}
 		},
 	)
@@ -227,13 +251,21 @@ describe('photo backup API', () => {
 		await directory.destroyRoot()
 	})
 
-	function upload(resourceKey: string, fileExtension: string, body: string) {
+	function upload(
+		resourceKey: string,
+		fileExtension: string,
+		body: string,
+		originalFilename = ORIGINAL_FILENAME,
+		sourceCreationDate?: number,
+	) {
 		return got(`${origin}/api/photos/upload`, {
 			method: 'POST',
 			headers: {
 				Authorization: 'Bearer photo-grant',
 				'X-Umbrel-Photo-Backup-Key': resourceKey,
 				'X-Umbrel-Photo-Backup-Extension': fileExtension,
+				...filenameHeader(originalFilename),
+				...(sourceCreationDate === undefined ? {} : {'X-Umbrel-Photo-Creation-Date-Ms': String(sourceCreationDate)}),
 			},
 			body,
 			throwHttpErrors: false,
@@ -268,6 +300,7 @@ describe('photo backup API', () => {
 				Authorization: 'Bearer photo-grant',
 				'X-Umbrel-Photo-Backup-Key': 'not-a-resource-key',
 				'X-Umbrel-Photo-Backup-Extension': 'heic',
+				...filenameHeader(),
 			},
 			body: 'photo',
 			throwHttpErrors: false,
@@ -280,11 +313,60 @@ describe('photo backup API', () => {
 				Authorization: 'Bearer invalid-grant',
 				'X-Umbrel-Photo-Backup-Key': RESOURCE_KEY,
 				'X-Umbrel-Photo-Backup-Extension': 'heic',
+				...filenameHeader(),
 			},
 			body: 'photo',
 			throwHttpErrors: false,
 		})
 		expect(invalidGrant.statusCode).toBe(401)
+	})
+
+	test('rejects a missing or malformed original filename', async () => {
+		const missingFilename = await got(`${origin}/api/photos/upload`, {
+			method: 'POST',
+			headers: {
+				Authorization: 'Bearer photo-grant',
+				'X-Umbrel-Photo-Backup-Key': RESOURCE_KEY,
+				'X-Umbrel-Photo-Backup-Extension': 'heic',
+			},
+			body: 'photo',
+			throwHttpErrors: false,
+		})
+		const controlCharacterFilename = await got(`${origin}/api/photos/upload`, {
+			method: 'POST',
+			headers: {
+				Authorization: 'Bearer photo-grant',
+				'X-Umbrel-Photo-Backup-Key': RESOURCE_KEY,
+				'X-Umbrel-Photo-Backup-Extension': 'heic',
+				...filenameHeader('IMG_1234\u0000.HEIC'),
+			},
+			body: 'photo',
+			throwHttpErrors: false,
+		})
+
+		expect(missingFilename.statusCode).toBe(400)
+		expect(controlCharacterFilename.statusCode).toBe(400)
+	})
+
+	test('accepts a bounded PhotoKit creation date and rejects malformed values', async () => {
+		const creationDate = 1_706_990_400_000
+		const accepted = await upload(RESOURCE_KEY, 'heic', 'photo', ORIGINAL_FILENAME, creationDate)
+		const malformed = await got(`${origin}/api/photos/upload`, {
+			method: 'POST',
+			headers: {
+				Authorization: 'Bearer photo-grant',
+				'X-Umbrel-Photo-Backup-Key': 'b'.repeat(64),
+				'X-Umbrel-Photo-Backup-Extension': 'heic',
+				'X-Umbrel-Photo-Creation-Date-Ms': 'today',
+				...filenameHeader(),
+			},
+			body: 'photo',
+			throwHttpErrors: false,
+		})
+
+		expect(accepted.statusCode).toBe(200)
+		expect(registerBackupResource.mock.calls[0]?.[6]).toBe(creationDate)
+		expect(malformed.statusCode).toBe(400)
 	})
 
 	test('derives a friendly Home source path and deduplicates exact retries', async () => {
@@ -295,6 +377,7 @@ describe('photo backup API', () => {
 					Authorization: 'Bearer photo-grant',
 					'X-Umbrel-Photo-Backup-Key': RESOURCE_KEY,
 					'X-Umbrel-Photo-Backup-Extension': 'HEIC',
+					...filenameHeader(),
 				},
 				body,
 			})
@@ -302,13 +385,11 @@ describe('photo backup API', () => {
 		const first = await upload('photo')
 		const retry = await upload('photo')
 		const shard = RESOURCE_KEY.slice(0, 2)
-		const receiptPath = `/Home/Photos/${source.directoryName}/${shard}/${RESOURCE_KEY}.heic`
 		const systemPath = `${mediaDirectory}/Photos/${source.directoryName}/${shard}/${RESOURCE_KEY}.heic`
 
 		expect(first.headers['x-umbrel-photo-backup-key']).toBe(RESOURCE_KEY)
-		expect(first.headers['x-umbrel-upload-path']).toBe(encodeURI(receiptPath))
-		expect(retry.headers['x-umbrel-upload-path']).toBe(encodeURI(receiptPath))
 		expect(retry.headers['x-umbrel-upload-bytes']).toBe(String(Buffer.byteLength('photo')))
+		expect(JSON.parse(retry.body)).toEqual({resourceKey: RESOURCE_KEY, bytes: Buffer.byteLength('photo')})
 		await expect(fse.readFile(systemPath, 'utf8')).resolves.toBe('photo')
 		await expect(fse.readdir(nodePath.dirname(systemPath))).resolves.toStrictEqual([`${RESOURCE_KEY}.heic`])
 		expect((await fse.stat(systemPath)).mode & 0o777).toBe(0o600)
@@ -343,10 +424,8 @@ describe('photo backup API', () => {
 		expect(first.statusCode).toBe(200)
 		expect(retry.statusCode).toBe(200)
 		expect(repeatedRetry.statusCode).toBe(200)
-		expect(retry.headers['x-umbrel-upload-path']).toBe(
-			encodeURI(`/Home/Photos/${source.directoryName}/${shard}/${RESOURCE_KEY} (1).heic`),
-		)
-		expect(repeatedRetry.headers['x-umbrel-upload-path']).toBe(retry.headers['x-umbrel-upload-path'])
+		expect(JSON.parse(retry.body)).toEqual({resourceKey: RESOURCE_KEY, bytes: Buffer.byteLength('phone original')})
+		expect(JSON.parse(repeatedRetry.body)).toEqual(JSON.parse(retry.body))
 		await expect(fse.readFile(originalPath, 'utf8')).resolves.toBe('user edit')
 		await expect(fse.readFile(preservedUploadPath, 'utf8')).resolves.toBe('phone original')
 		await expect(fse.pathExists(`${nodePath.dirname(preservedUploadPath)}/${RESOURCE_KEY} (2).heic`)).resolves.toBe(
@@ -354,15 +433,24 @@ describe('photo backup API', () => {
 		)
 	})
 
-	test('returns a header-safe receipt for a Unicode device folder', async () => {
+	test('does not expose a Unicode device folder in the receipt', async () => {
 		source.name = '李娜’s iPhone'
 		source.directoryName = '李娜’s iPhone'
-		const response = await upload(RESOURCE_KEY, 'heic', 'photo')
-		const receiptPath = `/Home/Photos/${source.directoryName}/${RESOURCE_KEY.slice(0, 2)}/${RESOURCE_KEY}.heic`
+		const originalFilename = '海边照片.HEIC'
+		const response = await upload(RESOURCE_KEY, 'heic', 'photo', originalFilename)
 
 		expect(response.statusCode).toBe(200)
-		expect(response.headers['x-umbrel-upload-path']).toBe(encodeURI(receiptPath))
-		expect(JSON.parse(response.body)).toEqual({key: RESOURCE_KEY, path: receiptPath, bytes: 5})
+		expect(response.headers['x-umbrel-upload-path']).toBeUndefined()
+		expect(JSON.parse(response.body)).toEqual({resourceKey: RESOURCE_KEY, bytes: 5})
+		expect(registerBackupResource).toHaveBeenCalledWith(
+			source,
+			RESOURCE_KEY,
+			expect.any(String),
+			expect.any(Buffer),
+			expect.any(Object),
+			originalFilename,
+			undefined,
+		)
 		await expect(
 			fse.readFile(
 				`${mediaDirectory}/Photos/${source.directoryName}/${RESOURCE_KEY.slice(0, 2)}/${RESOURCE_KEY}.heic`,
@@ -374,12 +462,13 @@ describe('photo backup API', () => {
 	test('stores a Live Photo still and motion resource independently', async () => {
 		const stillKey = '1'.repeat(64)
 		const motionKey = '2'.repeat(64)
-		const still = await upload(stillKey, 'heic', 'still')
-		const motion = await upload(motionKey, 'mov', 'motion')
+		const still = await upload(stillKey, 'heic', 'still', 'IMG_1234.HEIC')
+		const motion = await upload(motionKey, 'mov', 'motion', 'IMG_1234.MOV')
 
 		expect(still.statusCode).toBe(200)
 		expect(motion.statusCode).toBe(200)
 		expect(registerBackupResource.mock.calls.map(([, key]) => key)).toStrictEqual([stillKey, motionKey])
+		expect(registerBackupResource.mock.calls.map((call) => call[5])).toStrictEqual(['IMG_1234.HEIC', 'IMG_1234.MOV'])
 		await expect(
 			fse.readFile(`${mediaDirectory}/Photos/${source.directoryName}/${stillKey.slice(0, 2)}/${stillKey}.heic`, 'utf8'),
 		).resolves.toBe('still')
@@ -402,6 +491,8 @@ describe('photo backup API', () => {
 			`${mediaDirectory}/Photos/${source.directoryName}/${resourceKey.slice(0, 2)}/${resourceKey}.aae`,
 			expect.any(Buffer),
 			expect.objectContaining({size: 7}),
+			ORIGINAL_FILENAME,
+			undefined,
 		)
 		await expect(
 			fse.readFile(
@@ -421,6 +512,7 @@ describe('photo backup API', () => {
 				'Content-Length': '5',
 				'X-Umbrel-Photo-Backup-Key': resourceKey,
 				'X-Umbrel-Photo-Backup-Extension': 'heic',
+				...filenameHeader(),
 			},
 			body,
 			throwHttpErrors: false,

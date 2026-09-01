@@ -72,6 +72,15 @@ function optionalStringArg(args: unknown[], index: number) {
 	return value
 }
 
+function optionalNumberArg(args: unknown[], index: number) {
+	const value = args[index]
+	if (value === undefined) return
+	if (typeof value !== 'number' || !Number.isFinite(value)) {
+		throw new TypeError(`Expected optional number argument ${index}`)
+	}
+	return value
+}
+
 function booleanArg(args: unknown[], index: number) {
 	const value = args[index]
 	if (typeof value !== 'boolean') throw new TypeError(`Expected boolean argument ${index}`)
@@ -191,6 +200,8 @@ async function request(method: FileIndexRequestMethod, args: unknown[]) {
 				stringArg(args, 3),
 				bufferArg(args, 4),
 				contentFingerprintArg(args, 5),
+				optionalStringArg(args, 6),
+				optionalNumberArg(args, 7),
 			)
 		case 'photosConfirmedBackupResources':
 			return index.photosConfirmedBackupResources(stringArg(args), stringArg(args, 1), stringsArg(args, 2))

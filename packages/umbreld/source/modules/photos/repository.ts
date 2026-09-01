@@ -178,8 +178,12 @@ const PHOTO_LIBRARY_CTE = `
 		SELECT canonical_locations.*,
 			COALESCE(umbrel.photos_content_state.is_favorite, 0) AS is_favorite,
 			COALESCE(umbrel.photos_content_state.imported_at, canonical_locations.content_created_at) AS imported_at,
-			COALESCE(canonical_locations.taken_at, canonical_locations.birthtime_ms,
+			COALESCE(canonical_locations.taken_at, umbrel.photos_content_state.source_created_at,
+				canonical_locations.birthtime_ms,
 				canonical_locations.modified_ms) AS logical_taken_at,
+			COALESCE(canonical_locations.created_at, umbrel.photos_content_state.source_created_at,
+				canonical_locations.birthtime_ms,
+				canonical_locations.modified_ms) AS logical_created_at,
 			CASE
 				WHEN canonical_locations.sub_kind = 'spherical' THEN 'spherical'
 				WHEN live_pair.still_hash IS NOT NULL OR canonical_locations.sub_kind = 'live' THEN 'live'
@@ -291,6 +295,8 @@ export default class PhotosRepository {
 		resourceKey: string,
 		entryId: number,
 		hash: Buffer,
+		originalFilename?: string,
+		sourceCreationDate?: number,
 	) {
 		const source = database
 			.prepare("SELECT 1 FROM umbrel.photos_sources WHERE id = ? AND account_id = ? AND type = 'iphone'")
@@ -313,23 +319,30 @@ export default class PhotosRepository {
 		const now = Date.now()
 		database
 			.prepare(
-				`INSERT INTO umbrel.photos_source_resources(account_id, source_id, resource_key, content_hash)
-				VALUES (?, ?, ?, ?)
+				`INSERT INTO umbrel.photos_source_resources(
+					account_id, source_id, resource_key, content_hash, original_filename
+				)
+				VALUES (?, ?, ?, ?, ?)
 				ON CONFLICT(account_id, source_id, resource_key)
-				DO UPDATE SET content_hash = excluded.content_hash`,
+				DO UPDATE SET
+					content_hash = excluded.content_hash,
+					original_filename = COALESCE(photos_source_resources.original_filename, excluded.original_filename)`,
 			)
-			.run(accountId, sourceId, resourceKey, hash)
+			.run(accountId, sourceId, resourceKey, hash, originalFilename ?? null)
 		if (uploaded.content_id !== null) {
 			database
 				.prepare(
-					`INSERT INTO umbrel.photos_content_state(account_id, content_hash, source_id, is_favorite, imported_at)
-					VALUES (?, ?, ?, 0, ?)
+					`INSERT INTO umbrel.photos_content_state(
+						account_id, content_hash, source_id, is_favorite, imported_at, source_created_at
+					)
+					VALUES (?, ?, ?, 0, ?, ?)
 					ON CONFLICT(account_id, content_hash) DO UPDATE SET
 						source_id = CASE
 							WHEN (SELECT type FROM umbrel.photos_sources WHERE id = photos_content_state.source_id) = 'umbrel'
-							THEN excluded.source_id ELSE photos_content_state.source_id END`,
+							THEN excluded.source_id ELSE photos_content_state.source_id END,
+						source_created_at = COALESCE(photos_content_state.source_created_at, excluded.source_created_at)`,
 				)
-				.run(accountId, hash, sourceId, now)
+				.run(accountId, hash, sourceId, now, sourceCreationDate ?? null)
 		}
 		database.prepare('UPDATE umbrel.photos_sources SET last_import_at = ? WHERE id = ?').run(now, sourceId)
 		return {
@@ -607,9 +620,18 @@ export default class PhotosRepository {
 		this.#ensureSource(database, accountId)
 		const row = database
 			.prepare(
-				`${PHOTO_LIBRARY_CTE} ${ITEM_SELECT}, name AS file_name, size AS size_bytes,
+				`${PHOTO_LIBRARY_CTE} ${ITEM_SELECT}, COALESCE((
+					SELECT named_resource.original_filename
+					FROM umbrel.photos_source_resources AS named_resource
+					WHERE named_resource.account_id = logical_items.account_id
+						AND named_resource.source_id = logical_items.source_id
+						AND named_resource.content_hash = logical_items.content_hash
+						AND named_resource.original_filename IS NOT NULL
+					ORDER BY named_resource.resource_key LIMIT 1
+				), name) AS file_name,
+				size AS size_bytes,
 				source_id, source_name, source_type, root_virtual_path, relative_path,
-				COALESCE(created_at, birthtime_ms, modified_ms) AS created_at, imported_at,
+				logical_created_at AS created_at, imported_at,
 				camera_make, camera_model, lens, focal_length, aperture, exposure,
 				iso, latitude, longitude, altitude, user_comment
 				FROM logical_items WHERE id = ? AND root_kind = ?`,

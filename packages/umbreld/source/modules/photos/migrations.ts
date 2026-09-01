@@ -1,6 +1,6 @@
 import type BetterSqlite3 from 'better-sqlite3'
 
-export const PHOTOS_SCHEMA_VERSION = 4
+export const PHOTOS_SCHEMA_VERSION = 5
 export const PHOTOS_MIGRATION_MODULE = 'photos'
 
 export class UnsupportedPhotosSchemaError extends Error {}
@@ -52,6 +52,7 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 				source_id TEXT NOT NULL REFERENCES photos_sources(id) ON DELETE RESTRICT,
 				is_favorite INTEGER NOT NULL DEFAULT 0 CHECK (is_favorite IN (0, 1)),
 				imported_at INTEGER NOT NULL,
+				source_created_at INTEGER,
 				PRIMARY KEY(account_id, content_hash)
 			) WITHOUT ROWID;
 			CREATE INDEX photos_content_state_by_account
@@ -95,10 +96,14 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 					source_id TEXT NOT NULL REFERENCES photos_sources(id) ON DELETE RESTRICT,
 					is_favorite INTEGER NOT NULL DEFAULT 0 CHECK (is_favorite IN (0, 1)),
 					imported_at INTEGER NOT NULL,
+					source_created_at INTEGER,
 					PRIMARY KEY(account_id, content_hash)
 				) WITHOUT ROWID;
-				INSERT INTO photos_content_state_v3(account_id, content_hash, source_id, is_favorite, imported_at)
-					SELECT account_id, content_hash, source_id, is_favorite, imported_at FROM photos_content_state;
+				INSERT INTO photos_content_state_v3(
+					account_id, content_hash, source_id, is_favorite, imported_at, source_created_at
+				)
+					SELECT account_id, content_hash, source_id, is_favorite, imported_at, NULL
+					FROM photos_content_state;
 				DROP TABLE photos_content_state;
 				ALTER TABLE photos_content_state_v3 RENAME TO photos_content_state;
 				CREATE INDEX photos_content_state_by_account
@@ -115,6 +120,7 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 						AND resource_key NOT GLOB '*[^0-9a-f]*'
 					),
 					content_hash BLOB NOT NULL CHECK (length(content_hash) = 32),
+					original_filename TEXT,
 					PRIMARY KEY(account_id, source_id, resource_key)
 				) WITHOUT ROWID;
 				CREATE INDEX IF NOT EXISTS photos_source_resources_by_content
@@ -141,6 +147,29 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 			`)
 			database
 				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 4, ?)')
+				.run(PHOTOS_MIGRATION_MODULE, Date.now())
+		}
+		if (version < 5) {
+			const contentStateColumns = new Set(
+				(database.prepare("PRAGMA table_info('photos_content_state')").all() as Array<{name: string}>).map(
+					({name}) => name,
+				),
+			)
+			if (!contentStateColumns.has('source_created_at')) {
+				database.exec('ALTER TABLE photos_content_state ADD COLUMN source_created_at INTEGER')
+			}
+
+			const sourceResourceColumns = new Set(
+				(database.prepare("PRAGMA table_info('photos_source_resources')").all() as Array<{name: string}>).map(
+					({name}) => name,
+				),
+			)
+			if (!sourceResourceColumns.has('original_filename')) {
+				database.exec('ALTER TABLE photos_source_resources ADD COLUMN original_filename TEXT')
+			}
+
+			database
+				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 5, ?)')
 				.run(PHOTOS_MIGRATION_MODULE, Date.now())
 		}
 	})
