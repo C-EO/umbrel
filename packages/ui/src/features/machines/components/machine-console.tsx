@@ -9,6 +9,7 @@ import {createBrowserUuid} from '@/features/machines/utils'
 import {trpcClient} from '@/trpc/trpc'
 
 const SUPERSEDED_CLOSE_CODE = 4001
+const LAYOUT_SETTLE_DELAY_MS = 350
 
 type ConnectionState = 'connected' | 'disconnected' | 'superseded'
 
@@ -18,7 +19,7 @@ function machineSocketUrl(path: string, machineId: string, sessionId: string, ti
 	return `${protocol}//${window.location.hostname}${port}${path}?machineId=${encodeURIComponent(machineId)}&sessionId=${encodeURIComponent(sessionId)}&ticket=${encodeURIComponent(ticket)}`
 }
 
-export function MachineConsole({machineId}: {machineId: string}) {
+export function MachineConsole({machineId, resizeSession}: {machineId: string; resizeSession: boolean}) {
 	const root = useRef<HTMLDivElement>(null)
 	const screen = useRef<HTMLDivElement>(null)
 	const {t} = useTranslation()
@@ -35,6 +36,7 @@ export function MachineConsole({machineId}: {machineId: string}) {
 		let rfb: RFB | undefined
 		let socket: WebSocket | undefined
 		let closeCode: number | undefined
+		let rescaleTimer: ReturnType<typeof setTimeout> | undefined
 
 		const connect = async () => {
 			if (disposed || !screen.current) return
@@ -47,20 +49,30 @@ export function MachineConsole({machineId}: {machineId: string}) {
 				socket.addEventListener('close', (event) => {
 					closeCode = event.code
 				})
-				rfb = new RFB(screen.current, socket, {shared: true})
-				rfb.scaleViewport = true
-				rfb.resizeSession = true
-				rfb.showDotCursor = true
-				rfb.background = '#000'
-				rfb.addEventListener('connect', () => {
+				const connectedRfb = new RFB(screen.current, socket, {shared: true})
+				rfb = connectedRfb
+				connectedRfb.scaleViewport = true
+				connectedRfb.resizeSession = false
+				connectedRfb.showDotCursor = true
+				connectedRfb.background = '#000'
+				// Motion transforms do not trigger noVNC's ResizeObserver. Reassigning
+				// this property makes noVNC remeasure once the Machines morph settles;
+				// graphical guests can then start following the settled browser size.
+				rescaleTimer = setTimeout(() => {
+					if (disposed || rfb !== connectedRfb) return
+					connectedRfb.scaleViewport = true
+					connectedRfb.resizeSession = resizeSession
+				}, LAYOUT_SETTLE_DELAY_MS)
+				connectedRfb.addEventListener('connect', () => {
 					setConnectionState('connected')
 					// noVNC only forwards keyboard input while its canvas has DOM focus,
 					// and by default nothing focuses it until the first click. Focus on
 					// every (re)connect so an opened machine is immediately interactive.
 					rfb?.focus()
 				})
-				rfb.addEventListener('disconnect', (event: CustomEvent<{clean: boolean}>) => {
+				connectedRfb.addEventListener('disconnect', (event: CustomEvent<{clean: boolean}>) => {
 					if (disposed) return
+					if (rescaleTimer) clearTimeout(rescaleTimer)
 					if (closeCode === SUPERSEDED_CLOSE_CODE) {
 						setConnectionState('superseded')
 						return
@@ -79,10 +91,11 @@ export function MachineConsole({machineId}: {machineId: string}) {
 		return () => {
 			disposed = true
 			if (retry) clearTimeout(retry)
+			if (rescaleTimer) clearTimeout(rescaleTimer)
 			rfb?.disconnect()
 			socket?.close()
 		}
-	}, [machineId, sessionId])
+	}, [machineId, resizeSession, sessionId])
 
 	useEffect(() => {
 		if (muted) {
@@ -184,17 +197,8 @@ export function MachineConsole({machineId}: {machineId: string}) {
 
 	return (
 		<div ref={root} className='absolute inset-0 flex items-center justify-center bg-black'>
-			{/* Quantize the size noVNC requests (resizeSession uses this element's
-			    box) to whole VGA text cells — 16px rows, 8px columns. A fractional
-			    row count makes guest text consoles lay out lines past the visible
-			    framebuffer until the tty scrolls; cell-exact sizes remove that
-			    class of glitch, and the leftover pixels center out as bezel.
-			    Browsers without CSS round() ignore the style and keep size-full. */}
-			<div
-				ref={screen}
-				style={{height: 'round(down, 100%, 16px)', width: 'round(down, 100%, 8px)'}}
-				className='size-full overflow-hidden [&_canvas]:mx-auto [&_canvas]:block'
-			/>
+			{/* noVNC owns the canvas; scaleViewport keeps the complete framebuffer visible. */}
+			<div ref={screen} className='size-full shrink-0 overflow-hidden [&_canvas]:mx-auto [&_canvas]:block' />
 			{!muted && audioBlocked && (
 				<div className='pointer-events-none absolute top-3 right-3 z-10 grid size-7 place-items-center rounded-full bg-black/55 text-white/55 backdrop-blur'>
 					<VolumeX className='size-3.5' />

@@ -62,9 +62,14 @@ function Screen({machine}: {machine: Machine}) {
 }
 
 function ConsoleScreen({machine}: {machine: Machine}) {
+	// QEMU's VNC resize extension can diverge from Linux fbcon's scanout
+	// geometry. Keep built-in text consoles at their native framebuffer size;
+	// graphical guests can still follow the browser at native resolution.
+	const isTextConsole = machine.osVariant === 'Server' || machine.osId === 'alpine'
+
 	return (
 		<>
-			<MachineConsole machineId={machine.id} />
+			<MachineConsole machineId={machine.id} resizeSession={!isTextConsole} />
 			{machine.state === 'running' && machine.firstBootSetup && (
 				<div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-6 text-center backdrop-blur-sm'>
 					<Loader2 className='size-6 animate-spin text-white/70' />
