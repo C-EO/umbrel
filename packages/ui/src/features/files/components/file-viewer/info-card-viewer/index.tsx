@@ -30,8 +30,10 @@ export default function InfoCardViewer({item}: InfoCardViewerProps) {
 		<ViewerWrapper>
 			<div className='flex w-full max-w-[calc(100%-40px)] flex-col items-center gap-5 rounded-20 bg-dialog-content/70 p-8 shadow-dialog backdrop-blur-2xl contrast-more:bg-dialog-content contrast-more:backdrop-blur-none sm:w-md'>
 				<FileItemIcon item={item} className='h-16 w-16' />
-				<div className='flex flex-col items-center gap-1 text-center'>
-					<span className='text-17 leading-snug font-semibold -tracking-2 break-words text-white'>{item.name}</span>
+				<div className='flex w-full min-w-0 flex-col items-center gap-1 text-center'>
+					<span className='max-w-full min-w-0 text-17 leading-snug font-semibold -tracking-2 break-words text-white'>
+						{item.name}
+					</span>
 					{typeLine && <span className='text-13 leading-tight -tracking-2 text-white/60'>{typeLine}</span>}
 					{item.modified != null && (
 						<span className='text-13 leading-tight -tracking-2 text-white/60'>
