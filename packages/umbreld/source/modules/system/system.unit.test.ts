@@ -10,7 +10,7 @@ import * as execa from 'execa'
 import fse from 'fs-extra'
 
 import Umbreld from '../../index.js'
-import {getCpuTemperature, getMemoryUsage, getDiskUsageByPath, shutdown, reboot} from './system.js'
+import {getCpuTemperature, getMemoryUsage, getDiskUsage, getDiskUsageByPath, shutdown, reboot} from './system.js'
 
 vi.mock('systeminformation')
 vi.mock('execa')
@@ -51,6 +51,38 @@ describe('getDiskUsageByPath', () => {
 			totalUsed: 126167117824,
 			available: 164653916160,
 		})
+	})
+})
+
+describe('getDiskUsage', () => {
+	test('keeps filesystem capacity live while using Files and app directory aggregates', async () => {
+		vi.mocked(execa.$).mockResolvedValue({
+			stdout: `1B-blocks Used Avail
+1000 800 200`,
+		})
+		const getStorageUsage = vi.fn(async () => 130)
+		const getAppDiskUsage = vi.fn(async () => 70)
+		const storageResourceUsage = vi.fn(async () => [{id: 'machine', name: 'Machine', osId: 'linux', used: 110}])
+		const umbreld = {
+			dataDirectory: '/data',
+			hardware: {umbrelPro: {isUmbrelPro: vi.fn(async () => false)}},
+			apps: {instances: [{id: 'app', getDiskUsage: getAppDiskUsage}]},
+			machines: {storageResourceUsage},
+			files: {getStorageUsage},
+		} as unknown as Umbreld
+
+		await expect(getDiskUsage(umbreld)).resolves.toMatchObject({
+			size: 1000,
+			totalUsed: 800,
+			available: 200,
+			files: 130,
+			apps: [{id: 'app', used: 70}],
+			machines: [{id: 'machine', used: 110}],
+		})
+		expect(execa.$).toHaveBeenCalledOnce()
+		expect(getStorageUsage).toHaveBeenCalledOnce()
+		expect(getAppDiskUsage).toHaveBeenCalledOnce()
+		expect(storageResourceUsage).toHaveBeenCalledOnce()
 	})
 })
 

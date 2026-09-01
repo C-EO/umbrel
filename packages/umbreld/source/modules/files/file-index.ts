@@ -7,6 +7,7 @@ import {
 	DEFAULT_WATCHER_BULK_THRESHOLD,
 	type FileIndexLogger,
 	type FileIndexRoot,
+	type IndexedDirectorySize,
 	type IndexedEntry,
 	type SearchCandidate,
 	type WatcherChange,
@@ -594,6 +595,11 @@ export default class FileIndex {
 
 	async recentCandidates(virtualRoot: string, maxResults: number, excludedDirectoryNames: readonly string[] = []) {
 		return this.#request<SearchCandidate[]>('recentCandidates', [virtualRoot, maxResults, excludedDirectoryNames])
+	}
+
+	async directorySizes(virtualPaths: readonly string[]) {
+		if (!this.#workerReady) return []
+		return this.#request<IndexedDirectorySize[]>('directorySizes', [virtualPaths])
 	}
 
 	async status() {

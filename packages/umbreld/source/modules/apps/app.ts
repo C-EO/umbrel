@@ -8,8 +8,6 @@ import {$} from 'execa'
 import fetch from 'node-fetch'
 import stripAnsi from 'strip-ansi'
 import pRetry from 'p-retry'
-
-import getDirectorySize from '../utilities/get-directory-size.js'
 import {
 	applyGpuAccelerationToService,
 	getGpuAcceleration,
@@ -425,11 +423,7 @@ export default class App {
 
 	async getDiskUsage() {
 		try {
-			// Disk usage calculations can fail if the app is rapidly moving files around
-			// since files in directories will be listed and then iterated over to have
-			// their size summed up. If a file is moved between these two operations it
-			// will fail. It happens rarely so simply retrying will catch most cases.
-			return await pRetry(() => getDirectorySize(this.dataDirectory), {retries: 2})
+			return await this.#umbreld.files.getDirectorySize(`/Apps/${this.id}`)
 		} catch (error) {
 			this.logger.error(`Failed to get disk usage for app ${this.id}`, error)
 			return 0

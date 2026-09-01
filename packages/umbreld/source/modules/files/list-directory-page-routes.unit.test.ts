@@ -30,12 +30,14 @@ function contextFor(directory: string) {
 		modified: 0,
 		operations: [],
 	}))
+	const annotateIndexedDirectorySizes = vi.fn(async (files: Array<Awaited<ReturnType<typeof status>>>) => files)
 	const context = {
 		umbreld: {
 			files: {
 				normalizeVirtualPath: (path: string) => path,
 				virtualToSystemPath: vi.fn(async () => directory),
 				status,
+				annotateIndexedDirectorySizes,
 				isHidden: (name: string) => name === '.DS_Store',
 				maxDirectoryListing: 10_000,
 				logger: {error: vi.fn()},

@@ -10,7 +10,6 @@ import PQueue from 'p-queue'
 
 import type Umbreld from '../../index.js'
 
-import getDirectorySize from '../utilities/get-directory-size.js'
 import {escapeSpecialRegExpLiterals} from '../utilities/regexp.js'
 import pWaitFor from 'p-wait-for'
 import {getGpuDeviceUsage, type GpuDeviceUsage} from '../hardware/gpu-usage.js'
@@ -87,7 +86,7 @@ export async function getDiskUsage(umbreld: Umbreld): Promise<{
 }> {
 	const {size, totalUsed, available} = await getSystemDiskUsage(umbreld)
 
-	const [apps, machines] = await Promise.all([
+	const [apps, machines, filesTotalUsage] = await Promise.all([
 		Promise.all(
 			umbreld.apps.instances.map(async (app) => ({
 				id: app.id,
@@ -95,19 +94,10 @@ export async function getDiskUsage(umbreld: Umbreld): Promise<{
 			})),
 		),
 		umbreld.machines.storageResourceUsage(),
+		umbreld.files.getStorageUsage(),
 	])
 	const appsTotal = apps.reduce((total, app) => total + app.used, 0)
 	const machinesTotal = machines.reduce((total, machine) => total + machine.used, 0)
-
-	const filesTotalUsage = (
-		await Promise.all(
-			[
-				umbreld.files.getBaseDirectory('/Home'),
-				umbreld.files.getBaseDirectory('/Trash'),
-				umbreld.files.thumbnails.thumbnailDirectory,
-			].map((directory) => getDirectorySize(directory).catch(() => 0)),
-		)
-	).reduce((total, usage) => total + usage, 0)
 
 	const minSystemUsage = 2 * 1024 * 1024 * 1024 // 2GB
 

@@ -4525,6 +4525,124 @@ test('rejects invalid recent-file queries and non-Home roots', async () => {
 	)
 })
 
+test('aggregates ready indexed directories without following links or double-counting hard links', async () => {
+	const {index, homeDirectory, trashDirectory} = await fixture(undefined, {includeTrash: true})
+	const documents = nodePath.join(homeDirectory, 'documents')
+	const nested = nodePath.join(documents, 'nested')
+	const empty = nodePath.join(homeDirectory, 'empty')
+	await Promise.all([fse.ensureDir(nested), fse.ensureDir(empty)])
+	await Promise.all([
+		writeFile(nodePath.join(documents, 'document.txt'), 'abc'),
+		writeFile(nodePath.join(nested, 'nested.txt'), '12345'),
+		writeFile(nodePath.join(documents, '.hidden'), '1234567'),
+		writeFile(nodePath.join(homeDirectory, 'root.txt'), '12'),
+		writeFile(nodePath.join(trashDirectory, 'trashed.txt'), '12345678901'),
+	])
+	await link(nodePath.join(documents, 'document.txt'), nodePath.join(documents, 'document-hard-link.txt'))
+	await symlink(nodePath.join(documents, 'document.txt'), nodePath.join(documents, 'document-symbolic-link.txt'))
+	await Promise.all([index.reconcileRoot('/Home', 'directory-sizes'), index.reconcileRoot('/Trash', 'directory-sizes')])
+
+	await expect(
+		index.directorySizes([
+			'/Home',
+			'/Home/documents',
+			'/Home/documents/nested',
+			'/Home/empty',
+			'/Trash',
+			'/Home/documents/document.txt',
+			'/Home/missing',
+			'/External',
+		]),
+	).resolves.toStrictEqual([
+		{virtualPath: '/Home', size: 17},
+		{virtualPath: '/Home/documents', size: 15},
+		{virtualPath: '/Home/documents/nested', size: 5},
+		{virtualPath: '/Home/empty', size: 0},
+		{virtualPath: '/Trash', size: 11},
+	])
+})
+
+test('updates indexed directory aggregates after writes, copies, moves, and deletes', async () => {
+	const {index, homeDirectory} = await fixture()
+	const sourceDirectory = nodePath.join(homeDirectory, 'source')
+	const destinationDirectory = nodePath.join(homeDirectory, 'destination')
+	const sourcePath = nodePath.join(sourceDirectory, 'changing.txt')
+	const destinationPath = nodePath.join(destinationDirectory, 'changing.txt')
+	await Promise.all([fse.ensureDir(sourceDirectory), fse.ensureDir(destinationDirectory)])
+	await writeFile(sourcePath, '123')
+	await index.reconcileRoot('/Home', 'initial-directory-sizes')
+	await expect(index.directorySizes(['/Home/source', '/Home/destination'])).resolves.toStrictEqual([
+		{virtualPath: '/Home/source', size: 3},
+		{virtualPath: '/Home/destination', size: 0},
+	])
+
+	await writeFile(sourcePath, '1234567')
+	await index.reconcilePath(sourcePath)
+	await expect(index.directorySizes(['/Home/source'])).resolves.toStrictEqual([{virtualPath: '/Home/source', size: 7}])
+
+	await fse.copy(sourcePath, destinationPath)
+	await index.reconcilePath(destinationPath)
+	await expect(index.directorySizes(['/Home/source', '/Home/destination'])).resolves.toStrictEqual([
+		{virtualPath: '/Home/source', size: 7},
+		{virtualPath: '/Home/destination', size: 7},
+	])
+	await fse.remove(destinationPath)
+	await index.removePath(destinationPath)
+
+	await fse.move(sourcePath, destinationPath)
+	await index.movePath(sourcePath, destinationPath)
+	await expect(index.directorySizes(['/Home/source', '/Home/destination'])).resolves.toStrictEqual([
+		{virtualPath: '/Home/source', size: 0},
+		{virtualPath: '/Home/destination', size: 7},
+	])
+
+	await fse.remove(destinationPath)
+	await index.removePath(destinationPath)
+	await expect(index.directorySizes(['/Home/destination'])).resolves.toStrictEqual([
+		{virtualPath: '/Home/destination', size: 0},
+	])
+})
+
+test('only aggregates roots that are scanned and fully ready', async () => {
+	let failWalk = false
+	const walk: NonNullable<FileIndexEngineOptions['walkTree']> = async function* (root, stopping) {
+		if (failWalk) throw new Error('simulated scan failure')
+		yield* walkFileTree(root, stopping)
+	}
+	const {index, homeDirectory, rootDirectory, root} = await fixture(walk)
+	const unscannedDirectory = nodePath.join(rootDirectory, 'external')
+	await Promise.all([writeFile(nodePath.join(homeDirectory, 'home.txt'), 'home'), fse.ensureDir(unscannedDirectory)])
+	await writeFile(nodePath.join(unscannedDirectory, 'external.txt'), 'external')
+	await index.setRoots([
+		root,
+		{
+			virtualPath: '/External',
+			systemPath: unscannedDirectory,
+			ownerId: 'owner',
+			kind: 'home',
+			searchEnabled: false,
+			scanEnabled: false,
+		},
+	])
+
+	await expect(index.directorySizes(['/Home', '/External'])).resolves.toStrictEqual([])
+	await index.reconcileRoot('/Home', 'ready-directory-sizes')
+	await expect(index.directorySizes(['/Home', '/External'])).resolves.toStrictEqual([{virtualPath: '/Home', size: 4}])
+
+	failWalk = true
+	await index.reconcileRoot('/Home', 'degraded-directory-sizes')
+	await expect(index.status()).resolves.toMatchObject({
+		roots: expect.arrayContaining([expect.objectContaining({virtualPath: '/Home', state: 'degraded'})]),
+	})
+	await expect(index.directorySizes(['/Home', '/External'])).resolves.toStrictEqual([])
+})
+
+test('validates indexed directory aggregate paths', async () => {
+	const {index} = await fixture()
+	await expect(index.directorySizes(['Home'])).rejects.toThrow('must be absolute')
+	await expect(index.directorySizes(['/Home\0invalid'])).rejects.toThrow('cannot contain NUL')
+})
+
 test('scores indexed filenames with the established fuzzy matcher', async () => {
 	const {index, homeDirectory} = await fixture()
 	const decomposedCafe = 'café.jpg'.normalize('NFD')
@@ -5355,6 +5473,10 @@ test('excludes the reserved Trash subtree from member-home indexing', async () =
 	await expect(index.recentCandidates('/Users/alice', 10)).resolves.toMatchObject([{name: 'visible.txt'}])
 	await expect(index.getEntryBySystemPath(shadowedFile)).resolves.toBeUndefined()
 	await expect(index.getEntryBySystemPath(realTrashFile)).resolves.toMatchObject({name: 'trashed.txt'})
+	await expect(index.directorySizes(['/Users/alice', '/Users/alice/Trash'])).resolves.toStrictEqual([
+		{virtualPath: '/Users/alice', size: 7},
+		{virtualPath: '/Users/alice/Trash', size: 7},
+	])
 
 	const laterShadowedFile = nodePath.join(reservedHomeTrash, 'later-shadowed.txt')
 	await writeFile(laterShadowedFile, 'later')

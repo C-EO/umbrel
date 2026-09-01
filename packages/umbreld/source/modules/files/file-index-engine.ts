@@ -115,6 +115,11 @@ export type SearchCandidate = {
 	virtualPath: string
 }
 
+export type IndexedDirectorySize = {
+	virtualPath: string
+	size: number
+}
+
 type FileStats = Stats | BigIntStats
 type WalkedEntry = {systemPath: string; stats: FileStats}
 type WalkPathError = (systemPath: string, error: unknown) => void
@@ -2000,6 +2005,67 @@ export default class FileIndexEngine {
 				virtualPath: joinVirtualPath(root.virtualPath, row.relative_path),
 			}))
 		})) as SearchCandidate[]
+	}
+
+	async directorySizes(virtualPaths: readonly string[]): Promise<IndexedDirectorySize[]> {
+		const requestedPaths = virtualPaths.map((virtualPath) => {
+			if (!nodePath.posix.isAbsolute(virtualPath) || virtualPath.includes('\0')) {
+				throw new TypeError('Indexed directory paths must be absolute and cannot contain NUL')
+			}
+			return nodePath.posix.normalize(virtualPath)
+		})
+		if (!this.#available || requestedPaths.length === 0) return []
+
+		return (await this.#mutationQueue.add(() => {
+			const database = this.#requireDatabase()
+			const directory = database.prepare(`SELECT type FROM entries WHERE root_id = ? AND relative_path = ?`)
+			const rootSize = database.prepare(
+				`SELECT COALESCE(SUM(size), 0) AS size
+				FROM (
+					SELECT MAX(size) AS size
+					FROM entries
+					WHERE root_id = ? AND type = 'file'
+						AND (? = 0 OR (relative_path != 'Trash' AND relative_path NOT GLOB 'Trash/*'))
+					GROUP BY CASE
+						WHEN device = '' OR inode = '' THEN 'entry:' || id
+						ELSE 'inode:' || device || ':' || inode
+					END
+				)`,
+			)
+			const subtreeSize = database.prepare(
+				`SELECT COALESCE(SUM(size), 0) AS size
+				FROM (
+					SELECT MAX(size) AS size
+					FROM entries
+					WHERE root_id = ? AND type = 'file'
+						AND relative_path >= ? AND relative_path < ?
+					GROUP BY CASE
+						WHEN device = '' OR inode = '' THEN 'entry:' || id
+						ELSE 'inode:' || device || ':' || inode
+					END
+				)`,
+			)
+
+			const sizes: IndexedDirectorySize[] = []
+			for (const virtualPath of requestedPaths) {
+				const root = this.#rootForVirtualPath(virtualPath)
+				if (!root?.id || root.scanEnabled === false || root.state !== 'ready') continue
+				const relativePath = relativeVirtualPath(root.virtualPath, virtualPath)
+				if (relativePath && isReservedMemberTrashPath(root, relativePath)) continue
+				if (relativePath) {
+					const row = directory.get(root.id, relativePath) as {type: EntryType} | undefined
+					if (row?.type !== 'directory') continue
+				}
+
+				const row = (
+					relativePath
+						? subtreeSize.get(root.id, `${relativePath}/`, `${relativePath}0`)
+						: rootSize.get(root.id, Number(hasReservedMemberTrashPath(root)))
+				) as {size: number}
+				sizes.push({virtualPath, size: Number(row.size)})
+			}
+			return sizes
+		})) as IndexedDirectorySize[]
 	}
 
 	async status() {

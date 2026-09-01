@@ -28,6 +28,7 @@ import pRetry from 'p-retry'
 import PQueue from 'p-queue'
 
 import {copyWithProgress} from '../utilities/copy-with-progress.js'
+import getLiveDirectorySize from '../utilities/get-directory-size.js'
 
 import {getDiskUsageByPath} from '../system/system.js'
 
@@ -69,7 +70,7 @@ const ALL_OPERATIONS = [
 
 type FileOperation = (typeof ALL_OPERATIONS)[number]
 
-type File = {
+export type File = {
 	name: string
 	path: string
 	type: string
@@ -656,7 +657,11 @@ export default class Files {
 	// return value is cheap but converting a virtual path into a
 	// system path is expensive and we call this on every file in
 	// a directory.
-	async status(systemPath: string, userId: string = OWNER_USER_ID): Promise<File> {
+	async status(
+		systemPath: string,
+		userId: string = OWNER_USER_ID,
+		{includeIndexedDirectorySize = true}: {includeIndexedDirectorySize?: boolean} = {},
+	): Promise<File> {
 		// Get the path and filename
 		const path = this.systemToVirtualPath(systemPath)
 		const name = nodePath.basename(path)
@@ -686,9 +691,13 @@ export default class Files {
 
 		// Get the size in bytes
 		let size = stats.size
-		// Set dir size to zero for now
-		// TODO: Implement directory size index for efficient lookups
-		if (type === 'directory') size = 0
+		if (type === 'directory') {
+			size = 0
+			if (includeIndexedDirectorySize) {
+				const [indexed] = await this.fileIndex.directorySizes([path]).catch(() => [])
+				if (indexed?.virtualPath === path) size = indexed.size
+			}
+		}
 
 		// Get the modified time
 		const modified = stats.mtime.getTime()
@@ -704,6 +713,54 @@ export default class Files {
 		}
 	}
 
+	async annotateIndexedDirectorySizes(files: readonly File[]) {
+		// Listing metadata is allowed to use the index only. An omitted path stays
+		// zero instead of turning a fast listing into a recursive filesystem walk.
+		const directoryPaths = files.filter(({type}) => type === 'directory').map(({path}) => path)
+		if (directoryPaths.length === 0) return [...files]
+		const indexedSizes = await this.fileIndex.directorySizes(directoryPaths).catch(() => [])
+		const sizesByPath = new Map(indexedSizes.map(({virtualPath, size}) => [virtualPath, size]))
+		return files.map((file) => {
+			const size = sizesByPath.get(file.path)
+			return size === undefined ? file : {...file, size}
+		})
+	}
+
+	async getDirectorySize(virtualPath: string, userId: string = OWNER_USER_ID) {
+		// Internal disk-usage callers need a value even while an indexed root is
+		// warming or degraded, so they retain the live walk as a per-path fallback.
+		virtualPath = normalizePath(virtualPath)
+		const [indexed] = await this.fileIndex.directorySizes([virtualPath]).catch(() => [])
+		if (indexed?.virtualPath === virtualPath) return indexed.size
+		const systemPath = await this.virtualToSystemPath(virtualPath, userId)
+		return pRetry(() => getLiveDirectorySize(systemPath), {retries: 2})
+	}
+
+	async getStorageUsage() {
+		// External, Network, and Backups are deliberately absent: these aggregates
+		// account only for owner/member Files roots stored on indexed device storage.
+		const memberPaths = (await this.#umbreld.user.listMembers()).flatMap(({id}) => [
+			`/Users/${id}`,
+			`/Users/${id}/Trash`,
+		])
+		const virtualPaths = ['/Home', '/Trash', ...memberPaths]
+		const indexedSizes = await this.fileIndex.directorySizes(virtualPaths).catch(() => [])
+		const sizesByPath = new Map(indexedSizes.map(({virtualPath, size}) => [virtualPath, size]))
+		const usages = await Promise.all(
+			virtualPaths.map((virtualPath) => {
+				const indexedSize = sizesByPath.get(virtualPath)
+				if (indexedSize !== undefined) return indexedSize
+				return pRetry(() => getLiveDirectorySize(this.virtualToSystemPathUnsafe(virtualPath)), {retries: 2}).catch(
+					() => 0,
+				)
+			}),
+		)
+		const thumbnails = await pRetry(() => getLiveDirectorySize(this.thumbnails.thumbnailDirectory), {
+			retries: 2,
+		}).catch(() => 0)
+		return [...usages, thumbnails].reduce((total, usage) => total + usage, 0)
+	}
+
 	// Checks if a filename is hidden
 	isHidden(filename: string) {
 		return (
@@ -714,7 +771,12 @@ export default class Files {
 	// Lists the contents of the root directory.
 	// This is a special case since the root directory doesn't map to a system path.
 	async #listRoot() {
-		const files = await Promise.all([...this.baseDirectories.values()].map((systemPath) => this.status(systemPath)))
+		const statuses = await Promise.all(
+			[...this.baseDirectories.values()].map((systemPath) =>
+				this.status(systemPath, OWNER_USER_ID, {includeIndexedDirectorySize: false}),
+			),
+		)
+		const files = await this.annotateIndexedDirectorySizes(statuses)
 		return {
 			name: '',
 			path: '/',
@@ -771,7 +833,7 @@ export default class Files {
 
 			// Push the file details job to the queue to limit concurrency
 			fileJobs.push(
-				this.status(fileSystemPath, userId).catch((error) => {
+				this.status(fileSystemPath, userId, {includeIndexedDirectorySize: false}).catch((error) => {
 					this.logger.error(`Failed to get status for '${fileSystemPath}'`, error)
 					return undefined
 				}),
@@ -786,7 +848,8 @@ export default class Files {
 		}
 
 		// Filter out any files that failed to get status
-		const files = (await Promise.all(fileJobs)).filter((file) => file !== undefined) as File[]
+		const statuses = (await Promise.all(fileJobs)).filter((file) => file !== undefined) as File[]
+		const files = await this.annotateIndexedDirectorySizes(statuses)
 
 		return {
 			...directoryDetails,
@@ -800,20 +863,37 @@ export default class Files {
 	// operations on entries that aren't themselves covered by a grant.
 	async #listSharedAncestor(virtualPath: string, childNames: string[], userId: string): Promise<DirectoryListing> {
 		const systemPath = this.virtualToSystemPathUnsafe(virtualPath)
-		const directoryDetails = await this.status(systemPath, userId).catch((error) => {
-			if (error?.message?.includes('ENOENT')) throw new Error('[does-not-exist]')
-			throw error
-		})
+		const directoryDetails = await this.status(systemPath, userId, {includeIndexedDirectorySize: false}).catch(
+			(error) => {
+				if (error?.message?.includes('ENOENT')) throw new Error('[does-not-exist]')
+				throw error
+			},
+		)
 
 		const files: File[] = []
 		for (const childName of childNames) {
-			const file = await this.status(nodePath.join(systemPath, childName), userId).catch(() => undefined)
+			const file = await this.status(nodePath.join(systemPath, childName), userId, {
+				includeIndexedDirectorySize: false,
+			}).catch(() => undefined)
 			if (file) files.push(file)
 		}
 
+		// Intermediate ancestors can contain owner data outside the member's
+		// grants, so exposing their aggregate size would disclose that hidden
+		// content. Only annotate children whose complete subtree is covered by a
+		// share; deeper traversal-only ancestors retain the default zero size.
+		const sharedFiles = (
+			await Promise.all(
+				files.map(async (file) => ((await this.memberShares.shareGrantFor(file.path, userId)) ? file : undefined)),
+			)
+		).filter((file): file is File => file !== undefined)
+		const annotatedSharedFiles = await this.annotateIndexedDirectorySizes(sharedFiles)
+		const annotatedByPath = new Map(annotatedSharedFiles.map((file) => [file.path, file]))
+		const annotatedFiles = files.map((file) => annotatedByPath.get(file.path) ?? file)
+
 		return {
 			...directoryDetails,
-			files,
+			files: annotatedFiles,
 			truncatedAt: undefined,
 		}
 	}

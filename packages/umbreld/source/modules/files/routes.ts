@@ -158,16 +158,19 @@ export default router({
 			const page = entries.slice(startIndex, startIndex + input.limit)
 			const files = await Promise.all(
 				page.map(({systemPath}) =>
-					ctx.umbreld.files.status(systemPath, userId).catch((error) => {
+					ctx.umbreld.files.status(systemPath, userId, {includeIndexedDirectorySize: false}).catch((error) => {
 						ctx.umbreld.files.logger.error(`Failed to get status for '${systemPath}'`, error)
 						return undefined
 					}),
 				),
 			)
+			const annotatedFiles = await ctx.umbreld.files.annotateIndexedDirectorySizes(
+				files.filter((file) => file !== undefined),
+			)
 
 			return {
 				...directory,
-				files: files.filter((file) => file !== undefined),
+				files: annotatedFiles,
 				totalFiles: entries.length,
 				hasMore: startIndex + input.limit < entries.length,
 				...(truncatedAt ? {truncatedAt} : {}),

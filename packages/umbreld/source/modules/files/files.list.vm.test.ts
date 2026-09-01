@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto'
 
 import {expect, beforeAll, afterAll, test} from 'vitest'
 import yaml from 'js-yaml'
+import pRetry from 'p-retry'
 
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
 
@@ -151,7 +152,7 @@ test('list() lists the root directory', async () => {
 			name,
 			path: `/${name}`,
 			type: 'directory',
-			size: 0,
+			size: ['Backups', 'External', 'Network'].includes(name) ? 0 : expect.any(Number),
 			modified: expect.any(Number),
 			operations: expect.arrayContaining(['copy']),
 		})),
@@ -223,7 +224,7 @@ test('list() lists the /Home directory', async () => {
 		name: 'Home',
 		path: '/Home',
 		type: 'directory',
-		size: 0,
+		size: expect.any(Number),
 		modified: expect.any(Number),
 		operations: expect.arrayContaining(['copy']),
 		files: [
@@ -231,7 +232,7 @@ test('list() lists the /Home directory', async () => {
 				name: 'Documents',
 				path: '/Home/Documents',
 				type: 'directory',
-				size: 0,
+				size: expect.any(Number),
 				modified: expect.any(Number),
 				operations: expect.arrayContaining(['move', 'copy']),
 			},
@@ -239,7 +240,7 @@ test('list() lists the /Home directory', async () => {
 				name: 'Downloads',
 				path: '/Home/Downloads',
 				type: 'directory',
-				size: 0,
+				size: expect.any(Number),
 				modified: expect.any(Number),
 				operations: expect.arrayContaining(['copy']),
 			},
@@ -247,7 +248,7 @@ test('list() lists the /Home directory', async () => {
 				name: 'Photos',
 				path: '/Home/Photos',
 				type: 'directory',
-				size: 0,
+				size: expect.any(Number),
 				modified: expect.any(Number),
 				operations: expect.arrayContaining(['move', 'copy']),
 			},
@@ -255,7 +256,7 @@ test('list() lists the /Home directory', async () => {
 				name: 'Videos',
 				path: '/Home/Videos',
 				type: 'directory',
-				size: 0,
+				size: expect.any(Number),
 				modified: expect.any(Number),
 				operations: expect.arrayContaining(['move', 'copy']),
 			},
@@ -628,7 +629,7 @@ test('list() falls back to name sorting when numeric values are equal', async ()
 	])
 })
 
-test('list() reports size as zero for directories', async () => {
+test('list() reports indexed directory content size', async () => {
 	// Create a test directory with a subdirectory and files - using unique path
 	await umbreld.client.files.createDirectory.mutate({path: '/Home/dir-size-test'})
 	await umbreld.client.files.createDirectory.mutate({path: '/Home/dir-size-test/subdir'})
@@ -637,15 +638,17 @@ test('list() reports size as zero for directories', async () => {
 	await uploadFile('/Home/dir-size-test/subdir/file1.txt', 'content1')
 	await uploadFile('/Home/dir-size-test/subdir/file2.txt', 'content2')
 
-	// Query the directory listing
-	const listing = await umbreld.client.files.list.query({
-		path: '/Home/dir-size-test',
-	})
-
-	// Check that the directory size is reported as zero
-	const subdir = listing.files.find((f) => f.name === 'subdir')
-	expect(subdir).toBeDefined()
-	expect(subdir!.size).toBe(0)
+	// Watcher updates are asynchronous, so wait until the ready index reflects
+	// both files before checking the public listing response.
+	await pRetry(
+		async () => {
+			const listing = await umbreld.client.files.list.query({path: '/Home/dir-size-test'})
+			const subdir = listing.files.find((file) => file.name === 'subdir')
+			expect(subdir).toBeDefined()
+			expect(subdir!.size).toBe(16)
+		},
+		{retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100},
+	)
 })
 
 test('list() reports correct size for files in bytes', async () => {
