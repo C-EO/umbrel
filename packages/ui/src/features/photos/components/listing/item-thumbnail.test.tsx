@@ -5,6 +5,7 @@ import {createRoot, type Root} from 'react-dom/client'
 import {afterEach, beforeEach, describe, expect, test, vi} from 'vitest'
 
 import {ItemThumbnail, thumbSizeForTile} from './item-thumbnail'
+import {ThumbnailQueue} from './thumbnail-queue'
 
 vi.mock('@/modules/auth/http-url-authorizer', () => ({
 	useSharedAuthorizedHttpUrl: (url: string | undefined) => url,
@@ -105,5 +106,47 @@ describe('ItemThumbnail', () => {
 		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={192} />)
 		expect(imgs()).toHaveLength(1)
 		expect(imgs()[0]!.src).toContain('s=512')
+	})
+
+	test('the grid gates its src and clears an unfinished request when the tile leaves', async () => {
+		const queue = new ThumbnailQueue({capacity: 1})
+		const blocker = queue.enqueue(
+			() => 0,
+			() => {},
+		)
+		await act(async () => {})
+
+		render(<ItemThumbnail item={{id: 'a', tint: 0x336699}} size={512} requestQueue={queue} requestIndex={1} />)
+		await act(async () => {})
+		expect(imgs()[0]!.hasAttribute('src')).toBe(false)
+
+		act(() => blocker.settle())
+		const img = imgs()[0]!
+		expect(img.src).toContain('s=512')
+
+		render(null)
+		expect(img.hasAttribute('src')).toBe(false)
+	})
+
+	test('a warm canvas handoff bypasses the grid queue', async () => {
+		const queue = new ThumbnailQueue({capacity: 1})
+		const blocker = queue.enqueue(
+			() => 0,
+			() => {},
+		)
+		await act(async () => {})
+
+		render(
+			<ItemThumbnail
+				item={{id: 'a', tint: 0x336699}}
+				size={192}
+				warmUntil={performance.now() + 60_000}
+				requestQueue={queue}
+				requestIndex={1}
+			/>,
+		)
+
+		expect(imgs()[0]!.src).toContain('s=192')
+		blocker.release()
 	})
 })

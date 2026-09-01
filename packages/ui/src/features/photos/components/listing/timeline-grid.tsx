@@ -31,6 +31,7 @@ import {attachPinch} from '@/features/photos/components/listing/pinch'
 import {ReflowMotion} from '@/features/photos/components/listing/reflow-motion'
 import {isWholeLibrary} from '@/features/photos/components/listing/route-filter'
 import type {Frame} from '@/features/photos/components/listing/surface'
+import {ThumbnailQueue} from '@/features/photos/components/listing/thumbnail-queue'
 import {TileLayer} from '@/features/photos/components/listing/tile-layer'
 import {monthsFromItems, railDomain} from '@/features/photos/components/listing/time-rail/rail-scale'
 import {
@@ -128,7 +129,7 @@ type View = {
 	warmUntil: number
 }
 
-type Slot = {item: Item; x: number; y: number; size: number}
+type Slot = {index: number; item: Item; x: number; y: number; size: number}
 
 // Virtualized, date-grouped grid with spring-animated reflows. Fills its
 // surface edge to edge; the top `frame.inset` px are under the actions bar
@@ -336,6 +337,20 @@ export function TimelineGrid({
 	// pinch settles, the wave of arriving photographs should still start where
 	// the fingers were.
 	const eyeRef = useRef<{x: number; y: number} | null>(null)
+	const [thumbnailQueue] = useState(() => new ThumbnailQueue())
+	useLayoutEffect(() => {
+		thumbnailQueue.priority = (index) => {
+			const current = viewRef.current
+			const scrollTop = scrollerRef.current?.scrollTop ?? 0
+			if (!current) return {tier: 0, distance: index}
+			const visible = visibleItems(current.layout, scrollTop, current.height, 0)
+			const middle = (visible.start + visible.end) / 2
+			return {
+				tier: index < visible.start || index > visible.end ? 1 : 0,
+				distance: Math.abs(index - middle),
+			}
+		}
+	}, [thumbnailQueue])
 	// The tile the last reflow kept still, reused while reflows keep coming so
 	// one tile stays put through a whole gesture instead of drifting stop by stop
 	const anchorRef = useRef<Anchor | null>(null)
@@ -1011,9 +1026,10 @@ export function TimelineGrid({
 									/>
 								</div>
 							) : (
-								slots.map(({item, x, y, size}) => (
+								slots.map(({index, item, x, y, size}) => (
 									<TileSlot
 										key={item.id}
+										index={index}
 										item={item}
 										x={x}
 										y={y}
@@ -1024,6 +1040,7 @@ export function TimelineGrid({
 										registry={tileEls}
 										selected={selectedIds.has(item.id)}
 										selectable={selection.selecting}
+										thumbnailQueue={thumbnailQueue}
 									/>
 								))
 							)}
@@ -1075,7 +1092,7 @@ export function TimelineGrid({
 function slotsFor({layout, items}: View): Slot[] {
 	const slots: Slot[] = []
 	for (let index = items.start; index <= items.end; index++) {
-		slots.push({item: layout.items[index]!, ...rectOf(layout, index)})
+		slots.push({index, item: layout.items[index]!, ...rectOf(layout, index)})
 	}
 	return slots
 }
@@ -1128,6 +1145,7 @@ const GroupHeader = memo(function GroupHeader({
 })
 
 const TileSlot = memo(function TileSlot({
+	index,
 	item,
 	x,
 	y,
@@ -1138,7 +1156,9 @@ const TileSlot = memo(function TileSlot({
 	registry,
 	selected,
 	selectable,
+	thumbnailQueue,
 }: {
+	index: number
 	item: Item
 	x: number
 	y: number
@@ -1149,6 +1169,7 @@ const TileSlot = memo(function TileSlot({
 	registry: Map<string, HTMLElement>
 	selected: boolean
 	selectable: boolean
+	thumbnailQueue: ThumbnailQueue
 }) {
 	const ref = useRegistration(item.id, registry)
 	return (
@@ -1163,6 +1184,8 @@ const TileSlot = memo(function TileSlot({
 				live={live}
 				selected={selected}
 				selectable={selectable}
+				thumbnailQueue={thumbnailQueue}
+				thumbnailIndex={index}
 			/>
 		</div>
 	)

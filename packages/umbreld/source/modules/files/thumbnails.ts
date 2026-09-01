@@ -55,7 +55,10 @@ export default class Thumbnails {
 		variant: ThumbnailVariant = FILES_THUMBNAIL_VARIANT,
 	) {
 		const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, userId)
-		const reference = await this.#umbreld.files.fileIndex.ensureThumbnail(systemPath, variant)
+		// Skip the generation queue when the thumbnail is already ready.
+		const reference =
+			(await this.#umbreld.files.fileIndex.getExistingThumbnail(systemPath, variant)) ??
+			(await this.#umbreld.files.fileIndex.ensureThumbnail(systemPath, variant))
 		return this.thumbnailUrl(reference, systemPath)
 	}
 

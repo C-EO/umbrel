@@ -1,5 +1,6 @@
-import {useState} from 'react'
+import {useLayoutEffect, useRef, useState} from 'react'
 
+import type {ThumbnailQueue, ThumbnailRequestSlot} from '@/features/photos/components/listing/thumbnail-queue'
 import {itemThumbnailUrl, type Item, type ThumbSize} from '@/features/photos/hooks/use-items'
 import {cn} from '@/lib/utils'
 import {useSharedAuthorizedHttpUrl} from '@/modules/auth/http-url-authorizer'
@@ -32,6 +33,8 @@ export function ItemThumbnail({
 	loading = 'eager',
 	warmUntil = 0,
 	onLoad,
+	requestQueue,
+	requestIndex,
 }: {
 	item: Pick<Item, 'id' | 'tint'>
 	size?: ThumbSize
@@ -46,6 +49,11 @@ export function ItemThumbnail({
 	warmUntil?: number
 	// The loaded, decoded image — for reading its pixels
 	onLoad?: (img: HTMLImageElement) => void
+	// The timeline grid gates its DOM images so the current viewport is admitted
+	// before overscan. Other surfaces omit these and retain their direct <img>
+	// behavior.
+	requestQueue?: ThumbnailQueue
+	requestIndex?: number
 }) {
 	// Renditions only ever sharpen. `fine` is the one being shown or fetched;
 	// when `size` steps up, the loaded image stays mounted beneath as `coarse`
@@ -64,6 +72,41 @@ export function ItemThumbnail({
 	const authorizedCoarseUrl = useSharedAuthorizedHttpUrl(
 		coarse === null ? undefined : itemThumbnailUrl(item.id, coarse),
 	)
+	const [queuedUrl, setQueuedUrl] = useState<string>()
+	const fineImgRef = useRef<HTMLImageElement>(null)
+	const queuedRequest = useRef<{url: string; slot: ThumbnailRequestSlot; settled: boolean} | undefined>(undefined)
+	const requestIndexRef = useRef(requestIndex)
+	requestIndexRef.current = requestIndex
+	// Crossing up from the canvas mounts DOM images whose 192px renditions the
+	// canvas just displayed. Preserve that instant cache handoff instead of
+	// revealing it five tiles at a time through the request gate.
+	const [warmCacheHandoff] = useState(() => performance.now() < warmUntil)
+	const usesRequestQueue = requestQueue !== undefined && requestIndex !== undefined && !warmCacheHandoff
+	useLayoutEffect(() => {
+		if (!requestQueue || !usesRequestQueue || !authorizedUrl) return
+		const request = {
+			url: authorizedUrl,
+			slot: requestQueue.enqueue(
+				() => requestIndexRef.current!,
+				() => setQueuedUrl(authorizedUrl),
+			),
+			settled: false,
+		}
+		queuedRequest.current = request
+		return () => {
+			// Removing an img alone does not promise to stop its network request.
+			// Clear the selected source while the node is still mounted, then free
+			// the queue slot, so repeated jumps cannot leave detached requests
+			// consuming the browser's connection pool.
+			const img = fineImgRef.current
+			if (!request.settled && img?.getAttribute('src') === request.url) {
+				img.removeAttribute('src')
+			}
+			request.slot.release()
+			if (queuedRequest.current === request) queuedRequest.current = undefined
+		}
+	}, [authorizedUrl, requestQueue, usesRequestQueue])
+	const fineUrl = usesRequestQueue ? (queuedUrl === authorizedUrl ? authorizedUrl : undefined) : authorizedUrl
 
 	return (
 		<div
@@ -85,21 +128,24 @@ export function ItemThumbnail({
 			)}
 			{authorizedUrl && (
 				<img
+					ref={fineImgRef}
 					key={fine.size}
-					src={authorizedUrl}
+					src={fineUrl}
 					alt={alt}
 					draggable={false}
 					decoding='async'
-					fetchPriority='low'
+					fetchPriority={usesRequestQueue ? 'auto' : 'low'}
 					loading={loading}
 					onLoad={(event) => {
 						const img = event.currentTarget
+						settleQueuedRequest(authorizedUrl)
 						setLoaded(performance.now() < fine.warmUntil ? 'instant' : 'fade')
 						// The coarse layer goes once the finer pixels can truly
 						// paint; dropping it at the load event races the async decode
 						if (coarse !== null) img.decode().then(dropCoarse, dropCoarse)
 						onLoad?.(img)
 					}}
+					onError={() => settleQueuedRequest(authorizedUrl)}
 					className={cn(
 						'absolute inset-0 h-full w-full object-cover',
 						loaded === 'fade' && 'transition-opacity duration-300',
@@ -112,5 +158,13 @@ export function ItemThumbnail({
 
 	function dropCoarse() {
 		setCoarse(null)
+	}
+
+	function settleQueuedRequest(url: string) {
+		const request = queuedRequest.current
+		if (request?.url === url) {
+			request.settled = true
+			request.slot.settle()
+		}
 	}
 }

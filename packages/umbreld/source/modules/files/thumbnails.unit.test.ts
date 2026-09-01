@@ -47,15 +47,26 @@ test('stores thumbnails in one directory sharded by the first hash byte', () => 
 	)
 })
 
-test('keeps authorization in the facade and delegates on-demand generation to the index worker', async () => {
+test('keeps authorization in the facade and generates only when no ready thumbnail exists', async () => {
 	const {fileIndex, files, root, thumbnails} = await createThumbnails()
+	fileIndex.getExistingThumbnail.mockResolvedValue(undefined)
 	fileIndex.ensureThumbnail.mockResolvedValue(reference)
 
 	await expect(thumbnails.getThumbnailOnDemand('/Home/photo.png', 'alice')).resolves.toBe(
 		`/api/files/thumbnail/content-${THUMBNAIL_VARIANT}-${reference.key}.webp?path=%2FHome%2Fphoto.png`,
 	)
 	expect(files.virtualToSystemPath).toHaveBeenCalledWith('/Home/photo.png', 'alice')
+	expect(fileIndex.getExistingThumbnail).toHaveBeenCalledWith(nodePath.join(root, 'photo.png'), THUMBNAIL_VARIANT)
 	expect(fileIndex.ensureThumbnail).toHaveBeenCalledWith(nodePath.join(root, 'photo.png'), THUMBNAIL_VARIANT)
+})
+
+test('returns a ready thumbnail without entering the generation lane', async () => {
+	const {fileIndex, thumbnails} = await createThumbnails()
+	fileIndex.getExistingThumbnail.mockResolvedValue(reference)
+
+	await expect(thumbnails.getThumbnailOnDemand('/Home/photo.png', 'alice')).resolves.toContain(reference.key)
+
+	expect(fileIndex.ensureThumbnail).not.toHaveBeenCalled()
 })
 
 test('returns only ready index-owned thumbnails for directory listings', async () => {

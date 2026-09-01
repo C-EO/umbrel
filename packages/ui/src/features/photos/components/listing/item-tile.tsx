@@ -2,6 +2,7 @@ import {Check, Heart, Play} from 'lucide-react'
 import {memo, useEffect, useRef, useState} from 'react'
 
 import {ItemThumbnail} from '@/features/photos/components/listing/item-thumbnail'
+import type {ThumbnailQueue} from '@/features/photos/components/listing/thumbnail-queue'
 import {LivePhotoIcon} from '@/features/photos/components/live-photo-icon'
 import {itemLiveUrl, type Item, type ThumbSize} from '@/features/photos/hooks/use-items'
 import {cn} from '@/lib/utils'
@@ -48,6 +49,8 @@ export const ItemTile = memo(function ItemTile({
 	live,
 	selected,
 	selectable,
+	thumbnailQueue,
+	thumbnailIndex,
 }: {
 	item: Item
 	// The rendition the tile's size asks for (see thumbSizeForTile) and how
@@ -61,6 +64,8 @@ export const ItemTile = memo(function ItemTile({
 	live?: 'playing' | 'ending'
 	selected: boolean
 	selectable: boolean
+	thumbnailQueue?: ThumbnailQueue
+	thumbnailIndex?: number
 }) {
 	return (
 		<button
@@ -69,7 +74,14 @@ export const ItemTile = memo(function ItemTile({
 			aria-pressed={selectable ? selected : undefined}
 			className={tileClassByState[selected ? 'selected' : selectable ? 'selectable' : 'idle']}
 		>
-			<ItemThumbnail item={item} size={thumbSize} warmUntil={warmUntil} className='h-full w-full' />
+			<ItemThumbnail
+				item={item}
+				size={thumbSize}
+				warmUntil={warmUntil}
+				requestQueue={thumbnailQueue}
+				requestIndex={thumbnailIndex}
+				className='h-full w-full'
+			/>
 			{live && <LiveTileClip id={item.id} active={live === 'playing'} />}
 			{/* Below the sizes that carry the full badges, a video still wears a
 			    small play mark — the same one the canvas draws past the seam, so
