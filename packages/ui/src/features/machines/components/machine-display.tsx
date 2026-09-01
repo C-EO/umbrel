@@ -62,19 +62,22 @@ function Screen({machine}: {machine: Machine}) {
 }
 
 function ConsoleScreen({machine}: {machine: Machine}) {
+	const [showSetupConsole, setShowSetupConsole] = useState(false)
 	// QEMU's VNC resize extension can diverge from Linux fbcon's scanout
 	// geometry. Keep built-in text consoles at their native framebuffer size;
 	// graphical guests can still follow the browser at native resolution.
 	const isTextConsole = machine.osVariant === 'Server' || machine.osId === 'alpine'
+	const setupDelayed = machine.installationState === 'setup-delayed'
 
 	return (
 		<>
 			<MachineConsole machineId={machine.id} resizeSession={!isTextConsole} />
-			{machine.state === 'running' && machine.firstBootSetup && (
-				<div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-6 text-center backdrop-blur-sm'>
-					<Loader2 className='size-6 animate-spin text-white/70' />
-					<span className='text-13 text-white/70'>{t('machines.completing-setup', {os: machine.osName})}</span>
-				</div>
+			{machine.state === 'running' && machine.firstBootSetup && !showSetupConsole && (
+				<FirstBootSetupOverlay
+					osName={machine.osName}
+					delayed={setupDelayed}
+					onOpenConsole={() => setShowSetupConsole(true)}
+				/>
 			)}
 			{machine.state === 'stopping' && (
 				<div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/80 backdrop-blur-sm'>
@@ -83,6 +86,35 @@ function ConsoleScreen({machine}: {machine: Machine}) {
 				</div>
 			)}
 		</>
+	)
+}
+
+export function FirstBootSetupOverlay({
+	osName,
+	delayed,
+	onOpenConsole,
+}: {
+	osName: string
+	delayed: boolean
+	onOpenConsole: () => void
+}) {
+	return (
+		<div className='absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/70 px-6 text-center backdrop-blur-sm'>
+			<Loader2 className='size-6 animate-spin text-white/70' />
+			{delayed ? (
+				<>
+					<span className='text-13 font-medium text-white/80'>{t('machines.setup-taking-longer')}</span>
+					<span className='max-w-sm text-12 leading-relaxed text-white/50'>
+						{t('machines.setup-taking-longer-description', {os: osName})}
+					</span>
+					<button type='button' className={cn(screenActionButtonClass, 'mt-1 cursor-pointer')} onClick={onOpenConsole}>
+						{t('machines.open-console')}
+					</button>
+				</>
+			) : (
+				<span className='text-13 text-white/70'>{t('machines.completing-setup', {os: osName})}</span>
+			)}
+		</div>
 	)
 }
 

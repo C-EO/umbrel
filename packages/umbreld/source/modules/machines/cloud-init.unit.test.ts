@@ -14,7 +14,7 @@ import {
 } from './machines.js'
 
 describe('Machines cloud-init seed', () => {
-	test('hides an incomplete first-boot setup after one hour', () => {
+	test('marks an incomplete first-boot setup delayed after one hour', () => {
 		const setup = {startedAt: 1_000, tokenHash: 'a'.repeat(64)}
 		expect(isFirstBootSetupActive(setup, 1_000 + FIRST_BOOT_SETUP_TIMEOUT_MS - 1)).toBe(true)
 		expect(isFirstBootSetupActive(setup, 1_000 + FIRST_BOOT_SETUP_TIMEOUT_MS)).toBe(false)

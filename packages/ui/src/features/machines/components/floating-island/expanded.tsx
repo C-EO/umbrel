@@ -14,6 +14,7 @@ import {t} from '@/utils/i18n'
 function installPhaseLine(machine: Machine, osImages: OsImage[]) {
 	if (machine.installationState === 'starting') return t('machines.state.starting')
 	if (machine.installationState === 'setting-up') return t('machines.completing-setup', {os: machine.osName})
+	if (machine.installationState === 'setup-delayed') return t('machines.setup-taking-longer')
 	const image = machine.installOsId ? osImages.find((image) => image.id === machine.installOsId) : undefined
 	if (image?.state === 'downloading' && image.downloadedMb !== undefined && image.sizeMb) {
 		const {downloaded, total} = prettyMbPair(Math.min(image.downloadedMb, image.sizeMb), image.sizeMb)

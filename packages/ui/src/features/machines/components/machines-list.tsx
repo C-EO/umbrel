@@ -49,7 +49,9 @@ export default function MachinesList({machines}: {machines: Machine[]}) {
 // (plus the artwork itself) is the primary state channel.
 function MonitorGlow({machine}: {machine: Machine}) {
 	const {color} = getOsVisuals(machine.osId)
-	const settingUp = machine.installationState === 'setting-up'
+	const settingUp =
+		machine.installationState === 'setting-up' ||
+		(machine.installationState === 'setup-delayed' && machine.state === 'running')
 	const running = machine.state === 'running' && !settingUp
 	const isError = machine.state === 'error'
 	const working =
@@ -69,7 +71,8 @@ function MonitorGlow({machine}: {machine: Machine}) {
 function MachineRow({machine, index}: {machine: Machine; index: number}) {
 	const navigate = useNavigate()
 	const isError = machine.state === 'error'
-	const settingUp = machine.installationState === 'setting-up'
+	const setupDelayed = machine.installationState === 'setup-delayed' && machine.state === 'running'
+	const settingUp = machine.installationState === 'setting-up' || setupDelayed
 	const iconState = settingUp ? 'installing' : machine.state
 
 	// Compact "used of total" storage pair, e.g. "4.2 of 15 GB"
@@ -81,21 +84,23 @@ function MachineRow({machine, index}: {machine: Machine; index: number}) {
 	// Status after the version dot — working states narrate right here with a
 	// trailing ellipsis; only error owns the detail slot instead.
 	// Keys stay literal for the translation updater.
-	const statusLabel = settingUp
-		? `${t('machines.state.setting-up')}…`
-		: machine.state === 'running'
-			? t('machines.state.running')
-			: machine.state === 'stopped'
-				? t('machines.state.stopped')
-				: machine.state === 'installing'
-					? `${t('machines.state.installing')}…`
-					: machine.state === 'starting'
-						? `${t('machines.state.starting')}…`
-						: machine.state === 'stopping'
-							? `${t('machines.state.stopping')}…`
-							: machine.state === 'restarting'
-								? `${t('machines.state.restarting')}…`
-								: undefined
+	const statusLabel = setupDelayed
+		? `${t('machines.state.setup-delayed')}…`
+		: settingUp
+			? `${t('machines.state.setting-up')}…`
+			: machine.state === 'running'
+				? t('machines.state.running')
+				: machine.state === 'stopped'
+					? t('machines.state.stopped')
+					: machine.state === 'installing'
+						? `${t('machines.state.installing')}…`
+						: machine.state === 'starting'
+							? `${t('machines.state.starting')}…`
+							: machine.state === 'stopping'
+								? `${t('machines.state.stopping')}…`
+								: machine.state === 'restarting'
+									? `${t('machines.state.restarting')}…`
+									: undefined
 
 	return (
 		// Non-interactive container: the primary open affordance is a real button

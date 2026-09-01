@@ -85,7 +85,13 @@ export function useMachineCapabilities() {
 export function useInstallingMachines({enabled = true}: {enabled?: boolean} = {}) {
 	const {machines} = useMachines({enabled})
 	return useMemo(
-		() => machines.filter((machine) => machine.installationState && machine.installationState !== 'ready-for-setup'),
+		() =>
+			machines.filter(
+				(machine) =>
+					machine.installationState &&
+					machine.installationState !== 'ready-for-setup' &&
+					machine.installationState !== 'setup-delayed',
+			),
 		[machines],
 	)
 }
@@ -100,14 +106,30 @@ export function useMachineInstallToasts({enabled = true}: {enabled?: boolean} = 
 	const {machines} = useMachines({enabled})
 	// Machines observed mid-install, waiting to complete
 	const pendingRef = useRef(new Set<string>())
+	// Delayed notifications already shown during this app session
+	const delayedRef = useRef(new Set<string>())
 
 	useEffect(() => {
 		const pending = pendingRef.current
+		const delayed = delayedRef.current
 		for (const machine of machines) {
 			if (machine.installationState && machine.installationState !== 'ready-for-setup') {
 				pending.add(machine.id)
+				if (machine.installationState === 'setup-delayed' && machine.state === 'running' && !delayed.has(machine.id)) {
+					delayed.add(machine.id)
+					toast.info(t('machines.setup-taking-longer'), {
+						icon: createElement('img', {
+							src: machineIconSrc(machine.osId),
+							alt: '',
+							className: 'size-10 shrink-0 object-contain',
+						}),
+						duration: 5_000,
+						action: {label: t('machines.view'), onClick: () => navigate(machinePath(machine.id))},
+					})
+				}
 				continue
 			}
+			delayed.delete(machine.id)
 			if (!pending.has(machine.id)) continue
 			pending.delete(machine.id)
 			// Failed installs surface through the machine's own error UI
@@ -134,5 +156,6 @@ export function useMachineInstallToasts({enabled = true}: {enabled?: boolean} = 
 		// Cancelled installs and uninstalled machines just stop appearing
 		const ids = new Set(machines.map((machine) => machine.id))
 		for (const id of pending) if (!ids.has(id)) pending.delete(id)
+		for (const id of delayed) if (!ids.has(id)) delayed.delete(id)
 	}, [machines, navigate])
 }

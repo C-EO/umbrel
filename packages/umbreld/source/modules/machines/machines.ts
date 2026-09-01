@@ -39,7 +39,7 @@ export const FIRST_BOOT_SETUP_TIMEOUT_MS = 60 * 60 * 1_000
 export const WINDOWS_ARM_FIRST_BOOT_SETUP_TIMEOUT_MS = 4 * FIRST_BOOT_SETUP_TIMEOUT_MS
 
 export type MachineState = 'installing' | 'stopped' | 'starting' | 'running' | 'stopping' | 'restarting' | 'error'
-export type MachineInstallationState = 'preparing' | 'starting' | 'setting-up' | 'ready-for-setup'
+export type MachineInstallationState = 'preparing' | 'starting' | 'setting-up' | 'setup-delayed' | 'ready-for-setup'
 
 export type Machine = {
 	id: string
@@ -1331,13 +1331,16 @@ export default class Machines {
 		const externalDiskAvailable = await this.#externalDiskAvailable(definition)
 		const state = externalDiskAvailable ? await this.#state(definition) : 'error'
 		const firstBootSetupActive = isFirstBootSetupActive(firstBootSetup, Date.now(), firstBootSetupTimeoutMs(definition))
+		const firstBootSetupPending = !!firstBootSetup && !firstBootSetup.manual
 		const installationState =
 			this.#installationStates.get(definition.id) ??
 			(!installSource && state !== 'error'
 				? firstBootSetup
-					? firstBootSetupActive
-						? 'setting-up'
-						: 'ready-for-setup'
+					? firstBootSetup.manual
+						? 'ready-for-setup'
+						: firstBootSetupActive
+							? 'setting-up'
+							: 'setup-delayed'
 					: (!!installMedia && installMedia !== 'media/seed.iso') || !!bootMedia
 						? 'ready-for-setup'
 						: undefined
@@ -1346,7 +1349,7 @@ export default class Machines {
 			...publicDefinition,
 			ipAddress: machineIpAddressSchema.parse(definition.ipAddress),
 			memoryGb: definition.memoryMb / 1_024,
-			firstBootSetup: firstBootSetupActive,
+			firstBootSetup: firstBootSetupPending,
 			installPending: !!installSource,
 			// Cloud-init seed media is an internal implementation detail. Installer
 			// media is user-managed when setup does not already own its lifecycle.
