@@ -30,14 +30,22 @@ beforeEach(() => {
 	vi.mocked(getLiveDirectorySize).mockReset()
 })
 
-test('reports indexed sizes from status while leaving unindexed directories at zero', async () => {
+test('reports indexed sizes from status while leaving unindexed directories undefined', async () => {
 	const dataDirectory = await temporary.create()
 	const indexedDirectory = nodePath.join(dataDirectory, 'home', 'indexed')
+	const emptyDirectory = nodePath.join(dataDirectory, 'home', 'empty')
 	const externalDirectory = nodePath.join(dataDirectory, 'external', 'unindexed')
-	await Promise.all([fse.ensureDir(indexedDirectory), fse.ensureDir(externalDirectory)])
+	await Promise.all([fse.ensureDir(indexedDirectory), fse.ensureDir(emptyDirectory), fse.ensureDir(externalDirectory)])
 	const {files} = fixture([], dataDirectory)
+	const indexedSizes = new Map([
+		['/Home/indexed', 123],
+		['/Home/empty', 0],
+	])
 	const directorySizes = vi.fn(async (paths: readonly string[]) =>
-		paths[0] === '/Home/indexed' ? [{virtualPath: '/Home/indexed', size: 123}] : [],
+		paths.flatMap((virtualPath) => {
+			const size = indexedSizes.get(virtualPath)
+			return size === undefined ? [] : [{virtualPath, size}]
+		}),
 	)
 	Object.assign(files, {
 		fileIndex: {directorySizes},
@@ -50,30 +58,40 @@ test('reports indexed sizes from status while leaving unindexed directories at z
 		type: 'directory',
 		size: 123,
 	})
+	await expect(files.status(emptyDirectory)).resolves.toMatchObject({
+		path: '/Home/empty',
+		type: 'directory',
+		size: 0,
+	})
 	await expect(files.status(externalDirectory)).resolves.toMatchObject({
 		path: '/External/unindexed',
 		type: 'directory',
-		size: 0,
+		size: undefined,
 	})
 	expect(getLiveDirectorySize).not.toHaveBeenCalled()
 })
 
 test('annotates only directories for which the index returns a ready aggregate', async () => {
 	const {files} = fixture()
-	const directorySizes = vi.fn(async () => [{virtualPath: '/Home/indexed', size: 123}])
+	const directorySizes = vi.fn(async () => [
+		{virtualPath: '/Home/indexed', size: 123},
+		{virtualPath: '/Home/empty', size: 0},
+	])
 	Object.assign(files, {fileIndex: {directorySizes}})
 	const entries: File[] = [
-		{name: 'indexed', path: '/Home/indexed', type: 'directory', size: 0, modified: 1, operations: []},
-		{name: 'external', path: '/External/external', type: 'directory', size: 0, modified: 1, operations: []},
+		{name: 'indexed', path: '/Home/indexed', type: 'directory', size: undefined, modified: 1, operations: []},
+		{name: 'empty', path: '/Home/empty', type: 'directory', size: undefined, modified: 1, operations: []},
+		{name: 'external', path: '/External/external', type: 'directory', size: undefined, modified: 1, operations: []},
 		{name: 'file.txt', path: '/Home/file.txt', type: 'text/plain', size: 7, modified: 1, operations: []},
 	]
 
 	await expect(files.annotateIndexedDirectorySizes(entries)).resolves.toStrictEqual([
 		{...entries[0], size: 123},
-		entries[1],
+		{...entries[1], size: 0},
 		entries[2],
+		entries[3],
 	])
-	expect(directorySizes).toHaveBeenCalledWith(['/Home/indexed', '/External/external'])
+	expect(directorySizes).toHaveBeenCalledWith(['/Home/indexed', '/Home/empty', '/External/external'])
 	expect(getLiveDirectorySize).not.toHaveBeenCalled()
 })
 
@@ -110,8 +128,8 @@ test('does not disclose unshared directory sizes through member share ancestors'
 
 	const listing = await files.list('/Home', 'alice')
 
-	expect(listing.size).toBe(0)
-	expect(listing.files.find(({path}) => path === '/Home/Media')?.size).toBe(0)
+	expect(listing.size).toBeUndefined()
+	expect(listing.files.find(({path}) => path === '/Home/Media')?.size).toBeUndefined()
 	expect(listing.files.find(({path}) => path === '/Home/Direct')?.size).toBe(200)
 	expect(directorySizes).toHaveBeenCalledTimes(1)
 	expect(directorySizes).toHaveBeenCalledWith(['/Home/Direct'])

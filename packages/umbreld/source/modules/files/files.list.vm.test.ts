@@ -141,22 +141,28 @@ rm -rf '${mountSource}' '${guestDirectory}' /tmp/files-list-status-failure-bindf
 })
 
 test('list() lists the root directory', async () => {
-	await expect(umbreld.client.files.list.query({path: '/'})).resolves.toMatchObject({
+	const listing = await umbreld.client.files.list.query({path: '/'})
+	const expectedNames = ['Apps', 'Backups', 'External', 'Home', 'Machines', 'Network', 'Trash']
+
+	expect(listing).toMatchObject({
 		name: '',
 		path: '/',
 		type: 'directory',
-		size: 0,
 		modified: expect.any(Number),
 		operations: [],
-		files: ['Apps', 'Backups', 'External', 'Home', 'Machines', 'Network', 'Trash'].map((name) => ({
+		files: expectedNames.map((name) => ({
 			name,
 			path: `/${name}`,
 			type: 'directory',
-			size: ['Backups', 'External', 'Network'].includes(name) ? 0 : expect.any(Number),
 			modified: expect.any(Number),
 			operations: expect.arrayContaining(['copy']),
 		})),
 	})
+	expect(listing.size).toBeUndefined()
+	for (const directory of listing.files) {
+		if (['Backups', 'External', 'Network'].includes(directory.name)) expect(directory.size).toBeUndefined()
+		else expect(directory.size).toEqual(expect.any(Number))
+	}
 })
 
 test('list() exposes machine data and only protects roots backed by a valid machine', async () => {
@@ -629,10 +635,11 @@ test('list() falls back to name sorting when numeric values are equal', async ()
 	])
 })
 
-test('list() reports indexed directory content size', async () => {
+test('list() reports indexed directory content sizes including empty directories', async () => {
 	// Create a test directory with a subdirectory and files - using unique path
 	await umbreld.client.files.createDirectory.mutate({path: '/Home/dir-size-test'})
 	await umbreld.client.files.createDirectory.mutate({path: '/Home/dir-size-test/subdir'})
+	await umbreld.client.files.createDirectory.mutate({path: '/Home/dir-size-test/empty'})
 
 	// Add files to the subdirectory
 	await uploadFile('/Home/dir-size-test/subdir/file1.txt', 'content1')
@@ -644,8 +651,11 @@ test('list() reports indexed directory content size', async () => {
 		async () => {
 			const listing = await umbreld.client.files.list.query({path: '/Home/dir-size-test'})
 			const subdir = listing.files.find((file) => file.name === 'subdir')
+			const empty = listing.files.find((file) => file.name === 'empty')
 			expect(subdir).toBeDefined()
+			expect(empty).toBeDefined()
 			expect(subdir!.size).toBe(16)
+			expect(empty!.size).toBe(0)
 		},
 		{retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100},
 	)

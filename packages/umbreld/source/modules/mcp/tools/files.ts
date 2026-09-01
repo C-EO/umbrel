@@ -10,7 +10,7 @@ type FileDto = {
 	name: string
 	path: string
 	type: string
-	size: number
+	size?: number
 	modified: number
 }
 

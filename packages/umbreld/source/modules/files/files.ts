@@ -74,7 +74,7 @@ export type File = {
 	name: string
 	path: string
 	type: string
-	size: number
+	size?: number
 	modified: number
 	operations: FileOperation[]
 	thumbnail?: string
@@ -690,9 +690,9 @@ export default class Files {
 		else type = lookupMimeType(name) || 'application/octet-stream'
 
 		// Get the size in bytes
-		let size = stats.size
+		let size: number | undefined = stats.size
 		if (type === 'directory') {
-			size = 0
+			size = undefined
 			if (includeIndexedDirectorySize) {
 				const [indexed] = await this.fileIndex.directorySizes([path]).catch(() => [])
 				if (indexed?.virtualPath === path) size = indexed.size
@@ -715,7 +715,7 @@ export default class Files {
 
 	async annotateIndexedDirectorySizes(files: readonly File[]) {
 		// Listing metadata is allowed to use the index only. An omitted path stays
-		// zero instead of turning a fast listing into a recursive filesystem walk.
+		// undefined instead of turning a fast listing into a recursive filesystem walk.
 		const directoryPaths = files.filter(({type}) => type === 'directory').map(({path}) => path)
 		if (directoryPaths.length === 0) return [...files]
 		const indexedSizes = await this.fileIndex.directorySizes(directoryPaths).catch(() => [])
@@ -781,7 +781,7 @@ export default class Files {
 			name: '',
 			path: '/',
 			type: 'directory',
-			size: 0,
+			size: undefined,
 			modified: 0,
 			operations: [],
 			files,

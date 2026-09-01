@@ -77,8 +77,8 @@ export default router({
 			// We enable numeric sorting by name, e.g. 1.txt, 2.txt, 10.txt
 			const textSort = new Intl.Collator('en-US', {numeric: true})
 			directoryListing.files.sort((fileA, fileB) => {
-				const a = fileA[input.sortBy]
-				const b = fileB[input.sortBy]
+				const a = input.sortBy === 'size' ? (fileA.size ?? 0) : fileA[input.sortBy]
+				const b = input.sortBy === 'size' ? (fileB.size ?? 0) : fileB[input.sortBy]
 				if (typeof a === 'string' && typeof b === 'string') return textSort.compare(a, b)
 				if (typeof a === 'number' && typeof b === 'number') return a - b || textSort.compare(fileA.name, fileB.name)
 				return 0
