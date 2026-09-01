@@ -128,13 +128,41 @@ const PHOTO_LIBRARY_CTE = `
 	canonical_locations AS (
 		SELECT * FROM ranked_locations WHERE location_rank = 1
 	),
+	ranked_exact_live_motions AS (
+		SELECT account_id, live_identifier, content_hash, root_virtual_path, relative_path,
+			ROW_NUMBER() OVER (
+				PARTITION BY account_id, live_identifier
+				ORDER BY root_virtual_path, relative_path, content_hash
+			) AS motion_rank
+		FROM authorized_locations
+		WHERE kind = 'video' AND live_identifier IS NOT NULL
+	),
+	exact_live_motions AS (
+		SELECT account_id, live_identifier, content_hash, root_virtual_path, relative_path
+		FROM ranked_exact_live_motions WHERE motion_rank = 1
+	),
+	ranked_fallback_live_motions AS (
+		SELECT account_id, root_virtual_path, live_fallback_parent, live_fallback_stem,
+			content_hash, relative_path,
+			ROW_NUMBER() OVER (
+				PARTITION BY account_id, root_virtual_path, live_fallback_parent, live_fallback_stem
+				ORDER BY relative_path, content_hash
+			) AS motion_rank
+		FROM authorized_locations
+		WHERE kind = 'video' AND duration_ms <= 10000
+	),
+	fallback_live_motions AS (
+		SELECT account_id, root_virtual_path, live_fallback_parent, live_fallback_stem,
+			content_hash, relative_path
+		FROM ranked_fallback_live_motions WHERE motion_rank = 1
+	),
 	live_pair_candidates AS (
 		SELECT still.account_id, still.content_hash AS still_hash,
 			motion.content_hash AS motion_hash, motion.root_virtual_path AS motion_root_virtual_path,
 			motion.relative_path AS motion_relative_path, 0 AS match_rank
 		FROM authorized_locations AS still
-		JOIN authorized_locations AS motion ON motion.account_id = still.account_id
-			AND motion.kind = 'video' AND motion.live_identifier = still.live_identifier
+		JOIN exact_live_motions AS motion ON motion.account_id = still.account_id
+			AND motion.live_identifier = still.live_identifier
 		WHERE still.kind = 'photo' AND still.live_identifier IS NOT NULL
 
 		UNION ALL
@@ -143,11 +171,11 @@ const PHOTO_LIBRARY_CTE = `
 			motion.content_hash AS motion_hash, motion.root_virtual_path AS motion_root_virtual_path,
 			motion.relative_path AS motion_relative_path, 1 AS match_rank
 		FROM authorized_locations AS still
-		JOIN authorized_locations AS motion ON motion.account_id = still.account_id
-			AND motion.kind = 'video' AND motion.root_virtual_path = still.root_virtual_path
+		JOIN fallback_live_motions AS motion ON motion.account_id = still.account_id
+			AND motion.root_virtual_path = still.root_virtual_path
 			AND motion.live_fallback_parent = still.live_fallback_parent
 			AND motion.live_fallback_stem = still.live_fallback_stem
-		WHERE still.kind = 'photo' AND motion.duration_ms <= 10000
+		WHERE still.kind = 'photo'
 	),
 	ranked_live_pairs AS (
 		SELECT *, ROW_NUMBER() OVER (

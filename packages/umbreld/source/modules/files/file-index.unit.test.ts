@@ -1903,15 +1903,14 @@ test('preserves Photos identity and user state across a watcher-reported rename'
 	)
 })
 
-test('moves a shared Live Photo companion only with every still that references it', async () => {
+test('selects one canonical shared Live Photo companion and moves it only with every referencing still', async () => {
 	const {index, homeDirectory, trashDirectory} = await fixture(undefined, {
 		includeTrash: true,
 		enrichmentRuntime: {
-			hashFile: async (systemPath) =>
-				Buffer.alloc(
-					32,
-					nodePath.basename(systemPath).endsWith('.mov') ? 0x82 : Number(nodePath.basename(systemPath)[0]),
-				),
+			hashFile: async (systemPath) => {
+				const name = nodePath.basename(systemPath)
+				return Buffer.alloc(32, name === 'a-motion.mov' ? 0x81 : name.endsWith('.mov') ? 0x82 : Number(name[0]))
+			},
 			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
 			extractMediaMetadata: async (systemPath) => {
 				const video = systemPath.endsWith('.mov')
@@ -1930,7 +1929,8 @@ test('moves a shared Live Photo companion only with every still that references 
 	await Promise.all([
 		writeFile(nodePath.join(homeDirectory, '1-still.jpg'), 'one'),
 		writeFile(nodePath.join(homeDirectory, '2-still.jpg'), 'two'),
-		writeFile(nodePath.join(homeDirectory, 'motion.mov'), 'motion'),
+		writeFile(nodePath.join(homeDirectory, 'a-motion.mov'), 'first motion'),
+		writeFile(nodePath.join(homeDirectory, 'z-motion.mov'), 'second motion'),
 	])
 	await index.reconcileRoot('/Home', 'shared-live-photo')
 	await index.initializePhotos('owner')
@@ -1941,25 +1941,26 @@ test('moves a shared Live Photo companion only with every still that references 
 		maxTimeout: 20,
 	})
 
-	const stills = (await index.photosListItems('owner', {}, undefined, 10)).items
+	const stills = (await index.photosListItems('owner', {kind: 'photo'}, undefined, 10)).items
 	expect(stills).toHaveLength(2)
 	expect(stills.every(({subKind}) => subKind === 'live')).toBe(true)
 	await expect(index.photosResolveItemFiles('owner', [stills[0]!.id], 'home')).resolves.toMatchObject([
 		{id: stills[0]!.id},
 	])
-	await expect(
-		index.photosResolveItemFiles(
-			'owner',
-			stills.map(({id}) => id),
-			'home',
-		),
-	).resolves.toEqual(
+	const resolvedPair = await index.photosResolveItemFiles(
+		'owner',
+		stills.map(({id}) => id),
+		'home',
+	)
+	expect(resolvedPair).toEqual(
 		expect.arrayContaining([
 			expect.objectContaining({id: stills[0]!.id}),
 			expect.objectContaining({id: stills[1]!.id}),
-			expect.objectContaining({id: Buffer.alloc(32, 0x82).toString('hex')}),
+			expect.objectContaining({id: Buffer.alloc(32, 0x81).toString('hex')}),
 		]),
 	)
+	expect(resolvedPair).toHaveLength(3)
+	expect(resolvedPair.map(({id}) => id)).not.toContain(Buffer.alloc(32, 0x82).toString('hex'))
 
 	// Splitting the stills between Home and Trash must not make the motion file
 	// disposable: permanently deleting the Trash-side still later must not erase
