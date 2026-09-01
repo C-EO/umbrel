@@ -381,6 +381,15 @@ export default class Backups {
 					this.logger.log(`Restored ${this.restoreStatus.progress}% of backup`)
 				}
 			})
+			// rsync can exit successfully after its last parseable progress sample is 99%.
+			// Normalize the completed copy before the final restore work and reboot so
+			// subscribers reliably observe the transfer reaching 100%.
+			if (this.restoreStatus.progress !== 100) {
+				this.restoreStatus.progress = 100
+				this.restoreStatus.secondsRemaining = 0
+				this.#umbreld.eventBus.emit('backups:restore-progress', this.restoreStatus)
+				this.logger.log(`Restored 100% of backup`)
+			}
 			// We mark that the next boot is the first start after a backup restore.
 			// Cloud uses this marker on the next boot to pause restored syncs before
 			// they can run, so failing to persist it must fail the restore.

@@ -556,26 +556,28 @@ test('extracts descriptor-backed video metadata without passing an ImageMagick c
 	temporaryDirectories.push(directory)
 	const video = nodePath.join(directory, 'IMG_0001.mov')
 	await writeFile(video, 'video')
-	vi.mocked(execa).mockResolvedValueOnce({
-		stdout: JSON.stringify({
-			streams: [
-				{
-					codec_type: 'video',
-					width: 1920,
-					height: 1080,
-					duration: 'N/A',
-					side_data_list: [{rotation: 90}],
-					tags: {
-						rotate: '0',
-						creation_time: '2025-08-21T12:00:00Z',
-						projection: 'equirectangular',
-						'com.apple.quicktime.content.identifier': 'live-photo-id',
+	vi.mocked(execa)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify({
+				streams: [
+					{
+						codec_type: 'video',
+						width: 1920,
+						height: 1080,
+						duration: 'N/A',
+						side_data_list: [{rotation: 90}],
+						tags: {
+							rotate: '0',
+							creation_time: '2025-08-21T12:00:00Z',
+							projection: 'equirectangular',
+							'com.apple.quicktime.content.identifier': 'live-photo-id',
+						},
 					},
-				},
-			],
-			format: {duration: '3.25'},
-		}),
-	} as never)
+				],
+				format: {duration: '3.25'},
+			}),
+		} as never)
+		.mockResolvedValueOnce({stdout: '[{}]'} as never)
 
 	await expect(extractMediaMetadata(video, 42)).resolves.toMatchObject({
 		kind: 'video',
@@ -585,7 +587,7 @@ test('extracts descriptor-backed video metadata without passing an ImageMagick c
 		durationMs: 3250,
 		liveIdentifier: 'live-photo-id',
 	})
-	expect(execa).toHaveBeenCalledWith('ffprobe', expect.arrayContaining(['/dev/fd/3']), {
+	expect(execa).toHaveBeenNthCalledWith(1, 'ffprobe', expect.arrayContaining(['/dev/fd/3']), {
 		detached: true,
 		timeout: THUMBNAIL_GENERATION_TIMEOUT_MS,
 		killSignal: 'SIGKILL',
@@ -593,6 +595,117 @@ test('extracts descriptor-backed video metadata without passing an ImageMagick c
 	})
 	const arguments_ = vi.mocked(execa).mock.calls[0][1] as string[]
 	expect(arguments_).not.toContain('MOV:/dev/fd/3')
+	expect(execa).toHaveBeenNthCalledWith(2, 'exiftool', expect.arrayContaining(['-G1:2', '/dev/fd/3']), {
+		detached: true,
+		timeout: THUMBNAIL_GENERATION_TIMEOUT_MS,
+		killSignal: 'SIGKILL',
+		stdio: ['ignore', 'pipe', 'pipe', 42],
+	})
+	const exifToolArguments = vi.mocked(execa).mock.calls[1]![1] as string[]
+	expect(exifToolArguments).toEqual(expect.arrayContaining(['-api', 'IgnoreTags=all']))
+	expect(exifToolArguments).not.toContain('-ee')
+})
+
+test('merges camera-classified QuickTime metadata without accepting non-camera groups', async () => {
+	vi.mocked(execa)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify({
+				streams: [{codec_type: 'video', width: 1920, height: 1080}],
+				format: {duration: '1'},
+			}),
+		} as never)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify([
+				{
+					'ICC-header:Image:Make': 'Colour profile vendor',
+					'ICC-header:Image:Model': 'Colour profile model',
+					'Keys:Camera:Make': 'Apple',
+					'Keys:Camera:Model': 'iPhone Air',
+					'VideoKeys:Camera:LensModel': 'iPhone Air front camera 2.715mm f/1.9',
+					'VideoKeys:Camera:FocalLength': 2.715,
+					'VideoKeys:Camera:FNumber': 1.9,
+					'VideoKeys:Camera:ExposureTime': 0.005,
+					'VideoKeys:Camera:ISO': 80,
+				},
+			]),
+		} as never)
+
+	await expect(extractMediaMetadata('/home/iphone.mov')).resolves.toMatchObject({
+		cameraMake: 'Apple',
+		cameraModel: 'iPhone Air',
+		lens: 'iPhone Air front camera 2.715mm f/1.9',
+		focalLength: '2.7mm',
+		aperture: 'ƒ/1.9',
+		exposure: '1/200',
+		iso: 80,
+	})
+})
+
+test('accepts Android camera identity keys from the QuickTime video group', async () => {
+	vi.mocked(execa)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify({streams: [{codec_type: 'video', width: 1920, height: 1080}]}),
+		} as never)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify([
+				{
+					'Keys:Video:AndroidMake': 'Google',
+					'Keys:Video:AndroidModel': 'Pixel 10 Pro',
+				},
+			]),
+		} as never)
+
+	await expect(extractMediaMetadata('/home/pixel.mp4')).resolves.toMatchObject({
+		cameraMake: 'Google',
+		cameraModel: 'Pixel 10 Pro',
+	})
+})
+
+test('extracts embedded Insta360 trailer metadata only for INSV videos', async () => {
+	vi.mocked(execa)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify({
+				streams: [{codec_type: 'video', width: 1920, height: 1920}],
+				format: {duration: '61'},
+			}),
+		} as never)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify([
+				{
+					'Insta360:Camera:Model': 'Insta360 X4',
+					'Insta360:Camera:ExposureTime': 0.00499681429937482,
+				},
+			]),
+		} as never)
+
+	await expect(extractMediaMetadata('/home/video.insv')).resolves.toMatchObject({
+		cameraModel: 'Insta360 X4',
+		exposure: '1/200',
+	})
+	const arguments_ = vi.mocked(execa).mock.calls[1]![1] as string[]
+	expect(arguments_).toContain('-ee')
+})
+
+test('keeps playable video metadata when optional ExifTool extraction fails', async () => {
+	const onOptionalMetadataFailure = vi.fn()
+	const optionalMetadataError = new Error('Unsupported vendor trailer')
+	vi.mocked(execa)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify({
+				streams: [{codec_type: 'video', width: 1280, height: 720}],
+				format: {duration: '2'},
+			}),
+		} as never)
+		.mockRejectedValueOnce(optionalMetadataError)
+
+	await expect(extractMediaMetadata('/home/video.mp4', undefined, onOptionalMetadataFailure)).resolves.toMatchObject({
+		kind: 'video',
+		width: 1280,
+		height: 720,
+		durationMs: 2000,
+	})
+	expect(onOptionalMetadataFailure).toHaveBeenCalledOnce()
+	expect(onOptionalMetadataFailure).toHaveBeenCalledWith(optionalMetadataError)
 })
 
 test('packs the average thumbnail colour as 0xRRGGBB', async () => {

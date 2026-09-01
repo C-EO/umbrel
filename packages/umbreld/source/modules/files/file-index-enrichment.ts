@@ -832,7 +832,11 @@ export default class FileIndexEnrichment {
 			let source: Awaited<ReturnType<typeof open>> | undefined
 			try {
 				source = await openContentRevision(content.systemPath, content.fingerprint)
-				const metadata = await this.#extractMediaMetadata(content.systemPath, source.fd)
+				const metadata = await this.#extractMediaMetadata(content.systemPath, source.fd, (error) =>
+					this.logger.verbose(
+						`Optional ExifTool metadata extraction failed for '${content.systemPath}': ${errorMessage(error)}`,
+					),
+				)
 				let tint = metadata.tint
 				if (tint === undefined) {
 					const existingPreview = thumbnailSystemPath(
@@ -2194,10 +2198,14 @@ function referenceFailureKind(error: unknown): 'stale' | 'unreadable' | undefine
 	if (code === 'EACCES' || code === 'EPERM' || code === 'EIO') return 'unreadable'
 }
 
-export async function extractMediaMetadata(systemPath: string, sourceFileDescriptor?: number): Promise<MediaMetadata> {
+export async function extractMediaMetadata(
+	systemPath: string,
+	sourceFileDescriptor?: number,
+	onOptionalMetadataFailure?: (error: unknown) => void,
+): Promise<MediaMetadata> {
 	const kind = photoKind(systemPath)
 	if (!kind) throw new Error('Unsupported media source')
-	if (kind === 'video') return extractVideoMetadata(systemPath, sourceFileDescriptor)
+	if (kind === 'video') return extractVideoMetadata(systemPath, sourceFileDescriptor, onOptionalMetadataFailure)
 	return extractPhotoMetadata(systemPath, sourceFileDescriptor)
 }
 
@@ -2366,20 +2374,34 @@ async function extractPhotoMetadata(systemPath: string, sourceFileDescriptor?: n
 	}
 }
 
-async function extractVideoMetadata(systemPath: string, sourceFileDescriptor?: number): Promise<MediaMetadata> {
-	const {stdout} = await runBoundedMediaProcess(
-		'ffprobe',
-		[
-			'-v',
-			'error',
-			'-show_entries',
-			'stream=codec_type,width,height,duration:stream_tags=rotate,creation_time,projection,com.apple.quicktime.content.identifier:stream_side_data=rotation:format=duration:format_tags=creation_time,projection,com.apple.quicktime.content.identifier',
-			'-of',
-			'json',
-			mediaProcessInput(systemPath, sourceFileDescriptor),
-		],
-		sourceFileDescriptor,
-	)
+async function extractVideoMetadata(
+	systemPath: string,
+	sourceFileDescriptor?: number,
+	onOptionalMetadataFailure?: (error: unknown) => void,
+): Promise<MediaMetadata> {
+	// FFprobe is authoritative for the media structure while ExifTool fills in
+	// camera facts from QuickTime keys and vendor metadata that FFmpeg does not
+	// decode. Keep the optional pass independent: an unusual vendor trailer must
+	// never make an otherwise playable video disappear from Photos.
+	const [{stdout}, cameraMetadata] = await Promise.all([
+		runBoundedMediaProcess(
+			'ffprobe',
+			[
+				'-v',
+				'error',
+				'-show_entries',
+				'stream=codec_type,width,height,duration:stream_tags=rotate,creation_time,projection,com.apple.quicktime.content.identifier:stream_side_data=rotation:format=duration:format_tags=creation_time,projection,com.apple.quicktime.content.identifier',
+				'-of',
+				'json',
+				mediaProcessInput(systemPath, sourceFileDescriptor),
+			],
+			sourceFileDescriptor,
+		),
+		extractVideoCameraMetadata(systemPath, sourceFileDescriptor).catch((error) => {
+			onOptionalMetadataFailure?.(error)
+			return {}
+		}),
+	])
 	const probe = JSON.parse(stdout) as {
 		streams?: Array<{
 			codec_type?: string
@@ -2413,6 +2435,78 @@ async function extractVideoMetadata(systemPath: string, sourceFileDescriptor?: n
 		height,
 		...(durationSeconds === undefined ? {} : {durationMs: Math.max(0, Math.round(durationSeconds * 1000))}),
 		...(liveIdentifier ? {liveIdentifier} : {}),
+		...cameraMetadata,
+	}
+}
+
+async function extractVideoCameraMetadata(
+	systemPath: string,
+	sourceFileDescriptor?: number,
+): Promise<Partial<MediaMetadata>> {
+	const extractEmbedded = nodePath.extname(systemPath).toLowerCase() === '.insv'
+	const {stdout} = await runBoundedMediaProcess(
+		'exiftool',
+		[
+			'-j',
+			'-n',
+			'-G1:2',
+			'-api',
+			'LargeFileSupport=1',
+			'-api',
+			'IgnoreTags=all',
+			...(extractEmbedded ? ['-ee'] : []),
+			'-Make',
+			'-Model',
+			'-AndroidMake',
+			'-AndroidModel',
+			'-Lens',
+			'-LensModel',
+			'-FocalLength',
+			'-FNumber',
+			'-ExposureTime',
+			'-ISO',
+			mediaProcessInput(systemPath, sourceFileDescriptor),
+		],
+		sourceFileDescriptor,
+	)
+	const parsed = JSON.parse(stdout) as unknown
+	if (!Array.isArray(parsed) || !isMetadataRecord(parsed[0])) return {}
+	const tags = parsed[0]
+	const cameraMake = videoCameraTag(tags, ['Make', 'AndroidMake'])
+	const cameraModel = videoCameraTag(tags, ['Model', 'AndroidModel'])
+	const lens = videoCameraTag(tags, ['LensModel', 'Lens'])
+	const focalLength = meaningfulDngNumber(videoCameraTag(tags, ['FocalLength']))
+	const aperture = meaningfulDngNumber(videoCameraTag(tags, ['FNumber']))
+	const exposure = meaningfulDngNumber(videoCameraTag(tags, ['ExposureTime']))
+	const iso = optionalPositiveInteger(videoCameraTag(tags, ['ISO']))
+	return {
+		...(cameraMake ? {cameraMake} : {}),
+		...(cameraModel ? {cameraModel} : {}),
+		...(lens ? {lens} : {}),
+		...(focalLength ? {focalLength: formatFocalLength(focalLength)} : {}),
+		...(aperture ? {aperture: formatAperture(aperture)} : {}),
+		...(exposure ? {exposure: formatExposure(exposure)} : {}),
+		...(iso === undefined ? {} : {iso}),
+	}
+}
+
+function isMetadataRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function videoCameraTag(tags: Record<string, unknown>, names: string[]) {
+	for (const name of names) {
+		for (const [qualifiedName, value] of Object.entries(tags)) {
+			const [family1, family2, tagName] = qualifiedName.split(':')
+			if (tagName !== name) continue
+			const knownQuickTimeCameraTag =
+				(family1 === 'Keys' && ['Make', 'Model', 'AndroidMake', 'AndroidModel'].includes(tagName)) ||
+				(['ItemList', 'UserData'].includes(family1 ?? '') && ['Make', 'Model'].includes(tagName))
+			if (family2 !== 'Camera' && !knownQuickTimeCameraTag) continue
+			if (typeof value !== 'string' && typeof value !== 'number') continue
+			const cleaned = cleanMetadataValue(String(value))
+			if (cleaned) return cleaned
+		}
 	}
 }
 

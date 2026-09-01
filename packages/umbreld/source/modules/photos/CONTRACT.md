@@ -161,6 +161,23 @@ type Source = {
 }
 ```
 
+## Media metadata readers
+
+Still images use ImageMagick for dimensions and standard EXIF/DNG camera
+metadata. Videos combine FFprobe's structural metadata with a concurrent,
+best-effort ExifTool pass for camera fields that FFmpeg does not decode, such
+as QuickTime camera keys and vendor trailers. Only tags classified as camera
+metadata (plus the known QuickTime make/model locations) enter the index; an
+ICC profile's device manufacturer, for example, is not a camera make.
+
+ExifTool's embedded-document scan (`-ee`) is limited to INSV files. It is
+required to reach Insta360's trailer, but applying it to every video also
+walks timed telemetry such as accelerometer and GPS samples. Unrequested tags
+are discarded during extraction so those streams are not retained in memory.
+FFprobe remains authoritative for video dimensions, duration, creation time,
+projection and live-photo identifiers, and an ExifTool failure does not reject
+playable media.
+
 ## SubKinds & live pairs
 
 Spherical, screenshot and panorama tags are derived once at import, from the

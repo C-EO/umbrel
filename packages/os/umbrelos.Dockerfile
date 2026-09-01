@@ -393,7 +393,7 @@ RUN systemctl enable libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket vi
 
 # Install umbreld dependencies
 # (many of these can be remove after the apps refactor)
-RUN apt-get install --yes python3 fswatch jq rsync git gettext-base gnupg procps dmidecode unar imagemagick ffmpeg samba wsdd2 cifs-utils smbclient nvme-cli smartmontools pciutils
+RUN apt-get install --yes python3 fswatch jq rsync git gettext-base gnupg procps dmidecode unar imagemagick ffmpeg libimage-exiftool-perl samba wsdd2 cifs-utils smbclient nvme-cli smartmontools pciutils
 
 # Install the Realtek RTL8127 10GbE driver on amd64 systems. Build against the
 # kernels in the image rather than the kernel running the Docker builder.

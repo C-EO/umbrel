@@ -513,6 +513,52 @@ describe('file index migrations', () => {
 		database.close()
 	})
 
+	test('requeues only videos when adding video camera metadata extraction', async () => {
+		const database = new BetterSqlite3(':memory:')
+		await migrateFileIndex(database, fileIndexMigrations.slice(0, 11))
+		const insertContent = database.prepare('INSERT INTO contents(blake3, size, created_at) VALUES (?, 5, 1)')
+		const photo = insertContent.run(Buffer.alloc(32, 0xc1)).lastInsertRowid
+		const video = insertContent.run(Buffer.alloc(32, 0xc2)).lastInsertRowid
+		const insertMetadata = database.prepare(
+			`INSERT INTO media_metadata(
+				content_id, state, kind, width, height, camera_model,
+				failure_count, retry_at, last_error, updated_at
+			) VALUES (?, 'ready', ?, 100, 50, 'existing', 3, 123, 'old error', 1)`,
+		)
+		insertMetadata.run(photo, 'photo')
+		insertMetadata.run(video, 'video')
+
+		await expect(migrateFileIndex(database)).resolves.toBe(FILE_INDEX_SCHEMA_VERSION)
+		expect(
+			database
+				.prepare(
+					`SELECT kind, state, camera_model, failure_count, retry_at, last_error, updated_at
+					FROM media_metadata ORDER BY kind`,
+				)
+				.all(),
+		).toStrictEqual([
+			{
+				kind: 'photo',
+				state: 'ready',
+				camera_model: 'existing',
+				failure_count: 3,
+				retry_at: 123,
+				last_error: 'old error',
+				updated_at: 1,
+			},
+			{
+				kind: 'video',
+				state: 'pending',
+				camera_model: 'existing',
+				failure_count: 0,
+				retry_at: null,
+				last_error: null,
+				updated_at: 0,
+			},
+		])
+		database.close()
+	})
+
 	test('normalizes populated schema v4 filenames when adding the search index', async () => {
 		const database = new BetterSqlite3(':memory:')
 		await migrateFileIndex(database, fileIndexMigrations.slice(0, 4))
