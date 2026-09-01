@@ -62,7 +62,7 @@ export const ViewerWrapper: React.FC<ViewerWrapperProps> = ({
 		<div
 			className={`absolute top-0 left-1/2 z-10 flex h-full w-full -translate-x-1/2 items-center justify-center bg-black/80 ${className ?? ''}`}
 		>
-			<div ref={wrapperRef} className='p-2 md:px-10'>
+			<div ref={wrapperRef} className='max-w-full min-w-0 p-2 md:px-10'>
 				{children}
 			</div>
 		</div>
