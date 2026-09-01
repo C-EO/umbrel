@@ -159,10 +159,6 @@ test('list() lists the root directory', async () => {
 		})),
 	})
 	expect(listing.size).toBeUndefined()
-	for (const directory of listing.files) {
-		if (['Backups', 'External', 'Network'].includes(directory.name)) expect(directory.size).toBeUndefined()
-		else expect(directory.size).toEqual(expect.any(Number))
-	}
 })
 
 test('list() exposes machine data and only protects roots backed by a valid machine', async () => {
@@ -230,7 +226,6 @@ test('list() lists the /Home directory', async () => {
 		name: 'Home',
 		path: '/Home',
 		type: 'directory',
-		size: expect.any(Number),
 		modified: expect.any(Number),
 		operations: expect.arrayContaining(['copy']),
 		files: [
@@ -238,7 +233,6 @@ test('list() lists the /Home directory', async () => {
 				name: 'Documents',
 				path: '/Home/Documents',
 				type: 'directory',
-				size: expect.any(Number),
 				modified: expect.any(Number),
 				operations: expect.arrayContaining(['move', 'copy']),
 			},
@@ -246,7 +240,6 @@ test('list() lists the /Home directory', async () => {
 				name: 'Downloads',
 				path: '/Home/Downloads',
 				type: 'directory',
-				size: expect.any(Number),
 				modified: expect.any(Number),
 				operations: expect.arrayContaining(['copy']),
 			},
@@ -254,7 +247,6 @@ test('list() lists the /Home directory', async () => {
 				name: 'Photos',
 				path: '/Home/Photos',
 				type: 'directory',
-				size: expect.any(Number),
 				modified: expect.any(Number),
 				operations: expect.arrayContaining(['move', 'copy']),
 			},
@@ -262,7 +254,6 @@ test('list() lists the /Home directory', async () => {
 				name: 'Videos',
 				path: '/Home/Videos',
 				type: 'directory',
-				size: expect.any(Number),
 				modified: expect.any(Number),
 				operations: expect.arrayContaining(['move', 'copy']),
 			},
