@@ -13,6 +13,10 @@ export type Member = {
 	id: string
 	name: string
 	hashedPassword: string
+	// Samba uses NT password authentication, so it needs a separate plaintext
+	// secret that can be reapplied to the local passdb after an OS update. The
+	// presence of this field means Samba access is enabled for the member.
+	sambaPassword?: string
 	avatarHash?: string
 	// Per-member profile settings, mirroring the owner's user object
 	totpUri?: string
@@ -373,6 +377,7 @@ export default class User {
 		const privateServiceCleanup = await Promise.allSettled([
 			this.#umbreld.auth.revokeAllForAccount(userId),
 			this.#umbreld.files.cloud.removeUser(userId),
+			this.#umbreld.files.samba.removeUser(userId),
 		])
 		const cleanupFailures = privateServiceCleanup.filter(
 			(result): result is PromiseRejectedResult => result.status === 'rejected',
@@ -604,6 +609,10 @@ export default class User {
 					}
 				})(),
 			])
+		} else if ((await this.getMember(userId))?.sambaPassword) {
+			// A member's Home share also uses their display name while the login
+			// username remains their immutable id.
+			await this.#umbreld.files.samba.applyShares()
 		}
 		return true
 	}

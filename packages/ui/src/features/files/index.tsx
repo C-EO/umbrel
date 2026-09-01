@@ -41,7 +41,7 @@ export default function FilesLayout() {
 	const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false)
 	const isReadOnly = useIsFilesReadOnly()
 	const {data: user} = trpcReact.user.get.useQuery()
-	const isMember = user?.role === 'member'
+	const canManageSambaShares = user?.role === 'owner' || user?.sambaEnabled === true
 
 	// One subscription for the whole Files surface: refreshes every mounted
 	// listing (main view, /Apps, /Trash, sidebar trash) on external changes
@@ -110,7 +110,7 @@ export default function FilesLayout() {
 						{/* Lazy loaded dialogs on non-read-only mode */}
 						{!isReadOnly ? (
 							<>
-								{!isMember && (
+								{canManageSambaShares && (
 									<Suspense>
 										<ShareInfoDialog />
 									</Suspense>

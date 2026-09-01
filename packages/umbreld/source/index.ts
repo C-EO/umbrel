@@ -101,6 +101,8 @@ type StoreSchema = {
 		shares: {
 			name: string
 			path: string
+			// Missing on legacy records, which always belong to the owner.
+			userId?: string
 		}[]
 		// Owner paths shared with member accounts. 'all' also covers members
 		// created in the future. Shares still respect the usual system rules

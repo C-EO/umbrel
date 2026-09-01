@@ -107,6 +107,8 @@ export type SettingsPageItem = SettingsCatalogItemBase & {
 	to: string
 	external?: boolean
 	command?: SettingsPageCommand
+	/** Overrides the item's position in SETTINGS_PAGE_ITEM_ORDER */
+	order?: number
 }
 
 export type SettingsCommandItem = SettingsCatalogItemBase & {
@@ -126,7 +128,12 @@ export type SettingsPage = {
 
 export function createSettingsCatalog(
 	t: TFunction,
-	{deviceName, isMember = false, memberName}: {deviceName: string; isMember?: boolean; memberName?: string},
+	{
+		deviceName,
+		isMember = false,
+		memberName,
+		sambaEnabled = false,
+	}: {deviceName: string; isMember?: boolean; memberName?: string; sambaEnabled?: boolean},
 ): SettingsCatalogItem[] {
 	const pageItems: SettingsPageItem[] = [
 		{
@@ -693,7 +700,19 @@ export function createSettingsCatalog(
 	]
 
 	const memberPreferenceItems = pageItems.filter(({id}) => id === 'wallpaper' || id === 'widgets' || id === 'language')
-	const visiblePageItems = isMember ? [...memberPageItems, ...memberPreferenceItems] : pageItems
+	// Members get the File sharing row in their single account section, right below Widgets
+	const memberFileSharingItems = sambaEnabled
+		? pageItems
+				.filter(({id}) => id === 'file-sharing')
+				.map((item) => ({
+					...item,
+					category: 'account' as const,
+					order: (settingsPageItemOrder.get('widgets') ?? 0) + 0.5,
+				}))
+		: []
+	const visiblePageItems = isMember
+		? [...memberPageItems, ...memberPreferenceItems, ...memberFileSharingItems]
+		: pageItems
 	const memberCommandIds = new Set<SettingsItemId>([
 		'account',
 		'sessions',
@@ -715,8 +734,8 @@ export function getSettingsPage(
 		.filter((item): item is SettingsPageItem => item.kind === 'page')
 		.sort(
 			(a, b) =>
-				(settingsPageItemOrder.get(a.id) ?? Number.POSITIVE_INFINITY) -
-				(settingsPageItemOrder.get(b.id) ?? Number.POSITIVE_INFINITY),
+				(a.order ?? settingsPageItemOrder.get(a.id) ?? Number.POSITIVE_INFINITY) -
+				(b.order ?? settingsPageItemOrder.get(b.id) ?? Number.POSITIVE_INFINITY),
 		)
 	const items = query.trim()
 		? searchSettingsItems(pageItems, query)

@@ -10,6 +10,7 @@ import {Drawer, DrawerContent, DrawerHeader, DrawerScroller, DrawerTitle} from '
 import {listClass} from '@/components/ui/list'
 import {Switch} from '@/components/ui/switch'
 import {HomeIcon} from '@/features/files/assets/home-icon'
+import {ChangeSmbPassword} from '@/features/files/components/dialogs/share-info-dialog/change-smb-password'
 import {PlatformInstructions} from '@/features/files/components/dialogs/share-info-dialog/platform-instructions'
 import {
 	Platform,
@@ -19,8 +20,9 @@ import {
 import {MiniBrowser} from '@/features/files/components/mini-browser'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
 import {FolderIcon} from '@/features/files/components/shared/file-item-icon/folder-icon'
-import {EXTERNAL_STORAGE_PATH, HOME_PATH} from '@/features/files/constants'
+import {EXTERNAL_STORAGE_PATH} from '@/features/files/constants'
 import {useHomeDirectoryName} from '@/features/files/hooks/use-home-directory-name'
+import {useHomePath} from '@/features/files/hooks/use-home-path'
 import {useShares} from '@/features/files/hooks/use-shares'
 import {getShareUnavailableReason} from '@/features/files/utils/get-share-unavailable-reason'
 import {useIsMobile} from '@/hooks/use-is-mobile'
@@ -34,6 +36,8 @@ export default function FileSharingDrawerOrDialog() {
 	const dialogProps = useSettingsDialogProps()
 	const isMobile = useIsMobile()
 	const homeDirectoryName = useHomeDirectoryName()
+	// The account's home root: /Home for the owner, /Users/<slug> for members
+	const homePath = useHomePath()
 
 	const {
 		shares,
@@ -47,8 +51,12 @@ export default function FileSharingDrawerOrDialog() {
 		isRemovingShare,
 	} = useShares()
 
-	// Query disks directly (can't use useExternalStorage — it depends on files-specific context)
-	const {data: disks} = trpcReact.files.externalDevices.useQuery()
+	const {data: user} = trpcReact.user.get.useQuery()
+	const isOwner = user?.role === 'owner'
+
+	// Query disks directly (can't use useExternalStorage — it depends on files-specific context).
+	// Owner-only: the procedure is owner-gated, and members can never have external shares.
+	const {data: disks} = trpcReact.files.externalDevices.useQuery(undefined, {enabled: isOwner})
 
 	const isEnabled = (shares?.length ?? 0) > 0
 	const isBusy = isAddingShare || isRemovingShare
@@ -66,7 +74,7 @@ export default function FileSharingDrawerOrDialog() {
 	const homeShared = isHomeShared() ?? false
 
 	// Individual shares (non-Home)
-	const activeIndividualShares = shares?.filter((share) => share.path !== HOME_PATH) ?? []
+	const activeIndividualShares = shares?.filter((share) => share.path !== homePath) ?? []
 	const activePaths = new Set(activeIndividualShares.map((s) => s.path))
 
 	// Seed seenFolders with initial active shares once data loads
@@ -101,16 +109,16 @@ export default function FileSharingDrawerOrDialog() {
 	const showChoiceScreen = !isEnabled && !hasRecentlyRemoved && !isLoadingShares
 
 	// Derive name/sharename for platform instructions from the primary share
-	const primaryShare = shares?.find((s) => s.path === HOME_PATH) ?? shares?.[0]
+	const primaryShare = shares?.find((s) => s.path === homePath) ?? shares?.[0]
 	const primaryName = primaryShare?.name ?? homeDirectoryName
 	const primarySharename = primaryShare?.sharename
 
 	// Home toggle handler
 	const handleHomeToggle = async (checked: boolean) => {
 		if (checked) {
-			await addShare({path: HOME_PATH})
+			await addShare({path: homePath})
 		} else {
-			await removeShare({path: HOME_PATH})
+			await removeShare({path: homePath})
 		}
 	}
 
@@ -132,7 +140,7 @@ export default function FileSharingDrawerOrDialog() {
 
 	const smbUrl =
 		selectedPlatform.id === 'windows' ? `\\\\${window.location.hostname}` : `smb://${window.location.hostname}/`
-	const username = 'umbrel'
+	const username = user?.sambaUsername ?? ''
 	const password = isLoadingSharesPassword ? '...' : sharePassword || ''
 
 	// --- First-run choice screen ---
@@ -143,7 +151,7 @@ export default function FileSharingDrawerOrDialog() {
 			<div className='grid grid-cols-2 gap-3'>
 				<button
 					className='flex flex-col items-center gap-3 rounded-12 bg-white/6 px-4 py-6 text-center transition-colors hover:bg-white/10 active:bg-white/8'
-					onClick={() => addShare({path: HOME_PATH})}
+					onClick={() => addShare({path: homePath})}
 					disabled={isBusy}
 				>
 					<HomeIcon className='h-10 w-10' />
@@ -182,7 +190,7 @@ export default function FileSharingDrawerOrDialog() {
 			<div className={listClass}>
 				<label className={listItemClass}>
 					<FileItemIcon
-						item={{name: 'Home', path: HOME_PATH, type: 'directory', modified: 0, size: 0, operations: []}}
+						item={{name: 'Home', path: homePath, type: 'directory', modified: 0, size: 0, operations: []}}
 						className='h-8 w-8 shrink-0'
 					/>
 					<div className='min-w-0 flex-1'>
@@ -299,6 +307,7 @@ export default function FileSharingDrawerOrDialog() {
 								name={primaryName}
 								sharename={primarySharename}
 							/>
+							<ChangeSmbPassword toastArea='settings' />
 						</div>
 					</motion.div>
 				)}
@@ -313,9 +322,9 @@ export default function FileSharingDrawerOrDialog() {
 		<MiniBrowser
 			open={isAddFolderOpen}
 			onOpenChange={setAddFolderOpen}
-			rootPath={HOME_PATH}
-			rootPaths={[HOME_PATH, EXTERNAL_STORAGE_PATH]}
-			onOpenPath={HOME_PATH}
+			rootPath={homePath}
+			rootPaths={isOwner ? [homePath, EXTERNAL_STORAGE_PATH] : [homePath]}
+			onOpenPath={homePath}
 			preselectOnOpen={false}
 			title={t('settings.file-sharing.add-folder-title')}
 			selectionMode='folders'

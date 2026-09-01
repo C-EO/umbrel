@@ -2,11 +2,13 @@ import {keepPreviousData} from '@tanstack/react-query'
 import {useTranslation} from 'react-i18next'
 
 import {toast} from '@/components/ui/toast'
-import {useHomePath, useIsMember} from '@/features/files/hooks/use-home-path'
+import {useHomePath} from '@/features/files/hooks/use-home-path'
 import type {Share} from '@/features/files/types'
 import {getFilesErrorMessage} from '@/features/files/utils/error-messages'
 import {trpcReact} from '@/trpc/trpc'
 import type {RouterError} from '@/trpc/trpc'
+
+const SAMBA_STATE_REFETCH_INTERVAL_MS = 30_000
 
 /**
  * Hook to manage file shares in the file system.
@@ -16,14 +18,21 @@ export function useShares() {
 	const {t} = useTranslation()
 	const utils = trpcReact.useUtils()
 
-	const isMember = useIsMember()
+	const {data: user} = trpcReact.user.get.useQuery(undefined, {
+		staleTime: 0,
+		refetchInterval: SAMBA_STATE_REFETCH_INTERVAL_MS,
+		refetchIntervalInBackground: false,
+		refetchOnReconnect: 'always',
+		refetchOnWindowFocus: 'always',
+	})
+	const canManageShares = user?.role === 'owner' || user?.sambaEnabled === true
 	const homePath = useHomePath()
 
 	// Invalidate shares when external storage changes (e.g., drive ejected/mounted)
 	trpcReact.eventBus.listen.useSubscription(
 		{event: 'files:external-storage:change'},
 		{
-			enabled: !isMember,
+			enabled: user?.role === 'owner',
 			onData() {
 				utils.files.shares.invalidate()
 			},
@@ -35,9 +44,13 @@ export function useShares() {
 
 	// Query to fetch all shares
 	const {data: shares, isLoading: isLoadingShares} = trpcReact.files.shares.useQuery(undefined, {
-		enabled: !isMember,
+		enabled: canManageShares,
 		placeholderData: keepPreviousData,
-		staleTime: 60_000, // Cache for 1 minute
+		staleTime: 0,
+		refetchInterval: SAMBA_STATE_REFETCH_INTERVAL_MS,
+		refetchIntervalInBackground: false,
+		refetchOnReconnect: 'always',
+		refetchOnWindowFocus: 'always',
 	})
 
 	// Check if item is shared
@@ -48,8 +61,12 @@ export function useShares() {
 
 	// Query to get share password
 	const {data: sharePassword, isLoading: isLoadingSharesPassword} = trpcReact.files.sharePassword.useQuery(undefined, {
-		enabled: !isMember,
-		staleTime: Infinity, // Cache indefinitely until browser refresh
+		enabled: canManageShares,
+		staleTime: 0,
+		refetchInterval: SAMBA_STATE_REFETCH_INTERVAL_MS,
+		refetchIntervalInBackground: false,
+		refetchOnReconnect: 'always',
+		refetchOnWindowFocus: 'always',
 	})
 
 	// Add share mutation
@@ -78,6 +95,7 @@ export function useShares() {
 		isLoadingShares,
 		sharePassword,
 		isLoadingSharesPassword,
+		canManageShares,
 		isPathShared,
 		isHomeShared,
 

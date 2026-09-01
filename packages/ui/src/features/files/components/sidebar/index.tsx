@@ -30,7 +30,7 @@ import {firstNameFromFullName} from '@/utils/misc'
 export function Sidebar({className}: {className?: string}) {
 	const {t} = useTranslation()
 	const capabilities = useFilesCapabilities()
-	const {shares, isLoadingShares} = useShares()
+	const {shares, isLoadingShares, canManageShares} = useShares()
 	const {favorites, isLoadingFavorites} = useFavorites()
 	const {disks, isLoadingExternalStorage, isExternalStorageSupported} = useExternalStorage()
 	const homePath = useHomePath()
@@ -52,7 +52,7 @@ export function Sidebar({className}: {className?: string}) {
 		? t('files-sidebar.owners-umbrel', {name: firstNameFromFullName(sharedWithMe.ownerName)})
 		: ''
 	const showFavorites = !isLoadingFavorites && !!favorites && favorites.length > 0
-	const showShares = !isMember && !isLoadingShares && !!displayShares && displayShares.length > 0
+	const showShares = canManageShares && !isLoadingShares && !!displayShares && displayShares.length > 0
 	const showNetwork = !hidden.network && !isMember
 	const showExternal =
 		isExternalStorageSupported &&

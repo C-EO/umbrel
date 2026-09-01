@@ -1746,6 +1746,7 @@ export default class Files {
 
 		// Unshareable paths
 		const isUnshareable = match(rulePath, [
+			'/Trash',
 			'/Apps',
 			'/Apps/*',
 			'/Machines',
@@ -1778,11 +1779,9 @@ export default class Files {
 			operations.add('delete')
 		}
 
-		// Members may create household SMB exports only from their own private
-		// Home. Favorites are account-scoped and remain available to members.
-		if (this.ownerOfPath(virtualPath) !== OWNER_USER_ID) {
-			if (this.ownerOfPath(virtualPath) !== userId) operations.delete('share')
-		}
+		// Members may create SMB exports only from their own private Home.
+		// Favorites are account-scoped and remain available on granted paths.
+		if (userId !== OWNER_USER_ID && this.ownerOfPath(virtualPath) !== userId) operations.delete('share')
 
 		// Paths a member doesn't own are governed by the owner's share grants
 		if (userId !== OWNER_USER_ID && this.ownerOfPath(virtualPath) !== userId) {
@@ -1793,11 +1792,10 @@ export default class Files {
 			if (!share) return []
 
 			// The same rules as the owner apply (protected and read-only paths
-			// stay protected), minus SMB-over-SMB and trashing,
-			// which would strand the
+			// stay protected), minus SMB sharing and trashing, which would strand the
 			// owner's files in the member's private trash, so members hard delete
 			// from shares instead
-			if (!isExternal) operations.delete('share')
+			operations.delete('share')
 			if (operations.has('trash')) {
 				operations.delete('trash')
 				operations.add('delete')

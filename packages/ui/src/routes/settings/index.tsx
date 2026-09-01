@@ -163,7 +163,9 @@ export function Settings() {
 							<Route path='/terminal/*' Component={TerminalDialog} />
 							{isMobile && <Route path='/software-update' Component={SoftwareUpdateDrawer} />}
 							<Route path='/software-update/confirm' Component={SoftwareUpdateConfirmDialog} />
-							<Route path='/file-sharing' Component={FileSharingDrawerOrDialog} />
+							{(!isMember || userQ.data?.sambaEnabled === true) && (
+								<Route path='/file-sharing' Component={FileSharingDrawerOrDialog} />
+							)}
 							{!isMember && <Route path='/mcp' Component={McpDialog} />}
 							<Route path='/advanced/:advancedSelection?' Component={AdvancedSettingsDrawerOrDialog} />
 							<Route path='/storage/*' Component={StorageManagerDialog} />

@@ -18,7 +18,7 @@ export function SidebarHome() {
 	const {navigateToDirectory, currentPath} = useNavigate()
 	const navigate = useRouterNavigate()
 	const {addLinkSearchParams} = useQueryParams()
-	const {isHomeShared} = useShares()
+	const {isHomeShared, canManageShares} = useShares()
 	const hasMembers = useHasMembers()
 
 	const isShared = isHomeShared()
@@ -56,7 +56,7 @@ export function SidebarHome() {
 		/>
 	)
 
-	if (isMember) return homeItem
+	if (!canManageShares) return homeItem
 
 	return (
 		<ContextMenu>
@@ -67,7 +67,7 @@ export function SidebarHome() {
 				<ContextMenuItem onClick={openShareInfoDialog}>
 					{isShared ? t('files-action.sharing') : t('files-action.share')}
 				</ContextMenuItem>
-				{hasMembers && (
+				{!isMember && hasMembers && (
 					<ContextMenuItem onClick={openShareUsersDialog}>{t('files-action.share-with-users')}</ContextMenuItem>
 				)}
 			</ContextMenuContent>

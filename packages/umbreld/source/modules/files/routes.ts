@@ -25,6 +25,11 @@ function compareFileNames(first: string, second: string) {
 }
 
 const accountId = z.string().uuid()
+const sambaPassword = z
+	.string()
+	.min(6, 'Password must be at least 6 characters')
+	.max(127, 'Password must be at most 127 characters')
+	.refine((password) => !/[\r\n\0]/.test(password), 'Password contains unsupported characters')
 const oauthProvider = z.enum(['google-drive', 'dropbox', 'onedrive'])
 const remote = z
 	.object({
@@ -372,21 +377,40 @@ export default router({
 		}
 	}),
 
-	// Get the share password
-	sharePassword: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.samba.getSharePassword()),
+	// Get the current account's Samba password
+	sharePassword: privateProcedureWithMembers.query(async ({ctx}) =>
+		ctx.umbreld.files.samba.getSharePassword(ctx.principal!.accountId),
+	),
 
-	// Get shares
-	shares: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.samba.listShares()),
+	// Change the current account's Samba password
+	setSharePassword: privateProcedureWithMembers
+		.input(z.object({password: sambaPassword}))
+		.mutation(async ({ctx, input}) =>
+			ctx.umbreld.files.samba.setSharePassword(ctx.principal!.accountId, input.password),
+		),
+
+	// Get the current account's shares
+	shares: privateProcedureWithMembers.query(async ({ctx}) =>
+		ctx.umbreld.files.samba.listShares(ctx.principal!.accountId),
+	),
 
 	// Share a directory
-	addShare: privateProcedure
+	addShare: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.samba.addShare(input.path)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.samba.addShare(input.path, ctx.principal!.accountId)),
 
 	// Remove a share
-	removeShare: privateProcedure
+	removeShare: privateProcedureWithMembers
 		.input(z.object({path: z.string()}))
-		.mutation(async ({ctx, input}) => ctx.umbreld.files.samba.removeShare(input.path)),
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.samba.removeShare(input.path, ctx.principal!.accountId)),
+
+	// Owner-managed Samba access for member accounts. Passwords remain private
+	// to the member and are never included in this owner-facing status list.
+	memberSambaAccess: privateProcedure.query(async ({ctx}) => ctx.umbreld.files.samba.listMemberAccess()),
+
+	setMemberSambaAccess: privateProcedure
+		.input(z.object({userId: z.string().min(1), enabled: z.boolean()}))
+		.mutation(async ({ctx, input}) => ctx.umbreld.files.samba.setMemberAccess(input.userId, input.enabled)),
 
 	// Format an external device
 	formatExternalDevice: privateProcedure

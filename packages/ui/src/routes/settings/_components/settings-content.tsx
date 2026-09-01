@@ -121,8 +121,14 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 	const ownerHeading = ownerFirstName ? `${ownerFirstName}’s ${t('umbrel')}` : t('umbrel')
 
 	const settingsCatalog = useMemo(
-		() => createSettingsCatalog(t, {deviceName, isMember, memberName: userQ.data?.name}),
-		[t, deviceName, isMember, userQ.data?.name],
+		() =>
+			createSettingsCatalog(t, {
+				deviceName,
+				isMember,
+				memberName: userQ.data?.name,
+				sambaEnabled: userQ.data?.sambaEnabled === true,
+			}),
+		[t, deviceName, isMember, userQ.data?.name, userQ.data?.sambaEnabled],
 	)
 	const settingsPage = useMemo(
 		() => getSettingsPage(settingsCatalog, {query: searchQuery, filter: settingsFilter}),

@@ -189,6 +189,7 @@ export default function UsersDialog() {
 	const [shareAllFolders, setShareAllFolders] = useState(false)
 	const [allowExternalStorage, setAllowExternalStorage] = useState(false)
 	const [allowNetworkStorage, setAllowNetworkStorage] = useState(false)
+	const [allowSambaAccess, setAllowSambaAccess] = useState(false)
 	const [isCreating, setIsCreating] = useState(false)
 	const [isResettingPassword, setIsResettingPassword] = useState(false)
 	const [isManagingSessions, setIsManagingSessions] = useState(false)
@@ -225,6 +226,7 @@ export default function UsersDialog() {
 	const memberIds = members.map((member) => member.userId)
 	const editingMember = view.view === 'edit' ? members.find((member) => member.userId === view.userId) : undefined
 	const shouldLoadMemberData = view.view !== 'owner'
+	const sambaAccessQ = trpcReact.files.memberSambaAccess.useQuery(undefined, {enabled: shouldLoadMemberData})
 
 	const {
 		folderShares,
@@ -244,6 +246,7 @@ export default function UsersDialog() {
 	const avatarMutation = useAccountAvatar()
 	const resetUserPassword = trpcReact.user.resetUserPassword.useMutation()
 	const deleteUser = trpcReact.user.deleteUser.useMutation()
+	const setMemberSambaAccess = trpcReact.files.setMemberSambaAccess.useMutation()
 
 	const memberDataFailed = sharesFailed || appsQ.isError
 	const memberDataLoading = !sharesReady || appsQ.isLoading
@@ -274,6 +277,7 @@ export default function UsersDialog() {
 		setShareAllFolders(defaults.shareHome)
 		setAllowExternalStorage(false)
 		setAllowNetworkStorage(false)
+		setAllowSambaAccess(false)
 		setLocalView({
 			view: 'add',
 			inheritedAccess: {
@@ -357,9 +361,23 @@ export default function UsersDialog() {
 					return undefined
 				}
 			}
-			const [avatarUrl] = await Promise.all([uploadAvatar(), shareUpdates])
+			const updateSambaAccess = async () => {
+				if (!allowSambaAccess) return
+				try {
+					await setMemberSambaAccess.mutateAsync({userId: account.userId, enabled: true})
+				} catch (error) {
+					toast.error(t('users.samba-access-update-failed'), {
+						area: 'settings',
+						description: error instanceof Error ? error.message : String(error),
+					})
+				}
+			}
+			const [avatarUrl] = await Promise.all([uploadAvatar(), shareUpdates, updateSambaAccess()])
 
-			await utils.user.listAccounts.invalidate().catch(() => undefined)
+			await Promise.all([
+				utils.user.listAccounts.invalidate().catch(() => undefined),
+				utils.files.memberSambaAccess.invalidate().catch(() => undefined),
+			])
 			setLocalView({view: 'created', userId: account.userId, name: name.trim(), password, avatarUrl})
 		} catch (error) {
 			toast.error(t('users.create-failed'), {
@@ -427,6 +445,7 @@ export default function UsersDialog() {
 			await Promise.all([
 				utils.user.listAccounts.invalidate(),
 				utils.files.memberShares.invalidate(),
+				utils.files.memberSambaAccess.invalidate(),
 				utils.apps.memberShares.invalidate(),
 			])
 			returnToList()
@@ -472,6 +491,10 @@ export default function UsersDialog() {
 			: !!editingMember &&
 				!!networkStorageShare &&
 				shareCoversUser(networkStorageShare.sharedWith, editingMember.userId)
+	const editingSambaAccess = editingMember
+		? sambaAccessQ.data?.find((access) => access.userId === editingMember.userId)
+		: undefined
+	const sambaAccessOn = view.view === 'add' ? allowSambaAccess : Boolean(editingSambaAccess?.enabled)
 
 	const handleToggleAllApps = async (checked: boolean) => {
 		if (view.view === 'add') return setShareAllApps(checked)
@@ -497,6 +520,23 @@ export default function UsersDialog() {
 		if (!editingMember) return
 		if (checked) await addFolderForUser('/Network', editingMember.userId)
 		else await removeFolderForUser('/Network', editingMember.userId)
+	}
+
+	const handleToggleSambaAccess = async (checked: boolean) => {
+		if (view.view === 'add') return setAllowSambaAccess(checked)
+		if (!editingMember) return
+		try {
+			await setMemberSambaAccess.mutateAsync({userId: editingMember.userId, enabled: checked})
+		} catch (error) {
+			toast.error(t('users.samba-access-update-failed'), {
+				area: 'settings',
+				description: error instanceof Error ? error.message : String(error),
+			})
+		} finally {
+			// The durable toggle may already have changed even if a later Samba
+			// reconciliation step failed, so always refresh the authoritative state.
+			await utils.files.memberSambaAccess.invalidate().catch(() => undefined)
+		}
 	}
 
 	const availableApps = installedApps.filter((app) => {
@@ -703,6 +743,16 @@ export default function UsersDialog() {
 				disabled={isAddingUser ? undefined : shareControlsDisabled}
 				onExternalStorageChange={handleToggleExternalStorage}
 				onNetworkStorageChange={handleToggleNetworkStorage}
+			/>
+
+			<Separator />
+
+			<SambaAccessSection
+				enabled={sambaAccessOn}
+				disabled={
+					view.view === 'edit' && (sambaAccessQ.isLoading || sambaAccessQ.isError || setMemberSambaAccess.isPending)
+				}
+				onEnabledChange={handleToggleSambaAccess}
 			/>
 		</>
 	)
@@ -1248,6 +1298,34 @@ function StorageAccessSection({
 					checked={networkStorage}
 					disabled={disabled}
 					onCheckedChange={onNetworkStorageChange}
+				/>
+			</div>
+		</section>
+	)
+}
+
+function SambaAccessSection({
+	enabled,
+	disabled,
+	onEnabledChange,
+}: {
+	enabled: boolean
+	disabled?: boolean
+	onEnabledChange: (checked: boolean) => void
+}) {
+	const {t} = useTranslation()
+
+	return (
+		<section className='flex flex-col gap-2'>
+			<SectionLabel>{t('settings.file-sharing')}</SectionLabel>
+			<div className={shareListClass()}>
+				<ShareEveryoneRow
+					className='p-3'
+					title={t('users.samba-access-toggle')}
+					description={t('users.samba-access-description')}
+					checked={enabled}
+					disabled={disabled}
+					onCheckedChange={onEnabledChange}
 				/>
 			</div>
 		</section>

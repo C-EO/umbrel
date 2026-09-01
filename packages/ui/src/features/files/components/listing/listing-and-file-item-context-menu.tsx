@@ -94,7 +94,7 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 	const {listing} = useListDirectory(currentPath)
 	const canWriteHere = listing?.operations.includes('writable') ?? false
 
-	const {isPathShared, isAddingShare, isRemovingShare} = useShares()
+	const {isPathShared, isAddingShare, isRemovingShare, canManageShares} = useShares()
 	const {memberShares, shareForPath} = useMemberShares()
 	const hasMembers = useHasMembers()
 	const {isPathFavorite, addFavorite, removeFavorite, isAddingFavorite, isRemovingFavorite} = useFavorites()
@@ -169,13 +169,13 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 				)
 
 			const canShare =
-				!isMember &&
+				canManageShares &&
 				hasOneSelectedItem &&
 				!isPathShared(item.path) &&
 				!isAddingShare &&
 				canPerformFileOperation(item, 'share') &&
 				!isDirectoryAnUmbrelBackup(item.name)
-			const canRemoveShare = !isMember && hasOneSelectedItem && isPathShared(item.path) && !isRemovingShare
+			const canRemoveShare = canManageShares && hasOneSelectedItem && isPathShared(item.path) && !isRemovingShare
 
 			// Share a directory with member accounts (owner only, memberShares is
 			// undefined for members so the item never renders for them)
@@ -343,7 +343,7 @@ export function ListingAndFileItemContextMenu({children, menuItems}: ListingAndF
 						{t('files-action.uncompress')}
 					</ContextMenuItem>
 					<ContextMenuSeparator />
-					{!isMember &&
+					{canManageShares &&
 						(isPathShared(item.path) ? (
 							<ContextMenuItem disabled={!canRemoveShare} onClick={openShareInfoDialog}>
 								{t('files-action.sharing')}

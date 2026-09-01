@@ -26,6 +26,7 @@ describe('member lifecycle', () => {
 		vi.spyOn(umbreld.files, 'createMemberDirectories').mockResolvedValue()
 		vi.spyOn(umbreld.files, 'deleteMemberDirectories').mockResolvedValue()
 		vi.spyOn(umbreld.files.cloud, 'removeUser').mockResolvedValue()
+		vi.spyOn(umbreld.files.samba, 'removeUser').mockResolvedValue(false)
 		vi.spyOn(umbreld.files.memberShares, 'removeUserFromShares').mockResolvedValue()
 		vi.spyOn(umbreld.apps, 'removeUserFromMemberShares').mockResolvedValue()
 		vi.spyOn(umbreld.auth, 'revokeAllForAccount').mockResolvedValue(0)
@@ -52,6 +53,7 @@ describe('member lifecycle', () => {
 		expect(await umbreld.user.listDeletedMemberIds()).toEqual(['Alice'])
 		expect(await umbreld.store.get('members')).toEqual([{id: 'Alice', deleted: true}])
 		expect(umbreld.files.cloud.removeUser).toHaveBeenCalledWith('Alice')
+		expect(umbreld.files.samba.removeUser).toHaveBeenCalledWith('Alice')
 		expect(umbreld.files.deleteMemberDirectories).not.toHaveBeenCalled()
 
 		// Reusing the display name creates a new security identity.
@@ -88,6 +90,7 @@ describe('member lifecycle', () => {
 		const restarted = new Umbreld({dataDirectory})
 		vi.spyOn(restarted.files, 'deleteMemberDirectories').mockResolvedValue()
 		vi.spyOn(restarted.files.cloud, 'removeUser').mockResolvedValue()
+		vi.spyOn(restarted.files.samba, 'removeUser').mockResolvedValue(false)
 		vi.spyOn(restarted.files.memberShares, 'removeUserFromShares').mockResolvedValue()
 		vi.spyOn(restarted.apps, 'removeUserFromMemberShares').mockResolvedValue()
 		vi.spyOn(restarted.auth, 'revokeAllForAccount').mockResolvedValue(0)
@@ -97,6 +100,7 @@ describe('member lifecycle', () => {
 
 		expect(restarted.auth.revokeAllForAccount).toHaveBeenCalledWith('Grace')
 		expect(restarted.files.cloud.removeUser).toHaveBeenCalledWith('Grace')
+		expect(restarted.files.samba.removeUser).toHaveBeenCalledWith('Grace')
 		expect(restarted.photos.deleteAccount).toHaveBeenCalledWith('Grace')
 		expect(restarted.files.deleteMemberDirectories).toHaveBeenCalledWith('Grace')
 		expect(await restarted.store.get('members')).toEqual([{id: 'Grace', deleted: true, cleanupComplete: true}])
@@ -111,6 +115,20 @@ describe('member lifecycle', () => {
 		expect(umbreld.files.cloud.removeUser).toHaveBeenCalledWith(member.userId)
 		expect(umbreld.files.deleteMemberDirectories).not.toHaveBeenCalled()
 		expect(await umbreld.store.get('members')).toEqual([{id: member.userId, deleted: true}])
+	})
+
+	test('keeps member files until retryable Samba cleanup succeeds', async () => {
+		const member = await umbreld.user.createUser('Alice', 'passwordpassword')
+		vi.mocked(umbreld.files.samba.removeUser).mockRejectedValueOnce(new Error('samba cleanup unavailable'))
+
+		await expect(umbreld.user.deleteUser(member.userId)).rejects.toThrow('samba cleanup unavailable')
+		expect(umbreld.files.samba.removeUser).toHaveBeenCalledWith(member.userId)
+		expect(umbreld.files.deleteMemberDirectories).not.toHaveBeenCalled()
+		expect(await umbreld.store.get('members')).toEqual([{id: member.userId, deleted: true}])
+
+		await expect(umbreld.user.finishPendingDeletions()).resolves.toBeUndefined()
+		expect(umbreld.files.samba.removeUser).toHaveBeenCalledTimes(2)
+		expect(umbreld.files.deleteMemberDirectories).toHaveBeenCalledWith(member.userId)
 	})
 
 	test('retries member deletion when Photos cleanup fails', async () => {
@@ -199,6 +217,24 @@ describe('member lifecycle', () => {
 
 		expect(await umbreld.user.get()).toMatchObject({name: 'Renamed owner'})
 		expect(nameWhenSharesApplied).toBe('Renamed owner')
+		expect(applyShares).toHaveBeenCalledOnce()
+	})
+
+	test("reapplies Samba shares when an enabled member's display name changes", async () => {
+		const member = await umbreld.user.createUser('Alice', 'passwordpassword')
+		const records = (await umbreld.store.get('members')) ?? []
+		await umbreld.store.set(
+			'members',
+			records.map((record) =>
+				record.id === member.userId && !('deleted' in record)
+					? {...record, sambaPassword: 'member-samba-password'}
+					: record,
+			),
+		)
+		const applyShares = vi.spyOn(umbreld.files.samba, 'applyShares').mockResolvedValue(undefined)
+
+		await expect(umbreld.user.setAccountName(member.userId, 'Renamed Alice')).resolves.toBe(true)
+		expect((await umbreld.user.getMember(member.userId))?.name).toBe('Renamed Alice')
 		expect(applyShares).toHaveBeenCalledOnce()
 	})
 

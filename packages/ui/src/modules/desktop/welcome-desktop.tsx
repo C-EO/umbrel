@@ -112,8 +112,8 @@ export function WelcomeDesktop() {
 										<ButtonLink to='/files' className={cardButtonClass}>
 											{t('desktop.welcome.files.button')}
 										</ButtonLink>
-										{/* File sharing is owner-only */}
-										{!isMember && (
+										{/* File sharing is available to the owner and members with SMB access */}
+										{(!isMember || userQ.data?.sambaEnabled === true) && (
 											<ButtonLink to='/settings/file-sharing' className={cardButtonClass}>
 												{t('desktop.welcome.files.sharing-button')}
 											</ButtonLink>

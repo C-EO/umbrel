@@ -15,6 +15,7 @@ import {
 	DrawerScroller,
 	DrawerTitle,
 } from '@/components/ui/drawer'
+import {ChangeSmbPassword} from '@/features/files/components/dialogs/share-info-dialog/change-smb-password'
 import {PlatformInstructions} from '@/features/files/components/dialogs/share-info-dialog/platform-instructions'
 import {
 	Platform,
@@ -28,6 +29,7 @@ import {useHomePath} from '@/features/files/hooks/use-home-path'
 import {useShares} from '@/features/files/hooks/use-shares'
 import {getShareUnavailableReason} from '@/features/files/utils/get-share-unavailable-reason'
 import {useIsMobile} from '@/hooks/use-is-mobile'
+import {trpcReact} from '@/trpc/trpc'
 import {useDialogOpenProps} from '@/utils/dialog'
 
 export default function ShareInfoDialog() {
@@ -39,6 +41,7 @@ export default function ShareInfoDialog() {
 	const name = searchParams.get('files-share-info-name') || ''
 	const path = searchParams.get('files-share-info-path') || ''
 	const dialogProps = useDialogOpenProps('files-share-info')
+	const {data: user} = trpcReact.user.get.useQuery()
 
 	const {
 		shares,
@@ -78,7 +81,7 @@ export default function ShareInfoDialog() {
 
 	const smbUrl =
 		selectedPlatform.id === 'windows' ? `\\\\${window.location.hostname}` : `smb://${window.location.hostname}/`
-	const username = 'umbrel'
+	const username = user?.sambaUsername ?? ''
 	const password = isLoadingSharesPassword ? '...' : sharePassword || ''
 
 	const content = (
@@ -130,6 +133,7 @@ export default function ShareInfoDialog() {
 										name={name}
 										sharename={sharename}
 									/>
+									<ChangeSmbPassword toastArea='files' />
 								</div>
 							</motion.div>
 						)}

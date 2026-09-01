@@ -27,7 +27,7 @@ export function useSettingsCmdkEntries(): CmdkEntry[] {
 
 	if (!userQ.data) return []
 
-	const catalog = createSettingsCatalog(t, {deviceName, isMember})
+	const catalog = createSettingsCatalog(t, {deviceName, isMember, sambaEnabled: userQ.data.sambaEnabled === true})
 	const defaultItems = new Set(getDefaultSettingsCommandItems(catalog))
 
 	return getSettingsCommandItems(catalog).map((item) => ({
