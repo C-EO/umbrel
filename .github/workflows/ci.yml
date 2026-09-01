@@ -118,7 +118,7 @@ jobs:
     name: Build umbrelOS amd64
     needs: detect-changes
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-premium-4-ubuntu-2404
+    runs-on: ubicloud-standard-4-ubuntu-2404
     steps:
       - uses: actions/checkout@v3
       - uses: docker/setup-buildx-action@v3
@@ -157,7 +157,7 @@ jobs:
     name: Build umbrelOS amd64 VM image
     needs: [detect-changes, umbrelos-amd64-cache]
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-premium-4-ubuntu-2404
+    runs-on: ubicloud-standard-4-ubuntu-2404
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -191,7 +191,7 @@ jobs:
     name: Build umbrelOS Pi VM image
     needs: [detect-changes, umbrelos-pi-cache]
     if: needs.detect-changes.outputs.ui-only != 'true' && needs.detect-changes.outputs.run-pi-tests == 'true'
-    runs-on: ubicloud-premium-4-ubuntu-2404
+    runs-on: ubicloud-standard-4-ubuntu-2404
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -266,13 +266,12 @@ jobs:
           tests=$(find packages/umbreld/source -name "*.pi.vm.test.ts" | sed 's|packages/umbreld/||' | jq -R -s -c 'split("\n") | map(select(length > 0)) | map({path: ., name: (. | split("/") | last | sub("\\.pi\\.vm\\.test\\.ts$"; ""))})')
           echo "tests=$tests" >> $GITHUB_OUTPUT
 
-  # Run each VM test in a different runner. These tests require nested
-  # virtualization, so keep them on Ubicloud's KVM-capable premium fleet.
+  # Run each VM test in a different runner
   umbrelos-amd64-vm:
     name: VM test (${{ matrix.test.name }})
     needs: [detect-changes, umbrelos-amd64-vm-image-build, discover-vm-tests]
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-premium-4-ubuntu-2404
+    runs-on: ubicloud-standard-4-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
@@ -308,7 +307,7 @@ jobs:
   umbrelos-pi-vm:
     name: Pi VM test (${{ matrix.test.name }})
     needs: [umbrelos-pi-vm-image-build, discover-pi-vm-tests]
-    runs-on: ubicloud-premium-4-ubuntu-2404
+    runs-on: ubicloud-standard-4-ubuntu-2404
     env:
       # nixpkgs revision QEMU is built from (nixos-26.05 as of 2026-07). Bump
       # deliberately to change the emulator version — the cache key below
@@ -386,7 +385,7 @@ jobs:
     name: Integration test (${{ matrix.test.name }})
     needs: [detect-changes, discover-integration-tests, umbrelos-amd64-cache]
     if: needs.detect-changes.outputs.ui-only != 'true'
-    runs-on: ubicloud-premium-4-ubuntu-2404
+    runs-on: ubicloud-standard-4-ubuntu-2404
     strategy:
       fail-fast: false
       matrix:
@@ -517,7 +516,7 @@ jobs:
     name: Create release on tag
     if: startsWith(github.ref, 'refs/tags/')
     needs: [umbrelos-amd64-cache, umbrelos-arm64-cache, umbrelos-pi-cache]
-    runs-on: ubicloud-premium-16-ubuntu-2404
+    runs-on: ubicloud-standard-16-ubuntu-2404
     defaults:
       run:
         working-directory: packages/os
