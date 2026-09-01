@@ -35,6 +35,11 @@ ARG RCLONE_RELEASE=1.74.4
 ARG RCLONE_SHA256_amd64=fe435e0c36228e7c2f116a8701f01127bb1f694005fc11d1f27186c8bca4115d
 ARG RCLONE_SHA256_arm64=97685285c9ad6a0cf17d5844115d2a67245af6444db672187074bd9c358de419
 
+ARG LIBDE265_VERSION=1.1.1-1
+ARG LIBDE265_SNAPSHOT_DATE=20260831T000000Z
+ARG LIBDE265_SHA256_amd64=9af67dd3a1dce99c936f33865f92407746ca4031b7a8b86ae8c28b9a3445f01c
+ARG LIBDE265_SHA256_arm64=1982300d3b6845a1c96f80a364b7921a69b69abd0c0417dc8554e2d487f488f5
+
 #########################################################################
 # ui build stage
 #########################################################################
@@ -307,6 +312,10 @@ ARG RTL8127_SHA256
 ARG RCLONE_RELEASE
 ARG RCLONE_SHA256_amd64
 ARG RCLONE_SHA256_arm64
+ARG LIBDE265_VERSION
+ARG LIBDE265_SNAPSHOT_DATE
+ARG LIBDE265_SHA256_amd64
+ARG LIBDE265_SHA256_arm64
 
 # Install acpid
 # We use acpid to implement custom behaviour for power button presses
@@ -394,6 +403,18 @@ RUN systemctl enable libvirtd.socket libvirtd-ro.socket libvirtd-admin.socket vi
 # Install umbreld dependencies
 # (many of these can be remove after the apps refactor)
 RUN apt-get install --yes python3 fswatch jq rsync git gettext-base gnupg procps dmidecode unar imagemagick ffmpeg libimage-exiftool-perl samba wsdd2 cifs-utils smbclient nvme-cli smartmontools pciutils
+
+# Debian trixie ships libde265 1.0.15, which leaves 10-bit image planes
+# uninitialized before decoding. Apple tiled HEIC images can consequently pick
+# up heap contents as magenta/cyan blocks that ImageMagick preserves in cached
+# thumbnails. Install Debian's newer Forky/testing package containing the
+# upstream initialization fix.
+RUN LIBDE265_SHA256=$(eval echo \$LIBDE265_SHA256_${TARGETARCH}) && \
+    curl -fsSL "https://snapshot.debian.org/archive/debian/${LIBDE265_SNAPSHOT_DATE}/pool/main/libd/libde265/libde265-0_${LIBDE265_VERSION}_${TARGETARCH}.deb" -o /tmp/libde265-0.deb && \
+    echo "${LIBDE265_SHA256}  /tmp/libde265-0.deb" | sha256sum -c - && \
+    dpkg --install /tmp/libde265-0.deb && \
+    test "$(dpkg-query -W -f='${Version}' libde265-0)" = "${LIBDE265_VERSION}" && \
+    rm /tmp/libde265-0.deb
 
 # Install the Realtek RTL8127 10GbE driver on amd64 systems. Build against the
 # kernels in the image rather than the kernel running the Docker builder.

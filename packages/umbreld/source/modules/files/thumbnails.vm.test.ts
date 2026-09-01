@@ -179,6 +179,11 @@ describe('content-addressed thumbnail index', () => {
 		expect(available).toBe('yes')
 	})
 
+	test('ships the HEVC decoder with initialized HDR image planes', async () => {
+		const version = await umbreld.vm.ssh("dpkg-query -W -f='${Version}' libde265-0")
+		expect(version).toBe('1.1.1-1')
+	})
+
 	test('generates a genuine Apple HEIC thumbnail', async () => {
 		const path = `${suiteRoot}/formats/apple.heic`
 		await uploadFixture(path, 'apple-encoded-image.heic')
