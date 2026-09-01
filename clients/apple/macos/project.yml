@@ -1,0 +1,86 @@
+name: Umbrel
+options:
+  bundleIdPrefix: com.umbrel
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  UmbrelKit:
+    path: ../UmbrelKit
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    exactVersion: 2.9.6
+
+schemes:
+  Umbrel:
+    build:
+      targets:
+        Umbrel: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+
+targets:
+  Umbrel:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Umbrel
+        excludes:
+          - Resources
+      - path: Sources/Umbrel/Resources
+        buildPhase: resources
+      # Shared Icon Composer source used by both the iOS and macOS apps.
+      - path: ../AppIcon.icon
+        type: file
+        buildPhase: resources
+    dependencies:
+      - package: UmbrelKit
+      - package: Sparkle
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Umbrel
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        CFBundleIconFile: AppIcon
+        CFBundleIconName: AppIcon
+        LSApplicationCategoryType: public.app-category.utilities
+        LSUIElement: true
+        NSLocalNetworkUsageDescription: Umbrel finds your Umbrel devices on your local network.
+        NSNetworkVolumesUsageDescription: Umbrel mounts your Umbrel's shared folders so you can browse them in Finder.
+        NSBonjourServices:
+          - _umbrel._tcp.
+        NSAppTransportSecurity:
+          # LAN API traffic uses pinned HTTPS. Tailscale traffic uses HTTP inside
+          # its encrypted tunnel, scoped here to Tailscale's CGNAT range.
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            "100.64.0.0/10":
+              NSExceptionAllowsInsecureHTTPLoads: true
+        NSHumanReadableCopyright: Umbrel, Inc.
+        # Sparkle is embedded in the app; both the feed and release artifacts are
+        # hosted by Umbrel. Archive signatures and the signed feed are verified
+        # with this public key before an update is extracted.
+        # RELEASE BLOCKER: Replace with the final stable macOS appcast URL before distribution.
+        SUFeedURL: https://updates.invalid/umbrel-macos/appcast.xml
+        SUPublicEDKey: 6WS1H6oCszBQj8boE9u4jM3RPTyKjWLfWeqUIYfSwuA=
+        SUEnableAutomaticChecks: true
+        SUAutomaticallyUpdate: false
+        SURequireSignedFeed: true
+        SUVerifyUpdateBeforeExtraction: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.umbrel.mac
+        PRODUCT_NAME: Umbrel
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "16"
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_ENTITLEMENTS: Umbrel.entitlements
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: JABS8D63XG
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_VERSION: "5.9"

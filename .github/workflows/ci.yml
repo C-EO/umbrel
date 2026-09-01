@@ -10,6 +10,7 @@ jobs:
     outputs:
       ui-only: ${{ steps.check.outputs.ui-only }}
       ui-changed: ${{ steps.check.outputs.ui-changed }}
+      apple-changed: ${{ steps.check.outputs.apple-changed }}
       run-pi-tests: ${{ steps.pi.outputs.run-pi-tests }}
     steps:
       - uses: actions/checkout@v3
@@ -25,6 +26,7 @@ jobs:
           if [[ "${{ github.ref }}" == "refs/heads/${DEFAULT_BRANCH}" || "${{ github.ref }}" == refs/tags/* ]]; then
             echo "ui-only=false" >> $GITHUB_OUTPUT
             echo "ui-changed=true" >> $GITHUB_OUTPUT
+            echo "apple-changed=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
@@ -48,6 +50,7 @@ jobs:
           # anything that can affect the UI changed.
           UI_ONLY="true"
           UI_CHANGED="false"
+          APPLE_CHANGED="false"
           while IFS= read -r file; do
             if [[ -n "$file" && ! "$file" =~ ^packages/ui/ ]]; then
               UI_ONLY="false"
@@ -56,6 +59,12 @@ jobs:
             case "$file" in
               packages/ui/*|packages/umbreld/*|.github/workflows/ci.yml)
                 UI_CHANGED="true"
+                ;;
+            esac
+
+            case "$file" in
+              clients/apple/*|.github/workflows/ci.yml)
+                APPLE_CHANGED="true"
                 ;;
             esac
           done <<< "$CHANGED_FILES"
@@ -68,8 +77,10 @@ jobs:
           echo "$CHANGED_FILES"
           echo "UI only: $UI_ONLY"
           echo "UI changed: $UI_CHANGED"
+          echo "Apple changed: $APPLE_CHANGED"
           echo "ui-only=$UI_ONLY" >> $GITHUB_OUTPUT
           echo "ui-changed=$UI_CHANGED" >> $GITHUB_OUTPUT
+          echo "apple-changed=$APPLE_CHANGED" >> $GITHUB_OUTPUT
       # The Pi VM tests boot the production Pi image in an emulated Raspberry
       # Pi 4. Emulation is TCG-only (no hardware acceleration exists for the
       # raspi4b machine) so they're the slowest jobs in CI and only run on
@@ -425,6 +436,48 @@ jobs:
       - name: Install dependencies
         run: sudo npm clean-install
       - run: sudo npm run ${{ matrix.task }}
+
+  # Run the shared Apple client tests and compile both native apps. The macOS 26
+  # runner includes the iOS 26.5 SDK required by the generated iOS project.
+  apple:
+    name: Apple client checks
+    needs: detect-changes
+    if: needs.detect-changes.outputs.apple-changed == 'true'
+    runs-on: macos-26
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Test UmbrelKit
+        run: swift test --package-path clients/apple/UmbrelKit
+      - name: Generate macOS project
+        working-directory: clients/apple/macos
+        run: xcodegen generate
+      - name: Build macOS app
+        working-directory: clients/apple/macos
+        run: >-
+          xcodebuild
+          -project Umbrel.xcodeproj
+          -scheme Umbrel
+          -configuration Release
+          -destination 'generic/platform=macOS'
+          ARCHS='arm64 x86_64'
+          ONLY_ACTIVE_ARCH=NO
+          CODE_SIGNING_ALLOWED=NO
+          build
+      - name: Generate iOS project
+        working-directory: clients/apple/ios
+        run: xcodegen generate
+      - name: Build iOS app
+        working-directory: clients/apple/ios
+        run: >-
+          xcodebuild
+          -project Umbrel.xcodeproj
+          -scheme Umbrel
+          -destination 'generic/platform=iOS Simulator'
+          CODE_SIGNING_ALLOWED=NO
+          build
 
   # Run ui checks
   ui:

@@ -1,0 +1,28 @@
+<svg width="660" height="400" viewBox="0 0 660 400" fill="none" xmlns="http://www.w3.org/2000/svg">
+	<defs>
+		<radialGradient id="violetGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(540 338) rotate(-139) scale(430 310)">
+			<stop stop-color="#8B87FF" stop-opacity="0.18"/>
+			<stop offset="1" stop-color="#8B87FF" stop-opacity="0"/>
+		</radialGradient>
+		<radialGradient id="roseGlow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(82 316) rotate(-25) scale(360 280)">
+			<stop stop-color="#FFB8D4" stop-opacity="0.22"/>
+			<stop offset="1" stop-color="#FFB8D4" stop-opacity="0"/>
+		</radialGradient>
+		<linearGradient id="background" x1="58" y1="14" x2="602" y2="392" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#FCFCFE"/>
+			<stop offset="1" stop-color="#F5F4F9"/>
+		</linearGradient>
+		<linearGradient id="chevron" x1="302" y1="150" x2="358" y2="150" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#9E9DFB"/>
+			<stop offset="1" stop-color="#6261F4"/>
+		</linearGradient>
+	</defs>
+
+	<rect width="660" height="400" fill="url(#background)"/>
+	<rect width="660" height="400" fill="url(#roseGlow)"/>
+	<rect width="660" height="400" fill="url(#violetGlow)"/>
+
+	<path d="M302 138L314 150L302 162" stroke="url(#chevron)" stroke-opacity="0.45" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+	<path d="M321 138L333 150L321 162" stroke="url(#chevron)" stroke-opacity="0.7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+	<path d="M340 138L352 150L340 162" stroke="url(#chevron)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
