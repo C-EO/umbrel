@@ -1,7 +1,7 @@
 import semver from 'semver'
 
-const WHATS_NEW_PREVIOUS_VERSION_SEMVER_CUTOFF = '1.7.0'
-export const WHATS_NEW_VERSION_NAME = 'umbrelOS 1.7'
+const WHATS_NEW_PREVIOUS_VERSION_SEMVER_CUTOFF = '2.0.0'
+export const WHATS_NEW_VERSION_NAME = 'umbrelOS 2.0'
 
 export function shouldShowWhatsNew(previousVersion?: string) {
 	if (!previousVersion) return false
