@@ -20,7 +20,9 @@ export function FolderBreadcrumbScroller({path, homePath}: {path: string; homePa
 			ref={scrollerRef}
 			className='umbrel-hide-scrollbar min-w-0 overflow-x-auto whitespace-nowrap'
 		>
-			<div className='w-max min-w-full'>
+			{/* File badges protrude past their folder icon. Keep that intentional
+			    overhang inside the scroller so shared roots are not clipped. */}
+			<div className='w-max min-w-full p-1'>
 				<DestinationBreadcrumbs path={path} homePath={homePath} />
 			</div>
 		</FadeScroller>

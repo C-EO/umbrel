@@ -48,6 +48,7 @@ it('keeps the full path scrollable and initially shows its end', () => {
 	expect(scroller.className).toContain('overflow-x-auto')
 	expect(scroller.className).toContain('whitespace-nowrap')
 	expect(scroller.firstElementChild?.className).toContain('w-max')
+	expect(scroller.firstElementChild?.className).toContain('p-1')
 	expect(scroller.textContent).toBe('/Home/Photos/Trips')
 	expect(scroller.scrollLeft).toBe(640)
 
