@@ -147,16 +147,23 @@ describe('Photos HTTP account boundaries', () => {
 
 	test('a member can fetch only its own thumbnail, original, live clip, and download', async () => {
 		const headers = {Authorization: 'Bearer member'}
-		const [thumbnail, original, live, download] = await Promise.all([
+		const [thumbnail, original, originalDownload, live, download] = await Promise.all([
 			got(`${origin}/api/photos/thumb/member-item?s=192`, {headers}),
 			got(`${origin}/api/photos/original/member-item`, {headers}),
+			got(`${origin}/api/photos/original/member-item?download`, {headers}),
 			got(`${origin}/api/photos/live/member-item`, {headers}),
 			got(`${origin}/api/photos/download?ticket=member-download`, {headers}),
 		])
 		expect(thumbnail.body).toBe('member-thumbnail')
 		expect(original.body).toBe('member-original')
+		expect(originalDownload.body).toBe('member-original')
 		expect(live.body).toBe('member-live')
 		expect(download.body).toBe('member-original')
+		expect(thumbnail.headers['cache-control']).toBe('private, max-age=31536000, immutable')
+		expect(original.headers['cache-control']).toBe('private, max-age=31536000, immutable')
+		expect(originalDownload.headers['cache-control']).toBe('private, max-age=31536000, immutable')
+		expect(live.headers['cache-control']).toBeUndefined()
+		expect(download.headers['cache-control']).toBeUndefined()
 		expect(resolveThumbnailRequest).toHaveBeenCalledWith(
 			'content-preview-192-webp-v1-hash.webp',
 			'/Users/member/member.jpg',

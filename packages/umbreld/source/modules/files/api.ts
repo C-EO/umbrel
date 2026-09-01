@@ -13,6 +13,7 @@ import type Umbreld from '../../index.js'
 import type {Principal} from '../auth/auth.js'
 import {authorizeDashboardRequest, authorizeHttpRequest} from '../auth/http-request.js'
 import type UploadDiskPreflight from '../server/upload-disk-preflight.js'
+import {PRIVATE_IMMUTABLE_CACHE_CONTROL} from '../server/cache-control.js'
 import {Blake3Hasher} from './blake3.js'
 import type {PublishedFileRevision} from './file-index-enrichment.js'
 import {lookupMimeType} from './mime.js'
@@ -499,12 +500,9 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 
 	// Serve thumbnails from the thumbnails directory
 	// GET /api/files/thumbnail/:thumbnail
-	// Serve the thumbnail assets
-	// Thumbnail assets are named with a hash that only changes when the file is modified
-	// so a browser can cache them for the session without a shared cache retaining private data.
-	// A thumbnail is served only while this account can still resolve its source
-	// path. Revalidation keeps revocations effective while the hash remains the
-	// stable cache key for unchanged content.
+	// Thumbnail filenames contain either the source content hash or a source
+	// revision hash, so a different rendition always has a different URL. Keep
+	// the bytes private while allowing the browser to cache that URL immutably.
 	api.get('/thumbnail/:thumbnail', async (request, response) => {
 		try {
 			if (typeof request.query.path !== 'string') throw new Error('[thumbnail-not-found]')
@@ -513,7 +511,7 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 				request.query.path,
 				accountId(response),
 			)
-			response.setHeader('Cache-Control', 'private, no-cache')
+			response.setHeader('Cache-Control', PRIVATE_IMMUTABLE_CACHE_CONTROL)
 			response.setHeader('X-Content-Type-Options', 'nosniff')
 			return response.sendFile(thumbnailSystemPath, {cacheControl: false, dotfiles: 'deny'})
 		} catch {

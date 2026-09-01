@@ -19,6 +19,7 @@ import {authorizeDashboardRequest, authorizeHttpRequest, authorizePhotoBackupReq
 import {receiveUpload} from '../files/api.js'
 import {lookupMimeType} from '../files/mime.js'
 import type UploadDiskPreflight from '../server/upload-disk-preflight.js'
+import {PRIVATE_IMMUTABLE_CACHE_CONTROL} from '../server/cache-control.js'
 import type {ThumbnailVariant} from '../files/thumbnail-support.js'
 import {OWNER_USER_ID} from '../user/constants.js'
 
@@ -280,7 +281,7 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 		virtualPath: string,
 		request: express.Request,
 		response: express.Response,
-		{download = false}: {download?: boolean} = {},
+		{download = false, contentAddressed = false}: {download?: boolean; contentAddressed?: boolean} = {},
 	) {
 		const file = await umbreld.files.openFileForRead(virtualPath, accountId(response))
 		try {
@@ -290,6 +291,7 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 				response.setHeader('Content-Range', `bytes */${size}`)
 				return response.status(416).end()
 			}
+			if (contentAddressed) response.setHeader('Cache-Control', PRIVATE_IMMUTABLE_CACHE_CONTROL)
 			response.setHeader('Accept-Ranges', 'bytes')
 			response.setHeader('Content-Length', String(size === 0 ? 0 : range.end - range.start + 1))
 			response.setHeader('Last-Modified', new Date(Number(file.stats.mtimeMs)).toUTCString())
@@ -318,8 +320,6 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 			const variant = THUMB_VARIANTS[s]
 			if (!variant) return response.status(400).json({error: 'invalid s parameter'})
 			const {virtualPath} = await resolveItem(request, response)
-			response.setHeader('Cache-Control', 'private, no-cache')
-			response.setHeader('X-Content-Type-Options', 'nosniff')
 			const thumbnailUrl = await umbreld.files.thumbnails.getThumbnailOnDemand(
 				virtualPath,
 				accountId(response),
@@ -331,13 +331,15 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 				virtualPath,
 				accountId(response),
 			)
+			response.setHeader('Cache-Control', PRIVATE_IMMUTABLE_CACHE_CONTROL)
+			response.setHeader('X-Content-Type-Options', 'nosniff')
 			return response.sendFile(thumbnailSystemPath, {cacheControl: false, dotfiles: 'deny'})
 		} catch {
 			return response.status(404).json({error: 'not found'})
 		}
 	})
 
-	// GET /api/photos/original/:id — the original bytes, including video ranges.
+	// GET /api/photos/original/:id — content-addressed original bytes, including video ranges.
 	// `?download` switches to attachment disposition.
 	api.get('/original/:id', async (request, response) => {
 		try {
@@ -349,6 +351,7 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 			)
 			return await streamAuthorizedFile(virtualPath, request, response, {
 				download: request.query.download !== undefined,
+				contentAddressed: true,
 			})
 		} catch {
 			return response.status(404).json({error: 'not found'})
@@ -356,7 +359,8 @@ export default function api(umbreld: Umbreld, uploadDiskPreflight: UploadDiskPre
 	})
 
 	// GET /api/photos/live/:id — the motion companion for an indexed Apple
-	// live pair. The companion path is independently re-authorized.
+	// live pair. The companion path is independently re-authorized. The still id
+	// does not content-address the motion bytes, so this URL is not immutable.
 	api.get('/live/:id', async (request, response) => {
 		try {
 			const companion = await umbreld.photos.resolveLiveCompanion(accountId(response), String(request.params.id))

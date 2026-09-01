@@ -93,24 +93,17 @@ test('GET /api/files/thumbnail/:thumbnail throws 404 error when the source does 
 	expect(error.response.statusCode).toBe(404)
 })
 
-test('GET /api/files/thumbnail/:thumbnail serves an authorized thumbnail with private revalidation caching', async () => {
+test('GET /api/files/thumbnail/:thumbnail serves an authorized thumbnail with immutable private caching', async () => {
 	const thumbnailUrl = await createThumbnail('/Home/thumbnail-api/cache.png')
 
 	const response = await umbreld.api.get(apiPath(thumbnailUrl), {responseType: 'buffer'})
 
 	expect(response.statusCode).toBe(200)
-	expect(response.headers['cache-control']).toBe('private, no-cache')
+	expect(response.headers['cache-control']).toBe('private, max-age=31536000, immutable')
 	expect(response.headers.etag).toBeTypeOf('string')
 	expect(response.headers['content-type']).toBe('image/webp')
 	expect(response.body.length).toBeGreaterThan(0)
 	expect(response.body).toEqual(await readThumbnail(thumbnailUrl))
-
-	const revalidated = await umbreld.api.get(apiPath(thumbnailUrl), {
-		headers: {'If-None-Match': response.headers.etag!},
-		responseType: 'buffer',
-		throwHttpErrors: false,
-	})
-	expect(revalidated.statusCode).toBe(304)
 })
 
 test('GET /api/files/thumbnail/:thumbnail rejects a hash that does not match the authorized source path', async () => {

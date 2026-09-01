@@ -4,6 +4,7 @@ import express from 'express'
 import type Umbreld from '../../index.js'
 import type {Principal} from '../auth/auth.js'
 import {authorizeDashboardRequest} from '../auth/http-request.js'
+import {PRIVATE_IMMUTABLE_CACHE_CONTROL} from '../server/cache-control.js'
 import {
 	AvatarError,
 	MAX_AVATAR_UPLOAD_BYTES,
@@ -70,7 +71,7 @@ export function serveAccountAvatar(umbreld: Umbreld): express.RequestHandler {
 			const image = await fse.readFile(path)
 			response.set({
 				'Content-Type': 'image/webp',
-				'Cache-Control': 'private, max-age=31536000, immutable',
+				'Cache-Control': PRIVATE_IMMUTABLE_CACHE_CONTROL,
 				ETag: `"${request.params.hash}"`,
 				'X-Content-Type-Options': 'nosniff',
 			})

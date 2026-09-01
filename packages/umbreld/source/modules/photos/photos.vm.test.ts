@@ -145,10 +145,12 @@ describe('Photos account isolation', () => {
 		const original = await getPhotosMedia(`api/photos/original/${ownerItemId}`)
 		expect(original.statusCode).toBe(200)
 		expect(original.body).toEqual(ownerImage)
+		expect(original.headers['cache-control']).toBe('private, max-age=31536000, immutable')
 		for (const size of [192, 512, 1280]) {
 			const thumbnail = await getPhotosMedia(`api/photos/thumb/${ownerItemId}?s=${size}`)
 			expect(thumbnail.statusCode).toBe(200)
 			expect(thumbnail.headers['content-type']).toBe('image/webp')
+			expect(thumbnail.headers['cache-control']).toBe('private, max-age=31536000, immutable')
 			expect(thumbnail.body.length).toBeGreaterThan(0)
 		}
 	})
