@@ -33,6 +33,7 @@ const THUMBNAIL_RETRY_BASE_MS = 60_000
 const MAX_RETRY_MS = 24 * 60 * 60 * 1000
 const IDLE_RECHECK_MS = 60_000
 const INFRASTRUCTURE_RETRY_MS = 60_000
+const REFERENCE_FAILURE_PREFIX = '[source-reference] '
 const ALL_THUMBNAIL_VARIANTS = Object.keys(THUMBNAIL_VARIANTS) as ThumbnailVariant[]
 const PHOTOS_ONLY_VARIANT_SET = new Set<ThumbnailVariant>(
 	PHOTOS_THUMBNAIL_VARIANTS.filter((variant) => variant !== FILES_THUMBNAIL_VARIANT),
@@ -221,6 +222,7 @@ export default class FileIndexEnrichment {
 	#onDemandQueue: PQueue
 	#onDemandOperations = new Map<string, Promise<ThumbnailReference>>()
 	#contentOperations = new Map<number, Promise<ContentCandidate>>()
+	#mediaOperations = new Map<number, Promise<void>>()
 	#started = false
 	#stopping = false
 	#backgroundEnabled = false
@@ -312,6 +314,7 @@ export default class FileIndexEnrichment {
 		this.#artifactOperations.clear()
 		this.#onDemandOperations.clear()
 		this.#contentOperations.clear()
+		this.#mediaOperations.clear()
 		this.#activeHashEntries.clear()
 		this.#activeThumbnailContents.clear()
 		this.#activeMediaContents.clear()
@@ -624,13 +627,13 @@ export default class FileIndexEnrichment {
 			try {
 				const content = await this.#ensureEntryContent(entry.id, false, entry)
 				if (photoKind(entry.systemPath)) {
-					const ownsContentReservation = !this.#activeThumbnailContents.has(content.id)
-					if (ownsContentReservation) this.#activeThumbnailContents.add(content.id)
-					try {
-						await this.#ensureContentThumbnail(content, FILES_THUMBNAIL_VARIANT, false)
-					} finally {
-						if (ownsContentReservation) this.#activeThumbnailContents.delete(content.id)
-					}
+					// Keep a newly discovered item in the same background slot through
+					// its derived work. Draining the global hash backlog first can leave
+					// Photos empty even after thousands of renditions have been built.
+					// Metadata is published last so its change event exposes an item only
+					// after its normal thumbnail variants have been attempted.
+					retryDelay = Math.max(retryDelay, await this.#backgroundThumbnailStep(content, false, true))
+					retryDelay = Math.max(retryDelay, await this.#backgroundMediaStep(content, false, true))
 				}
 			} catch (error) {
 				if (error instanceof StaleFileRevisionError) {
@@ -651,44 +654,14 @@ export default class FileIndexEnrichment {
 
 		const media = await this.#nextContentNeedingMetadata()
 		if (media) {
-			let retryDelay = 0
-			try {
-				await this.#ensureMediaMetadata(media, false)
-			} catch (error) {
-				if (error instanceof StaleFileRevisionError) {
-					await this.#onStalePath(media.systemPath).catch((refreshError) => {
-						retryDelay = INFRASTRUCTURE_RETRY_MS
-						this.logger.error(`Failed to refresh stale media source '${media.systemPath}'`, refreshError)
-					})
-				} else {
-					if (!(error instanceof PersistedEnrichmentFailure)) retryDelay = INFRASTRUCTURE_RETRY_MS
-					this.logger.error(`Failed to extract media metadata for '${media.systemPath}'`, error)
-				}
-			} finally {
-				this.#activeMediaContents.delete(media.id)
-			}
+			const retryDelay = await this.#backgroundMediaStep(media, true)
 			this.#schedule(retryDelay)
 			return
 		}
 
 		const content = await this.#nextContentNeedingThumbnail()
 		if (content) {
-			let retryDelay = 0
-			try {
-				await this.#ensureContentThumbnail(content, content.variant, false).catch(async (error) => {
-					if (error instanceof StaleFileRevisionError) {
-						await this.#onStalePath(content.systemPath).catch((refreshError) => {
-							retryDelay = INFRASTRUCTURE_RETRY_MS
-							this.logger.error(`Failed to refresh stale thumbnail source '${content.systemPath}'`, refreshError)
-						})
-						return
-					}
-					if (!(error instanceof PersistedEnrichmentFailure)) retryDelay = INFRASTRUCTURE_RETRY_MS
-					this.logger.error(`Failed to generate thumbnail for '${content.systemPath}'`, error)
-				})
-			} finally {
-				this.#activeThumbnailContents.delete(content.id)
-			}
+			const retryDelay = await this.#backgroundThumbnailStep(content, true)
 			this.#schedule(retryDelay)
 			return
 		}
@@ -711,6 +684,54 @@ export default class FileIndexEnrichment {
 		if (nextAttemptAt !== undefined) {
 			this.#schedule(Math.min(IDLE_RECHECK_MS, Math.max(10, nextAttemptAt - Date.now())))
 		}
+	}
+
+	async #backgroundMediaStep(content: ContentCandidate, alreadyReserved = false, freshReference = false) {
+		const ownsReservation = alreadyReserved || !this.#activeMediaContents.has(content.id)
+		if (!alreadyReserved && ownsReservation) this.#activeMediaContents.add(content.id)
+		let retryDelay = 0
+		try {
+			await this.#ensureMediaMetadataOnce(content, false, freshReference)
+		} catch (error) {
+			if (error instanceof StaleFileRevisionError) {
+				await this.#onStalePath(content.systemPath).catch((refreshError) => {
+					retryDelay = INFRASTRUCTURE_RETRY_MS
+					this.logger.error(`Failed to refresh stale media source '${content.systemPath}'`, refreshError)
+				})
+			} else {
+				if (!(error instanceof PersistedEnrichmentFailure)) retryDelay = INFRASTRUCTURE_RETRY_MS
+				this.logger.error(`Failed to extract media metadata for '${content.systemPath}'`, error)
+			}
+		} finally {
+			if (ownsReservation) this.#activeMediaContents.delete(content.id)
+		}
+		return retryDelay
+	}
+
+	async #backgroundThumbnailStep(
+		content: ContentCandidate & {variant?: ThumbnailVariant},
+		alreadyReserved = false,
+		freshReference = false,
+	) {
+		const ownsReservation = alreadyReserved || !this.#activeThumbnailContents.has(content.id)
+		if (!alreadyReserved && ownsReservation) this.#activeThumbnailContents.add(content.id)
+		let retryDelay = 0
+		try {
+			await this.#ensureContentThumbnail(content, content.variant ?? FILES_THUMBNAIL_VARIANT, false, freshReference)
+		} catch (error) {
+			if (error instanceof StaleFileRevisionError) {
+				await this.#onStalePath(content.systemPath).catch((refreshError) => {
+					retryDelay = INFRASTRUCTURE_RETRY_MS
+					this.logger.error(`Failed to refresh stale thumbnail source '${content.systemPath}'`, refreshError)
+				})
+			} else {
+				if (!(error instanceof PersistedEnrichmentFailure)) retryDelay = INFRASTRUCTURE_RETRY_MS
+				this.logger.error(`Failed to generate thumbnail for '${content.systemPath}'`, error)
+			}
+		} finally {
+			if (ownsReservation) this.#activeThumbnailContents.delete(content.id)
+		}
+		return retryDelay
 	}
 
 	#onDemandBusy() {
@@ -814,17 +835,26 @@ export default class FileIndexEnrichment {
 		}, BACKGROUND_DATABASE_PRIORITY)
 	}
 
-	async #ensureMediaMetadata(content: ContentCandidate, onDemand: boolean) {
+	async #ensureMediaMetadata(content: ContentCandidate, onDemand: boolean, freshReference = false) {
 		const priority = onDemand ? ON_DEMAND_DATABASE_PRIORITY : BACKGROUND_DATABASE_PRIORITY
 		const current = await this.#withDatabase(
 			(database) =>
-				database.prepare('SELECT state, retry_at FROM media_metadata WHERE content_id = ?').get(content.id) as
-					| {state: 'pending' | 'ready' | 'failed'; retry_at: number | null}
+				database
+					.prepare('SELECT state, retry_at, last_error FROM media_metadata WHERE content_id = ?')
+					.get(content.id) as
+					| {state: 'pending' | 'ready' | 'failed'; retry_at: number | null; last_error: string | null}
 					| undefined,
 			priority,
 		)
 		if (!current || current.state === 'ready') return
-		if (!onDemand && current.state === 'failed' && current.retry_at !== null && current.retry_at > Date.now()) return
+		if (
+			!onDemand &&
+			current.state === 'failed' &&
+			current.retry_at !== null &&
+			current.retry_at > Date.now() &&
+			!(freshReference && referenceFailureMessage(current.last_error))
+		)
+			return
 
 		const attemptedEntries = new Set<number>()
 		while (true) {
@@ -911,7 +941,7 @@ export default class FileIndexEnrichment {
 					if (referenceFailure === 'stale')
 						throw new StaleFileRevisionError('No current metadata source remains', {cause: error})
 				}
-				await this.#recordMediaMetadataFailure(content.id, error, priority)
+				await this.#recordMediaMetadataFailure(content.id, error, priority, referenceFailure === 'unreadable')
 				await this.#onContentFailure?.(content.id)
 				throw new PersistedEnrichmentFailure(error)
 			} finally {
@@ -920,7 +950,19 @@ export default class FileIndexEnrichment {
 		}
 	}
 
-	async #recordMediaMetadataFailure(contentId: number, error: unknown, priority: number) {
+	async #ensureMediaMetadataOnce(content: ContentCandidate, onDemand: boolean, freshReference = false) {
+		const existing = this.#mediaOperations.get(content.id)
+		if (existing) return existing
+		const operation = this.#ensureMediaMetadata(content, onDemand, freshReference)
+		this.#mediaOperations.set(content.id, operation)
+		try {
+			await operation
+		} finally {
+			if (this.#mediaOperations.get(content.id) === operation) this.#mediaOperations.delete(content.id)
+		}
+	}
+
+	async #recordMediaMetadataFailure(contentId: number, error: unknown, priority: number, referenceFailure = false) {
 		await this.#withDatabase((database) => {
 			const current = database
 				.prepare('SELECT failure_count FROM media_metadata WHERE content_id = ?')
@@ -935,7 +977,7 @@ export default class FileIndexEnrichment {
 				.run(
 					failureCount,
 					Date.now() + retryDelay(THUMBNAIL_RETRY_BASE_MS, failureCount),
-					errorMessage(error),
+					persistedFailureMessage(error, referenceFailure),
 					Date.now(),
 					contentId,
 				)
@@ -1198,15 +1240,21 @@ export default class FileIndexEnrichment {
 		}, BACKGROUND_DATABASE_PRIORITY)
 	}
 
-	async #thumbnailVariantsForContent(contentId: number, requested: ThumbnailVariant, priority: number) {
+	async #thumbnailVariantsForContent(
+		contentId: number,
+		requested: ThumbnailVariant,
+		priority: number,
+		freshReference = false,
+	) {
 		const rows = await this.#withDatabase(
 			(database) =>
 				database
-					.prepare('SELECT variant, state, retry_at FROM thumbnail_variants WHERE content_id = ?')
+					.prepare('SELECT variant, state, retry_at, last_error FROM thumbnail_variants WHERE content_id = ?')
 					.all(contentId) as Array<{
 					variant: string
 					state: 'pending' | 'ready' | 'failed'
 					retry_at: number | null
+					last_error: string | null
 				}>,
 			priority,
 		)
@@ -1216,13 +1264,22 @@ export default class FileIndexEnrichment {
 			if (variant === requested) return true
 			if (!this.#enabledThumbnailVariants.has(variant)) return false
 			const row = stateByVariant.get(variant)
-			return row?.state === 'pending' || (row?.state === 'failed' && (row.retry_at ?? 0) <= now)
+			return (
+				row?.state === 'pending' ||
+				(row?.state === 'failed' &&
+					((row.retry_at ?? 0) <= now || (freshReference && referenceFailureMessage(row.last_error))))
+			)
 		})
 	}
 
-	async #ensureContentThumbnail(content: ContentCandidate, variant: ThumbnailVariant, onDemand: boolean) {
+	async #ensureContentThumbnail(
+		content: ContentCandidate,
+		variant: ThumbnailVariant,
+		onDemand: boolean,
+		freshReference = false,
+	) {
 		const priority = onDemand ? ON_DEMAND_DATABASE_PRIORITY : BACKGROUND_DATABASE_PRIORITY
-		const variants = await this.#thumbnailVariantsForContent(content.id, variant, priority)
+		const variants = await this.#thumbnailVariantsForContent(content.id, variant, priority, freshReference)
 		await this.#withArtifactOperations(
 			variants.map((candidate) => contentIdentity(content.hash, candidate)),
 			async () => {
@@ -1231,11 +1288,12 @@ export default class FileIndexEnrichment {
 						await this.#withDatabase(
 							(database) =>
 								database
-									.prepare('SELECT variant, state, retry_at FROM thumbnail_variants WHERE content_id = ?')
+									.prepare('SELECT variant, state, retry_at, last_error FROM thumbnail_variants WHERE content_id = ?')
 									.all(content.id) as Array<{
 									variant: ThumbnailVariant
 									state: 'pending' | 'ready' | 'failed'
 									retry_at: number | null
+									last_error: string | null
 								}>,
 							priority,
 						)
@@ -1250,7 +1308,8 @@ export default class FileIndexEnrichment {
 						!onDemand &&
 						existing?.state === 'failed' &&
 						existing.retry_at !== null &&
-						existing.retry_at > Date.now()
+						existing.retry_at > Date.now() &&
+						!(freshReference && referenceFailureMessage(existing.last_error))
 					) {
 						continue
 					}
@@ -1328,7 +1387,13 @@ export default class FileIndexEnrichment {
 							}
 						}
 						for (const output of outputs) {
-							await this.#recordThumbnailFailure(content.id, output.variant, error, priority)
+							await this.#recordThumbnailFailure(
+								content.id,
+								output.variant,
+								error,
+								priority,
+								referenceFailure === 'unreadable',
+							)
 						}
 						await this.#onContentFailure?.(content.id)
 						throw new PersistedEnrichmentFailure(error)
@@ -1624,7 +1689,13 @@ export default class FileIndexEnrichment {
 		}, priority)
 	}
 
-	async #recordThumbnailFailure(contentId: number, variant: ThumbnailVariant, error: unknown, priority: number) {
+	async #recordThumbnailFailure(
+		contentId: number,
+		variant: ThumbnailVariant,
+		error: unknown,
+		priority: number,
+		referenceFailure = false,
+	) {
 		await this.#withDatabase((database) => {
 			const existing = database
 				.prepare('SELECT failure_count FROM thumbnail_variants WHERE content_id = ? AND variant = ?')
@@ -1645,7 +1716,7 @@ export default class FileIndexEnrichment {
 					variant,
 					failureCount,
 					Date.now() + retryDelay(THUMBNAIL_RETRY_BASE_MS, failureCount),
-					errorMessage(error),
+					persistedFailureMessage(error, referenceFailure),
 					Date.now(),
 				)
 		}, priority)
@@ -2196,6 +2267,14 @@ function referenceFailureKind(error: unknown): 'stale' | 'unreadable' | undefine
 	const code = (error as NodeJS.ErrnoException | undefined)?.code
 	if (code === 'ENOENT' || code === 'ENOTDIR' || code === 'ESTALE') return 'stale'
 	if (code === 'EACCES' || code === 'EPERM' || code === 'EIO') return 'unreadable'
+}
+
+function persistedFailureMessage(error: unknown, referenceFailure: boolean) {
+	return `${referenceFailure ? REFERENCE_FAILURE_PREFIX : ''}${errorMessage(error)}`
+}
+
+function referenceFailureMessage(message: string | null) {
+	return message?.startsWith(REFERENCE_FAILURE_PREFIX) ?? false
 }
 
 export async function extractMediaMetadata(

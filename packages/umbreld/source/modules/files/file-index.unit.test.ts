@@ -1038,6 +1038,174 @@ test('generates all pending Photos renditions together for one content decode', 
 	])
 })
 
+test('publishes each Photos item before hashing the next background candidate', async () => {
+	let signalSecondHash!: () => void
+	let releaseSecondHash!: () => void
+	const secondHashStarted = new Promise<void>((resolve) => (signalSecondHash = resolve))
+	const secondHashReleased = new Promise<void>((resolve) => (releaseSecondHash = resolve))
+	const operations: string[] = []
+	let hashCount = 0
+	const hashFile = vi.fn(async (systemPath: string) => {
+		const ordinal = ++hashCount
+		operations.push(`hash:${nodePath.basename(systemPath)}`)
+		if (ordinal === 2) {
+			signalSecondHash()
+			await secondHashReleased
+		}
+		return Buffer.alloc(32, ordinal)
+	})
+	const generateThumbnails = vi.fn(
+		async (systemPath: string, outputs: Array<{destination: string; variant: string}>) => {
+			operations.push(`thumbnails:${nodePath.basename(systemPath)}`)
+			await Promise.all(outputs.map(({destination}) => fse.outputFile(destination, 'thumbnail')))
+		},
+	)
+	const extractMediaMetadata = vi.fn(async (systemPath: string) => {
+		operations.push(`metadata:${nodePath.basename(systemPath)}`)
+		return {kind: 'photo' as const, takenAt: 1, createdAt: 1, width: 100, height: 50}
+	})
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {hashFile, generateThumbnails, extractMediaMetadata},
+	})
+	await Promise.all([
+		writeFile(nodePath.join(homeDirectory, 'first.jpg'), 'first'),
+		writeFile(nodePath.join(homeDirectory, 'second.jpg'), 'second'),
+	])
+	await index.reconcileRoot('/Home', 'incremental-enrichment')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+
+	try {
+		await secondHashStarted
+		const first = nodePath.basename(hashFile.mock.calls[0]![0])
+		const second = nodePath.basename(hashFile.mock.calls[1]![0])
+		expect(operations).toStrictEqual([`hash:${first}`, `thumbnails:${first}`, `metadata:${first}`, `hash:${second}`])
+		const partial = await index.photosListItems('owner', {}, undefined, 10)
+		expect(partial).toMatchObject({total: 1, items: [{id: '01'.repeat(32)}]})
+		await expect(index.photosGetItem('owner', partial.items[0]!.id)).resolves.toMatchObject({
+			path: `/Home/${first}`,
+		})
+		await expect(index.photosIndexingState('owner')).resolves.toMatchObject({
+			phase: 'enriching',
+			completed: 1,
+			total: 2,
+			percentage: 50,
+		})
+	} finally {
+		releaseSecondHash()
+	}
+
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 2})
+})
+
+test('publishes an enriched Photos item when its thumbnail renditions fail', async () => {
+	const extractMediaMetadata = vi.fn(async () => ({
+		kind: 'photo' as const,
+		takenAt: 1,
+		createdAt: 1,
+		width: 100,
+		height: 50,
+	}))
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x31),
+			generateThumbnails: async () => {
+				throw new Error('invalid thumbnail payload')
+			},
+			extractMediaMetadata,
+		},
+	})
+	await writeFile(nodePath.join(homeDirectory, 'recoverable.jpg'), 'photo')
+	await index.reconcileRoot('/Home', 'thumbnail-failure-isolation')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+
+	await pRetry(async () => expect(await index.photosListItems('owner', {}, undefined, 10)).toMatchObject({total: 1}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await expect(index.photosIndexingState('owner')).resolves.toMatchObject({phase: 'degraded'})
+	expect(extractMediaMetadata).toHaveBeenCalledOnce()
+})
+
+test('coalesces per-item enrichment for duplicate content across background lanes', async () => {
+	let signalBothHashes!: () => void
+	const bothHashesStarted = new Promise<void>((resolve) => (signalBothHashes = resolve))
+	let hashCount = 0
+	const hashFile = vi.fn(async () => {
+		if (++hashCount === 2) signalBothHashes()
+		await bothHashesStarted
+		return Buffer.alloc(32, 0x32)
+	})
+	const generateThumbnails = vi.fn(
+		async (_systemPath: string, outputs: Array<{destination: string; variant: string}>) => {
+			await Promise.all(outputs.map(({destination}) => fse.outputFile(destination, 'thumbnail')))
+		},
+	)
+	const extractMediaMetadata = vi.fn(async () => ({
+		kind: 'photo' as const,
+		takenAt: 1,
+		createdAt: 1,
+		width: 100,
+		height: 50,
+	}))
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {availableParallelism: 8, hashFile, generateThumbnails, extractMediaMetadata},
+	})
+	await Promise.all([
+		writeFile(nodePath.join(homeDirectory, 'duplicate-a.jpg'), 'same'),
+		writeFile(nodePath.join(homeDirectory, 'duplicate-b.jpg'), 'same'),
+	])
+	await index.reconcileRoot('/Home', 'parallel-duplicate-enrichment')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	expect(hashFile).toHaveBeenCalledTimes(2)
+	expect(generateThumbnails).toHaveBeenCalledOnce()
+	expect(extractMediaMetadata).toHaveBeenCalledOnce()
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 1})
+})
+
+test('keeps invalid duplicate media on backoff as new references are discovered', async () => {
+	const extractMediaMetadata = vi.fn(async () => {
+		throw new Error('invalid image metadata')
+	})
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async () => Buffer.alloc(32, 0x33),
+			generateThumbnails: async (_systemPath, outputs) => {
+				await Promise.all(outputs.map(({destination}) => fse.outputFile(destination, 'thumbnail')))
+			},
+			extractMediaMetadata,
+		},
+	})
+	await Promise.all([
+		writeFile(nodePath.join(homeDirectory, 'invalid-duplicate-a.jpg'), 'same'),
+		writeFile(nodePath.join(homeDirectory, 'invalid-duplicate-b.jpg'), 'same'),
+	])
+	await index.reconcileRoot('/Home', 'invalid-duplicate-backoff')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'degraded'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	expect(extractMediaMetadata).toHaveBeenCalledOnce()
+})
+
 test('background-enriches Home and Trash while leaving other indexed roots on demand', async () => {
 	const hashFile = vi.fn(async (systemPath: string) => {
 		const byte = new Map([
