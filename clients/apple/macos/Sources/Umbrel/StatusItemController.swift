@@ -8,16 +8,12 @@ import SwiftUI
 // same, which is why it isn't used here.
 @MainActor
 final class StatusItemController: NSObject {
-	private static let hasPresentedInitialPanelKey = "hasPresentedInitialMenuBarPanel"
-
 	private let state: AppState
 	private let updateController: UpdateController
 	private let statusItem: NSStatusItem
 	private let panel: PopupPanel
-	private var shouldPresentInitialPanel = !UserDefaults.standard.bool(
-		forKey: StatusItemController.hasPresentedInitialPanelKey
-	)
-	private var initialPanelPresentationObserver: NSObjectProtocol?
+	private var hasPendingPanelPresentation = false
+	private var statusItemMoveObserver: NSObjectProtocol?
 
 	init(state: AppState, updateController: UpdateController) {
 		self.state = state
@@ -26,11 +22,11 @@ final class StatusItemController: NSObject {
 		self.panel = PopupPanel()
 		super.init()
 
-		let hostingView = NSHostingView(
-			rootView: PanelRoot(state: state) { [weak self] size in
-				self?.layoutPanel(contentSize: size)
-			})
-		panel.contentView = hostingView
+		let hostingController = NSHostingController(rootView: PanelRoot(state: state))
+		// Keep the AppKit panel synchronized with SwiftUI's changing ideal size.
+		// Measuring the rendered view would only report the panel's existing bounds.
+		hostingController.sizingOptions = [.preferredContentSize]
+		panel.contentViewController = hostingController
 
 		if let button = statusItem.button {
 			button.image = Assets.trayNormal
@@ -57,34 +53,35 @@ final class StatusItemController: NSObject {
 		}
 	}
 
-	// A menu-bar-only app has no Dock or window feedback after its first launch.
+	// A menu-bar-only app has no Dock or window feedback when explicitly launched.
 	// applicationDidFinishLaunching runs before AppKit has processed its first event,
 	// and the status button moves through placeholder frames before reaching its menu-
 	// bar slot. Observe that window instead of guessing a delay. Checking on the next
 	// main-actor turn coalesces each burst of moves before validating the final frame.
-	func presentInitialPanelIfNeeded() {
-		guard shouldPresentInitialPanel,
-			initialPanelPresentationObserver == nil,
-			let buttonWindow = statusItem.button?.window
-		else { return }
+	func presentPanelWhenReady() {
+		hasPendingPanelPresentation = true
 
-		initialPanelPresentationObserver = NotificationCenter.default.addObserver(
-			forName: NSWindow.didMoveNotification, object: buttonWindow, queue: .main
-		) { [weak self] _ in
-			Task { @MainActor [weak self] in
-				guard let self else { return }
-				// The first valid menu-bar frame can still be temporary. Once visible,
-				// keep the panel attached while AppKit settles the status item into its
-				// final slot; ordinary later opens already use the final geometry.
-				if self.panel.isVisible {
-					self.layoutPanel(contentSize: self.panel.contentView?.fittingSize ?? .zero)
+		if statusItemMoveObserver == nil,
+			let buttonWindow = statusItem.button?.window
+		{
+			statusItemMoveObserver = NotificationCenter.default.addObserver(
+				forName: NSWindow.didMoveNotification, object: buttonWindow, queue: .main
+			) { [weak self] _ in
+				Task { @MainActor [weak self] in
+					guard let self else { return }
+					// The first valid menu-bar frame can still be temporary. Once visible,
+					// keep the panel attached while AppKit settles the status item into its
+					// final slot; ordinary later opens already use the final geometry.
+					if self.panel.isVisible {
+						self.layoutPanel(contentSize: self.preferredPanelSize)
+					}
+					self.presentPendingPanelWhenReady()
 				}
-				self.presentInitialPanelWhenReady()
 			}
 		}
 
 		Task { @MainActor [weak self] in
-			self?.presentInitialPanelWhenReady()
+			self?.presentPendingPanelWhenReady()
 		}
 	}
 
@@ -169,7 +166,8 @@ final class StatusItemController: NSObject {
 
 	private func showPanel() {
 		panel.contentView?.layoutSubtreeIfNeeded()
-		guard layoutPanel(contentSize: panel.contentView?.fittingSize ?? .zero) else { return }
+		guard layoutPanel(contentSize: preferredPanelSize) else { return }
+		hasPendingPanelPresentation = false
 		panel.makeKeyAndOrderFront(nil)
 		// Route keyboard input into the SwiftUI hierarchy (borderless panels don't
 		// pick a first responder on their own)
@@ -178,7 +176,6 @@ final class StatusItemController: NSObject {
 		Task {
 			await state.probeSweep()
 		}
-		recordInitialPanelPresentation()
 	}
 
 	private func hidePanel() {
@@ -224,18 +221,9 @@ final class StatusItemController: NSObject {
 		return (frame, screen)
 	}
 
-	private func presentInitialPanelWhenReady() {
-		guard shouldPresentInitialPanel, statusItemGeometry != nil else { return }
+	private func presentPendingPanelWhenReady() {
+		guard hasPendingPanelPresentation, statusItemGeometry != nil else { return }
 		showPanel()
-	}
-
-	private func recordInitialPanelPresentation() {
-		guard shouldPresentInitialPanel else { return }
-		shouldPresentInitialPanel = false
-		UserDefaults.standard.set(true, forKey: Self.hasPresentedInitialPanelKey)
-		// Keep the launch-time window-move observer for this process. AppKit may move
-		// the status item again after the panel becomes visible; the observer is idle
-		// once placement settles and ensures the panel follows that final move.
 	}
 
 	// ── Tray icon (broken-umbrella alert when saved devices exist but none is connected) ──
@@ -250,6 +238,11 @@ final class StatusItemController: NSObject {
 				self?.observeTrayIcon()
 			}
 		}
+	}
+
+	private var preferredPanelSize: CGSize {
+		let preferred = panel.contentViewController?.preferredContentSize ?? .zero
+		return preferred == .zero ? panel.contentView?.fittingSize ?? .zero : preferred
 	}
 }
 
@@ -278,10 +271,10 @@ private final class PopupPanel: NSPanel {
 }
 
 // Popup content wrapped with the popover material and rounded corners the panel
-// itself doesn't provide, reporting its natural size so the panel can track it
+// itself doesn't provide. NSHostingController reports its changing ideal size to
+// AppKit so the panel follows discovery and navigation state without manual geometry.
 private struct PanelRoot: View {
 	let state: AppState
-	let onSizeChange: (CGSize) -> Void
 
 	var body: some View {
 		PopupView()
@@ -289,18 +282,5 @@ private struct PanelRoot: View {
 			.preferredColorScheme(.dark)
 			.background(PanelMaterial())
 			.clipShape(Panel.shape)
-			.background(
-				GeometryReader { proxy in
-					Color.clear.preference(key: ContentSizeKey.self, value: proxy.size)
-				}
-			)
-			.onPreferenceChange(ContentSizeKey.self, perform: onSizeChange)
-	}
-}
-
-private struct ContentSizeKey: PreferenceKey {
-	static let defaultValue: CGSize = .zero
-	static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
-		value = nextValue()
 	}
 }

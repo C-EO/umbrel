@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	private let updateController = UpdateController()
 
 	func applicationDidFinishLaunching(_ notification: Notification) {
+		let launchedAtLogin = Self.launchedAtLogin
 		// Menu bar only, no Dock icon. The bundled app also sets LSUIElement;
 		// this covers bare `swift run` during development.
 		NSApp.setActivationPolicy(.accessory)
@@ -30,6 +31,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 			updateController: updateController
 		)
 		self.statusItemController = statusItemController
-		statusItemController.presentInitialPanelIfNeeded()
+		if !launchedAtLogin {
+			statusItemController.presentPanelWhenReady()
+		}
+	}
+
+	func applicationShouldHandleReopen(
+		_ sender: NSApplication,
+		hasVisibleWindows: Bool
+	) -> Bool {
+		statusItemController?.presentPanelWhenReady()
+		return false
+	}
+
+	// macOS marks the open-application Apple Event when the system starts an app
+	// as a login item. Read it during did-finish-launching, while it is current.
+	private static var launchedAtLogin: Bool {
+		guard let event = NSAppleEventManager.shared().currentAppleEvent else {
+			return false
+		}
+		return event.eventID == kAEOpenApplication
+			&& event.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue
+				== keyAELaunchedAsLogInItem
 	}
 }
