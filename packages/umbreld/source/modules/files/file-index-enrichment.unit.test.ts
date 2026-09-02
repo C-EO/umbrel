@@ -18,7 +18,6 @@ import {
 	type ThumbnailVariant,
 } from './thumbnail-support.js'
 import {
-	decodeExifUserComment,
 	enrichmentQueueConcurrency,
 	extractMediaMetadata,
 	extractThumbnailTint,
@@ -32,118 +31,17 @@ vi.mock('execa')
 
 const execFileAsync = promisify(execFile)
 const temporaryDirectories: string[] = []
-const metadataSeparator = '\u001f'
 
-type PhotoIdentifyMetadata = {
-	width: string
-	height: string
-	orientation: string
-	originalDate: string
-	originalOffset: string
-	digitizedDate: string
-	digitizedOffset: string
-	dateTime: string
-	dateTimeOffset: string
-	make: string
-	model: string
-	lens: string
-	focalLength: string
-	aperture: string
-	exposure: string
-	photographicSensitivity: string
-	legacyIso: string
-	latitude: string
-	latitudeRef: string
-	longitude: string
-	longitudeRef: string
-	altitude: string
-	altitudeRef: string
-	projection: string
-	exifContentIdentifier: string
-	makerContentIdentifier: string
-	xmpContentIdentifier: string
-	userCommentMarker: string
-	dngDate: string
-	dngMake: string
-	dngModel: string
-	dngLens: string
-	dngFocalLength: string
-	dngAperture: string
-	dngExposure: string
-	dngIso: string
-	dngLatitude: string
-	dngLongitude: string
-	dngAltitude: string
-}
-
-function photoIdentifyMetadata(overrides: Partial<PhotoIdentifyMetadata> = {}) {
-	const metadata: PhotoIdentifyMetadata = {
-		width: '4032',
-		height: '3024',
-		orientation: '',
-		originalDate: '',
-		originalOffset: '',
-		digitizedDate: '',
-		digitizedOffset: '',
-		dateTime: '',
-		dateTimeOffset: '',
-		make: '',
-		model: '',
-		lens: '',
-		focalLength: '',
-		aperture: '',
-		exposure: '',
-		photographicSensitivity: '',
-		legacyIso: '',
-		latitude: '',
-		latitudeRef: '',
-		longitude: '',
-		longitudeRef: '',
-		altitude: '',
-		altitudeRef: '',
-		projection: '',
-		exifContentIdentifier: '',
-		makerContentIdentifier: '',
-		xmpContentIdentifier: '',
-		userCommentMarker: '',
-		dngDate: '',
-		dngMake: '',
-		dngModel: '',
-		dngLens: '',
-		dngFocalLength: '',
-		dngAperture: '',
-		dngExposure: '',
-		dngIso: '',
-		dngLatitude: '',
-		dngLongitude: '',
-		dngAltitude: '',
-		...overrides,
+function exifMetadata(overrides: Record<string, string | number | undefined> = {}) {
+	return {
+		stdout: JSON.stringify([
+			{
+				'File:Image:ImageWidth': 4032,
+				'File:Image:ImageHeight': 3024,
+				...overrides,
+			},
+		]),
 	}
-	return {stdout: Object.values(metadata).join(metadataSeparator)}
-}
-
-function exifUserCommentProfile(marker: Buffer, payload: Buffer) {
-	const value = Buffer.concat([marker, payload])
-	const profile = Buffer.alloc(6 + 44 + value.length)
-	profile.write('Exif\0\0', 0, 'binary')
-	const tiff = 6
-	profile.write('II', tiff, 'ascii')
-	profile.writeUInt16LE(42, tiff + 2)
-	profile.writeUInt32LE(8, tiff + 4)
-	profile.writeUInt16LE(1, tiff + 8)
-	profile.writeUInt16LE(0x8769, tiff + 10)
-	profile.writeUInt16LE(4, tiff + 12)
-	profile.writeUInt32LE(1, tiff + 14)
-	profile.writeUInt32LE(26, tiff + 18)
-	profile.writeUInt32LE(0, tiff + 22)
-	profile.writeUInt16LE(1, tiff + 26)
-	profile.writeUInt16LE(0x9286, tiff + 28)
-	profile.writeUInt16LE(7, tiff + 30)
-	profile.writeUInt32LE(value.length, tiff + 32)
-	profile.writeUInt32LE(44, tiff + 36)
-	profile.writeUInt32LE(0, tiff + 40)
-	value.copy(profile, tiff + 44)
-	return profile
 }
 
 afterEach(async () => {
@@ -316,24 +214,21 @@ test('extracts oriented photo metadata, capture offset, GPS, and Apple live iden
 	const photo = nodePath.join(directory, 'IMG_0001.heic')
 	await writeFile(photo, 'photo')
 	vi.mocked(execa).mockResolvedValueOnce(
-		photoIdentifyMetadata({
-			orientation: 'RightTop',
-			originalDate: '2025:08:21 14:03:04',
-			originalOffset: '+02:30',
-			make: 'Apple',
-			model: 'iPhone 16 Pro',
-			lens: 'iPhone lens',
-			focalLength: '24/1',
-			aperture: '18/10',
-			exposure: '1/125',
-			photographicSensitivity: '100',
-			latitude: '13/1, 45/1, 0/1',
-			latitudeRef: 'N',
-			longitude: '100/1, 30/1, 0/1',
-			longitudeRef: 'E',
-			altitude: '125/2',
-			altitudeRef: '0',
-			makerContentIdentifier: 'live-photo-id',
+		exifMetadata({
+			'IFD0:Image:Orientation': 6,
+			'ExifIFD:Time:DateTimeOriginal': '2025:08:21 14:03:04',
+			'ExifIFD:Time:OffsetTimeOriginal': '+02:30',
+			'IFD0:Camera:Make': 'Apple',
+			'IFD0:Camera:Model': 'iPhone 16 Pro',
+			'ExifIFD:Image:LensModel': 'iPhone lens',
+			'ExifIFD:Camera:FocalLength': '24/1',
+			'ExifIFD:Image:FNumber': '18/10',
+			'ExifIFD:Image:ExposureTime': '1/125',
+			'ExifIFD:Image:PhotographicSensitivity': 100,
+			'GPS:Location:GPSLatitude': 13.75,
+			'GPS:Location:GPSLongitude': 100.5,
+			'GPS:Location:GPSAltitude': 62.5,
+			'Apple:Image:ContentIdentifier': 'live-photo-id',
 		}) as never,
 	)
 
@@ -353,41 +248,87 @@ test('extracts oriented photo metadata, capture offset, GPS, and Apple live iden
 		altitude: 62.5,
 		liveIdentifier: 'live-photo-id',
 	})
-	expect(execa).toHaveBeenCalledWith('identify', expect.arrayContaining(['-limit', 'memory', '-limit', 'time']), {
+	expect(execa).toHaveBeenCalledOnce()
+	expect(execa).toHaveBeenCalledWith('exiftool', expect.arrayContaining(['-j', '-n', '-G1:2', '-a', photo]), {
 		detached: true,
 		timeout: THUMBNAIL_GENERATION_TIMEOUT_MS,
 		killSignal: 'SIGKILL',
 	})
+	const arguments_ = vi.mocked(execa).mock.calls[0]![1] as string[]
+	expect(arguments_).toEqual(
+		expect.arrayContaining([
+			'-ImageWidth',
+			'-ImageSize',
+			'-DateTimeOriginal',
+			'-GPSLatitude',
+			'-GPSLatitudeRef',
+			'-GPSLongitudeRef',
+			'-GPSAltitudeRef',
+			'-ProjectionType',
+			'-ContentIdentifier',
+			'-UserComment',
+		]),
+	)
+	expect(arguments_).toEqual(expect.arrayContaining(['-api', 'IgnoreTags=all']))
 })
 
-test.each([
-	['modern ISO', {photographicSensitivity: '640'}, 640],
-	['legacy ISO', {legacyIso: '320'}, 320],
-	['modern ISO precedence', {photographicSensitivity: '800', legacyIso: '200'}, 800],
-])('extracts %s', async (_name, values, expected) => {
-	vi.mocked(execa).mockResolvedValueOnce(photoIdentifyMetadata(values) as never)
-	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({iso: expected})
-})
-
-test('falls back to LibRaw DNG metadata for camera RAW photos', async () => {
+test('prefers signed Composite GPS values over unsigned EXIF storage values', async () => {
 	vi.mocked(execa).mockResolvedValueOnce(
-		photoIdentifyMetadata({
-			dngDate: '2008-01-01T15:29:46+02:30',
-			dngMake: 'Sony',
-			dngModel: 'DSLR-A700',
-			dngLens: '20-200mm f/4-6',
-			dngFocalLength: '2e+02 mm',
-			dngAperture: '8',
-			dngExposure: '1/1e+03',
-			dngIso: '2e+02',
-			dngLatitude: `13 deg 45' 0" N`,
-			dngLongitude: `100 deg 30' 0" E`,
-			dngAltitude: '62.5 m',
+		exifMetadata({
+			'GPS:Location:GPSLatitude': 33.8688,
+			'Composite:Location:GPSLatitude': -33.8688,
+			'GPS:Location:GPSLongitude': 118.2437,
+			'Composite:Location:GPSLongitude': -118.2437,
+			'GPS:Location:GPSAltitude': 62.5,
+			'Composite:Location:GPSAltitude': -62.5,
+			'GPS:Location:GPSLatitudeRef': 'S',
+			'GPS:Location:GPSLongitudeRef': 'W',
+			'GPS:Location:GPSAltitudeRef': 1,
 		}) as never,
 	)
 
-	await expect(extractMediaMetadata('/home/photo.arw')).resolves.toMatchObject({
+	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({
+		latitude: -33.8688,
+		longitude: -118.2437,
+		altitude: -62.5,
+	})
+})
+
+test.each([
+	['PhotographicSensitivity', {'ExifIFD:Image:PhotographicSensitivity': 640}, 640],
+	['ISO', {'ExifIFD:Image:ISO': 320}, 320],
+	['PhotographicSensitivity precedence', {'ExifIFD:Image:PhotographicSensitivity': 800, 'ExifIFD:Image:ISO': 200}, 800],
+])('extracts %s', async (_name, values, expected) => {
+	vi.mocked(execa).mockResolvedValueOnce(exifMetadata(values) as never)
+	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({iso: expected})
+})
+
+test('extracts standard ExifTool metadata from camera RAW photos', async () => {
+	vi.mocked(execa).mockResolvedValueOnce(
+		exifMetadata({
+			'IFD0:Image:ImageWidth': 8,
+			'SubIFD:Image:ImageWidth': 3516,
+			'IFD0:Image:ImageHeight': 8,
+			'SubIFD:Image:ImageHeight': 2328,
+			'Composite:Image:ImageSize': '3516 2328',
+			'XMP:Time:CreationDate': '2008:01:01 15:29:46+02:30',
+			'IFD0:Camera:Make': 'Sony',
+			'IFD0:Camera:Model': 'DSLR-A700',
+			'ExifIFD:Image:LensModel': '20-200mm f/4-6',
+			'ExifIFD:Camera:FocalLength': '2e+02',
+			'ExifIFD:Image:FNumber': '8',
+			'ExifIFD:Image:ExposureTime': '1/1e+03',
+			'ExifIFD:Image:ISO': '2e+02',
+			'GPS:Location:GPSLatitude': 13.75,
+			'GPS:Location:GPSLongitude': 100.5,
+			'GPS:Location:GPSAltitude': 62.5,
+		}) as never,
+	)
+
+	await expect(extractMediaMetadata('/home/photo.dng')).resolves.toMatchObject({
 		kind: 'photo',
+		width: 3516,
+		height: 2328,
 		takenAt: Date.parse('2008-01-01T15:29:46+02:30'),
 		takenAtOffsetMinutes: 150,
 		cameraMake: 'Sony',
@@ -401,16 +342,24 @@ test('falls back to LibRaw DNG metadata for camera RAW photos', async () => {
 		longitude: 100.5,
 		altitude: 62.5,
 	})
+	const arguments_ = vi.mocked(execa).mock.calls[0]![1] as string[]
+	expect(arguments_).not.toContain('IgnoreTags=all')
 })
 
-test('ignores LibRaw zero GPS and unknown-lens sentinels', async () => {
+test('rejects photo metadata without valid dimensions', async () => {
+	vi.mocked(execa).mockResolvedValueOnce({stdout: JSON.stringify([{SourceFile: '/home/broken.jpg'}])} as never)
+
+	await expect(extractMediaMetadata('/home/broken.jpg')).rejects.toThrow('Photo has no valid image dimensions')
+})
+
+test('ignores zero GPS, invalid dates, and unknown-lens sentinels', async () => {
 	vi.mocked(execa).mockResolvedValueOnce(
-		photoIdentifyMetadata({
-			dngDate: '2008-02-30T15:29:46+00:00',
-			dngLens: '0-0mm f/0-0',
-			dngLatitude: `0 deg 0' 0" N`,
-			dngLongitude: `0 deg 0' 0" W`,
-			dngAltitude: '0 m',
+		exifMetadata({
+			'ExifIFD:Time:DateTimeOriginal': '2008:02:30 15:29:46',
+			'ExifIFD:Image:LensModel': '0-0mm f/0-0',
+			'GPS:Location:GPSLatitude': 0,
+			'GPS:Location:GPSLongitude': 0,
+			'GPS:Location:GPSAltitude': 0,
 		}) as never,
 	)
 
@@ -421,63 +370,47 @@ test('ignores LibRaw zero GPS and unknown-lens sentinels', async () => {
 	expect(metadata).not.toHaveProperty('longitude')
 })
 
-test('prefers EXIF metadata when a DNG exposes both metadata families', async () => {
-	vi.mocked(execa).mockResolvedValueOnce(
-		photoIdentifyMetadata({
-			originalDate: '2025:08:21 14:03:04',
-			originalOffset: '+02:30',
-			make: 'Apple',
-			model: 'iPhone 16 Pro',
-			photographicSensitivity: '640',
-			dngDate: '2008-01-01T15:29:46+00:00',
-			dngMake: 'Raw make',
-			dngModel: 'Raw model',
-			dngIso: '200',
-		}) as never,
-	)
-
-	await expect(extractMediaMetadata('/home/photo.dng')).resolves.toMatchObject({
-		takenAt: Date.parse('2025-08-21T14:03:04+02:30'),
-		cameraMake: 'Apple',
-		cameraModel: 'iPhone 16 Pro',
-		iso: 640,
-	})
-})
-
 test.each([
 	[
 		'DateTimeOriginal and its offset',
 		{
-			originalDate: '2024:01:02 03:04:05',
-			originalOffset: '+02:30',
-			digitizedDate: '2023:01:02 03:04:05',
-			digitizedOffset: '-04:00',
-			dateTime: '2022:01:02 03:04:05',
-			dateTimeOffset: '+05:00',
+			'ExifIFD:Time:DateTimeOriginal': '2024:01:02 03:04:05',
+			'ExifIFD:Time:OffsetTimeOriginal': '+02:30',
+			'Keys:Time:CreationDate': '2023:01:02 03:04:05-04:00',
+			'ExifIFD:Time:CreateDate': '2022:01:02 03:04:05',
 		},
 		Date.UTC(2024, 0, 2, 0, 34, 5),
 		150,
 	],
 	[
-		'DateTimeDigitized and its offset',
-		{digitizedDate: '2023:02:03 04:05:06', digitizedOffset: '-04:00', dateTime: '2022:01:02 03:04:05'},
+		'CreationDate with its inline offset',
+		{
+			'Keys:Time:CreationDate': '2023:02:03 04:05:06-04:00',
+			'ExifIFD:Time:CreateDate': '2022:01:02 03:04:05',
+		},
 		Date.UTC(2023, 1, 3, 8, 5, 6),
 		-240,
 	],
 	[
-		'DateTime and its offset',
-		{dateTime: '2022:03:04 05:06:07', dateTimeOffset: '+05:45'},
+		'CreateDate and OffsetTimeDigitized',
+		{'ExifIFD:Time:CreateDate': '2022:03:04 05:06:07', 'ExifIFD:Time:OffsetTimeDigitized': '+05:45'},
 		Date.UTC(2022, 2, 3, 23, 21, 7),
 		345,
 	],
 	[
-		'a capture date without an offset as UTC',
-		{originalDate: '2021:04:05 06:07:08'},
+		'MediaCreateDate without an offset as UTC',
+		{'Track1:Time:MediaCreateDate': '2021:04:05 06:07:08'},
 		Date.UTC(2021, 3, 5, 6, 7, 8),
 		undefined,
 	],
+	[
+		'ModifyDate and OffsetTime',
+		{'IFD0:Time:ModifyDate': '2020:05:06 07:08:09', 'ExifIFD:Time:OffsetTime': '+01:00'},
+		Date.UTC(2020, 4, 6, 6, 8, 9),
+		60,
+	],
 ] as const)('selects %s', async (_name, values, takenAt, offsetMinutes) => {
-	vi.mocked(execa).mockResolvedValueOnce(photoIdentifyMetadata(values) as never)
+	vi.mocked(execa).mockResolvedValueOnce(exifMetadata(values) as never)
 	const metadata = await extractMediaMetadata('/home/photo.jpg')
 	expect(metadata.takenAt).toBe(takenAt)
 	expect(metadata.takenAtOffsetMinutes).toBe(offsetMinutes)
@@ -485,11 +418,10 @@ test.each([
 
 test('falls through an invalid higher-priority photo date without borrowing its offset', async () => {
 	vi.mocked(execa).mockResolvedValueOnce(
-		photoIdentifyMetadata({
-			originalDate: '2024:02:30 12:00:00',
-			originalOffset: '+09:00',
-			digitizedDate: '2023:05:06 07:08:09',
-			digitizedOffset: '-03:00',
+		exifMetadata({
+			'ExifIFD:Time:DateTimeOriginal': '2024:02:30 12:00:00',
+			'ExifIFD:Time:OffsetTimeOriginal': '+09:00',
+			'Keys:Time:CreationDate': '2023:05:06 07:08:09-03:00',
 		}) as never,
 	)
 	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({
@@ -499,59 +431,44 @@ test('falls through an invalid higher-priority photo date without borrowing its 
 })
 
 test.each([
-	['above sea level', '125/2', '0', 62.5],
-	['below sea level', '125/2', '1', -62.5],
-])('extracts GPS altitude %s', async (_name, altitude, altitudeRef, expected) => {
+	['above sea level', 62.5],
+	['below sea level', -62.5],
+])('extracts signed ExifTool GPS altitude %s', async (_name, altitude) => {
 	vi.mocked(execa).mockResolvedValueOnce(
-		photoIdentifyMetadata({
-			latitude: '13/1, 45/1, 0/1',
-			latitudeRef: 'N',
-			longitude: '100/1, 30/1, 0/1',
-			longitudeRef: 'E',
-			altitude,
-			altitudeRef,
+		exifMetadata({
+			'GPS:Location:GPSLatitude': 13.75,
+			'Composite:Location:GPSLatitude': 13.75,
+			'GPS:Location:GPSLongitude': 100.5,
+			'Composite:Location:GPSLongitude': 100.5,
+			'GPS:Location:GPSAltitude': Math.abs(altitude),
+			'Composite:Location:GPSAltitude': altitude,
 		}) as never,
 	)
-	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({altitude: expected})
+	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({altitude})
 })
 
-test('extracts and normalizes ASCII EXIF UserComment metadata', async () => {
-	vi.mocked(execa)
-		.mockResolvedValueOnce(photoIdentifyMetadata({userCommentMarker: 'ASCII'}) as never)
-		.mockResolvedValueOnce({
-			stdout: exifUserCommentProfile(Buffer.from('ASCII\0\0\0', 'binary'), Buffer.from('  Alpine sunrise  \0')),
-		} as never)
+test('uses ExifTool-decoded UserComment metadata and normalizes it', async () => {
+	vi.mocked(execa).mockResolvedValueOnce(
+		exifMetadata({'ExifIFD:Image:UserComment': '  Cafe\u0301 東京の夜  \0'}) as never,
+	)
 
-	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({userComment: 'Alpine sunrise'})
-	expect(execa).toHaveBeenCalledTimes(2)
+	await expect(extractMediaMetadata('/home/photo.jpg')).resolves.toMatchObject({userComment: 'Café 東京の夜'})
+	expect(execa).toHaveBeenCalledOnce()
 })
 
-test.each([
-	[
-		'Unicode with a BOM',
-		exifUserCommentProfile(
-			Buffer.from('UNICODE\0', 'binary'),
-			Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Cafe\u0301 東京の夜\0', 'utf16le')]),
-		),
-		'Café 東京の夜',
-	],
-	['empty ASCII', exifUserCommentProfile(Buffer.from('ASCII\0\0\0', 'binary'), Buffer.from('   \0')), undefined],
-	['missing', Buffer.from('not an EXIF profile'), undefined],
-	[
-		'malformed Unicode',
-		exifUserCommentProfile(Buffer.from('UNICODE\0', 'binary'), Buffer.from([0xff, 0xfe, 0x00])),
-		undefined,
-	],
-	[
-		'unknown character set',
-		exifUserCommentProfile(Buffer.from('UNKNOWN\0', 'binary'), Buffer.from('comment')),
-		undefined,
-	],
-] as const)('decodes %s UserComment safely', (_name, profile, expected) => {
-	expect(decodeExifUserComment(profile)).toBe(expected)
+test('prefers spherical metadata over the panorama aspect-ratio heuristic', async () => {
+	vi.mocked(execa).mockResolvedValueOnce(
+		exifMetadata({
+			'File:Image:ImageWidth': 6000,
+			'File:Image:ImageHeight': 2000,
+			'XMP-GPano:Image:ProjectionType': 'equirectangular',
+		}) as never,
+	)
+
+	await expect(extractMediaMetadata('/home/panorama.jpg')).resolves.toMatchObject({subKind: 'spherical'})
 })
 
-test('extracts descriptor-backed video metadata without passing an ImageMagick coder to ffprobe', async () => {
+test('combines descriptor-backed FFprobe structure with ExifTool video semantics', async () => {
 	const directory = await mkdtemp(nodePath.join(tmpdir(), 'umbrel-video-metadata-'))
 	temporaryDirectories.push(directory)
 	const video = nodePath.join(directory, 'IMG_0001.mov')
@@ -565,26 +482,29 @@ test('extracts descriptor-backed video metadata without passing an ImageMagick c
 						width: 1920,
 						height: 1080,
 						duration: 'N/A',
-						side_data_list: [{rotation: 90}],
-						tags: {
-							rotate: '0',
-							creation_time: '2025-08-21T12:00:00Z',
-							projection: 'equirectangular',
-							'com.apple.quicktime.content.identifier': 'live-photo-id',
-						},
+						side_data_list: [{rotation: 90}, {crop_left: 10, crop_right: 20, crop_top: 2, crop_bottom: 8}],
+						tags: {rotate: '0'},
 					},
 				],
 				format: {duration: '3.25'},
 			}),
 		} as never)
-		.mockResolvedValueOnce({stdout: '[{}]'} as never)
+		.mockResolvedValueOnce(
+			exifMetadata({
+				'Keys:Time:CreationDate': '2025:08:21 14:30:00+02:30',
+				'Keys:Video:ProjectionType': 'equirectangular',
+				'Keys:Other:ContentIdentifier': 'live-photo-id',
+			}) as never,
+		)
 
 	await expect(extractMediaMetadata(video, 42)).resolves.toMatchObject({
 		kind: 'video',
 		subKind: 'spherical',
-		width: 1080,
-		height: 1920,
+		width: 1070,
+		height: 1890,
 		durationMs: 3250,
+		takenAt: Date.parse('2025-08-21T14:30:00+02:30'),
+		takenAtOffsetMinutes: 150,
 		liveIdentifier: 'live-photo-id',
 	})
 	expect(execa).toHaveBeenNthCalledWith(1, 'ffprobe', expect.arrayContaining(['/dev/fd/3']), {
@@ -593,8 +513,13 @@ test('extracts descriptor-backed video metadata without passing an ImageMagick c
 		killSignal: 'SIGKILL',
 		stdio: ['ignore', 'pipe', 'pipe', 42],
 	})
-	const arguments_ = vi.mocked(execa).mock.calls[0][1] as string[]
-	expect(arguments_).not.toContain('MOV:/dev/fd/3')
+	const ffprobeArguments = vi.mocked(execa).mock.calls[0][1] as string[]
+	expect(ffprobeArguments).not.toContain('MOV:/dev/fd/3')
+	const showEntries = ffprobeArguments[ffprobeArguments.indexOf('-show_entries') + 1]
+	expect(showEntries).toBe(
+		'stream=codec_type,width,height,duration:stream_tags=rotate:stream_side_data=rotation,crop_top,crop_bottom,crop_left,crop_right:format=duration',
+	)
+	expect(showEntries).not.toMatch(/creation|projection|identifier|color|audio|dolby/i)
 	expect(execa).toHaveBeenNthCalledWith(2, 'exiftool', expect.arrayContaining(['-G1:2', '/dev/fd/3']), {
 		detached: true,
 		timeout: THUMBNAIL_GENERATION_TIMEOUT_MS,
@@ -602,8 +527,85 @@ test('extracts descriptor-backed video metadata without passing an ImageMagick c
 		stdio: ['ignore', 'pipe', 'pipe', 42],
 	})
 	const exifToolArguments = vi.mocked(execa).mock.calls[1]![1] as string[]
-	expect(exifToolArguments).toEqual(expect.arrayContaining(['-api', 'IgnoreTags=all']))
+	expect(exifToolArguments).toEqual(
+		expect.arrayContaining([
+			'-a',
+			'-CreationDate',
+			'-ProjectionType',
+			'-ContentIdentifier',
+			'-GPSCoordinates',
+			'-FocalLengthIn35mmFormat',
+			'-CameraLensIrisfnumber',
+		]),
+	)
+	expect(exifToolArguments).not.toContain('IgnoreTags=all')
 	expect(exifToolArguments).not.toContain('-ee')
+})
+
+test('extracts common iPhone MOV location, focal length, aperture, and lens VideoKeys', async () => {
+	vi.mocked(execa)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify({
+				streams: [{codec_type: 'video', width: 1920, height: 1440}],
+				format: {duration: '1.25'},
+			}),
+		} as never)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify([
+				{
+					'Keys:Location:GPSCoordinates': '13.7237 100.5223 10.528',
+					'VideoKeys:Camera:FocalLengthIn35mmFormat': 26,
+					'VideoKeys:Audio:CameraLensIrisfnumber': 'F1.60',
+					'VideoKeys:Camera:LensModel': 'iPhone Air back camera 5.96mm f/1.6',
+				},
+			]),
+		} as never)
+
+	await expect(extractMediaMetadata('/home/iphone.mov')).resolves.toMatchObject({
+		latitude: 13.7237,
+		longitude: 100.5223,
+		altitude: 10.528,
+		focalLength: '26mm',
+		aperture: 'ƒ/1.6',
+		lens: 'iPhone Air back camera 5.96mm f/1.6',
+	})
+})
+
+test('keeps signed QuickTime GPSCoordinates altitude over its absolute composite', async () => {
+	vi.mocked(execa)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify({
+				streams: [{codec_type: 'video', width: 1920, height: 1440}],
+				format: {duration: '1.25'},
+			}),
+		} as never)
+		.mockResolvedValueOnce(
+			exifMetadata({
+				'Composite:Location:GPSLatitude': -33.8688,
+				'Composite:Location:GPSLongitude': -118.2437,
+				'Composite:Location:GPSAltitude': 62.5,
+				'Keys:Location:GPSCoordinates': '-33.8688 -118.2437 -62.5',
+			}) as never,
+		)
+
+	await expect(extractMediaMetadata('/home/iphone.mov')).resolves.toMatchObject({
+		latitude: -33.8688,
+		longitude: -118.2437,
+		altitude: -62.5,
+	})
+})
+
+test('recognizes numeric Matroska equirectangular projection metadata', async () => {
+	vi.mocked(execa)
+		.mockResolvedValueOnce({
+			stdout: JSON.stringify({
+				streams: [{codec_type: 'video', width: 4096, height: 2048}],
+				format: {duration: '2'},
+			}),
+		} as never)
+		.mockResolvedValueOnce(exifMetadata({'Matroska:Video:ProjectionType': 1}) as never)
+
+	await expect(extractMediaMetadata('/home/sphere.mkv')).resolves.toMatchObject({subKind: 'spherical'})
 })
 
 test('merges camera-classified QuickTime metadata without accepting non-camera groups', async () => {
@@ -684,6 +686,7 @@ test('extracts embedded Insta360 trailer metadata only for INSV videos', async (
 	})
 	const arguments_ = vi.mocked(execa).mock.calls[1]![1] as string[]
 	expect(arguments_).toContain('-ee')
+	expect(arguments_).toContain('IgnoreTags=all')
 })
 
 test('keeps playable video metadata when optional ExifTool extraction fails', async () => {

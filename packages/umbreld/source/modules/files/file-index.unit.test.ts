@@ -652,7 +652,7 @@ describe('file index migrations', () => {
 		insertMetadata.run(photo, 'photo')
 		insertMetadata.run(video, 'video')
 
-		await expect(migrateFileIndex(database)).resolves.toBe(FILE_INDEX_SCHEMA_VERSION)
+		await expect(migrateFileIndex(database, fileIndexMigrations.slice(0, 12))).resolves.toBe(12)
 		expect(
 			database
 				.prepare(
@@ -679,6 +679,35 @@ describe('file index migrations', () => {
 				last_error: null,
 				updated_at: 0,
 			},
+		])
+		database.close()
+	})
+
+	test('requeues all media when changing the metadata reader and field precedence', async () => {
+		const database = new BetterSqlite3(':memory:')
+		await migrateFileIndex(database, fileIndexMigrations.slice(0, 13))
+		const insertContent = database.prepare('INSERT INTO contents(blake3, size, created_at) VALUES (?, 5, 1)')
+		const photo = insertContent.run(Buffer.alloc(32, 0xd1)).lastInsertRowid
+		const video = insertContent.run(Buffer.alloc(32, 0xd2)).lastInsertRowid
+		const insertMetadata = database.prepare(
+			`INSERT INTO media_metadata(
+				content_id, state, kind, width, height, failure_count, retry_at, last_error, updated_at
+			) VALUES (?, 'ready', ?, 100, 50, 3, 123, 'old error', 1)`,
+		)
+		insertMetadata.run(photo, 'photo')
+		insertMetadata.run(video, 'video')
+
+		await expect(migrateFileIndex(database)).resolves.toBe(FILE_INDEX_SCHEMA_VERSION)
+		expect(
+			database
+				.prepare(
+					`SELECT kind, state, failure_count, retry_at, last_error, updated_at
+					FROM media_metadata ORDER BY kind`,
+				)
+				.all(),
+		).toStrictEqual([
+			{kind: 'photo', state: 'pending', failure_count: 0, retry_at: null, last_error: null, updated_at: 0},
+			{kind: 'video', state: 'pending', failure_count: 0, retry_at: null, last_error: null, updated_at: 0},
 		])
 		database.close()
 	})

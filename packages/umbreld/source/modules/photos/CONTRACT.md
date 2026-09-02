@@ -174,20 +174,64 @@ type Source = {
 
 ## Media metadata readers
 
-Still images use ImageMagick for dimensions and standard EXIF/DNG camera
-metadata. Videos combine FFprobe's structural metadata with a concurrent,
-best-effort ExifTool pass for camera fields that FFmpeg does not decode, such
-as QuickTime camera keys and vendor trailers. Only tags classified as camera
-metadata (plus the known QuickTime make/model locations) enter the index; an
-ICC profile's device manufacturer, for example, is not a camera make.
+ExifTool is the single semantic metadata reader for photos and videos. One
+targeted, numeric JSON pass supplies orientation-aware still dimensions,
+capture dates and offsets, camera and lens fields, exposure, GPS, projection,
+EXIF `UserComment`, and Apple Live Photo content identifiers. Group-qualified
+tags are retained so camera identity can be accepted from camera metadata and
+known QuickTime key locations without mistaking an ICC profile's manufacturer
+for the camera make. ExifTool also decodes EXIF strings and normalizes GPS signs,
+so the indexer does not maintain its own TIFF `UserComment`, rational GPS, or
+LibRaw-specific metadata parsers.
+
+Capture-date precedence is `DateTimeOriginal` with `OffsetTimeOriginal`, then
+timezone-bearing `CreationDate`, `CreateDate` with `OffsetTimeDigitized`,
+`MediaCreateDate`, and finally `ModifyDate` with `OffsetTime`. A date and its
+separate offset always travel as a pair; an invalid higher-priority date falls
+through without donating its offset to a lower-priority value. Inline `Z` and
+numeric offsets are preserved as `takenAtOffsetMinutes`. With ExifTool's numeric
+output, raw EXIF coordinates remain unsigned, so the allowlist also requests
+their latitude, longitude, and altitude reference tags and prefers ExifTool's
+signed `Composite` values. QuickTime `GPSCoordinates` remains authoritative for
+its altitude because the corresponding composite is absolute. Invalid ranges
+and the `(0, 0)` missing-location sentinel are discarded.
+
+Normal videos and camera RAW photos must not use ExifTool's `IgnoreTags=all`
+optimization. For videos it prevents the Apple `VideoKeys` table from being
+decoded even when individual leaf tags are requested. For RAW containers it
+prevents vendor dimensions from satisfying the dependencies of ExifTool's
+`Composite:ImageSize`, which can otherwise select a small IFD0 preview. The
+video allowlist explicitly includes QuickTime
+`GPSCoordinates`, `FocalLengthIn35mmFormat`, `CameraLensIrisfnumber`, and
+`LensModel`; these are normalized into the same location, focal-length,
+aperture, and lens fields as still-image EXIF. Ordinary photos and INSV retain
+`IgnoreTags=all`; their required tags remain directly readable, and INSV needs
+the restriction while its embedded-document scan walks the Insta360 trailer.
+
+Photo metadata is accepted only when ExifTool supplies valid positive image
+dimensions. Missing dimensions are an extraction failure rather than a
+synthetic 1×1 ready item. Camera RAW dimensions prefer
+`Composite:ImageSize`, which resolves the primary image across TIFF-based and
+vendor RAW containers; regular stills use the same value when available and
+fall back to the selected width/height tags.
+
+FFprobe remains required for videos, but only for facts for which the decoded
+stream is authoritative: whether a video stream is playable, its playable
+duration, and its crop- and rotation-adjusted display dimensions. Codecs, pixel
+and colour formats, audio stream details, and Dolby Vision descriptors are not
+requested because the current Photos index does not store or consume them.
+Creation time, projection, Live Photo identifiers, and camera fields come only
+from ExifTool rather than being merged from competing readers. The two video
+passes run concurrently, and ExifTool remains best-effort for videos so an
+unusual metadata trailer cannot reject an otherwise playable clip.
 
 ExifTool's embedded-document scan (`-ee`) is limited to INSV files. It is
-required to reach Insta360's trailer, but applying it to every video also
-walks timed telemetry such as accelerometer and GPS samples. Unrequested tags
-are discarded during extraction so those streams are not retained in memory.
-FFprobe remains authoritative for video dimensions, duration, creation time,
-projection and live-photo identifiers, and an ExifTool failure does not reject
-playable media.
+required to reach Insta360's trailer, but applying it to every video also walks
+timed telemetry such as accelerometer and GPS samples. Only explicitly requested
+tags are emitted. ImageMagick remains the bounded media decoder for thumbnails
+and tint generation; it is not a metadata authority. The reader change requeues
+all existing media metadata once on upgrade so stored values and Live Photo
+relationships converge on the same precedence as newly indexed files.
 
 ## SubKinds & live pairs
 
@@ -199,7 +243,8 @@ equirectangular, so the panorama heuristic would also match it, and the tag must
 win:
 
 1. `spherical` — the spherical video box (v1 `Spherical`/`ProjectionType` XML
-   or v2 `sv3d`/`proj`) on videos; XMP `GPano:ProjectionType` on photos.
+   or v2 `sv3d`/`proj`) on videos, including Matroska's numeric equirectangular
+   projection type; XMP `GPano:ProjectionType` on photos.
 2. `live` — the still of an Apple live pair (below).
 3. `screenshot` — `Screenshot*`/`Screen Shot*` file names, a `UserComment`
    containing `screenshot`/`screen shot` (case-insensitive), or a PNG with no

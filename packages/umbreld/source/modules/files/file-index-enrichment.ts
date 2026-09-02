@@ -38,6 +38,7 @@ const ALL_THUMBNAIL_VARIANTS = Object.keys(THUMBNAIL_VARIANTS) as ThumbnailVaria
 const PHOTOS_ONLY_VARIANT_SET = new Set<ThumbnailVariant>(
 	PHOTOS_THUMBNAIL_VARIANTS.filter((variant) => variant !== FILES_THUMBNAIL_VARIANT),
 )
+const CAMERA_RAW_EXTENSIONS = new Set(['.arw', '.cr2', '.cr3', '.dng', '.nef', '.orf', '.raf', '.rw2'])
 // Every scan-enabled root is indexed, but proactive content I/O is limited to
 // personal Home and Trash roots. Other roots are enriched by Files only when browsed.
 const BACKGROUND_ENRICHMENT_ROOT_SQL = "index_roots.kind IN ('home', 'trash')"
@@ -2296,167 +2297,25 @@ export async function extractMediaMetadata(
 }
 
 async function extractPhotoMetadata(systemPath: string, sourceFileDescriptor?: number): Promise<MediaMetadata> {
-	const separator = '\u001f'
-	const properties = [
-		'%w',
-		'%h',
-		'%[orientation]',
-		'%[EXIF:DateTimeOriginal]',
-		'%[EXIF:OffsetTimeOriginal]',
-		'%[EXIF:DateTimeDigitized]',
-		'%[EXIF:OffsetTimeDigitized]',
-		'%[EXIF:DateTime]',
-		'%[EXIF:OffsetTime]',
-		'%[EXIF:Make]',
-		'%[EXIF:Model]',
-		'%[EXIF:LensModel]',
-		'%[EXIF:FocalLength]',
-		'%[EXIF:FNumber]',
-		'%[EXIF:ExposureTime]',
-		'%[EXIF:PhotographicSensitivity]',
-		'%[EXIF:ISOSpeedRatings]',
-		'%[EXIF:GPSLatitude]',
-		'%[EXIF:GPSLatitudeRef]',
-		'%[EXIF:GPSLongitude]',
-		'%[EXIF:GPSLongitudeRef]',
-		'%[EXIF:GPSAltitude]',
-		'%[EXIF:GPSAltitudeRef]',
-		'%[xmp:GPano:ProjectionType]',
-		'%[EXIF:ContentIdentifier]',
-		'%[MakerNotes:ContentIdentifier]',
-		'%[xmp:ContentIdentifier]',
-		'%[EXIF:UserComment]',
-		// ImageMagick's LibRaw-backed DNG coder exposes camera RAW metadata
-		// through dng:* properties rather than an EXIF profile.
-		'%[dng:create.date]',
-		'%[dng:make]',
-		'%[dng:camera.model.name]',
-		'%[dng:lens]',
-		'%[dng:focal.length]',
-		'%[dng:f.number]',
-		'%[dng:exposure.time]',
-		'%[dng:iso.setting]',
-		'%[dng:gps.latitude]',
-		'%[dng:gps.longitude]',
-		'%[dng:gps.altitude]',
-	]
-	const {stdout} = await runBoundedMediaProcess(
-		'identify',
-		[
-			'-quiet',
-			'-limit',
-			'memory',
-			String(THUMBNAIL_MEMORY_LIMIT_BYTES),
-			'-limit',
-			'map',
-			String(THUMBNAIL_MAP_LIMIT_BYTES),
-			'-limit',
-			'disk',
-			String(THUMBNAIL_DISK_LIMIT_BYTES),
-			'-limit',
-			'thread',
-			String(THUMBNAIL_THREAD_LIMIT),
-			'-limit',
-			'time',
-			String(Math.ceil(THUMBNAIL_GENERATION_TIMEOUT_MS / 1000)),
-			'-format',
-			properties.join(separator),
-			`${escapeImageMagickInputPath(imageMagickMediaProcessInput(systemPath, sourceFileDescriptor))}[0]`,
-		],
+	const {metadata, imageWidth, imageHeight, orientation, spherical} = await extractExifMetadata(
+		systemPath,
 		sourceFileDescriptor,
 	)
-	const [
-		widthValue,
-		heightValue,
-		orientation,
-		originalDate,
-		originalOffset,
-		digitizedDate,
-		digitizedOffset,
-		dateTime,
-		dateTimeOffset,
-		make,
-		model,
-		lens,
-		focalLength,
-		aperture,
-		exposure,
-		photographicSensitivity,
-		legacyIso,
-		latitude,
-		latitudeRef,
-		longitude,
-		longitudeRef,
-		altitude,
-		altitudeRef,
-		projection,
-		exifContentIdentifier,
-		makerContentIdentifier,
-		xmpContentIdentifier,
-		userCommentMarker,
-		dngDate,
-		dngMake,
-		dngModel,
-		dngLens,
-		dngFocalLength,
-		dngAperture,
-		dngExposure,
-		dngIso,
-		dngLatitude,
-		dngLongitude,
-		dngAltitude,
-	] = stdout.split(separator).map(cleanMetadataValue)
-	const liveIdentifier = exifContentIdentifier ?? makerContentIdentifier ?? xmpContentIdentifier
-	let width = positiveInteger(widthValue)
-	let height = positiveInteger(heightValue)
-	if (['LeftTop', 'RightTop', 'RightBottom', 'LeftBottom'].includes(orientation ?? ''))
-		[width, height] = [height, width]
-	const takenDate =
-		selectPhotoTakenDate([
-			[originalDate, originalOffset],
-			[digitizedDate, digitizedOffset],
-			[dateTime, dateTimeOffset],
-		]) ?? parseIsoPhotoDate(dngDate)
-	const cameraMake = make ?? dngMake
-	const cameraModel = model ?? dngModel
-	const lensModel = lens ?? meaningfulDngLens(dngLens)
-	const focalLengthValue = focalLength ?? meaningfulDngNumber(dngFocalLength?.replace(/\s*mm$/i, ''))
-	const apertureValue = aperture ?? meaningfulDngNumber(dngAperture)
-	const exposureValue = exposure ?? meaningfulDngNumber(dngExposure)
-	const location =
-		parseGps(latitude, latitudeRef, longitude, longitudeRef, altitude, altitudeRef) ??
-		parseDngGps(dngLatitude, dngLongitude, dngAltitude)
-	const iso =
-		optionalPositiveInteger(photographicSensitivity) ??
-		optionalPositiveInteger(legacyIso) ??
-		optionalPositiveInteger(dngIso)
-	const userComment = userCommentMarker
-		? await extractExifUserComment(systemPath, sourceFileDescriptor).catch(() => undefined)
-		: undefined
-	const subKind: PhotoSubKind | undefined =
-		projection?.toLowerCase() === 'equirectangular'
-			? 'spherical'
-			: width / Math.max(1, height) >= 2
-				? 'panorama'
-				: undefined
+	if (imageWidth === undefined || imageHeight === undefined) throw new Error('Photo has no valid image dimensions')
+	let width = imageWidth
+	let height = imageHeight
+	if ([5, 6, 7, 8].includes(orientation ?? 0)) [width, height] = [height, width]
+	const subKind: PhotoSubKind | undefined = spherical
+		? 'spherical'
+		: width / Math.max(1, height) >= 2
+			? 'panorama'
+			: undefined
 	return {
 		kind: 'photo',
 		...(subKind ? {subKind} : {}),
-		...(takenDate ? {takenAt: takenDate.takenAt} : {}),
-		...(takenDate?.offsetMinutes === undefined ? {} : {takenAtOffsetMinutes: takenDate.offsetMinutes}),
-		...(takenDate ? {createdAt: takenDate.takenAt} : {}),
 		width,
 		height,
-		...(cameraMake ? {cameraMake} : {}),
-		...(cameraModel ? {cameraModel} : {}),
-		...(lensModel ? {lens: lensModel} : {}),
-		...(focalLengthValue ? {focalLength: formatFocalLength(focalLengthValue)} : {}),
-		...(apertureValue ? {aperture: formatAperture(apertureValue)} : {}),
-		...(exposureValue ? {exposure: formatExposure(exposureValue)} : {}),
-		...(iso === undefined ? {} : {iso}),
-		...(location ?? {}),
-		...(userComment ? {userComment} : {}),
-		...(liveIdentifier ? {liveIdentifier} : {}),
+		...metadata,
 	}
 }
 
@@ -2465,27 +2324,26 @@ async function extractVideoMetadata(
 	sourceFileDescriptor?: number,
 	onOptionalMetadataFailure?: (error: unknown) => void,
 ): Promise<MediaMetadata> {
-	// FFprobe is authoritative for the media structure while ExifTool fills in
-	// camera facts from QuickTime keys and vendor metadata that FFmpeg does not
-	// decode. Keep the optional pass independent: an unusual vendor trailer must
-	// never make an otherwise playable video disappear from Photos.
-	const [{stdout}, cameraMetadata] = await Promise.all([
+	// FFprobe is authoritative only for the playable video stream. ExifTool owns
+	// semantic metadata for every media type, but remains optional for videos: an
+	// unusual vendor trailer must never make otherwise playable media disappear.
+	const [{stdout}, exifMetadata] = await Promise.all([
 		runBoundedMediaProcess(
 			'ffprobe',
 			[
 				'-v',
 				'error',
 				'-show_entries',
-				'stream=codec_type,width,height,duration:stream_tags=rotate,creation_time,projection,com.apple.quicktime.content.identifier:stream_side_data=rotation:format=duration:format_tags=creation_time,projection,com.apple.quicktime.content.identifier',
+				'stream=codec_type,width,height,duration:stream_tags=rotate:stream_side_data=rotation,crop_top,crop_bottom,crop_left,crop_right:format=duration',
 				'-of',
 				'json',
 				mediaProcessInput(systemPath, sourceFileDescriptor),
 			],
 			sourceFileDescriptor,
 		),
-		extractVideoCameraMetadata(systemPath, sourceFileDescriptor).catch((error) => {
+		extractExifMetadata(systemPath, sourceFileDescriptor).catch((error) => {
 			onOptionalMetadataFailure?.(error)
-			return {}
+			return {metadata: {}, spherical: false}
 		}),
 	])
 	const probe = JSON.parse(stdout) as {
@@ -2495,52 +2353,83 @@ async function extractVideoMetadata(
 			height?: number
 			duration?: string
 			tags?: Record<string, string>
-			side_data_list?: Array<{rotation?: number | string}>
+			side_data_list?: Array<{
+				rotation?: number | string
+				crop_top?: number | string
+				crop_bottom?: number | string
+				crop_left?: number | string
+				crop_right?: number | string
+			}>
 		}>
-		format?: {duration?: string; tags?: Record<string, string>}
+		format?: {duration?: string}
 	}
 	const stream = probe.streams?.find(({codec_type}) => codec_type === 'video')
 	if (!stream?.width || !stream.height) throw new Error('Video has no decodable video stream')
 	const sideDataRotation = stream.side_data_list?.map(({rotation}) => Number(rotation)).find(Number.isFinite)
 	const rotation = sideDataRotation ?? Number(stream.tags?.rotate ?? 0)
+	const cropLeft = sideDataValue(stream.side_data_list, 'crop_left') ?? 0
+	const cropRight = sideDataValue(stream.side_data_list, 'crop_right') ?? 0
+	const cropTop = sideDataValue(stream.side_data_list, 'crop_top') ?? 0
+	const cropBottom = sideDataValue(stream.side_data_list, 'crop_bottom') ?? 0
+	const croppedWidth = stream.width - cropLeft - cropRight
+	const croppedHeight = stream.height - cropTop - cropBottom
+	const displayWidth = croppedWidth > 0 ? croppedWidth : stream.width
+	const displayHeight = croppedHeight > 0 ? croppedHeight : stream.height
 	const rotated = Math.abs(rotation) % 180 === 90
-	const width = rotated ? stream.height : stream.width
-	const height = rotated ? stream.width : stream.height
+	const width = rotated ? displayHeight : displayWidth
+	const height = rotated ? displayWidth : displayHeight
 	const durationSeconds = [stream.duration, probe.format?.duration].map(Number).find(Number.isFinite)
-	const creationTime = stream.tags?.creation_time ?? probe.format?.tags?.creation_time
-	const parsedCreationTime = creationTime ? Date.parse(creationTime) : Number.NaN
-	const projection = stream.tags?.projection ?? probe.format?.tags?.projection
-	const liveIdentifier =
-		stream.tags?.['com.apple.quicktime.content.identifier'] ??
-		probe.format?.tags?.['com.apple.quicktime.content.identifier']
 	return {
 		kind: 'video',
-		...(projection?.toLowerCase().includes('equirect') ? {subKind: 'spherical' as const} : {}),
-		...(Number.isFinite(parsedCreationTime) ? {takenAt: parsedCreationTime, createdAt: parsedCreationTime} : {}),
+		...(exifMetadata.spherical ? {subKind: 'spherical' as const} : {}),
 		width,
 		height,
 		...(durationSeconds === undefined ? {} : {durationMs: Math.max(0, Math.round(durationSeconds * 1000))}),
-		...(liveIdentifier ? {liveIdentifier} : {}),
-		...cameraMetadata,
+		...exifMetadata.metadata,
 	}
 }
 
-async function extractVideoCameraMetadata(
-	systemPath: string,
-	sourceFileDescriptor?: number,
-): Promise<Partial<MediaMetadata>> {
-	const extractEmbedded = nodePath.extname(systemPath).toLowerCase() === '.insv'
+type ExtractedExifMetadata = {
+	metadata: Omit<Partial<MediaMetadata>, 'kind' | 'subKind' | 'width' | 'height' | 'durationMs'>
+	imageWidth?: number
+	imageHeight?: number
+	orientation?: number
+	spherical: boolean
+}
+
+async function extractExifMetadata(systemPath: string, sourceFileDescriptor?: number): Promise<ExtractedExifMetadata> {
+	const extension = nodePath.extname(systemPath).toLowerCase()
+	const extractEmbedded = extension === '.insv'
+	const cameraRaw = CAMERA_RAW_EXTENSIONS.has(extension)
+	// A normal QuickTime scan must decode the Apple VideoKeys table before leaf
+	// requests can select from it. Camera RAW also needs its full dependency scan
+	// so Composite:ImageSize resolves the primary image rather than an IFD0 preview.
+	// IgnoreTags=all remains useful for ordinary photos and the much larger INSV
+	// embedded-document scan.
+	const ignoreUnrequestedTags = (photoKind(systemPath) === 'photo' && !cameraRaw) || extractEmbedded
 	const {stdout} = await runBoundedMediaProcess(
 		'exiftool',
 		[
 			'-j',
 			'-n',
 			'-G1:2',
+			'-a',
 			'-api',
 			'LargeFileSupport=1',
-			'-api',
-			'IgnoreTags=all',
+			...(ignoreUnrequestedTags ? ['-api', 'IgnoreTags=all'] : []),
 			...(extractEmbedded ? ['-ee'] : []),
+			'-ImageWidth',
+			'-ImageHeight',
+			'-ImageSize',
+			'-Orientation',
+			'-DateTimeOriginal',
+			'-OffsetTimeOriginal',
+			'-CreationDate',
+			'-CreateDate',
+			'-OffsetTimeDigitized',
+			'-MediaCreateDate',
+			'-ModifyDate',
+			'-OffsetTime',
 			'-Make',
 			'-Model',
 			'-AndroidMake',
@@ -2548,31 +2437,93 @@ async function extractVideoCameraMetadata(
 			'-Lens',
 			'-LensModel',
 			'-FocalLength',
+			'-FocalLengthIn35mmFormat',
 			'-FNumber',
+			'-CameraLensIrisfnumber',
 			'-ExposureTime',
 			'-ISO',
+			'-PhotographicSensitivity',
+			'-GPSLatitude',
+			'-GPSLongitude',
+			'-GPSAltitude',
+			'-GPSLatitudeRef',
+			'-GPSLongitudeRef',
+			'-GPSAltitudeRef',
+			'-GPSCoordinates',
+			'-ProjectionType',
+			'-Spherical',
+			'-ContentIdentifier',
+			'-UserComment',
 			mediaProcessInput(systemPath, sourceFileDescriptor),
 		],
 		sourceFileDescriptor,
 	)
 	const parsed = JSON.parse(stdout) as unknown
-	if (!Array.isArray(parsed) || !isMetadataRecord(parsed[0])) return {}
+	if (!Array.isArray(parsed) || !isMetadataRecord(parsed[0])) return {metadata: {}, spherical: false}
 	const tags = parsed[0]
-	const cameraMake = videoCameraTag(tags, ['Make', 'AndroidMake'])
-	const cameraModel = videoCameraTag(tags, ['Model', 'AndroidModel'])
-	const lens = videoCameraTag(tags, ['LensModel', 'Lens'])
-	const focalLength = meaningfulDngNumber(videoCameraTag(tags, ['FocalLength']))
-	const aperture = meaningfulDngNumber(videoCameraTag(tags, ['FNumber']))
-	const exposure = meaningfulDngNumber(videoCameraTag(tags, ['ExposureTime']))
-	const iso = optionalPositiveInteger(videoCameraTag(tags, ['ISO']))
+	const takenDate = selectTakenDate([
+		[metadataTag(tags, ['DateTimeOriginal']), metadataTag(tags, ['OffsetTimeOriginal'])],
+		[metadataTag(tags, ['CreationDate']), undefined],
+		[metadataTag(tags, ['CreateDate']), metadataTag(tags, ['OffsetTimeDigitized'])],
+		[metadataTag(tags, ['MediaCreateDate']), undefined],
+		[metadataTag(tags, ['ModifyDate']), metadataTag(tags, ['OffsetTime'])],
+	])
+	const cameraMake = cameraTag(tags, ['Make', 'AndroidMake'])
+	const cameraModel = cameraTag(tags, ['Model', 'AndroidModel'])
+	const lens = meaningfulLens(cameraTag(tags, ['LensModel', 'Lens'], true))
+	const focalLength =
+		meaningfulNumber(cameraTag(tags, ['FocalLength'], true)) ??
+		meaningfulNumber(metadataTag(tags, ['FocalLengthIn35mmFormat']))
+	const aperture =
+		meaningfulNumber(cameraTag(tags, ['FNumber'], true)) ??
+		meaningfulNumber(normalizeIrisFNumber(metadataTag(tags, ['CameraLensIrisfnumber'])))
+	const exposure = meaningfulNumber(cameraTag(tags, ['ExposureTime'], true))
+	const iso = optionalPositiveInteger(metadataTag(tags, ['PhotographicSensitivity', 'ISO'], ['Camera', 'Image']))
+	const coordinates = parseGpsCoordinates(metadataTag(tags, ['GPSCoordinates']))
+	const latitude = numericMetadataTag(tags, ['GPSLatitude'], ['Composite']) ?? coordinates?.latitude
+	const longitude = numericMetadataTag(tags, ['GPSLongitude'], ['Composite']) ?? coordinates?.longitude
+	// QuickTime's GPSAltitude composite is absolute even when GPSCoordinates
+	// carries a signed below-sea-level value, so keep the tuple authoritative.
+	const altitude = coordinates?.altitude ?? numericMetadataTag(tags, ['GPSAltitude'], ['Composite'])
+	const hasLocation =
+		latitude !== undefined &&
+		longitude !== undefined &&
+		Math.abs(latitude) <= 90 &&
+		Math.abs(longitude) <= 180 &&
+		(latitude !== 0 || longitude !== 0)
+	const projection = metadataTag(tags, ['ProjectionType'])?.toLowerCase()
+	const sphericalValue = metadataTag(tags, ['Spherical'])?.toLowerCase()
+	const spherical =
+		projection?.includes('equirect') === true ||
+		matroskaEquirectangularProjection(tags) ||
+		['1', 'true', 'yes', 'spherical'].includes(sphericalValue ?? '')
+	const userComment = cleanUserComment(metadataTag(tags, ['UserComment']))
+	const liveIdentifier = metadataTag(tags, ['ContentIdentifier'], ['Image', 'Other'])
+	const imageSize = parseImageSize(metadataTag(tags, ['ImageSize'], ['Image'], ['Composite']))
 	return {
-		...(cameraMake ? {cameraMake} : {}),
-		...(cameraModel ? {cameraModel} : {}),
-		...(lens ? {lens} : {}),
-		...(focalLength ? {focalLength: formatFocalLength(focalLength)} : {}),
-		...(aperture ? {aperture: formatAperture(aperture)} : {}),
-		...(exposure ? {exposure: formatExposure(exposure)} : {}),
-		...(iso === undefined ? {} : {iso}),
+		metadata: {
+			...(takenDate ? {takenAt: takenDate.takenAt, createdAt: takenDate.takenAt} : {}),
+			...(takenDate?.offsetMinutes === undefined ? {} : {takenAtOffsetMinutes: takenDate.offsetMinutes}),
+			...(cameraMake ? {cameraMake} : {}),
+			...(cameraModel ? {cameraModel} : {}),
+			...(lens ? {lens} : {}),
+			...(focalLength ? {focalLength: formatFocalLength(focalLength)} : {}),
+			...(aperture ? {aperture: formatAperture(aperture)} : {}),
+			...(exposure ? {exposure: formatExposure(exposure)} : {}),
+			...(iso === undefined ? {} : {iso}),
+			...(hasLocation ? {latitude, longitude} : {}),
+			...(!hasLocation || altitude === undefined ? {} : {altitude}),
+			...(userComment ? {userComment} : {}),
+			...(liveIdentifier ? {liveIdentifier} : {}),
+		},
+		imageWidth:
+			imageSize?.width ??
+			optionalPositiveInteger(metadataTag(tags, ['ImageWidth'], undefined, ['File', 'IFD0', 'ExifIFD'])),
+		imageHeight:
+			imageSize?.height ??
+			optionalPositiveInteger(metadataTag(tags, ['ImageHeight'], undefined, ['File', 'IFD0', 'ExifIFD'])),
+		orientation: optionalPositiveInteger(metadataTag(tags, ['Orientation'])),
+		spherical,
 	}
 }
 
@@ -2580,15 +2531,25 @@ function isMetadataRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function videoCameraTag(tags: Record<string, unknown>, names: string[]) {
+function metadataTag(
+	tags: Record<string, unknown>,
+	names: string[],
+	allowedFamily2?: string[],
+	preferredFamily1?: string[],
+) {
 	for (const name of names) {
-		for (const [qualifiedName, value] of Object.entries(tags)) {
-			const [family1, family2, tagName] = qualifiedName.split(':')
+		const entries = Object.entries(tags).filter(([qualifiedName]) => qualifiedName.split(':').at(-1) === name)
+		if (preferredFamily1) {
+			const rank = (qualifiedName: string) => {
+				const index = preferredFamily1.indexOf(qualifiedName.split(':')[0] ?? '')
+				return index < 0 ? preferredFamily1.length : index
+			}
+			entries.sort(([left], [right]) => rank(left) - rank(right))
+		}
+		for (const [qualifiedName, value] of entries) {
+			const [, family2, tagName] = qualifiedName.split(':')
 			if (tagName !== name) continue
-			const knownQuickTimeCameraTag =
-				(family1 === 'Keys' && ['Make', 'Model', 'AndroidMake', 'AndroidModel'].includes(tagName)) ||
-				(['ItemList', 'UserData'].includes(family1 ?? '') && ['Make', 'Model'].includes(tagName))
-			if (family2 !== 'Camera' && !knownQuickTimeCameraTag) continue
+			if (allowedFamily2 && !allowedFamily2.includes(family2 ?? '')) continue
 			if (typeof value !== 'string' && typeof value !== 'number') continue
 			const cleaned = cleanMetadataValue(String(value))
 			if (cleaned) return cleaned
@@ -2596,14 +2557,45 @@ function videoCameraTag(tags: Record<string, unknown>, names: string[]) {
 	}
 }
 
+function cameraTag(tags: Record<string, unknown>, names: string[], allowImageGroup = false) {
+	for (const name of names) {
+		for (const [qualifiedName, value] of Object.entries(tags)) {
+			const [family1, family2, tagName] = qualifiedName.split(':')
+			if (tagName !== name) continue
+			const knownQuickTimeCameraTag =
+				(family1 === 'Keys' && ['Make', 'Model', 'AndroidMake', 'AndroidModel'].includes(tagName)) ||
+				(['ItemList', 'UserData'].includes(family1 ?? '') && ['Make', 'Model'].includes(tagName))
+			if (family2 !== 'Camera' && !(allowImageGroup && family2 === 'Image') && !knownQuickTimeCameraTag) continue
+			if (typeof value !== 'string' && typeof value !== 'number') continue
+			const cleaned = cleanMetadataValue(String(value))
+			if (cleaned) return cleaned
+		}
+	}
+}
+
+function numericMetadataTag(tags: Record<string, unknown>, names: string[], preferredFamily1?: string[]) {
+	const value = Number(metadataTag(tags, names, undefined, preferredFamily1))
+	return Number.isFinite(value) ? value : undefined
+}
+
+function parseImageSize(value: string | undefined) {
+	const match = /^(\d+)\s*(?:x|\s)\s*(\d+)$/i.exec(value ?? '')
+	if (!match) return
+	const width = optionalPositiveInteger(match[1])
+	const height = optionalPositiveInteger(match[2])
+	return width === undefined || height === undefined ? undefined : {width, height}
+}
+
+function matroskaEquirectangularProjection(tags: Record<string, unknown>) {
+	return Object.entries(tags).some(([qualifiedName, value]) => {
+		const [family1, , tagName] = qualifiedName.split(':')
+		return family1 === 'Matroska' && tagName === 'ProjectionType' && Number(value) === 1
+	})
+}
+
 function cleanMetadataValue(value: string) {
 	const cleaned = value.trim()
 	return !cleaned || cleaned === 'undefined' ? undefined : cleaned
-}
-
-function positiveInteger(value: string | number | undefined) {
-	const parsed = Math.round(Number(value))
-	return Number.isFinite(parsed) && parsed > 0 ? parsed : 1
 }
 
 function optionalPositiveInteger(value: string | number | undefined) {
@@ -2614,40 +2606,19 @@ function optionalPositiveInteger(value: string | number | undefined) {
 function parseOffsetMinutes(value: string | undefined) {
 	const match = /^([+-])(\d{2}):(\d{2})$/.exec(value ?? '')
 	if (!match) return
-	const minutes = Number(match[2]) * 60 + Number(match[3])
+	const hours = Number(match[2])
+	const minutePart = Number(match[3])
+	if (hours > 23 || minutePart > 59) return
+	const minutes = hours * 60 + minutePart
 	return match[1] === '-' ? -minutes : minutes
 }
 
 function parseExifDate(value: string | undefined, offset: string | undefined) {
-	const match = /^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/.exec(value ?? '')
+	const match = /^(\d{4})[:-](\d{2})[:-](\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$/.exec(
+		value ?? '',
+	)
 	if (!match) return
 	const [year, month, day, hour, minute, second] = match.slice(1).map(Number)
-	const localTime = Date.UTC(year!, month! - 1, day, hour, minute, second)
-	const localDate = new Date(localTime)
-	if (
-		localDate.getUTCFullYear() !== year ||
-		localDate.getUTCMonth() !== month! - 1 ||
-		localDate.getUTCDate() !== day ||
-		localDate.getUTCHours() !== hour ||
-		localDate.getUTCMinutes() !== minute ||
-		localDate.getUTCSeconds() !== second
-	)
-		return
-	const offsetMinutes = parseOffsetMinutes(offset)
-	return {takenAt: localTime - (offsetMinutes ?? 0) * 60_000, offsetMinutes}
-}
-
-function selectPhotoTakenDate(candidates: Array<[string | undefined, string | undefined]>) {
-	for (const [date, offset] of candidates) {
-		const parsed = parseExifDate(date, offset)
-		if (parsed) return parsed
-	}
-}
-
-function parseIsoPhotoDate(value: string | undefined) {
-	const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})?$/.exec(value ?? '')
-	if (!match) return
-	const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number)
 	const milliseconds = match[7] ? Math.floor(Number(`0.${match[7]}`) * 1000) : 0
 	const localTime = Date.UTC(year!, month! - 1, day, hour, minute, second, milliseconds)
 	const localDate = new Date(localTime)
@@ -2657,14 +2628,20 @@ function parseIsoPhotoDate(value: string | undefined) {
 		localDate.getUTCDate() !== day ||
 		localDate.getUTCHours() !== hour ||
 		localDate.getUTCMinutes() !== minute ||
-		localDate.getUTCSeconds() !== second
+		localDate.getUTCSeconds() !== second ||
+		localDate.getUTCMilliseconds() !== milliseconds
 	)
 		return
-	const zone = match[8]
-	const offsetMinutes = zone?.toUpperCase() === 'Z' ? 0 : parseOffsetMinutes(zone)
-	return {
-		takenAt: localTime - (offsetMinutes ?? 0) * 60_000,
-		offsetMinutes,
+	const inlineOffset = match[8]
+	const offsetMinutes =
+		parseOffsetMinutes(offset) ?? (inlineOffset?.toUpperCase() === 'Z' ? 0 : parseOffsetMinutes(inlineOffset))
+	return {takenAt: localTime - (offsetMinutes ?? 0) * 60_000, offsetMinutes}
+}
+
+function selectTakenDate(candidates: Array<[string | undefined, string | undefined]>) {
+	for (const [date, offset] of candidates) {
+		const parsed = parseExifDate(date, offset)
+		if (parsed) return parsed
 	}
 }
 
@@ -2675,200 +2652,56 @@ function parseRational(value: string | undefined) {
 	return Number.isFinite(parsed) ? parsed : undefined
 }
 
-function parseDms(value: string | undefined) {
-	if (!value) return
-	const parts = value.split(/,\s*/).map(parseRational)
-	if (parts.some((part) => part === undefined)) return
-	return parts[0]! + parts[1]! / 60 + parts[2]! / 3600
-}
-
-function parseGps(
-	latitudeValue: string | undefined,
-	latitudeRef: string | undefined,
-	longitudeValue: string | undefined,
-	longitudeRef: string | undefined,
-	altitudeValue: string | undefined,
-	altitudeRef: string | undefined,
-) {
-	const latitude = parseDms(latitudeValue)
-	const longitude = parseDms(longitudeValue)
-	if (latitude === undefined || longitude === undefined) return
-	const altitude = parseGpsAltitude(altitudeValue, altitudeRef)
-	return {
-		latitude: latitudeRef?.toUpperCase() === 'S' ? -latitude : latitude,
-		longitude: longitudeRef?.toUpperCase() === 'W' ? -longitude : longitude,
-		...(altitude === undefined ? {} : {altitude}),
-	}
-}
-
-function parseGpsAltitude(value: string | undefined, reference: string | undefined) {
-	const altitude = parseRational(value)
-	if (altitude === undefined) return
-	const numericReference = parseRational(reference)
-	if (numericReference === 1 || /below/i.test(reference ?? '')) return -Math.abs(altitude)
-	if (numericReference === 0 || /above/i.test(reference ?? '')) return Math.abs(altitude)
-	return altitude
-}
-
-function parseDngCoordinate(value: string | undefined, allowedReferences: string, maximum: number) {
-	const match = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s+deg\s+(\d+(?:\.\d+)?)'\s+(\d+(?:\.\d+)?)"\s*([NSEW])$/i.exec(
-		value ?? '',
-	)
-	if (!match || !allowedReferences.includes(match[4].toUpperCase())) return
-	const minutes = Number(match[2])
-	const seconds = Number(match[3])
-	const coordinate = Math.abs(Number(match[1])) + minutes / 60 + seconds / 3600
-	if (!Number.isFinite(coordinate) || minutes >= 60 || seconds >= 60 || coordinate > maximum) return
-	return ['S', 'W'].includes(match[4].toUpperCase()) ? -coordinate : coordinate
-}
-
-function parseDngGps(
-	latitudeValue: string | undefined,
-	longitudeValue: string | undefined,
-	altitudeValue: string | undefined,
-) {
-	const latitude = parseDngCoordinate(latitudeValue, 'NS', 90)
-	const longitude = parseDngCoordinate(longitudeValue, 'EW', 180)
-	if (latitude === undefined || longitude === undefined || (latitude === 0 && longitude === 0)) return
-	const altitudeMatch = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))\s*m$/i.exec(altitudeValue ?? '')
-	const altitude = altitudeMatch ? Number(altitudeMatch[1]) : undefined
-	return {
-		latitude,
-		longitude,
-		...(altitude === undefined || !Number.isFinite(altitude) ? {} : {altitude}),
-	}
-}
-
-function meaningfulDngLens(value: string | undefined) {
+function meaningfulLens(value: string | undefined) {
 	if (!value || /^0(?:\.0+)?-0(?:\.0+)?mm\s+f\/0(?:\.0+)?-0(?:\.0+)?$/i.test(value)) return
 	return value
 }
 
-function meaningfulDngNumber(value: string | undefined) {
+function meaningfulNumber(value: string | undefined) {
 	const parsed = parseRational(value)
 	return parsed !== undefined && parsed > 0 ? value : undefined
 }
 
-async function extractExifUserComment(systemPath: string, sourceFileDescriptor?: number) {
-	const stdout = await runBoundedMediaProcessBuffer(
-		'convert',
-		[
-			'-quiet',
-			'-limit',
-			'memory',
-			String(THUMBNAIL_MEMORY_LIMIT_BYTES),
-			'-limit',
-			'map',
-			String(THUMBNAIL_MAP_LIMIT_BYTES),
-			'-limit',
-			'disk',
-			String(THUMBNAIL_DISK_LIMIT_BYTES),
-			'-limit',
-			'thread',
-			String(THUMBNAIL_THREAD_LIMIT),
-			'-limit',
-			'time',
-			String(Math.ceil(THUMBNAIL_GENERATION_TIMEOUT_MS / 1000)),
-			`${escapeImageMagickInputPath(imageMagickMediaProcessInput(systemPath, sourceFileDescriptor))}[0]`,
-			'exif:-',
-		],
-		sourceFileDescriptor,
-	)
-	return decodeExifUserComment(stdout)
+function normalizeIrisFNumber(value: string | undefined) {
+	return value?.replace(/^f\/?\s*/i, '')
 }
 
-export function decodeExifUserComment(profile: Buffer) {
-	const exifHeader = Buffer.from('Exif\0\0', 'binary')
-	const header = profile.indexOf(exifHeader)
-	if (header < 0) return
-	const tiffStart = header + exifHeader.length
-	if (tiffStart + 8 > profile.length) return
-	const byteOrder = profile.subarray(tiffStart, tiffStart + 2).toString('ascii')
-	if (byteOrder !== 'II' && byteOrder !== 'MM') return
-	const littleEndian = byteOrder === 'II'
-	const readUInt16 = (offset: number) =>
-		littleEndian ? profile.readUInt16LE(tiffStart + offset) : profile.readUInt16BE(tiffStart + offset)
-	const readUInt32 = (offset: number) =>
-		littleEndian ? profile.readUInt32LE(tiffStart + offset) : profile.readUInt32BE(tiffStart + offset)
-	const inBounds = (offset: number, length: number) =>
-		Number.isSafeInteger(offset) && offset >= 0 && length >= 0 && tiffStart + offset + length <= profile.length
-	if (!inBounds(0, 8) || readUInt16(2) !== 42) return
-
-	const queue = [readUInt32(4)]
-	const visited = new Set<number>()
-	while (queue.length > 0 && visited.size < 16) {
-		const ifdOffset = queue.shift()!
-		if (visited.has(ifdOffset) || !inBounds(ifdOffset, 2)) continue
-		visited.add(ifdOffset)
-		const count = readUInt16(ifdOffset)
-		if (count > 4096 || !inBounds(ifdOffset + 2, count * 12 + 4)) continue
-		for (let index = 0; index < count; index++) {
-			const entryOffset = ifdOffset + 2 + index * 12
-			const tag = readUInt16(entryOffset)
-			const type = readUInt16(entryOffset + 2)
-			const valueCount = readUInt32(entryOffset + 4)
-			const bytesPerValue = new Map([
-				[1, 1],
-				[2, 1],
-				[3, 2],
-				[4, 4],
-				[5, 8],
-				[7, 1],
-				[9, 4],
-				[10, 8],
-			]).get(type)
-			if (!bytesPerValue || valueCount > profile.length) continue
-			const valueLength = valueCount * bytesPerValue
-			const valueOffset = valueLength <= 4 ? entryOffset + 8 : readUInt32(entryOffset + 8)
-			if (!inBounds(valueOffset, valueLength)) continue
-			if (tag === 0x9286 && type === 7) {
-				return decodeExifUserCommentValue(
-					profile.subarray(tiffStart + valueOffset, tiffStart + valueOffset + valueLength),
-					littleEndian,
-				)
-			}
-			if (tag === 0x8769 && (type === 3 || type === 4) && valueCount > 0) {
-				queue.push(type === 3 ? readUInt16(valueOffset) : readUInt32(valueOffset))
-			}
-		}
-		const nextOffset = readUInt32(ifdOffset + 2 + count * 12)
-		if (nextOffset > 0) queue.push(nextOffset)
+function parseGpsCoordinates(value: string | undefined) {
+	const parts = value
+		?.trim()
+		.split(/[,\s]+/)
+		.map(Number)
+	if (!parts || (parts.length !== 2 && parts.length !== 3) || parts.some((part) => !Number.isFinite(part))) return
+	return {
+		latitude: parts[0]!,
+		longitude: parts[1]!,
+		...(parts[2] === undefined ? {} : {altitude: parts[2]}),
 	}
 }
 
-function decodeExifUserCommentValue(value: Buffer, littleEndian: boolean) {
-	if (value.length < 8) return
-	const marker = value.subarray(0, 8).toString('binary')
-	const payload = value.subarray(8)
-	let decoded: string
-	try {
-		if (marker === 'ASCII\0\0\0') {
-			if (payload.some((byte) => byte > 0x7f)) return
-			decoded = payload.toString('ascii')
-		} else if (marker === 'UNICODE\0') {
-			let encoding: 'utf-16le' | 'utf-16be' = littleEndian ? 'utf-16le' : 'utf-16be'
-			let text = payload
-			if (payload[0] === 0xff && payload[1] === 0xfe) {
-				encoding = 'utf-16le'
-				text = payload.subarray(2)
-			} else if (payload[0] === 0xfe && payload[1] === 0xff) {
-				encoding = 'utf-16be'
-				text = payload.subarray(2)
-			}
-			while (text.length >= 2 && text.at(-1) === 0 && text.at(-2) === 0) text = text.subarray(0, -2)
-			if (text.length % 2 !== 0) return
-			decoded = new TextDecoder(encoding, {fatal: true}).decode(text)
-		} else {
-			// JIS and the all-zero marker do not identify a reliable encoding.
-			return
-		}
-	} catch {
-		return
-	}
-	const normalized = decoded.replace(/\0+$/u, '').normalize('NFC').trim()
+function cleanUserComment(value: string | undefined) {
+	const normalized = value?.replace(/\0+$/u, '').normalize('NFC').trim()
 	if (!normalized || normalized.includes('\0') || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(normalized))
 		return
 	return normalized
+}
+
+function sideDataValue(
+	sideData:
+		| Array<{
+				rotation?: number | string
+				crop_top?: number | string
+				crop_bottom?: number | string
+				crop_left?: number | string
+				crop_right?: number | string
+		  }>
+		| undefined,
+	name: 'crop_top' | 'crop_bottom' | 'crop_left' | 'crop_right',
+) {
+	const value = sideData
+		?.map((entry) => Number(entry[name]))
+		.find((candidate) => Number.isFinite(candidate) && candidate >= 0)
+	return value === undefined ? undefined : Math.round(value)
 }
 
 function formatFocalLength(value: string) {
@@ -3012,24 +2845,6 @@ async function runBoundedMediaProcess(command: string, arguments_: string[], sou
 	})
 	try {
 		return await process
-	} catch (error) {
-		if ((error as {timedOut?: boolean}).timedOut && process.pid !== undefined) killProcessGroup(process.pid)
-		throw error
-	}
-}
-
-async function runBoundedMediaProcessBuffer(command: string, arguments_: string[], sourceFileDescriptor?: number) {
-	const process = execa(command, arguments_, {
-		detached: true,
-		timeout: THUMBNAIL_GENERATION_TIMEOUT_MS,
-		killSignal: 'SIGKILL',
-		encoding: null,
-		maxBuffer: 1024 * 1024,
-		...(sourceFileDescriptor === undefined ? {} : {stdio: ['ignore', 'pipe', 'pipe', sourceFileDescriptor]}),
-	})
-	try {
-		const {stdout} = await process
-		return Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout)
 	} catch (error) {
 		if ((error as {timedOut?: boolean}).timedOut && process.pid !== undefined) killProcessGroup(process.pid)
 		throw error

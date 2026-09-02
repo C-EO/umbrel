@@ -450,6 +450,16 @@ export const fileIndexMigrations: FileIndexMigration[] = [
 			`)
 		},
 	},
+	{
+		version: 16,
+		up: (database) => {
+			database.exec(`
+				UPDATE media_metadata SET
+					state = 'pending', failure_count = 0, retry_at = NULL,
+					last_error = NULL, updated_at = 0;
+			`)
+		},
+	},
 ]
 
 export const FILE_INDEX_SCHEMA_VERSION = fileIndexMigrations.at(-1)?.version ?? 0
