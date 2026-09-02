@@ -157,6 +157,7 @@ describe('Machines cloud-init seed', () => {
 
 		expect(script).toContain('waydroid init -s VANILLA')
 		expect(script).toContain('cage -s -- waydroid show-full-ui')
+		expect(script).toContain('export WLR_NO_HARDWARE_CURSORS=1')
 		expect(script).toContain('ro.hardware.egl=swiftshader')
 		expect(script).toContain('vt = 7')
 		expect(script).toContain('user = "$android_user"')

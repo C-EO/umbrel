@@ -271,6 +271,10 @@ fi
 cat > /usr/local/bin/umbrel-waydroid-session <<'EOF'
 #!/bin/sh
 set -eu
+# virglrenderer before !1611 flips GL-rendered hardware cursors when QEMU reads
+# them back, so the console shows an upside-down arrow whose tip sits below the
+# real pointer. Composite the cursor in the guest instead.
+export WLR_NO_HARDWARE_CURSORS=1
 if ! find /dev/dri -maxdepth 1 -name 'renderD*' -print -quit 2>/dev/null | grep -q .; then
 	export WLR_RENDERER=pixman
 fi
