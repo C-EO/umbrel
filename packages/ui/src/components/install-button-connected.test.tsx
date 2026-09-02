@@ -30,7 +30,7 @@ const fixtures = vi.hoisted(() => ({
 	launch: vi.fn(),
 	update: vi.fn(),
 	appInstallHook: vi.fn(() => ({state: 'ready', progress: undefined, install: vi.fn()})),
-	dependenciesDialog: vi.fn(),
+	installReviewDialog: vi.fn(),
 	osUpdateDialog: vi.fn(),
 }))
 
@@ -51,9 +51,9 @@ vi.mock('@/providers/apps', () => ({
 vi.mock('@/providers/available-apps', () => ({
 	useAllAvailableApps: () => ({apps: [fixtures.app], ambiguousAppIds: new Set(), isLoading: false}),
 }))
-vi.mock('@/modules/app-store/select-dependencies-dialog', () => ({
-	SelectDependenciesDialog: (props: unknown) => {
-		fixtures.dependenciesDialog(props)
+vi.mock('@/modules/app-store/install-review-dialog', () => ({
+	InstallReviewDialog: (props: unknown) => {
+		fixtures.installReviewDialog(props)
 		return null
 	},
 }))
@@ -66,7 +66,14 @@ vi.mock('@/modules/app-store/os-update-required', () => ({
 vi.mock('@/trpc/trpc', () => ({
 	installedStates: ['ready', 'running', 'stopped'],
 	progressBarStates: ['installing', 'updating'],
-	trpcReact: {user: {get: {useQuery: () => ({data: {role: 'owner'}})}}},
+	trpcReact: {
+		user: {get: {useQuery: () => ({data: {role: 'owner'}})}},
+		apps: {
+			installReview: {
+				useQuery: () => ({data: {requiredFolders: [], gpuAccess: false}, refetch: vi.fn()}),
+			},
+		},
+	},
 }))
 ;(globalThis as {IS_REACT_ACT_ENVIRONMENT?: boolean}).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -127,7 +134,7 @@ describe('InstallButtonConnected', () => {
 		)
 
 		expect(fixtures.appInstallHook).toHaveBeenCalledTimes(1)
-		expect(fixtures.dependenciesDialog).toHaveBeenCalledTimes(1)
+		expect(fixtures.installReviewDialog).toHaveBeenCalledTimes(1)
 		expect(fixtures.osUpdateDialog).toHaveBeenCalledTimes(1)
 		expect(container.querySelector('[data-testid="expanded"] button')).not.toBeNull()
 		expect(container.querySelector('[data-testid="compact"] button')).not.toBeNull()

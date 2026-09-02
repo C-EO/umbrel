@@ -45,6 +45,16 @@ describe('settings catalog search', () => {
 		expect(getSettingsCommandItems(memberCatalog).map(({id}) => id)).not.toContain('mcp')
 	})
 
+	it('places app settings in the owner Storage section and command search', () => {
+		const ownerCatalog = catalog()
+		expect(getSettingsPage(ownerCatalog, {filter: 'storage'}).items.map(({id}) => id)).toContain('apps')
+		expect(getSettingsCommandItems(ownerCatalog).map(({id}) => id)).toContain('apps')
+
+		const memberCatalog = createSettingsCatalog(t, {deviceName: 'Umbrel Home', isMember: true})
+		expect(getSettingsPage(memberCatalog).items.map(({id}) => id)).not.toContain('apps')
+		expect(getSettingsCommandItems(memberCatalog).map(({id}) => id)).not.toContain('apps')
+	})
+
 	it('matches accentless queries against translated copy', () => {
 		const localizedT = ((key: string) => (key === 'network.hostname' ? 'Nom d’hôte sécurisé' : key)) as TFunction
 		const localizedCatalog = catalog(localizedT)

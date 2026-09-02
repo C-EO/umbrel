@@ -4,9 +4,11 @@ import {useTranslation} from 'react-i18next'
 
 import {Progress} from '@/components/ui/progress'
 import {EditableName} from '@/features/files/components/listing/file-item/editable-name'
+import {FolderAppStack} from '@/features/files/components/listing/file-item/folder-app-stack'
 import {TruncatedFilename} from '@/features/files/components/listing/file-item/truncated-filename'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
 import {FILE_TYPE_MAP} from '@/features/files/constants'
+import {useAppStorageFolderTags} from '@/features/files/hooks/use-app-storage-folder-tags'
 import type {FileSystemItem} from '@/features/files/types'
 import {formatFilesystemDate} from '@/features/files/utils/format-filesystem-date'
 import {formatFilesystemSize} from '@/features/files/utils/format-filesystem-size'
@@ -37,6 +39,8 @@ export function ListViewFileItem({
 	const displayName = machine?.name ?? item.name
 	const isUploading = 'isUploading' in item && item.isUploading
 	const uploadingProgress = isUploading && 'progress' in item ? item.progress : 0
+	const {getFolderStorageApps} = useAppStorageFolderTags()
+	const folderApps = getFolderStorageApps(item)
 
 	const isMobile = useIsMobile()
 	const [languageCode] = useLanguage()
@@ -57,11 +61,14 @@ export function ListViewFileItem({
 						{isEditingName && !machine ? (
 							<EditableName item={item} view='list' onFinish={onEditingNameComplete} />
 						) : (
-							<TruncatedFilename
-								filename={displayName}
-								view='list'
-								className='min-w-0 overflow-hidden pr-2 text-12 text-ellipsis whitespace-nowrap'
-							/>
+							<div className='flex min-w-0 items-center gap-1.5 pr-2'>
+								<TruncatedFilename
+									filename={displayName}
+									view='list'
+									className='min-w-0 overflow-hidden text-12 text-ellipsis whitespace-nowrap'
+								/>
+								{folderApps && <FolderAppStack apps={folderApps} />}
+							</div>
 						)}
 						<span className='min-w-0 overflow-hidden text-11 text-ellipsis whitespace-nowrap text-white/40'>
 							{isUploading
@@ -97,13 +104,16 @@ export function ListViewFileItem({
 					<div className='flex-shrink-0'>
 						<FileItemIcon item={item} machine={machine ?? null} className='h-5 w-5' />
 					</div>
-					<div className={cn('min-w-0', fadedContent && 'opacity-50')}>
-						{isEditingName && !machine ? (
+					{isEditingName && !machine ? (
+						<div className={cn('min-w-0', fadedContent && 'opacity-50')}>
 							<EditableName item={item} view='list' onFinish={onEditingNameComplete} />
-						) : (
+						</div>
+					) : (
+						<div className={cn('flex min-w-0 items-center gap-1.5', fadedContent && 'opacity-50')}>
 							<TruncatedFilename filename={displayName} view='list' className='min-w-0 text-12' />
-						)}
-					</div>
+							{folderApps && <FolderAppStack apps={folderApps} />}
+						</div>
+					)}
 				</div>
 			</div>
 

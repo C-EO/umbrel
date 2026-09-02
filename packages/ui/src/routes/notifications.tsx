@@ -206,6 +206,13 @@ export function Notifications() {
 		enabled: hasBackupNotification,
 	})
 
+	// Query apps to resolve app names for app storage notifications (only when
+	// needed). This component renders outside AppsProvider so we query directly.
+	const hasAppStorageNotification = notifications.some((n) => n.startsWith('app-storage-settings-changed:'))
+	const appsQuery = trpcReact.apps.list.useQuery(undefined, {
+		enabled: hasAppStorageNotification,
+	})
+
 	// Query cloud accounts (only when a cloud auth notification is present)
 	const hasCloudNotification = notifications.some((n) => n.startsWith('cloud-auth:'))
 	const cloudAccountsQuery = trpcReact.files.cloud.accounts.useQuery(undefined, {
@@ -392,6 +399,34 @@ export function Notifications() {
 		// Handle specific notification types
 		if (notification === 'migrated-back-that-mac-up') {
 			return getMigratedBackThatMacUpContent()
+		}
+
+		// Handle app storage settings invalidated by an app update
+		if (notification.startsWith('app-storage-settings-changed:')) {
+			const appId = notification.split(':')[1]
+			const app = appsQuery.data?.find((app) => app.id === appId)
+			const appName = (app && 'name' in app && app.name) || appId
+			return {
+				title: t('notifications.app-storage-settings-changed.title'),
+				description: t('notifications.app-storage-settings-changed.description', {app: appName}),
+				action: (
+					<>
+						<Button variant='default' size='dialog' onClick={() => clearNotification(notification)} tabIndex={-1}>
+							{t('ok')}
+						</Button>
+						<AlertDialogAction
+							variant='primary'
+							onClick={() => {
+								clearNotification(notification)
+								navigate(linkToDialog('app-settings', {for: appId, view: 'storage'}))
+							}}
+							tabIndex={0}
+						>
+							{t('notifications.app-storage-settings-changed.review')}
+						</AlertDialogAction>
+					</>
+				),
+			}
 		}
 
 		// Default fallback for unknown notifications

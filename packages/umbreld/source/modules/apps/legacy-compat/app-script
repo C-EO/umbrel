@@ -147,9 +147,24 @@ derive_entropy () {
   printf "%s" "${identifier}" | openssl dgst -sha256 -hmac "${umbrel_seed}" | sed 's/^.* //'
 }
 
+# Define the stable app paths before any lifecycle hook runs. APP_DATA_DIR is
+# the fixed app definition directory; APP_DATA_ROOT is the app-owned persistent
+# data root and defaults to its data/ child until storage relocation is enabled.
+_umbrel_runtime_set_app_paths() {
+  local -r app="${1}"
+  local app_data_root
+  app_data_root="$(printf '%s' "${SCRIPT_APP_DATA_ROOTS}" | jq --exit-status --raw-output --arg app "${app}" '.[$app]')"
+
+  export APP_DATA_DIR="${UMBREL_ROOT}/app-data/${app}"
+  export APP_DATA_ROOT="${app_data_root}"
+}
+
 # Setup env. for this context for a given app
 source_app() {
   local -r app="${1}"
+  local -r _umbrel_runtime_data_roots="${SCRIPT_APP_DATA_ROOTS}"
+  local _umbrel_runtime_app_data_root
+  _umbrel_runtime_app_data_root="$(printf '%s' "${_umbrel_runtime_data_roots}" | jq --exit-status --raw-output --arg app "${app}" '.[$app]')"
 
   local -r app_domain="$(hostname -s 2>/dev/null || echo "umbrel").local"
   local -r app_entropy_identifier="app-${app}-seed"
@@ -182,7 +197,9 @@ source_app() {
   for EXPORTS_APP_ID in $APPS_TO_SOURCE; do
     EXPORTS_APP_DIR="${UMBREL_ROOT}/app-data/${EXPORTS_APP_ID}"
     EXPORTS_APP_FILE="${EXPORTS_APP_DIR}/exports.sh"
-    EXPORTS_APP_DATA_DIR="${EXPORTS_APP_DIR}/data"
+    # Keep the existing cross-version export name while resolving it to the
+    # app's current physical data root on supported umbrelOS versions.
+    EXPORTS_APP_DATA_DIR="$(printf '%s' "${_umbrel_runtime_data_roots}" | jq --exit-status --raw-output --arg app "${EXPORTS_APP_ID}" '.[$app]')"
 
     if [[ -f "${EXPORTS_APP_FILE}" ]]; then
       # We replace the literal text "${UMBREL_ROOT}/scripts/app" within the exports.sh file with the path to this script
@@ -198,14 +215,17 @@ source_app() {
   done
 
   # App specific exports
+  # Re-assert these after sourcing dependency exports so an app cannot
+  # accidentally override the runtime-owned path contract.
+  export APP_DATA_DIR="${UMBREL_ROOT}/app-data/${app}"
+  export APP_DATA_ROOT="${_umbrel_runtime_app_data_root}"
   export APP_ID="${app}"
-  export APP_MANIFEST_FILE="${app_data_dir}/umbrel-app.yml"
+  export APP_MANIFEST_FILE="${APP_DATA_DIR}/umbrel-app.yml"
   export APP_VERSION=$(cat "${APP_MANIFEST_FILE}" | yq '.version')
   
   # The manifest port remains the browser-facing port owned by umbreld's app gateway.
   export APP_PROXY_PORT=$(cat "${APP_MANIFEST_FILE}" | yq '.port')
   
-  export APP_DATA_DIR="${app_data_dir}"
   export APP_DOMAIN="${app_domain}"
   export APP_HIDDEN_SERVICE="not-enabled.onion"
   if [[ "${REMOTE_TOR_ACCESS}" == "true" ]]; then
@@ -287,6 +307,10 @@ else
   fi
 fi
 
+# Hooks such as pre-install, pre-stop, pre-update, and pre-uninstall run before
+# source_app in their command paths, so establish the app data contract here.
+_umbrel_runtime_set_app_paths "${app}"
+
 if [ -z ${3+x} ]; then
   args=""
 else
@@ -323,6 +347,7 @@ compose() {
   local -r tor_compose_file="${SCRIPT_DOCKER_FRAGMENTS}/docker-compose.tor.yml"
   local -r common_compose_file="${SCRIPT_DOCKER_FRAGMENTS}/docker-compose.common.yml"
   local -r app_compose_file="${app_data_dir}/docker-compose.yml"
+  local -r user_settings_compose_file="${app_data_dir}/docker-compose.umbrel-user-settings.yml"
   local app_runtime_compose_file="${app_compose_file}"
 
   local -r umbrel_env_file="${UMBREL_ROOT}/.env"
@@ -382,6 +407,9 @@ compose() {
   # Any of the other compose files
   compose_files+=( "--file" "${common_compose_file}" )
   compose_files+=( "--file" "${app_runtime_compose_file}" )
+  if [[ -f "${user_settings_compose_file}" ]]; then
+    compose_files+=( "--file" "${user_settings_compose_file}" )
+  fi
 
   # Merge compose files and args. passed into 'compose'
   compose_args=("${compose_files[@]}" "${@}")
@@ -522,6 +550,17 @@ must_be_installed_guard() {
   fi
 }
 
+# Recreates install-time state after the user abandons a missing data root.
+# Existing images are retained, so recovery does not require another download.
+if [[ "$command" = "initialize-data-root" ]]; then
+  execute_hook "${app}" "pre-install"
+
+  start_app "${app}"
+
+  execute_hook "${app}" "post-install"
+  exit
+fi
+
 # Pulls down images for an app and starts it
 if [[ "$command" = "install" ]]; then
 
@@ -622,6 +661,13 @@ if [[ "$command" = "stop" ]]; then
 
   execute_hook "${app}" "post-stop"
 
+  exit
+fi
+
+# Removes app containers without running hooks. This is reserved for recovery
+# when the app's configured storage is unavailable and its hooks cannot run.
+if [[ "$command" = "force-stop" ]]; then
+  compose "${app}" down --remove-orphans
   exit
 fi
 
@@ -776,16 +822,9 @@ fi
 
 # Update an installed app
 if [[ "$command" = "post-patch-update" ]]; then
-
-  echo "Pulling images for app ${app}..."
-  compose "${app}" pull
-
-  if [[ "$*" != *"--skip-start"* ]]; then
-    "${0}" "start" "${app}"
-    # Remove any old images we don't need anymore
-    # docker rmi $app_old_images || true
-  fi
-
+  # umbreld pulls and starts the app between the split update phases. Keeping
+  # startup in TypeScript lets normal starts and fresh-data initialization use
+  # the same recovery path.
   execute_hook "${app}" "post-update"
 
   exit

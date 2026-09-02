@@ -1,10 +1,10 @@
-import {motion} from 'motion/react'
 import {useTranslation} from 'react-i18next'
 
 import {ScrollArea} from '@/components/ui/scroll-area'
 import {CLOUD_PROVIDER_LOGOS} from '@/features/files/constants'
 import {useAnimatedNumber} from '@/features/files/hooks/use-animated-number'
 import {formatFilesystemSize} from '@/features/files/utils/format-filesystem-size'
+import {ProgressRing, ProgressRingBadge} from '@/modules/floating-island/progress-ring'
 
 import {CloudProgressBar} from '../../shared/cloud-progress-bar'
 import type {CloudIslandRow} from './index'
@@ -73,13 +73,6 @@ function SingleTransfer({row, totalSpeed}: {row: CloudIslandRow; totalSpeed: num
 	const {t} = useTranslation()
 	const animatedPercent = useAnimatedNumber(row.percent)
 
-	const radius = 40
-	const circumference = 2 * Math.PI * radius
-	const strokeDashoffset =
-		animatedPercent === undefined
-			? circumference
-			: circumference - (Math.min(100, animatedPercent) / 100) * circumference
-
 	return (
 		<div className='flex size-full items-center justify-between overflow-hidden px-8 py-6'>
 			{/* Left side */}
@@ -108,86 +101,11 @@ function SingleTransfer({row, totalSpeed}: {row: CloudIslandRow; totalSpeed: num
 				</div>
 			</div>
 
-			{/* Right side */}
-			<motion.div
-				className='relative flex shrink-0 items-center justify-center'
-				initial={{scale: 0.6, opacity: 0, rotate: -10}}
-				animate={{scale: 1, opacity: 1, rotate: 0}}
-				exit={{scale: 0.6, opacity: 0, rotate: 10}}
-				transition={{type: 'spring', stiffness: 300, damping: 20, delay: 0.05}}
-			>
-				{/* Subtle background glow */}
-				<motion.div
-					className='absolute inset-0 rounded-full bg-linear-to-br from-brand/30 to-transparent'
-					initial={{scale: 0.8, opacity: 0}}
-					animate={{scale: 1, opacity: 1}}
-					exit={{scale: 0.8, opacity: 0}}
-					transition={{type: 'spring', stiffness: 400, damping: 25, delay: 0.1}}
-				/>
-
-				{/* Main progress ring */}
-				<svg
-					className={`relative size-28 -rotate-90 ${animatedPercent === undefined ? 'motion-safe:animate-pulse' : ''}`}
-					viewBox='0 0 112 112'
-				>
-					<defs>
-						<linearGradient id='cloudProgressGradient' x1='0%' y1='0%' x2='100%' y2='100%'>
-							<stop offset='0%' stopColor='hsl(var(--color-brand))' />
-							<stop offset='100%' stopColor='hsl(var(--color-brand-lightest))' />
-						</linearGradient>
-						<filter id='cloudGlow'>
-							<feGaussianBlur stdDeviation='2' result='coloredBlur' />
-							<feMerge>
-								<feMergeNode in='coloredBlur' />
-								<feMergeNode in='SourceGraphic' />
-							</feMerge>
-						</filter>
-					</defs>
-					{/* Background circle */}
-					<circle
-						cx='56'
-						cy='56'
-						r={radius}
-						stroke='currentColor'
-						strokeWidth='3'
-						fill='none'
-						className='text-white/10'
-					/>
-					{/* Progress circle with gradient */}
-					<circle
-						cx='56'
-						cy='56'
-						r={radius}
-						stroke='url(#cloudProgressGradient)'
-						strokeWidth='3'
-						fill='none'
-						strokeDasharray={circumference}
-						strokeDashoffset={strokeDashoffset}
-						className='transition-all duration-700 ease-out'
-						strokeLinecap='round'
-						filter='url(#cloudGlow)'
-					/>
-				</svg>
-
-				{/* Provider logo container */}
-				<motion.div
-					className='absolute inset-0 flex items-center justify-center'
-					initial={{scale: 0.7, opacity: 0}}
-					animate={{scale: 1, opacity: 1}}
-					exit={{scale: 0.7, opacity: 0}}
-					transition={{type: 'spring', stiffness: 350, damping: 22, delay: 0.2}}
-				>
-					<motion.div
-						className='relative rounded-full border border-white/10 bg-white/5 p-3'
-						initial={{scale: 0.8, opacity: 0}}
-						animate={{scale: 1, opacity: 1}}
-						exit={{scale: 0.8, opacity: 0}}
-						transition={{type: 'spring', stiffness: 400, damping: 20, delay: 0.25}}
-					>
-						<img src={cloudLogo(row.provider)} alt='' className='size-12 object-contain p-1' draggable={false} />
-					</motion.div>
-				</motion.div>
-			</motion.div>
+			<ProgressRing percent={animatedPercent} transition={false}>
+				<ProgressRingBadge>
+					<img src={cloudLogo(row.provider)} alt='' className='size-12 object-contain p-1' draggable={false} />
+				</ProgressRingBadge>
+			</ProgressRing>
 		</div>
 	)
 }

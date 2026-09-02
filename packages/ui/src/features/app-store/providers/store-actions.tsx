@@ -7,15 +7,17 @@ import {beginAppAction, finishAppAction} from '@/hooks/app-action-guard'
 import {useLaunchApp} from '@/hooks/use-launch-app'
 import {useUpdateAppMutation} from '@/hooks/use-update-app'
 import {getDependencyAlternatives} from '@/modules/app-store/dependency-alternatives'
+import {InstallReviewDialog} from '@/modules/app-store/install-review-dialog'
 import {OSUpdateRequiredDialog} from '@/modules/app-store/os-update-required'
-import {SelectDependenciesDialog} from '@/modules/app-store/select-dependencies-dialog'
+import type {InstallDependency} from '@/modules/app-store/select-dependencies-dialog'
 import {canPresentUpdateAction} from '@/modules/app-store/update-availability'
 import {useApps} from '@/providers/apps'
 import {useAllAvailableApps} from '@/providers/available-apps'
-import {AppState, RegistryApp, trpcReact} from '@/trpc/trpc'
+import {AppState, RegistryApp, RouterOutput, trpcReact} from '@/trpc/trpc'
+import {stripErrorCode} from '@/utils/backend-error'
 
 type StoreActionsContextT = {
-	installApp: (app: RegistryApp) => void
+	installApp: InstallDependency
 	updateApp: (app: RegistryApp) => void
 	openApp: (appId: string) => void
 	isAppIdAmbiguous: (appId: string) => boolean
@@ -34,17 +36,22 @@ export function useStoreActions() {
  * hundreds of cards can offer working actions without each mounting its own
  * dialogs. Runs the same gates as the app page's install button: members are
  * pointed to the owner, incompatible apps explain the required OS update, and
- * dependencies are chosen before installing.
+ * required apps, folders, and hardware access are reviewed before installing.
  */
 export function StoreActionsProvider({children}: {children: React.ReactNode}) {
 	const {t} = useTranslation()
-	const isMember = trpcReact.user.get.useQuery().data?.role === 'member'
+	const userQ = trpcReact.user.get.useQuery()
+	const isMember = userQ.data?.role === 'member'
 	const {apps, ambiguousAppIds} = useAllAvailableApps()
 	const {userAppsKeyed} = useApps()
 	const launchApp = useLaunchApp()
 	const utils = trpcReact.useUtils()
 
-	const [dialog, setDialog] = useState<{kind: 'os-update' | 'dependencies'; app: RegistryApp} | null>(null)
+	const [dialog, setDialog] = useState<
+		| {kind: 'os-update'; app: RegistryApp}
+		| {kind: 'install-review'; app: RegistryApp; review: RouterOutput['apps']['installReview']}
+		| null
+	>(null)
 	const [pendingStates, setPendingStates] = useState<ReadonlyMap<string, AppState>>(new Map())
 	const setPendingState = (appId: string, state?: AppState) => {
 		setPendingStates((current) => {
@@ -71,16 +78,32 @@ export function StoreActionsProvider({children}: {children: React.ReactNode}) {
 			utils.apps.list.invalidate()
 			utils.user.get.invalidate()
 		},
+		onError: (error) => {
+			toast.error(t('app.toast.install-failed'), {area: 'app-store', description: stripErrorCode(error.message)})
+		},
 	})
 
 	// The same optimistic seeding and refresh as every other update surface
 	const updateMut = useUpdateAppMutation()
 
-	const installApp = (app: RegistryApp) => {
+	const installApp: InstallDependency = async (app, presentDialog) => {
+		if (!userQ.data) return
 		if (isMember) return void toast(t('app-store.ask-owner-to-install'), {area: 'app-store'})
 		if (ambiguousAppIds?.has(app.id)) return void toast(t('app-store.app-id-conflict'), {area: 'app-store'})
-		if (!app.compatible) return setDialog({kind: 'os-update', app})
-		if (app.dependencies && app.dependencies.length > 0) return setDialog({kind: 'dependencies', app})
+		if (!app.compatible) {
+			const showDialog = () => setDialog({kind: 'os-update', app})
+			return presentDialog ? presentDialog(showDialog) : showDialog()
+		}
+		let review: RouterOutput['apps']['installReview']
+		try {
+			review = await utils.apps.installReview.fetch({appId: app.id})
+		} catch {
+			return void toast.error(t('install-review.load-error'), {area: 'app-store'})
+		}
+		if ((app.dependencies?.length ?? 0) > 0 || review.requiredFolders.length > 0 || review.gpuAccess) {
+			const showDialog = () => setDialog({kind: 'install-review', app, review})
+			return presentDialog ? presentDialog(showDialog) : showDialog()
+		}
 		if (beginAppAction(app.id)) installMut.mutate({appId: app.id})
 	}
 
@@ -96,9 +119,12 @@ export function StoreActionsProvider({children}: {children: React.ReactNode}) {
 	const closeDialog = (open: boolean) => {
 		if (!open) setDialog(null)
 	}
-	const installWithDependencies = (appId: string, alternatives: Record<string, string>) => {
+	const installReviewed = (
+		appId: string,
+		options: {alternatives: Record<string, string>; folderAccess: Array<{id: string; sourcePath: string}>},
+	) => {
 		if (ambiguousAppIds?.has(appId)) return void toast(t('app-store.app-id-conflict'), {area: 'app-store'})
-		if (beginAppAction(appId)) installMut.mutate({appId, alternatives})
+		if (beginAppAction(appId)) installMut.mutate({appId, ...options})
 	}
 
 	return (
@@ -113,13 +139,14 @@ export function StoreActionsProvider({children}: {children: React.ReactNode}) {
 		>
 			{children}
 			{dialog?.kind === 'os-update' && <OSUpdateRequiredDialog app={dialog.app} open onOpenChange={closeDialog} />}
-			{dialog?.kind === 'dependencies' && (
-				<SelectDependenciesDialog
-					appId={dialog.app.id}
+			{dialog?.kind === 'install-review' && (
+				<InstallReviewDialog
+					app={dialog.app}
+					review={dialog.review}
 					dependencies={getDependencyAlternatives(dialog.app.dependencies, apps ?? [], userAppsKeyed, ambiguousAppIds)}
 					open
 					onOpenChange={closeDialog}
-					onNext={(selectedDeps) => installWithDependencies(dialog.app.id, selectedDeps)}
+					onInstall={(options) => installReviewed(dialog.app.id, options)}
 					onInstallDependency={installApp}
 					makeDependencyPath={registryAppPath}
 				/>

@@ -193,6 +193,9 @@ export function GlobalFilesProvider({children}: {children: React.ReactNode}) {
 				setOperations(data as OperationsInProgress)
 			},
 			onError(err) {
+				// The next successful subscription starts with an authoritative
+				// snapshot. Clear now so a dead stream cannot leave stale progress.
+				setOperations([])
 				console.error('eventBus.listen(files:operation-progress) subscription error', err)
 			},
 		},

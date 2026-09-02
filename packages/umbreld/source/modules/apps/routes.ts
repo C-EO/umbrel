@@ -2,6 +2,12 @@ import z from 'zod'
 
 import {router, privateProcedure, privateProcedureWithMembers} from '../server/trpc/trpc.js'
 import {OWNER_USER_ID} from '../user/constants.js'
+import {
+	AppCustomEnvironmentVariableSchema,
+	AppCustomMountSchema,
+	AppEnvironmentVariableSchema,
+	AppFolderAccessSelectionSchema,
+} from './schema.js'
 
 export const appStore = router({
 	// Returns the app store registry.
@@ -56,8 +62,9 @@ export const apps = router({
 	// nothing is shared, letting the desktop render for them).
 	list: privateProcedureWithMembers.query(async ({ctx}) => {
 		const userId = ctx.principal?.accountId ?? OWNER_USER_ID
+		const isMemberRequest = userId !== OWNER_USER_ID
 		let apps = ctx.apps.instances
-		if (userId !== OWNER_USER_ID) {
+		if (isMemberRequest) {
 			const sharedAppIds = await ctx.umbreld.apps.sharedAppIdsForUser(userId)
 			apps = apps.filter((app) => sharedAppIds.includes(app.id))
 			if (apps.length === 0) return []
@@ -86,7 +93,16 @@ export const apps = router({
 						selectedDependencies,
 					] = await Promise.all([app.readManifest(), app.getSelectedDependencies()])
 
-					const hiddenService = torEnabled ? await app.readHiddenService() : ''
+					const [hiddenService, autoStart] = await Promise.all([
+						torEnabled ? app.readHiddenService() : '',
+						app.shouldAutoStart(),
+					])
+					// App settings are owner-only: storage sources reveal filesystem
+					// layout, environment values can hold secrets the owner set, and
+					// members can't open app settings anyway.
+					const [appProxyAuth, storage, environment] = isMemberRequest
+						? []
+						: await Promise.all([app.getAppProxyAuth(), app.getStorageSettings(), app.getEnvironmentSettings()])
 					if (deterministicPassword) {
 						defaultPassword = await app.deriveDeterministicPassword()
 					}
@@ -101,6 +117,7 @@ export const apps = router({
 						path,
 						state: app.state,
 						progress: app.stateProgress,
+						autoStart,
 						credentials: {
 							defaultUsername,
 							defaultPassword,
@@ -110,6 +127,9 @@ export const apps = router({
 						widgets,
 						dependencies,
 						selectedDependencies,
+						appProxyAuth,
+						storage,
+						environment,
 						implements: implements_,
 						torOnly,
 						requiresHttps: requiresHttps === true,
@@ -126,15 +146,23 @@ export const apps = router({
 		return appDataSortedByNames
 	}),
 
+	// User-visible choices that must be reviewed before an app is installed.
+	installReview: privateProcedure
+		.input(z.object({appId: z.string()}))
+		.query(async ({ctx, input}) => ctx.apps.getInstallReview(input.appId)),
+
 	// Install an app
 	install: privateProcedure
 		.input(
 			z.object({
 				appId: z.string(),
 				alternatives: z.record(z.string()).optional(),
+				folderAccess: z.array(AppFolderAccessSelectionSchema).optional(),
 			}),
 		)
-		.mutation(async ({ctx, input}) => ctx.apps.install(input.appId, input.alternatives)),
+		.mutation(async ({ctx, input}) =>
+			ctx.apps.install(input.appId, {alternatives: input.alternatives, folderAccess: input.folderAccess}),
+		),
 
 	// Get state
 	// Temporarily used for polling the state of app mutations until we implement subscriptions
@@ -307,6 +335,33 @@ export const apps = router({
 			}),
 		)
 		.mutation(async ({ctx, input}) => ctx.apps.setSelectedDependencies(input.appId, input.dependencies)),
+
+	// Save any combination of app settings in one operation so a combined save
+	// triggers at most one restart. Fields left undefined are untouched.
+	setSettings: privateProcedure
+		.input(
+			z.object({
+				appId: z.string(),
+				appProxyAuthEnabled: z.boolean().nullable().optional(),
+				customMounts: z.array(AppCustomMountSchema).optional(),
+				folderAccess: z.array(AppFolderAccessSelectionSchema).optional(),
+				environment: z.array(AppEnvironmentVariableSchema).optional(),
+				customEnvironment: z.array(AppCustomEnvironmentVariableSchema).optional(),
+				dependencies: z.record(z.string()).optional(),
+			}),
+		)
+		.mutation(async ({ctx, input}) => {
+			const {appId, ...settings} = input
+			return ctx.apps.setSettings(appId, settings)
+		}),
+
+	moveDataRoot: privateProcedure
+		.input(z.object({appId: z.string(), destinationParentPath: z.string().nullable()}))
+		.mutation(({ctx, input}) => ctx.apps.moveDataRoot(input.appId, input.destinationParentPath)),
+
+	resetDataRoot: privateProcedure
+		.input(z.object({appId: z.string()}))
+		.mutation(({ctx, input}) => ctx.apps.resetDataRoot(input.appId)),
 
 	dependents: privateProcedure.input(z.string()).query(async ({ctx, input}) => ctx.apps.getDependents(input)),
 

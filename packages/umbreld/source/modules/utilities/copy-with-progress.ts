@@ -5,11 +5,13 @@ export async function copyWithProgress(
 	source: string,
 	destination: string,
 	onProgress?: (progress: {progress: number; bytesPerSecond: number; secondsRemaining?: number}) => void,
+	{durable = false}: {durable?: boolean} = {},
 ) {
 	const rsyncExtraOptions = []
 
 	// Force 100 KB/s for test suite
 	if (process.env.UMBRELD_FORCE_100KBS_COPY === 'true') rsyncExtraOptions.push('--bwlimit=100')
+	if (durable) rsyncExtraOptions.push('--fsync')
 
 	// Start rsync copy
 	const rsync = execa('rsync', [

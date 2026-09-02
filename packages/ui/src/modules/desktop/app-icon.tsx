@@ -3,6 +3,7 @@ import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {FaRegPlayCircle} from 'react-icons/fa'
 import {FaRegCirclePause} from 'react-icons/fa6'
+import {TbAlertTriangle} from 'react-icons/tb'
 import {Link, useNavigate} from 'react-router-dom'
 import {arrayIncludes} from 'ts-extras'
 
@@ -14,12 +15,15 @@ import {canRestart, canStart, canStop, useAppInstall} from '@/hooks/use-app-inst
 import {useLaunchApp} from '@/hooks/use-launch-app'
 import {indexRegistryApps} from '@/lib/app-store-registry'
 import {cn} from '@/lib/utils'
+import {getAppWarning} from '@/modules/apps/app-warnings'
 import {useAppUninstall} from '@/modules/apps/use-app-uninstall'
 import {useHasMembers} from '@/modules/user-sharing'
 import {useUserApp} from '@/providers/apps'
 import {AppStateOrLoading, progressBarStates, progressStates, trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
 import {assertUnreachable} from '@/utils/misc'
+
+import {MemberAppUnavailableDialog} from './member-app-unavailable-dialog'
 
 export const APP_ICON_PLACEHOLDER_SRC = '/assets/app-icon-placeholder.svg'
 
@@ -29,17 +33,24 @@ export function AppIcon({
 	onClick,
 	state = 'ready',
 	progress,
+	warning = false,
 }: {
 	label: string
 	src: string
 	onClick?: () => void
 	state?: AppStateOrLoading
 	progress?: number
+	warning?: boolean
 }) {
 	const [appIconSrc, setAppIconSrc] = useState(src)
 
 	const inProgress = arrayIncludes(progressStates, state)
 	const isStopped = state === 'stopped'
+	// App state and settings warnings are independent: an app can still be
+	// running while required storage is unavailable. Progress takes precedence,
+	// then warnings, then the stopped control.
+	const showWarning = !inProgress && (state === 'unknown' || warning)
+	const showStopped = !inProgress && !showWarning && isStopped
 
 	const appIcon = (
 		<motion.button
@@ -78,8 +89,8 @@ export function AppIcon({
 						onError={() => setAppIconSrc(APP_ICON_PLACEHOLDER_SRC)}
 						className={cn(
 							'h-full w-full duration-500',
-							(inProgress || isStopped) && 'brightness-50',
-							!inProgress && !isStopped && 'animate-in fade-in',
+							(inProgress || showStopped || showWarning) && 'brightness-50',
+							!inProgress && !showStopped && !showWarning && 'animate-in fade-in',
 						)}
 						draggable={false}
 					/>
@@ -98,7 +109,14 @@ export function AppIcon({
 						</div>
 					</div>
 				)}
-				{isStopped && (
+				{/* Same dim + centered white glyph as the stopped state, but a warning
+				    triangle so the shape reads as "problem" rather than "inactive" */}
+				{showWarning && (
+					<div className='absolute inset-0 flex items-center justify-center'>
+						<TbAlertTriangle className='h-6 w-6 text-white/90 md:h-8 md:w-8' strokeWidth={2} />
+					</div>
+				)}
+				{showStopped && (
 					<div className='absolute inset-0 flex items-center justify-center'>
 						<FaRegCirclePause className='h-6 w-6 text-white/90 group-hover:hidden md:h-8 md:w-8' />
 						<FaRegPlayCircle className='hidden h-6 w-6 text-white/90 group-hover:block md:h-8 md:w-8' />
@@ -160,10 +178,17 @@ export function AppIconConnected({appId}: {appId: string}) {
 	// Members see shared apps but can't manage them
 	const userQ = trpcReact.user.get.useQuery()
 	const isMember = userQ.data?.role === 'member'
+	const [showMemberUnavailableDialog, setShowMemberUnavailableDialog] = useState(false)
 
 	if (!userApp || !userApp.app) return <AppIcon label='' src='' />
 
 	const state = appInstall.state
+	// Only data-root problems make an app unusable. Folder-access warnings are
+	// advisory — the app keeps running with the folder missing, and a slow
+	// drive or share can flag them transiently — so they surface in the app's
+	// settings without hijacking the icon's launch behavior.
+	const storageWarning = getAppWarning(userApp.app)
+	const storageBlocked = storageWarning === 'app-storage' || storageWarning === 'app-data-missing'
 
 	const startDisabled = !canStart(state)
 	const stopDisabled = !canStop(state)
@@ -175,6 +200,9 @@ export function AppIconConnected({appId}: {appId: string}) {
 	const uninstallDisabled = false
 
 	const handleAppClick = async () => {
+		if (storageBlocked) {
+			return navigate(linkToDialog('app-settings', {for: appId, view: 'storage'}))
+		}
 		// Launch the app if it's ready
 		if (state === 'ready') {
 			return launchApp(appId)
@@ -189,16 +217,32 @@ export function AppIconConnected({appId}: {appId: string}) {
 		}
 	}
 
-	// Members only get the app icon, the context menu is device management
+	// Members only get the app icon, the context menu is device management.
+	// Clicking an app that isn't running explains the state instead of
+	// attempting owner-only start/restart actions that would just error.
 	if (isMember) {
+		const handleMemberAppClick = () => {
+			if (storageBlocked) return setShowMemberUnavailableDialog(true)
+			if (state === 'ready') return launchApp(appId)
+			if (state === 'stopped' || state === 'unknown') setShowMemberUnavailableDialog(true)
+		}
 		return (
-			<AppIcon
-				label={userApp.app.name}
-				src={userApp.app.icon}
-				onClick={handleAppClick}
-				state={state}
-				progress={appInstall.progress}
-			/>
+			<>
+				<AppIcon
+					label={userApp.app.name}
+					src={userApp.app.icon}
+					onClick={handleMemberAppClick}
+					state={state}
+					progress={appInstall.progress}
+					warning={storageBlocked}
+				/>
+				<MemberAppUnavailableDialog
+					appName={userApp.app.name}
+					variant={state === 'stopped' && !storageBlocked ? 'stopped' : 'problem'}
+					open={showMemberUnavailableDialog}
+					onOpenChange={setShowMemberUnavailableDialog}
+				/>
+			</>
 		)
 	}
 
@@ -212,25 +256,10 @@ export function AppIconConnected({appId}: {appId: string}) {
 						onClick={handleAppClick}
 						state={state}
 						progress={appInstall.progress}
+						warning={storageBlocked}
 					/>
 				</ContextMenuTrigger>
 				<ContextMenuContent>
-					{userApp.app.credentials &&
-						(userApp.app.credentials.defaultUsername || userApp.app.credentials.defaultPassword) && (
-							<ContextMenuItem asChild>
-								<Link to={linkToDialog('default-credentials', {for: appId})}>
-									{t('desktop.app.context.show-default-credentials')}
-								</Link>
-							</ContextMenuItem>
-						)}
-
-					{/* App settings (currently dependencies only) */}
-					{!!userApp.app.dependencies?.length && (
-						<ContextMenuItem asChild>
-							<Link to={linkToDialog('app-settings', {for: appId})}>{t('desktop.app.context.settings')}</Link>
-						</ContextMenuItem>
-					)}
-
 					{/* Start / Stop */}
 					{state !== 'stopped' ? (
 						<ContextMenuItem disabled={stopDisabled} onSelect={stopDisabled ? undefined : appInstall.stop}>
@@ -245,6 +274,11 @@ export function AppIconConnected({appId}: {appId: string}) {
 					{/* Restart */}
 					<ContextMenuItem disabled={restartDisabled} onSelect={restartDisabled ? undefined : appInstall.restart}>
 						{t('restart')}
+					</ContextMenuItem>
+
+					{/* App settings */}
+					<ContextMenuItem asChild>
+						<Link to={linkToDialog('app-settings', {for: appId})}>{t('desktop.app.context.settings')}</Link>
 					</ContextMenuItem>
 
 					{/* Troubleshoot */}

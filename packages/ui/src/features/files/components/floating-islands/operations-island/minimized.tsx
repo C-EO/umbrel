@@ -7,13 +7,18 @@ import {formatNumberI18n} from '@/utils/number'
 export function MinimizedContent({
 	progress,
 	count,
+	label,
 	eta,
 	type,
+	isPreparing,
 }: {
 	progress: number
 	count: number
+	// Replaces the item count when set (a lone operation shows its name)
+	label?: string
 	eta: string
 	type: 'copy' | 'move' | 'mixed'
+	isPreparing: boolean
 }) {
 	const {t, i18n} = useTranslation()
 	return (
@@ -25,14 +30,15 @@ export function MinimizedContent({
 			</CircularProgress>
 			<div className='min-w-0 flex-1'>
 				<span className='block truncate text-center text-xs text-white/90'>
-					{t('files-listing.item-count', {
-						formattedCount: formatNumberI18n({n: count, showDecimals: false, locale: i18n.language}),
-						count,
-					})}
+					{label ??
+						t('files-listing.item-count', {
+							formattedCount: formatNumberI18n({n: count, showDecimals: false, locale: i18n.language}),
+							count,
+						})}
 				</span>
 			</div>
 			<div className='flex flex-shrink-0 items-center gap-2'>
-				<span className='text-xs text-white/60'>{eta}</span>
+				<span className='text-xs text-white/60'>{isPreparing ? t('files-operations-island.preparing') : eta}</span>
 			</div>
 		</div>
 	)

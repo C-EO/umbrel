@@ -27,6 +27,7 @@ const SettingsContentMobile = React.lazy(() =>
 )
 
 const FileSharingDrawerOrDialog = React.lazy(() => import('@/routes/settings/file-sharing'))
+const AppSettingsListDrawerOrDialog = React.lazy(() => import('@/routes/settings/app-settings'))
 const McpDialog = React.lazy(() => import('@/routes/settings/mcp'))
 const AppStorePreferencesDialog = React.lazy(() => import('@/routes/settings/app-store-preferences'))
 const ChangeNameDialog = React.lazy(() => import('@/routes/settings/change-name'))
@@ -166,6 +167,7 @@ export function Settings() {
 							{(!isMember || userQ.data?.sambaEnabled === true) && (
 								<Route path='/file-sharing' Component={FileSharingDrawerOrDialog} />
 							)}
+							{!isMember && <Route path='/apps' Component={AppSettingsListDrawerOrDialog} />}
 							{!isMember && <Route path='/mcp' Component={McpDialog} />}
 							<Route path='/advanced/:advancedSelection?' Component={AdvancedSettingsDrawerOrDialog} />
 							<Route path='/storage/*' Component={StorageManagerDialog} />

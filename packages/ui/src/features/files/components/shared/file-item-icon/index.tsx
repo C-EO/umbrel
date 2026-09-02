@@ -35,6 +35,7 @@ import {
 	HOME_PATH,
 	IMAGE_EXTENSIONS_WITH_IMAGE_THUMBNAILS,
 	MACHINES_PATH,
+	NETWORK_STORAGE_PATH,
 	RECENTS_PATH,
 	TRASH_PATH,
 	VIDEO_EXTENSIONS_WITH_IMAGE_THUMBNAILS,
@@ -64,6 +65,9 @@ interface FileItemIconProps {
 	className?: string
 	useAnimatedIcon?: boolean
 	isHovered?: boolean
+	// Overlay badges (share, cloud, app folder) have minimum sizes tuned for
+	// listing icons; compact contexts like breadcrumbs turn them off
+	showBadges?: boolean
 }
 
 export const FileItemIcon = (props: FileItemIconProps) => {
@@ -82,10 +86,11 @@ const FileItemIconContent = ({
 	className,
 	useAnimatedIcon = false,
 	isHovered = false,
+	showBadges = true,
 }: FileItemIconProps) => {
 	const {t} = useTranslation()
 	const {isPathShared} = useShares()
-	const isShared = isPathShared(item.path)
+	const isShared = showBadges && isPathShared(item.path)
 	const cloudProvider = useCloudBadge(item.path)
 	// Flavor branding only matters for the handful of icons that carry a badge
 	const {data: badgeAccounts} = useCloudAccounts({enabled: Boolean(cloudProvider)})
@@ -106,31 +111,32 @@ const FileItemIconContent = ({
 	// keeps the sticker a true square; percentage heights would resolve
 	// against the folder's shorter box and squash it.
 	const badgeBrandId = badgeBrand ?? cloudProvider?.provider
-	const cloudBadge = cloudProvider ? (
-		<div className='absolute top-0 right-0 aspect-square w-1/2 max-w-7 min-w-4 translate-x-[26%] translate-y-[-10%] rotate-[10deg]'>
-			{cloudProvider.state === 'attention' ? (
-				<span className='flex size-full items-center justify-center rounded-[30%] border border-white/25 bg-neutral-900 shadow-[0_2px_6px_rgba(0,0,0,0.6)]'>
-					<RiAlertFill className='aspect-square w-[68%] text-yellow-400' />
-				</span>
-			) : badgeBrandId && CLOUD_SELF_TILE_BRANDS.has(badgeBrandId) ? (
-				<img
-					src={CLOUD_PROVIDER_LOGOS[badgeBrandId]}
-					alt=''
-					className='size-full rounded-[28%] object-contain shadow-[0_2px_6px_rgba(0,0,0,0.6)]'
-					draggable={false}
-				/>
-			) : (
-				<span className='flex size-full items-center justify-center rounded-[30%] border border-white/25 bg-neutral-900 shadow-[0_2px_6px_rgba(0,0,0,0.6)]'>
+	const cloudBadge =
+		showBadges && cloudProvider ? (
+			<div className='absolute top-0 right-0 aspect-square w-1/2 max-w-7 min-w-4 translate-x-[26%] translate-y-[-10%] rotate-[10deg]'>
+				{cloudProvider.state === 'attention' ? (
+					<span className='flex size-full items-center justify-center rounded-[30%] border border-white/25 bg-neutral-900 shadow-[0_2px_6px_rgba(0,0,0,0.6)]'>
+						<RiAlertFill className='aspect-square w-[68%] text-yellow-400' />
+					</span>
+				) : badgeBrandId && CLOUD_SELF_TILE_BRANDS.has(badgeBrandId) ? (
 					<img
-						src={CLOUD_PROVIDER_LOGOS[badgeBrandId ?? '']}
+						src={CLOUD_PROVIDER_LOGOS[badgeBrandId]}
 						alt=''
-						className='aspect-square w-[62%] rounded-[16%] object-contain'
+						className='size-full rounded-[28%] object-contain shadow-[0_2px_6px_rgba(0,0,0,0.6)]'
 						draggable={false}
 					/>
-				</span>
-			)}
-		</div>
-	) : null
+				) : (
+					<span className='flex size-full items-center justify-center rounded-[30%] border border-white/25 bg-neutral-900 shadow-[0_2px_6px_rgba(0,0,0,0.6)]'>
+						<img
+							src={CLOUD_PROVIDER_LOGOS[badgeBrandId ?? '']}
+							alt=''
+							className='aspect-square w-[62%] rounded-[16%] object-contain'
+							draggable={false}
+						/>
+					</span>
+				)}
+			</div>
+		) : null
 
 	// Check if this is an app folder in either normal mode or rewind mode
 	// Normal: /Apps/bitcoin
@@ -168,6 +174,11 @@ const FileItemIconContent = ({
 		return <NetworkDeviceIcon path={item.path} className={className} />
 	}
 
+	// Network root for synthetic MiniBrowser roots
+	if (item.type === 'directory' && item.path === NETWORK_STORAGE_PATH) {
+		return <img src={networkIcon} alt='Network' className={`${className ?? ''} object-contain`} draggable={false} />
+	}
+
 	if (item.type === 'directory' && item.name === 'Umbrel Backup.backup') {
 		return <img src={backupsIcon} alt='Umbrel Backup' className={className} draggable={false} />
 	}
@@ -179,7 +190,7 @@ const FileItemIconContent = ({
 
 	// Network root for sidebar and pathbar
 	if (item.type === 'network-root') {
-		return <img src={networkIcon} alt='Network' className={className + 'w-auto'} draggable={false} />
+		return <img src={networkIcon} alt='Network' className={`${className ?? ''} object-contain`} draggable={false} />
 	}
 
 	// Network share for sidebar and pathbar
@@ -201,8 +212,8 @@ const FileItemIconContent = ({
 		return (
 			<div className='relative'>
 				<FolderIcon className={className} path={item.path} useAnimatedIcon={useAnimatedIcon} isHovered={isHovered} />
-				{isAppFolder ? <AppFolderBottomIcon appId={extractAppIdFromPath(item.path)} /> : null}
-				{machine ? (
+				{showBadges && isAppFolder ? <AppFolderBottomIcon appId={extractAppIdFromPath(item.path)} /> : null}
+				{showBadges && machine ? (
 					<div className='absolute right-0 bottom-0 size-1/2 max-h-8 min-h-5 max-w-8 min-w-5 translate-x-[16%] translate-y-[10%] overflow-hidden rounded-[25%] shadow-md md:min-h-[0.9rem] md:min-w-[0.9rem]'>
 						<OsIcon osId={machine.osId} state={machine.state} className='size-full' />
 					</div>
@@ -449,7 +460,10 @@ const NetworkDeviceIcon = ({path, className}: {path: string; className?: string}
 	const {doesHostHaveMountedShares} = useNetworkStorage()
 	const {deviceType, isLoading} = useNetworkDeviceType(path)
 
-	const isMounted = doesHostHaveMountedShares(path)
+	// The path may point at a share (/Network/<host>/<share>) while the mounted
+	// check expects the host root (/Network/<host>)
+	const hostRoot = `/${path.split('/').filter(Boolean).slice(0, 2).join('/')}`
+	const isMounted = doesHostHaveMountedShares(hostRoot)
 
 	// While detecting, show generic NAS icon
 	if (isLoading) {

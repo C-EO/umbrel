@@ -1,6 +1,8 @@
-import {createContext, useContext} from 'react'
+import {createContext, useContext, useEffect} from 'react'
 import {filter} from 'remeda'
+import {arrayIncludes} from 'ts-extras'
 
+import {pollStates} from '@/hooks/use-app-install'
 import {trpcReact, UserApp} from '@/trpc/trpc'
 import {keyBy} from '@/utils/misc'
 
@@ -90,13 +92,37 @@ type AppsContextT = {
 const AppsContext = createContext<AppsContextT | null>(null)
 
 export function AppsProvider({children}: {children: React.ReactNode}) {
-	const utils = trpcReact.useUtils()
 	const appsQ = trpcReact.apps.list.useQuery()
+	const utils = trpcReact.useUtils()
+
+	// Refetch apps when storage mounts so tiles recover on their own, e.g. an app
+	// marked "Storage unavailable" clears once its NAS comes back and the backend
+	// auto-restarts it, without waiting for a manual refresh. Storage events are
+	// owner-only, members are rejected by the event bus.
+	const userQ = trpcReact.user.get.useQuery()
+	const invalidateApps = {
+		enabled: userQ.data?.role === 'owner',
+		onData: () => utils.apps.list.invalidate(),
+		onError: (error: unknown) => console.error('eventBus.listen storage change subscription error', error),
+	}
+	trpcReact.eventBus.listen.useSubscription({event: 'files:external-storage:change'}, invalidateApps)
+	trpcReact.eventBus.listen.useSubscription({event: 'files:network-storage:change'}, invalidateApps)
+	trpcReact.eventBus.listen.useSubscription(
+		{event: 'apps:settings:change'},
+		{
+			enabled: userQ.data?.role === 'owner',
+			onData(data) {
+				const {appId} = data as {appId: string}
+				utils.apps.state.invalidate({appId})
+				utils.apps.list.invalidate()
+			},
+			onError: (error) => console.error('eventBus.listen(apps:settings:change) subscription error', error),
+		},
+	)
 
 	// Refresh the apps a member can see the moment the owner shares or unshares
 	// an app with them (the server only streams changes affecting this account).
 	// The owner's own UI already refreshes via its mutations' onSuccess.
-	const userQ = trpcReact.user.get.useQuery()
 	trpcReact.eventBus.listen.useSubscription(
 		{event: 'apps:member-shares:change'},
 		{
@@ -153,6 +179,34 @@ export function AppsProvider({children}: {children: React.ReactNode}) {
 			{children}
 		</AppsContext>
 	)
+}
+
+// Poll app state that is expected to settle on its own. Storage checks share
+// this loop so a slow drive/share check can replace its temporary "checking"
+// result without waiting for an unrelated UI refresh.
+export function AppStatePolling() {
+	const {userApps} = useApps()
+	const utils = trpcReact.useUtils()
+	const pollingAppIds = (userApps ?? [])
+		.filter((app) => arrayIncludes(pollStates, app.state) || app.storage?.dataRoot?.status === 'checking')
+		.map((app) => app.id)
+	const pollingAppIdsKey = pollingAppIds.sort().join('\n')
+
+	useEffect(() => {
+		if (pollingAppIds.length === 0) return
+		// Desktop tiles read per-app apps.state queries, so invalidating them
+		// teaches each tile its state changed; useAppInstall's own poll loop
+		// then keeps that tile live until the state settles again.
+		const invalidate = () => {
+			for (const appId of pollingAppIds) utils.apps.state.invalidate({appId})
+			utils.apps.list.invalidate()
+		}
+		invalidate()
+		const interval = setInterval(invalidate, 2000)
+		return () => clearInterval(interval)
+	}, [pollingAppIdsKey])
+
+	return null
 }
 
 export function useApps() {

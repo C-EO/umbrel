@@ -36,6 +36,8 @@ test('keeps a configured network share when unmounting fails', async () => {
 	const blockNetworkStorage = vi.fn(async () => releaseCloud)
 	const releaseMachines = vi.fn()
 	const blockStoragePaths = vi.fn(async () => releaseMachines)
+	const releaseApps = vi.fn()
+	const blockAppStoragePaths = vi.fn(async () => releaseApps)
 	const logger = {
 		log: vi.fn(),
 		error: vi.fn(),
@@ -51,6 +53,7 @@ test('keeps a configured network share when unmounting fails', async () => {
 			getBaseDirectory: () => '/tmp/network',
 			cloud: {blockNetworkStorage},
 		},
+		apps: {blockStoragePaths: blockAppStoragePaths},
 		machines: {blockStoragePaths},
 		logger: {createChildLogger: () => logger},
 	} as unknown as Umbreld
@@ -69,8 +72,10 @@ test('keeps a configured network share when unmounting fails', async () => {
 	expect(storage.mountedShares).toContain(share.mountPath)
 	expect(blockNetworkStorage).toHaveBeenCalledWith(share)
 	expect(blockStoragePaths).toHaveBeenCalledWith([share.mountPath])
+	expect(blockAppStoragePaths).toHaveBeenCalledWith([share.mountPath])
 	expect(releaseCloud).toHaveBeenCalledOnce()
 	expect(releaseMachines).toHaveBeenCalledOnce()
+	expect(releaseApps).toHaveBeenCalledOnce()
 })
 
 test('removes an unmounted configured share when its mount directory is already absent', async () => {
@@ -90,6 +95,8 @@ test('removes an unmounted configured share when its mount directory is already 
 	const blockNetworkStorage = vi.fn(async () => releaseCloud)
 	const releaseMachines = vi.fn()
 	const blockStoragePaths = vi.fn(async () => releaseMachines)
+	const releaseApps = vi.fn()
+	const blockAppStoragePaths = vi.fn(async () => releaseApps)
 	const logger = {
 		log: vi.fn(),
 		error: vi.fn(),
@@ -105,6 +112,7 @@ test('removes an unmounted configured share when its mount directory is already 
 			getBaseDirectory: () => '/tmp/network',
 			cloud: {blockNetworkStorage},
 		},
+		apps: {blockStoragePaths: blockAppStoragePaths},
 		machines: {blockStoragePaths},
 		logger: {createChildLogger: () => logger},
 	} as unknown as Umbreld
@@ -117,8 +125,10 @@ test('removes an unmounted configured share when its mount directory is already 
 	expect(getWriteLock).toHaveBeenCalledOnce()
 	expect(blockNetworkStorage).toHaveBeenCalledWith(share)
 	expect(blockStoragePaths).toHaveBeenCalledWith([share.mountPath])
+	expect(blockAppStoragePaths).toHaveBeenCalledWith([share.mountPath])
 	expect(releaseCloud).toHaveBeenCalledOnce()
 	expect(releaseMachines).toHaveBeenCalledOnce()
+	expect(releaseApps).toHaveBeenCalledOnce()
 	expect(logger.error).not.toHaveBeenCalled()
 })
 
@@ -140,6 +150,8 @@ test('unmounts every stacked filesystem before removing a configured share', asy
 	const blockNetworkStorage = vi.fn(async () => releaseCloud)
 	const releaseMachines = vi.fn()
 	const blockStoragePaths = vi.fn(async () => releaseMachines)
+	const releaseApps = vi.fn()
+	const blockAppStoragePaths = vi.fn(async () => releaseApps)
 	const logger = {
 		log: vi.fn(),
 		error: vi.fn(),
@@ -155,6 +167,7 @@ test('unmounts every stacked filesystem before removing a configured share', asy
 			getBaseDirectory: () => '/tmp/network',
 			cloud: {blockNetworkStorage},
 		},
+		apps: {blockStoragePaths: blockAppStoragePaths},
 		machines: {blockStoragePaths},
 		logger: {createChildLogger: () => logger},
 	} as unknown as Umbreld
@@ -180,5 +193,7 @@ test('unmounts every stacked filesystem before removing a configured share', asy
 	expect(storage.mountedShares).not.toContain(share.mountPath)
 	expect(releaseCloud).toHaveBeenCalledOnce()
 	expect(blockStoragePaths).toHaveBeenCalledWith([share.mountPath])
+	expect(blockAppStoragePaths).toHaveBeenCalledWith([share.mountPath])
 	expect(releaseMachines).toHaveBeenCalledOnce()
+	expect(releaseApps).toHaveBeenCalledOnce()
 })

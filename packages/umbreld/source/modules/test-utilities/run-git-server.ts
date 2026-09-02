@@ -10,7 +10,7 @@ import temporaryDirectory from '../utilities/temporary-directory.js'
 const currentDirectory = path.dirname(fileURLToPath(import.meta.url))
 const directory = temporaryDirectory()
 
-export default async function runGitServer() {
+export default async function runGitServer({additionalApps = []}: {additionalApps?: string[]} = {}) {
 	// Create root dir to run git server
 	const gitServerDirectory = await directory.create()
 
@@ -20,6 +20,10 @@ export default async function runGitServer() {
 
 	// Copy in community repo skeleton fixture and commit it
 	await fse.copy(`${currentDirectory}/fixtures/community-repo`, repoDirectory)
+	for (const appId of additionalApps) {
+		if (!/^[a-z0-9-]+$/.test(appId)) throw new Error(`Invalid additional test app ID: ${appId}`)
+		await fse.copy(`${currentDirectory}/fixtures/additional-apps/${appId}`, `${repoDirectory}/${appId}`)
+	}
 	const $$ = $({cwd: repoDirectory})
 	await $$`git init`
 	await $$`git add .`

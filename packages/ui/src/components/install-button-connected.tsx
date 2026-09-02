@@ -1,20 +1,21 @@
 import prettyBytes from 'pretty-bytes'
-import {createContext, useContext, useImperativeHandle, useRef, useState} from 'react'
+import {createContext, useContext, useImperativeHandle, useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {arrayIncludes} from 'ts-extras'
 
 import {Button} from '@/components/ui/button'
 import {toast} from '@/components/ui/toast'
+import {registryAppPath} from '@/constants/app-store'
+import {useStoreActions} from '@/features/app-store/providers/store-actions'
 import {useAppInstall} from '@/hooks/use-app-install'
 import {useLaunchApp} from '@/hooks/use-launch-app'
 import {useUpdateApp} from '@/hooks/use-update-app'
 import {getDependencyAlternatives} from '@/modules/app-store/dependency-alternatives'
+import {InstallReviewDialog} from '@/modules/app-store/install-review-dialog'
 import {OSUpdateRequiredDialog} from '@/modules/app-store/os-update-required'
-import {SelectDependenciesDialog} from '@/modules/app-store/select-dependencies-dialog'
 import {canPresentUpdateAction, isAppUpdateAvailable} from '@/modules/app-store/update-availability'
 import {useApps} from '@/providers/apps'
 import {useAllAvailableApps} from '@/providers/available-apps'
-import {installedStates, RegistryApp, trpcReact} from '@/trpc/trpc'
+import {RegistryApp, trpcReact} from '@/trpc/trpc'
 
 import {InstallButton} from './install-button'
 
@@ -63,39 +64,30 @@ export function InstallButtonConnectedController({
 }) {
 	const {t} = useTranslation()
 	const appInstall = useAppInstall(app.id)
-	const isMember = trpcReact.user.get.useQuery().data?.role === 'member'
+	// Members browse the app store read-only, only the owner can install
+	const userQ = trpcReact.user.get.useQuery()
+	const isMember = userQ.data?.role === 'member'
 	const {apps, ambiguousAppIds} = useAllAvailableApps()
+	const actions = useStoreActions()
+	const installReviewQ = trpcReact.apps.installReview.useQuery(
+		{appId: app.id},
+		{enabled: userQ.data?.role === 'owner' && app.compatible && appInstall.state === 'not-installed'},
+	)
+	const [showInstallReview, setShowInstallReview] = useState(false)
+	const [showOSUpdateRequiredDialog, setShowOSUpdateRequiredDialog] = useState(false)
 	const {userAppsKeyed, isLoading} = useApps()
 	const openApp = useLaunchApp()
 	const updateApp = useUpdateApp(app.id)
-	const [showDepsDialog, setShowDepsDialog] = useState(false)
-	const [showOSUpdateRequiredDialog, setShowOSUpdateRequiredDialog] = useState(false)
-	const selections = useRef({} as Record<string, string>).current
 	const [highlightDependency, setHighlightDependency] = useState<string | undefined>(undefined)
 
-	const ready = !isLoading && Boolean(userAppsKeyed && apps && ambiguousAppIds)
+	const ready = !isLoading && Boolean(userQ.data && userAppsKeyed && apps && ambiguousAppIds)
 	const isAppIdAmbiguous = Boolean(ambiguousAppIds?.has(app.id))
-	const isInstalled = (appId: string) =>
-		Boolean(userAppsKeyed && arrayIncludes(installedStates, userAppsKeyed[appId]?.state))
 	const dependencies =
 		ready && apps && userAppsKeyed && ambiguousAppIds
 			? getDependencyAlternatives(app.dependencies, apps, userAppsKeyed, ambiguousAppIds)
 			: []
 
-	if (ready) {
-		// Preserve an installed alternative across both action renderers.
-		dependencies.forEach(({dependencyId, appIds}) => {
-			appIds.forEach((appId) => {
-				if (!selections[dependencyId] && isInstalled(appId)) selections[dependencyId] = appId
-			})
-		})
-	}
-
-	const areAllAlternativesSelectedAndInstalled = dependencies.every(({dependencyId, appIds}) =>
-		appIds.some((appId) => selections[dependencyId] === appId && isInstalled(appId)),
-	)
-
-	const install = () => {
+	async function install() {
 		if (!ready) return
 		if (isMember) {
 			toast(t('app-store.ask-owner-to-install'), {area: 'app-store'})
@@ -109,25 +101,27 @@ export function InstallButtonConnectedController({
 			setShowOSUpdateRequiredDialog(true)
 			return
 		}
-		if (dependencies.length > 0) {
-			setShowDepsDialog(true)
+		const review = installReviewQ.data ?? (await installReviewQ.refetch()).data
+		if (!review) {
+			toast.error(t('install-review.load-error'), {area: 'app-store'})
+			return
+		}
+		if (dependencies.length > 0 || review.requiredFolders.length > 0 || review.gpuAccess) {
+			setShowInstallReview(true)
 			return
 		}
 		appInstall.install()
 	}
 
 	useImperativeHandle(ref, () => ({
-		triggerInstall(dependencyId?: string) {
-			setHighlightDependency(dependencyId)
-			install()
+		triggerInstall(highlightDependency?: string) {
+			setHighlightDependency(highlightDependency)
+			void install()
 		},
 	}))
 
-	const verifyInstall = (selectedDeps: Record<string, string>) => {
-		if (isAppIdAmbiguous) return
-		if (areAllAlternativesSelectedAndInstalled) appInstall.install(selectedDeps)
-	}
-
+	// Open remains the primary installed-app action. Updates are offered
+	// separately so an incompatible update never blocks launching the app.
 	const userApp = userAppsKeyed?.[app.id]
 	const updateAvailable = !isMember && !!userApp && isAppUpdateAvailable(userApp.version, app)
 	const canOfferUpdate = ready && updateAvailable && canPresentUpdateAction(appInstall.state)
@@ -166,14 +160,19 @@ export function InstallButtonConnectedController({
 			{children}
 			{ready && (
 				<>
-					<SelectDependenciesDialog
-						appId={app.id}
-						dependencies={dependencies}
-						open={showDepsDialog}
-						onOpenChange={setShowDepsDialog}
-						onNext={verifyInstall}
-						highlightDependency={highlightDependency}
-					/>
+					{installReviewQ.data && (
+						<InstallReviewDialog
+							app={app}
+							review={installReviewQ.data}
+							dependencies={dependencies}
+							open={showInstallReview}
+							onOpenChange={setShowInstallReview}
+							onInstall={appInstall.install}
+							highlightDependency={highlightDependency}
+							onInstallDependency={actions?.installApp}
+							makeDependencyPath={registryAppPath}
+						/>
+					)}
 					<OSUpdateRequiredDialog
 						app={app}
 						open={showOSUpdateRequiredDialog}

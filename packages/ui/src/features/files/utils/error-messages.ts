@@ -25,6 +25,10 @@ export function getFilesErrorMessage(message: string): string {
 	if (message.includes('[cant-find-root]')) return t('files-backend-error.cant-find-root')
 	if (message.includes('[share-already-exists]')) return t('files-backend-error.share-already-exists')
 	if (message.includes('[share-name-generation-failed]')) return t('files-backend-error.share-name-generation-failed')
+	if (message.includes('[storage-in-use-by-apps]')) {
+		const apps = message.split('[storage-in-use-by-apps]')[1]?.trim()
+		return t('files-backend-error.storage-in-use-by-apps', {apps})
+	}
 
 	// Cloud (codes are namespaced [cloud-*] by the backend)
 	if (message.includes('[cloud-account-already-exists]')) return t('files-cloud-error.account-already-exists')

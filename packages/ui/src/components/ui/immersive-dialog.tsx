@@ -99,11 +99,16 @@ export function ImmersiveDialogContent({
 export function ImmersiveDialogSplitContent({
 	children,
 	side,
+	footer,
 	ref,
 	...contentProps
-}: {children: React.ReactNode; side: React.ReactNode; ref?: React.Ref<HTMLDivElement>} & ComponentPropsWithoutRef<
-	typeof DialogContent
->) {
+}: {
+	children: React.ReactNode
+	side: React.ReactNode
+	// Rendered below the scroll area so it stays visible however long the content is
+	footer?: React.ReactNode
+	ref?: React.Ref<HTMLDivElement>
+} & ComponentPropsWithoutRef<typeof DialogContent>) {
 	return (
 		<DialogPortal>
 			<ImmersiveDialogOverlay />
@@ -128,10 +133,11 @@ export function ImmersiveDialogSplitContent({
 				<section className='hidden w-[210px] flex-col items-center justify-center bg-black/40 md:flex md:[border-top-left-radius:var(--window-radius)] md:[border-bottom-left-radius:var(--window-radius)]'>
 					{side}
 				</section>
-				<section className='umbrel-window-tint min-w-0 flex-1 overflow-hidden max-md:[border-radius:var(--window-radius)] md:[border-top-right-radius:var(--window-radius)] md:[border-bottom-right-radius:var(--window-radius)]'>
-					<ScrollArea dialogInset className='h-full'>
+				<section className='umbrel-window-tint flex min-w-0 flex-1 flex-col overflow-hidden max-md:[border-radius:var(--window-radius)] md:[border-top-right-radius:var(--window-radius)] md:[border-bottom-right-radius:var(--window-radius)]'>
+					<ScrollArea dialogInset className='min-h-0 flex-1'>
 						<div className={immersiveScrollAreaContentsClass}>{children}</div>
 					</ScrollArea>
+					{footer}
 				</section>
 				<div className='umbrel-window-chrome umbrel-window-surface-all pointer-events-none absolute inset-0 z-50' />
 				<ImmersiveDialogClose />

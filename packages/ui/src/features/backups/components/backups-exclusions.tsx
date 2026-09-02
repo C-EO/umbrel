@@ -17,8 +17,10 @@ import {useBackupIgnoredPaths} from '@/features/backups/hooks/use-backup-ignored
 import {formatAppPathForDisplay} from '@/features/backups/utils/filepath-helpers'
 import {MiniBrowser} from '@/features/files/components/mini-browser'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
+import {EXTERNAL_STORAGE_PATH, NETWORK_STORAGE_PATH} from '@/features/files/constants'
 import {useListDirectory} from '@/features/files/hooks/use-list-directory'
 import type {FileSystemItem} from '@/features/files/types'
+import {getAppStorageSourcePaths} from '@/modules/apps/app-storage'
 import {useApps} from '@/providers/apps'
 
 // MAIN COMPONENT
@@ -38,6 +40,22 @@ export function BackupsExclusions({showTitle = false}: {showTitle?: boolean}) {
 		isLoading: isIgnoredLoading,
 	} = useAppsBackupIgnoredSummary()
 	const {pathsByAppId, autoExcludedAppsCount, isLoading: isAutoExcludedLoading} = useAppsAutoExcludedPaths()
+
+	// Folders on external drives or network shares that apps keep data in.
+	// Backups only cover /Home and app-data, so those folders sit outside every
+	// backup: they surface in each affected app's 'Some data excluded' pill
+	// below. Derived from the already cached apps list, no extra requests.
+	const externalPathsByAppId = useMemo(() => {
+		const isOutsideBackupCoverage = (path: string) =>
+			path.startsWith(`${EXTERNAL_STORAGE_PATH}/`) || path.startsWith(`${NETWORK_STORAGE_PATH}/`)
+
+		const byAppId = new Map<string, string[]>()
+		for (const app of userApps || []) {
+			const paths = getAppStorageSourcePaths(app).filter(isOutsideBackupCoverage)
+			if (paths.length > 0) byAppId.set(app.id, paths)
+		}
+		return byAppId
+	}, [userApps])
 
 	const [appPickerOpen, setAppPickerOpen] = useState(false)
 	const [appQuery, setAppQuery] = useState('')
@@ -65,7 +83,7 @@ export function BackupsExclusions({showTitle = false}: {showTitle?: boolean}) {
 						<PlusCircle className='h-3 w-3' />
 					</Button>
 				</div>
-				<div className='divide-y divide-white/6 rounded-12 bg-white/5'>
+				<div className='divide-y divide-white/6 overflow-hidden rounded-12 bg-white/5'>
 					{filteredIgnoredPaths.length === 0 ? (
 						<div className='p-4 text-sm text-white/50'>{t('backups-exclusions.no-excluded-files-or-folders')}</div>
 					) : (
@@ -172,7 +190,8 @@ export function BackupsExclusions({showTitle = false}: {showTitle?: boolean}) {
 					!isIgnoredLoading &&
 					!isAutoExcludedLoading &&
 					excludedAppsCount === 0 &&
-					autoExcludedAppsCount === 0 ? (
+					autoExcludedAppsCount === 0 &&
+					externalPathsByAppId.size === 0 ? (
 						<div className='p-4 text-sm text-white/50'>{t('backups-exclusions.no-excluded-apps')}</div>
 					) : (
 						!isLoadingApps &&
@@ -183,6 +202,7 @@ export function BackupsExclusions({showTitle = false}: {showTitle?: boolean}) {
 								onUnignore={(appId) => unignore(appId)}
 								onIgnore={(appId) => ignore(appId)}
 								paths={pathsByAppId.get(app.id) || []}
+								externalPaths={externalPathsByAppId.get(app.id) || []}
 								isIgnored={!!isIgnoredByAppId.get(app.id)}
 							/>
 						))
@@ -222,7 +242,7 @@ function useFileItemForPath(path: string) {
 	return found
 }
 
-function FilePathRow({path, rightSlot}: {path: string; rightSlot?: React.ReactNode}) {
+function FilePathRow({path, rightSlot, dense}: {path: string; rightSlot?: React.ReactNode; dense?: boolean}) {
 	const found = useFileItemForPath(path)
 	const name = useMemo(() => path.split('/').filter(Boolean).pop() || path, [path])
 	const item: FileSystemItem = found || {
@@ -236,7 +256,11 @@ function FilePathRow({path, rightSlot}: {path: string; rightSlot?: React.ReactNo
 	}
 	const displayPath = path.startsWith('/Home/') ? path.slice('/Home/'.length) : path
 	return (
-		<div className='flex items-center justify-between p-3 text-sm'>
+		<div
+			className={
+				dense ? 'flex items-center justify-between px-1 py-1 text-sm' : 'flex items-center justify-between p-3 text-sm'
+			}
+		>
 			<div className='flex min-w-0 flex-1 items-center gap-2'>
 				<FileItemIcon item={item} className='size-6' />
 				<span dir='ltr' className='w-0 flex-1 truncate text-left text-13' title={path}>
@@ -253,19 +277,23 @@ function AppRow({
 	onUnignore,
 	onIgnore,
 	paths,
+	externalPaths,
 	isIgnored,
 }: {
 	app: {id: string; name?: string; icon?: string}
 	onUnignore: (appId: string) => void
 	onIgnore: (appId: string) => void
 	paths: string[]
+	externalPaths: string[]
 	isIgnored: boolean
 }) {
 	const {t} = useTranslation()
 	const [open, setOpen] = useState(false)
 	const hasDefaultIgnores = (paths || []).length > 0
+	const hasExternalPaths = (externalPaths || []).length > 0
+	const hasExcludedData = hasDefaultIgnores || hasExternalPaths
 
-	if (!isIgnored && !hasDefaultIgnores) return null
+	if (!isIgnored && !hasDefaultIgnores && !hasExternalPaths) return null
 
 	return (
 		<div className='p-3 text-sm'>
@@ -277,13 +305,13 @@ function AppRow({
 					</span>
 				</div>
 				<div className='flex items-center gap-2'>
-					{!isIgnored && hasDefaultIgnores && (
+					{!isIgnored && hasExcludedData && (
 						<button
 							onClick={() => setOpen((v) => !v)}
-							className='flex items-center gap-1 rounded-md bg-white/10 px-2 py-0.5 text-12 text-white/70 hover:text-white'
+							className='flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2 py-0.5 text-12 whitespace-nowrap text-white/70 hover:text-white'
 							type='button'
 						>
-							{t('backups-exclusions.auto-excluded')} ({paths.length})
+							{t('backups-exclusions.some-data-excluded')}
 							<ChevronDown className={`size-3 transition-transform ${open ? 'rotate-180' : ''}`} />
 						</button>
 					)}
@@ -306,13 +334,30 @@ function AppRow({
 					)}
 				</div>
 			</div>
-			{!isIgnored && open && hasDefaultIgnores && (
+			{!isIgnored && open && hasExcludedData && (
 				<div className='mt-2 space-y-1 rounded-md bg-white/5 p-2'>
-					<div className='text-12 text-white/60'>{t('backups-exclusions.app-paths-explanation')}</div>
-					<div className='text-12 text-white/60'>{t('backups-exclusions.app-paths-cannot-be-modified')}</div>
-					{paths.map((p: string) => (
-						<FilePathRow key={p} path={formatAppPathForDisplay(p)} />
-					))}
+					{hasExternalPaths && (
+						<>
+							<div className='px-1 pt-1 text-11 font-semibold tracking-wide text-white/60 uppercase'>
+								{t('backups-exclusions.group-external')}
+							</div>
+							<div className='px-1 text-12 text-white/40'>{t('backups-exclusions.group-external-note')}</div>
+							{externalPaths.map((p: string) => (
+								<FilePathRow key={p} path={p} dense />
+							))}
+						</>
+					)}
+					{hasDefaultIgnores && (
+						<>
+							<div className='px-1 pt-1 text-11 font-semibold tracking-wide text-white/60 uppercase'>
+								{t('backups-exclusions.group-app')}
+							</div>
+							<div className='px-1 text-12 text-white/40'>{t('backups-exclusions.app-paths-explanation')}</div>
+							{paths.map((p: string) => (
+								<FilePathRow key={p} path={formatAppPathForDisplay(p)} dense />
+							))}
+						</>
+					)}
 					<div className='pt-1'>
 						<Button
 							variant='destructive'

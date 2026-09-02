@@ -45,11 +45,13 @@ export const events = [
 	'files:cloud-progress',
 	'files:member-shares:change',
 	'apps:member-shares:change',
+	'apps:settings:change',
 	'apps:state:change',
 	'backups:backup-progress',
 	'backups:restore-progress',
 	'system:disk:change',
 	'files:external-storage:change',
+	'files:network-storage:change',
 	'raid:expansion-progress',
 	'raid:failsafe-transition-progress',
 	'raid:rebuild-progress',
@@ -80,6 +82,9 @@ export type EventTypes = {
 	// Fires when the apps shared with members change, with the accounts the
 	// affected share was or is now shared with
 	'apps:member-shares:change': MemberSharesChangeEvent
+	// Fires after an app settings update reaches a terminal state and the
+	// persisted values are ready to read
+	'apps:settings:change': {appId: string}
 	// Fires when an app's lifecycle state changes, with 'not-installed' when
 	// an app disappears (uninstall or failed install)
 	'apps:state:change': {appId: string; state: AppState | 'not-installed'}
@@ -95,6 +100,8 @@ export type EventTypes = {
 	// Fires when the accessible external storage devices change
 	// e.g mounting/unmounting a USB drive
 	'files:external-storage:change': undefined
+	// Fires when a network share is mounted
+	'files:network-storage:change': undefined
 	// Fires when RAID expansion progress changes
 	'raid:expansion-progress': ExpansionStatus
 	// Fires when failsafe transition progress changes

@@ -200,13 +200,14 @@ export function MiniBrowser({
 					<div className='flex items-center justify-between gap-2'>
 						<div className='min-w-0 flex-1'>
 							<DialogTitle>{title}</DialogTitle>
-							{subtitle ? <p className='mt-1 text-xs text-white/60'>{subtitle}</p> : null}
+							{subtitle ? <div className='mt-1 text-xs text-white/60'>{subtitle}</div> : null}
 						</div>
 						{/* Show new folder button on mobile in header */}
 						{isMobile && newFolderButton}
 					</div>
 				</DialogHeader>
 
+				{/* Fixed height so the dialog doesn't resize as folders expand */}
 				<div className='umbrel-stable-gutter h-[min(60vh,480px)] overflow-x-hidden overflow-y-auto rounded-xl border border-white/10 bg-white/5 p-2'>
 					{/* Optional actions to render in the browser. e.g., "add NAS" button to open the add NAS dialog */}
 					{actions ? <div className='flex items-center justify-end'>{actions}</div> : null}
@@ -238,7 +239,7 @@ export function MiniBrowser({
 					)}
 				</div>
 
-				<DialogFooter className='mt-4'>
+				<DialogFooter className='mt-4 shrink-0'>
 					{/* Show new folder button on desktop in footer */}
 					{!isMobile && newFolderButton}
 					<Button variant='primary' onClick={() => selected && onSelect?.(selected.path)} disabled={!isSelectionValid}>

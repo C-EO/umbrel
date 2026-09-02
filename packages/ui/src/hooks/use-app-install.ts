@@ -6,6 +6,7 @@ import {arrayIncludes} from 'ts-extras'
 
 import {toast} from '@/components/ui/toast'
 import {AppState, AppStateOrLoading, trpcReact} from '@/trpc/trpc'
+import {stripErrorCode} from '@/utils/backend-error'
 
 import {beginAppAction, finishAppAction} from './app-action-guard'
 
@@ -147,16 +148,20 @@ export function useAppInstall(id: string) {
 
 	const startMut = trpcReact.apps.start.useMutation({
 		onMutate: makeOptimisticOnMutate('starting'),
-		onError: (error) => toast.error(t('app.toast.start-failed'), {area: 'app-store', description: error.message}),
+		onError: (error) =>
+			toast.error(t('app.toast.start-failed'), {area: 'app-store', description: stripErrorCode(error.message)}),
 		onSettled: settleAppAction,
 	})
 	const stopMut = trpcReact.apps.stop.useMutation({
 		onMutate: makeOptimisticOnMutate('stopping'),
-		onError: (error) => toast.error(t('app.toast.stop-failed'), {area: 'app-store', description: error.message}),
+		onError: (error) =>
+			toast.error(t('app.toast.stop-failed'), {area: 'app-store', description: stripErrorCode(error.message)}),
 		onSettled: settleAppAction,
 	})
 	const installMut = trpcReact.apps.install.useMutation({
 		onMutate: makeOptimisticOnMutate('installing'),
+		onError: (error) =>
+			toast.error(t('app.toast.install-failed'), {area: 'app-store', description: stripErrorCode(error.message)}),
 		onSettled: settleAppAction,
 	})
 	const uninstallMut = trpcReact.apps.uninstall.useMutation({
@@ -165,7 +170,8 @@ export function useAppInstall(id: string) {
 	})
 	const restartMut = trpcReact.apps.restart.useMutation({
 		onMutate: makeOptimisticOnMutate('restarting'),
-		onError: (error) => toast.error(t('app.toast.restart-failed'), {area: 'app-store', description: error.message}),
+		onError: (error) =>
+			toast.error(t('app.toast.restart-failed'), {area: 'app-store', description: stripErrorCode(error.message)}),
 		onSettled: settleAppAction,
 	})
 
@@ -186,11 +192,20 @@ export function useAppInstall(id: string) {
 	const stop = () => {
 		if (beginAppAction(id)) stopMut.mutate({appId: id})
 	}
-	const install = (alternatives?: Record<string, string>) => {
-		if (beginAppAction(id)) installMut.mutate({appId: id, alternatives})
+	const install = ({
+		alternatives,
+		folderAccess,
+	}: {
+		alternatives?: Record<string, string>
+		folderAccess?: Array<{id: string; sourcePath: string}>
+	} = {}) => {
+		if (beginAppAction(id)) installMut.mutate({appId: id, alternatives, folderAccess})
 	}
 	const getAppsToUninstallFirst = async () => {
-		const appsToUninstallFirst = await utils.apps.dependents.fetch(id)
+		// Dependency membership can change moments before this prompt (for example,
+		// after uninstalling a dependent), so this safety check must never use the
+		// UI's normal one-minute query cache.
+		const appsToUninstallFirst = await utils.apps.dependents.fetch(id, {staleTime: 0})
 		// We expect to have an array, even if it's empty
 		if (!appsToUninstallFirst) throw new Error(t('apps.uninstall.failed-to-get-required-apps'))
 		return appsToUninstallFirst

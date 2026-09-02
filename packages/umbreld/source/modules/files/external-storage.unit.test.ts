@@ -1,6 +1,10 @@
 import {describe, expect, test} from 'vitest'
 
-import {isEligibleExternalStorageDevice, syntheticOwnershipMountOptions} from './external-storage.js'
+import {
+	isEligibleExternalStorageDevice,
+	supportsAppDataRootFilesystem,
+	syntheticOwnershipMountOptions,
+} from './external-storage.js'
 
 describe('isEligibleExternalStorageDevice', () => {
 	test('excludes USB devices that report zero capacity', () => {
@@ -21,5 +25,15 @@ describe('syntheticOwnershipMountOptions', () => {
 
 	test.each(['ext4', 'xfs', 'btrfs', 'unknown'])('preserves native ownership for %s', (filesystem) => {
 		expect(syntheticOwnershipMountOptions(filesystem, 1000, 1000)).toBeUndefined()
+	})
+})
+
+describe('supportsAppDataRootFilesystem', () => {
+	test.each(['ext4', 'EXT4'])('supports %s', (filesystem) => {
+		expect(supportsAppDataRootFilesystem(filesystem)).toBe(true)
+	})
+
+	test.each(['exfat', 'vfat', 'ntfs', 'ntfs3', 'xfs', 'btrfs', 'unknown'])('rejects %s', (filesystem) => {
+		expect(supportsAppDataRootFilesystem(filesystem)).toBe(false)
 	})
 })

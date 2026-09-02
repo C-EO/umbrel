@@ -32,6 +32,18 @@ export type PhotosDialogKey =
 	| 'photos-rename-album'
 export type DialogKey = GlobalDialogKey | AppStoreDialogKey | SettingsDialogKey | FilesDialogKey | PhotosDialogKey
 
+// Some dialog params read better unprefixed in the URL (?app=jellyfin instead
+// of ?app-settings-for=jellyfin). Maps a dialog's linkToDialog param names to
+// the raw query keys used in the URL; unlisted params keep the
+// `<dialogKey>-` prefix. Raw keys must not collide with other query params.
+const dialogParamAliases: Partial<Record<DialogKey, Record<string, string>>> = {
+	'app-settings': {for: 'app', view: 'view', dependency: 'dependency'},
+}
+
+export function getDialogParamKey(dialogKey: DialogKey, param: string) {
+	return dialogParamAliases[dialogKey]?.[param] ?? `${dialogKey}-${param}`
+}
+
 // TODO: make dialog query params typesafe
 
 /**
@@ -68,10 +80,12 @@ export function useDialogOpenProps(dialogKey: DialogKey) {
 
 	const removeQueryParam = async () => {
 		await sleep(EXIT_DURATION_MS)
-		// Remove `dialog` and all `dialogKey` prefixed search params
+		// Remove `dialog`, all `dialogKey` prefixed search params, and any
+		// unprefixed aliases this dialog uses
+		const aliasKeys = new Set(Object.values(dialogParamAliases[dialogKey] ?? {}))
 		filter(([key]) => {
 			const isDialog = key === 'dialog'
-			const dialogParams = key.startsWith(dialogKey)
+			const dialogParams = key.startsWith(dialogKey) || aliasKeys.has(key)
 			return !(isDialog || dialogParams)
 		})
 	}
@@ -101,7 +115,7 @@ export function useLinkToDialog() {
 		const otherParamsModified: {[key: string]: string} = {}
 		if (otherParams) {
 			Object.keys(otherParams).forEach((key) => {
-				otherParamsModified[`${dialogKey}-${key}`] = otherParams[key]
+				otherParamsModified[getDialogParamKey(dialogKey, key)] = otherParams[key]
 			})
 		}
 		return {

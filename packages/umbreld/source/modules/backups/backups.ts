@@ -746,6 +746,9 @@ export default class Backups {
 
 		// Ignore temporary migration directory
 		ignoreFileContents.push('.temporary-migration')
+		// App data-root moves copy into a sibling staging directory before an
+		// atomic rename. Never snapshot that incomplete copy.
+		ignoreFileContents.push('app-data/*/.data-moving-*')
 
 		// SQLite's database, WAL, and shared-memory files cannot be copied
 		// independently while writes and checkpoints continue. Back up only the
@@ -792,7 +795,9 @@ export default class Backups {
 					this.logger.error(`Failed to get backup ignored status for ${app.id}`, error)
 					return false
 				})
-				if (isIgnored) ignoreFileContents.push(app.dataDirectory)
+				if (isIgnored) {
+					ignoreFileContents.push(app.dataDirectory)
+				}
 
 				// Ignore paths that apps have signaled should be ignored
 				const backupIgnore = await app.getBackupIgnoredFilePaths().catch((error) => {

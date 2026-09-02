@@ -6,17 +6,7 @@ import {arrayIncludes} from 'ts-extras'
 import {AppIcon} from '@/components/app-icon'
 import {ChevronDown} from '@/components/chevron-down'
 import {ProgressButton} from '@/components/progress-button'
-import {
-	AlertDialog,
-	AlertDialogAction,
-	AlertDialogCancel,
-	AlertDialogContent,
-	AlertDialogFooter,
-	AlertDialogHeader,
-	AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import {Button} from '@/components/ui/button'
-import {ButtonLink} from '@/components/ui/button-link'
 import {
 	DropdownMenu,
 	DropdownMenuCheckboxItem,
@@ -35,91 +25,8 @@ import {installedStates, RegistryApp, UserApp} from '@/trpc/trpc'
 import {tw} from '@/utils/tw'
 
 type DependencyApp = RegistryApp | UserApp
-
-export function SelectDependenciesDialog({
-	open,
-	onOpenChange,
-	appId,
-	dependencies,
-	onNext,
-	highlightDependency,
-	onInstallDependency,
-	makeDependencyPath = registryAppPath,
-}: {
-	open: boolean
-	onOpenChange: (open: boolean) => void
-	appId: string
-	dependencies: DependencyAlternatives[]
-	onNext: (selectedDeps: Record<string, string>) => void
-	highlightDependency?: string
-	onInstallDependency?: (app: RegistryApp) => void
-	makeDependencyPath?: (app: RegistryApp) => string
-}) {
-	const {t} = useTranslation()
-	const availableApps = useAllAvailableApps()
-	const {isLoading, userApps, userAppsKeyed} = useApps()
-	const [selectedDependencies, setSelectedDependencies] = useState<Record<string, string>>({})
-
-	// Try user app first in case the app was installed at some point but is not
-	// present in an app store anymore, for example because a community app store
-	// has been removed. UserApp and RegistryApp share the necessary properties.
-	const registryApp = availableApps.appsKeyed?.[appId]
-	const userApp = userAppsKeyed?.[appId]
-	const app = userApp ?? registryApp
-	if (!app) throw new Error('App not found')
-
-	if (isLoading || !userApps || !userAppsKeyed || availableApps.isLoading) return null
-
-	const appName = app?.name
-
-	// A dependency counts as installed once its selected alternative is installed.
-	const installedCount = dependencies.filter(({dependencyId, appIds}) => {
-		const selectedApp = userAppsKeyed[selectedDependencies[dependencyId]]
-		return !!selectedApp && appIds.includes(selectedApp.id) && arrayIncludes(installedStates, selectedApp.state)
-	}).length
-	const areAllDependenciesInstalled = installedCount === dependencies.length
-
-	return (
-		// The store's alert-dialog treatment (icon, centered copy, centered
-		// actions), with the dependency list between the copy and the actions
-		<AlertDialog open={open} onOpenChange={onOpenChange}>
-			<AlertDialogContent
-				className='umbrel-app-store-modal'
-				onOpenAutoFocus={(e) => {
-					// `preventDefault` to prevent focus on first input
-					e.preventDefault()
-				}}
-			>
-				<AlertDialogHeader>
-					<AlertDialogTitle>{t('install-first.title', {app: appName, count: dependencies.length})}</AlertDialogTitle>
-				</AlertDialogHeader>
-				<SelectDependencies
-					dependencies={dependencies}
-					selectedDependencies={selectedDependencies}
-					setSelectedDependencies={setSelectedDependencies}
-					onLeave={() => onOpenChange(false)}
-					highlightDependency={highlightDependency}
-					onInstallDependency={onInstallDependency}
-					makeDependencyPath={makeDependencyPath}
-				/>
-				<AlertDialogFooter>
-					<AlertDialogAction
-						variant='primary'
-						className='px-6'
-						disabled={!areAllDependenciesInstalled}
-						onClick={() => {
-							onOpenChange(false)
-							onNext(selectedDependencies)
-						}}
-					>
-						{t('install-first.install-app', {app: appName})}
-					</AlertDialogAction>
-					<AlertDialogCancel>{t('cancel')}</AlertDialogCancel>
-				</AlertDialogFooter>
-			</AlertDialogContent>
-		</AlertDialog>
-	)
-}
+type PresentInstallDialog = (showDialog: () => void) => void
+export type InstallDependency = (app: RegistryApp, presentDialog?: PresentInstallDialog) => void
 
 // Reusable dependencies selection
 export function SelectDependencies({
@@ -134,10 +41,10 @@ export function SelectDependencies({
 	dependencies: DependencyAlternatives[]
 	selectedDependencies: Record<string, string>
 	setSelectedDependencies: (selectedDependencies: Record<string, string>) => void
-	/** The user is leaving for a dependency's own page or install flow — close the surrounding dialog */
-	onLeave: () => void
+	/** Close the surrounding dialog, then continue into the dependency's flow. */
+	onLeave: (afterLeave?: () => void) => void
 	highlightDependency?: string
-	onInstallDependency?: (app: RegistryApp) => void
+	onInstallDependency?: InstallDependency
 	makeDependencyPath?: (app: RegistryApp) => string
 }) {
 	const {t} = useTranslation()
@@ -272,8 +179,8 @@ function DependencyAction({
 }: {
 	app?: DependencyApp
 	availableApp?: RegistryApp
-	onLeave: () => void
-	onInstallDependency?: (app: RegistryApp) => void
+	onLeave: (afterLeave?: () => void) => void
+	onInstallDependency?: InstallDependency
 	makeDependencyPath: (app: RegistryApp) => string
 }) {
 	const {t} = useTranslation()
@@ -310,23 +217,23 @@ function DependencyAction({
 	const pagePath = makeDependencyPath(availableApp)
 
 	const install = () => {
-		if (!needsFullFlow) {
-			if (onInstallDependency) onInstallDependency(availableApp)
-			else appInstall.install()
+		if (onInstallDependency) {
+			onInstallDependency(availableApp, (showDialog) => onLeave(showDialog))
 			return
 		}
-		onLeave()
-		if (onInstallDependency) onInstallDependency(availableApp)
-		else navigate(pagePath, {state: {fromAppStore: true}})
+		if (!needsFullFlow) return appInstall.install()
+		onLeave(() => navigate(pagePath, {state: {fromAppStore: true}}))
 	}
 
 	return (
 		<span className='flex items-center gap-2'>
 			{/* Once the install is running the progress button is the whole story */}
+			{/* Navigation runs inside onLeave so hosts that guard leaving (the app
+			    settings dialog confirming unsaved changes) can gate or cancel it */}
 			{!transitioning && (
-				<ButtonLink to={pagePath} state={{fromAppStore: true}} onClick={onLeave} size='sm'>
+				<Button onClick={() => onLeave(() => navigate(pagePath, {state: {fromAppStore: true}}))} size='sm'>
 					{t('app.view')}
-				</ButtonLink>
+				</Button>
 			)}
 			{/* Disables itself while the app transitions (see ProgressButton) */}
 			<ProgressButton

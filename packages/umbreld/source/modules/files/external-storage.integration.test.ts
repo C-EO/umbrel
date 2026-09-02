@@ -210,6 +210,7 @@ describe('files.mountedExternalDevices', () => {
 						mountpoints: [],
 						size: 209715200,
 						type: 'EFI System',
+						supportsAppDataRoot: false,
 					},
 					{
 						id: 'sda2',
@@ -218,6 +219,7 @@ describe('files.mountedExternalDevices', () => {
 						mountpoints: [],
 						size: 999993376768,
 						type: 'Microsoft basic data',
+						supportsAppDataRoot: false,
 					},
 				],
 			},
@@ -253,6 +255,7 @@ describe('files.mountedExternalDevices', () => {
 						mountpoints: [],
 						size: 209715200,
 						type: 'EFI System',
+						supportsAppDataRoot: false,
 					},
 					{
 						id: 'sda2',
@@ -261,6 +264,7 @@ describe('files.mountedExternalDevices', () => {
 						type: 'Microsoft basic data',
 						size: 999993376768,
 						mountpoints: ['/External/Red T5'],
+						supportsAppDataRoot: false,
 					},
 				],
 			},
@@ -2092,3 +2096,68 @@ const LSBLK_EXTERNAL_DISK_MOUNTED = {
 		},
 	],
 }
+
+describe('externalstorage eject guard', () => {
+	test('blocks unmounting a device an active app uses as a storage location', async () => {
+		const appId = 'sparkles-hello-world'
+		const waitForReady = async (description: string) => {
+			for (let i = 0; i < 60; i++) {
+				const state = await umbreld.client.apps.state.query({appId})
+				if (state.state === 'ready') return
+				await delay(1000)
+			}
+
+			throw new Error(`${appId} did not return to ready state after ${description}`)
+		}
+
+		// Install an app and wait for it to become ready
+		await expect(umbreld.client.apps.install.mutate({appId})).resolves.toBe(true)
+		await waitForReady('install')
+
+		// Fake an attached and mounted external drive
+		mockCommand = (command: string) => {
+			if (command.startsWith('lsblk'))
+				return JSON.stringify(LSBLK_EXTERNAL_DISK_MOUNTED).replaceAll(
+					'/home/umbrel/umbrel',
+					umbreld.instance.dataDirectory,
+				)
+			if (command.startsWith('umount')) return 'fake umount worked'
+		}
+		mockWriteFile = (path: string, data: string) => {
+			if (path === '/sys/block/sda/device/delete') return '1'
+		}
+		const mountPoint = `${umbreld.instance.dataDirectory}/external/Red T5`
+		await fse.ensureDir(mountPoint)
+
+		// Point the app at the drive as a custom storage location
+		await expect(
+			umbreld.client.apps.setSettings.mutate({
+				appId,
+				customMounts: [
+					{
+						serviceName: 'server',
+						targetPath: '/drive-data',
+						sourcePath: '/External/Red T5',
+						readOnly: false,
+					},
+				],
+				folderAccess: [],
+			}),
+		).resolves.toBe(true)
+
+		// Wait out the restart triggered by the save so the assertions below can't
+		// race it: the guard must be checked against a running app, and the final
+		// stop must not overlap the restart's own stop/start cycle
+		await waitForReady('saving storage settings')
+
+		// Ejecting is blocked while the app is running and the drive stays mounted
+		await expect(umbreld.client.files.unmountExternalDevice.mutate({deviceId: 'sda'})).rejects.toThrow(
+			'[storage-in-use-by-apps]',
+		)
+		await expect(fse.pathExists(mountPoint)).resolves.toBe(true)
+
+		// Stopping the app unblocks ejecting
+		await expect(umbreld.client.apps.stop.mutate({appId})).resolves.toBe(true)
+		await expect(umbreld.client.files.unmountExternalDevice.mutate({deviceId: 'sda'})).resolves.toBe(true)
+	})
+})

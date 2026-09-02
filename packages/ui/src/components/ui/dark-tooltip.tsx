@@ -15,13 +15,17 @@ export const darkTooltipClass = cn(
 // <DarkTooltip label="Restart"><button .../></DarkTooltip>
 // Uses the Radix primitives directly (rather than components/ui/tooltip) so the
 // content renders in a portal — otherwise ancestors with overflow-hidden clip it.
+// The default pill shape suits one-word labels; sentence-length labels pass a
+// className to unlock wrapping (e.g. 'max-w-60 rounded-12 whitespace-normal').
 export function DarkTooltip({
 	label,
 	side = 'top',
+	className,
 	children,
 }: {
 	label: string
 	side?: 'top' | 'bottom' | 'left' | 'right'
+	className?: string
 	children: React.ReactNode
 }) {
 	return (
@@ -34,6 +38,7 @@ export function DarkTooltip({
 					className={cn(
 						darkTooltipClass,
 						'z-50 animate-in fade-in-0 zoom-in-95 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95',
+						className,
 					)}
 				>
 					{label}

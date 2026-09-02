@@ -53,6 +53,9 @@ export default router({
 					// Progress events are snapshots rather than deltas. The stream is
 					// already attached before this read, so a concurrent update queues
 					// behind the seed instead of being lost in a subscribe-time gap.
+					if (input.event === 'files:operation-progress') {
+						yield ctx.umbreld.files.operationsInProgress.filter((operation) => operation.userId === userId)
+					}
 					if (input.event === 'files:cloud-progress') {
 						yield ctx.umbreld.files.cloud.getActivity(userId)
 					}
@@ -95,8 +98,8 @@ export default router({
 							}
 						}
 
-						// Members only receive progress of their own file operations
-						if (isMember && input.event === 'files:operation-progress') {
+						// Every account only receives progress for its own file operations
+						if (input.event === 'files:operation-progress') {
 							const operations = event as OperationsInProgress
 							event = operations.filter((operation) => operation.userId === userId)
 						}

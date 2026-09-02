@@ -1,3 +1,5 @@
+import type {ReactNode} from 'react'
+
 import {formatItemName, splitFileName} from '@/features/files/utils/format-filesystem-name'
 import {cn} from '@/lib/utils'
 
@@ -5,14 +7,25 @@ interface TruncatedFilenameProps {
 	filename: string
 	className?: string
 	view?: 'list' | 'icons'
+	// Icons view only: an inline element that follows the name, wrapping with it
+	suffix?: ReactNode
+	// Icons view only: shorter names leave room for a suffix within the clamp
+	maxLength?: number
 }
 
-export function TruncatedFilename({filename, className, view = 'list'}: TruncatedFilenameProps) {
+export function TruncatedFilename({
+	filename,
+	className,
+	view = 'list',
+	suffix,
+	maxLength = 30,
+}: TruncatedFilenameProps) {
 	// In icons view, we know the parent's height/width, so we don't need to use dynamic truncation
 	if (view === 'icons') {
 		return (
 			<span className={cn('block w-full text-center', className)} title={filename}>
-				{formatItemName({name: filename, maxLength: 30})}
+				{formatItemName({name: filename, maxLength})}
+				{suffix && <> {suffix}</>}
 			</span>
 		)
 	}

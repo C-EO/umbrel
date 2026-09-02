@@ -1050,7 +1050,8 @@ export default function UsersDialog() {
 		>
 			<AlertDialogContent>
 				<AlertDialogHeader>
-					<div className='relative mx-auto w-fit'>
+					{/* mt-1 keeps the badge's negative offset inside the header's scroll clip */}
+					<div className='relative mx-auto mt-1 w-fit'>
 						<AccountAvatar
 							name={editingMember.name}
 							userId={editingMember.userId}

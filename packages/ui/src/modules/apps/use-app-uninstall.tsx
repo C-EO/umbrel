@@ -1,6 +1,7 @@
-import {ReactNode, useState} from 'react'
+import {ReactNode, useEffect, useState} from 'react'
 
 import type {useAppInstall} from '@/hooks/use-app-install'
+import {useApps} from '@/providers/apps'
 
 import {UninstallConfirmationDialog} from './uninstall-confirmation-dialog'
 import {UninstallTheseFirstDialog} from './uninstall-these-first-dialog'
@@ -19,6 +20,18 @@ export function useAppUninstall(
 	const [showConfirmation, setShowConfirmation] = useState(false)
 	const [depsOpen, setDepsOpen] = useState(false)
 	const [toUninstallFirstIds, setToUninstallFirstIds] = useState<string[]>([])
+	const {userAppsKeyed} = useApps()
+	const remainingToUninstallFirstIds = toUninstallFirstIds.filter((id) => userAppsKeyed?.[id])
+
+	// Keep an open dependency prompt in sync with uninstalls happening elsewhere.
+	// Once the final blocker is gone, continue the flow instead of leaving the
+	// user looking at stale instructions.
+	useEffect(() => {
+		if (!depsOpen || toUninstallFirstIds.length === 0 || remainingToUninstallFirstIds.length > 0) return
+		setDepsOpen(false)
+		setToUninstallFirstIds([])
+		setShowConfirmation(true)
+	}, [depsOpen, remainingToUninstallFirstIds.length, toUninstallFirstIds.length])
 
 	const promptUninstall = async () => {
 		const apps = await appInstall.getAppsToUninstallFirst()
@@ -44,10 +57,10 @@ export function useAppUninstall(
 
 	const dialogs = (
 		<>
-			{toUninstallFirstIds.length > 0 && (
+			{remainingToUninstallFirstIds.length > 0 && (
 				<UninstallTheseFirstDialog
 					appId={appId}
-					toUninstallFirstIds={toUninstallFirstIds}
+					toUninstallFirstIds={remainingToUninstallFirstIds}
 					open={depsOpen}
 					onOpenChange={setDepsOpen}
 				/>

@@ -10,7 +10,10 @@ export default async function appScript(
 	command: string,
 	arg: string,
 	inheritStdio: boolean = true,
-	{maxOutputBytes}: {maxOutputBytes?: number} = {},
+	{
+		maxOutputBytes,
+		dataRoots = {[arg]: `${umbreld.dataDirectory}/app-data/${arg}/data`},
+	}: {maxOutputBytes?: number; dataRoots?: Record<string, string>} = {},
 ) {
 	// Prevent breaking test output
 	if (process.env.TEST === 'true') inheritStdio = false
@@ -31,6 +34,7 @@ export default async function appScript(
 			SCRIPT_UMBREL_ROOT: umbreld.dataDirectory,
 			SCRIPT_DOCKER_FRAGMENTS: currentDirname,
 			SCRIPT_APP_REPO_DIR,
+			SCRIPT_APP_DATA_ROOTS: JSON.stringify(dataRoots),
 			BITCOIN_NETWORK: 'mainnet', // Needed for legacy reasons otherwise the Bitcoin app fails to start
 			TOR_PROXY_IP: '10.21.21.11',
 			TOR_PROXY_PORT: '9050',

@@ -1,5 +1,5 @@
 import {fileURLToPath} from 'node:url'
-import {dirname, join} from 'node:path'
+import {dirname, join, posix} from 'node:path'
 
 import fse from 'fs-extra'
 import {$} from 'execa'
@@ -7,18 +7,42 @@ import pRetry from 'p-retry'
 
 import randomToken from '../../modules/utilities/random-token.js'
 import type Umbreld from '../../index.js'
+import {CLOUD_DESTINATION_MISSING_ERROR} from '../files/cloud-types.js'
 import appEnvironment from './legacy-compat/app-environment.js'
-import type {AppSettings} from './schema.js'
-import App, {readManifestInDirectory} from './app.js'
+import type {AppDataRootLocation, AppFolderAccessSelection, AppSettings} from './schema.js'
+import App, {
+	getFolderAccessSlots,
+	readComposeInDirectory,
+	readManifestInDirectory,
+	type AppSettingsUpdate,
+} from './app.js'
 import type {AppManifest} from './schema.js'
 import {fillSelectedDependencies} from '../utilities/dependencies.js'
+import {OWNER_USER_ID} from '../user/constants.js'
 import {assertManifestVersionCompatible} from './manifest-compatibility.js'
+
+export type AppDataRootStatus = 'available' | 'storage-unavailable' | 'data-missing'
+
+type InstallOptions = {
+	alternatives?: AppSettings['dependencies']
+	folderAccess?: AppFolderAccessSelection[]
+}
 
 export default class Apps {
 	#umbreld: Umbreld
 	logger: Umbreld['logger']
 	instances: App[] = []
 	isTorBeingToggled = false
+	#storageChangeUnsubscribes: Array<() => void> = []
+	#storageRetryInFlight = false
+	#storageRetryQueued = false
+	#storageSourceChecks = new Map<string, {isDirectory: Promise<boolean>; settledAt?: number}>()
+	#dataRootChecks = new Map<string, {status: Promise<AppDataRootStatus>; settledAt?: number}>()
+	#dataRootLocations = new Map<string, AppDataRootLocation>()
+	#folderAccessSourcePaths = new Map<string, string[]>()
+	#storageBlocks = new Map<symbol, string[]>()
+	#storageOperations = new Map<symbol, {appId: string; paths: string[]; protectAsDataRoot: boolean}>()
+	#installsInProgress = new Set<string>()
 
 	constructor(umbreld: Umbreld) {
 		this.#umbreld = umbreld
@@ -102,6 +126,13 @@ export default class Apps {
 		// Create app instances
 		const appIds = await this.#umbreld.store.get('apps')
 		this.instances = appIds.map((appId) => new App(this.#umbreld, appId))
+		this.#dataRootLocations.clear()
+		await Promise.all(
+			this.instances.map(async (app) => {
+				const location = await app.getDataRootLocation().catch(() => null)
+				if (location) this.#dataRootLocations.set(app.id, location)
+			}),
+		)
 
 		// Don't save references to any apps that don't have a data directory on
 		// startup. This will allow apps that were excluded from backups to be
@@ -116,12 +147,35 @@ export default class Apps {
 				appIdsMissingDataDir.push(app.id)
 			}
 		}
+		this.#folderAccessSourcePaths.clear()
+		await Promise.all(this.instances.map((app) => this.refreshFolderAccessSourcePaths(app)))
 
 		// Force the app state to starting so users don't get confused.
 		// They aren't actually starting yet, we need to make sure the app env is up first.
 		// But if that takes a long time users see all their apps listed as not running and
 		// get confused.
 		for (const app of this.instances) app.state = 'starting'
+
+		// Storage that apps depend on via custom folders (network shares, external
+		// drives) can become available after an app has already failed to start,
+		// e.g. a NAS that's still booting when apps auto-start after a reboot.
+		// Retry those apps whenever storage is mounted.
+		let initialAppStartsSettled = false
+		let retryAfterInitialAppStarts = false
+		const onStorageChange = () => {
+			// Re-check source availability from scratch so recovery shows promptly
+			this.#storageSourceChecks.clear()
+			this.#dataRootChecks.clear()
+			// A mount can finish after an app checks storage but before its failed
+			// start changes state from starting to unknown. The event-time retry then
+			// skips it, so remember to retry once all initial starts have settled.
+			if (!initialAppStartsSettled) retryAfterInitialAppStarts = true
+			this.startAppsAwaitingStorage()
+		}
+		this.#storageChangeUnsubscribes.push(
+			this.#umbreld.eventBus.on('files:external-storage:change', onStorageChange),
+			this.#umbreld.eventBus.on('files:network-storage:change', onStorageChange),
+		)
 
 		// Attempt to pre-load local Docker images
 		try {
@@ -202,6 +256,8 @@ export default class Apps {
 
 		// Wait for current installed apps to finish starting
 		await startAppsPromise
+		initialAppStartsSettled = true
+		if (retryAfterInitialAppStarts) await this.startAppsAwaitingStorage()
 		await this.#umbreld.lanIngress
 			.refresh()
 			.catch((error) => this.logger.error('Failed to refresh LAN ingress after starting apps', error))
@@ -247,8 +303,412 @@ export default class Apps {
 		}
 	}
 
+	// Returns the names of installed apps that use storage at or under the given
+	// virtual path, including data roots inherited through app dependencies. Used
+	// to block removing network shares or ejecting drives out from under active apps.
+	// Only an explicitly stopped app releases its storage. `unknown` can mean a
+	// lifecycle command failed after changing only some containers, so treating it
+	// as inactive could allow storage to be removed from a container still using it.
+	async #getFolderAccessSourcePaths(app: App) {
+		try {
+			return await app.getEffectiveFolderAccessSourcePaths()
+		} catch (error) {
+			this.logger.error(`Could not resolve effective folder access for ${app.id}; using saved paths`, error)
+			return app.getConfiguredFolderAccessSourcePaths()
+		}
+	}
+
+	async getAppsUsingStorageSource(virtualPath: string) {
+		const appNames: string[] = []
+		for (const app of this.instances) {
+			if (app.state === 'stopped') continue
+			const sourcePaths = new Set(await this.getDataRootStoragePaths(app.id))
+			for (const path of await this.#getFolderAccessSourcePaths(app)) sourcePaths.add(path)
+			const usesPath = [...sourcePaths].some(
+				(sourcePath) => sourcePath === virtualPath || sourcePath.startsWith(`${virtualPath}/`),
+			)
+			if (usesPath) {
+				const name = await app
+					.readManifest()
+					.then((manifest) => manifest.name)
+					.catch(() => app.id)
+				appNames.push(name)
+			}
+		}
+
+		return appNames
+	}
+
+	#storagePathsOverlap(first: string, second: string) {
+		return first === second || first.startsWith(`${second}/`) || second.startsWith(`${first}/`)
+	}
+
+	// Register source and destination paths before a move performs any async work.
+	// Drive/share removal registers its block the same way, so whichever operation
+	// starts first wins without a check-then-unmount race.
+	beginStorageOperation(
+		appId: string,
+		paths: string[],
+		{protectAsDataRoot = true}: {protectAsDataRoot?: boolean} = {},
+	) {
+		const normalizedPaths = paths.map((path) => posix.normalize(path))
+		for (const blockedPaths of this.#storageBlocks.values()) {
+			if (normalizedPaths.some((path) => blockedPaths.some((blocked) => this.#storagePathsOverlap(path, blocked)))) {
+				throw new Error('[apps-storage-blocked] Storage is being disconnected')
+			}
+		}
+
+		const token = Symbol('app-storage-operation')
+		this.#storageOperations.set(token, {appId, paths: normalizedPaths, protectAsDataRoot})
+		let released = false
+		return () => {
+			if (released) return
+			released = true
+			this.#storageOperations.delete(token)
+		}
+	}
+
+	// Register the block synchronously before inspecting apps. An operation that
+	// began first is visible below; one that begins later sees the block and fails.
+	// Unrelated app lifecycle work never waits on this path-specific coordination.
+	async blockStoragePaths(paths: string[]) {
+		const roots = paths.map((path) => posix.normalize(path))
+		const token = Symbol('app-storage-block')
+		this.#storageBlocks.set(token, roots)
+
+		try {
+			const appIds = new Set<string>()
+			for (const operation of this.#storageOperations.values()) {
+				if (operation.paths.some((path) => roots.some((root) => this.#storagePathsOverlap(path, root)))) {
+					appIds.add(operation.appId)
+				}
+			}
+
+			const names = new Set<string>()
+			for (const root of roots) {
+				for (const name of await this.getAppsUsingStorageSource(root)) names.add(name)
+			}
+			for (const appId of appIds) {
+				const name = await this.getApp(appId)
+					.readManifest()
+					.then((manifest) => manifest.name)
+					.catch(() => appId)
+				names.add(name)
+			}
+
+			if (names.size > 0) throw new Error(`[storage-in-use-by-apps] ${[...names].join(', ')}`)
+
+			let released = false
+			return () => {
+				if (released) return
+				released = true
+				this.#storageBlocks.delete(token)
+			}
+		} catch (error) {
+			this.#storageBlocks.delete(token)
+			throw error
+		}
+	}
+
+	async #getDependencyAppIds(appId: string) {
+		const appIds: string[] = []
+		const visited = new Set<string>()
+		const visit = async (id: string) => {
+			if (visited.has(id)) return
+			visited.add(id)
+			appIds.push(id)
+			const app = this.instances.find((candidate) => candidate.id === id)
+			if (!app) return
+			for (const dependencyId of await app.getDependencies()) await visit(dependencyId)
+		}
+		await visit(appId)
+		return appIds
+	}
+
+	async getDataRootStoragePaths(appId: string) {
+		const paths = new Set<string>()
+		for (const id of await this.#getDependencyAppIds(appId)) {
+			const location = this.#dataRootLocations.get(id)
+			if (location) paths.add(location.path)
+		}
+		return [...paths]
+	}
+
+	async getDataRootPathsForApps(appIds: string[]) {
+		const paths = new Set<string>()
+		for (const appId of appIds) {
+			for (const id of await this.#getDependencyAppIds(appId)) {
+				paths.add(this.#dataRootLocations.get(id)?.path ?? `/Apps/${id}/data`)
+			}
+		}
+		return [...paths]
+	}
+
+	async getAppsWithFolderAccessOverlap(virtualPath: string) {
+		const path = posix.normalize(virtualPath)
+		const appIds: string[] = []
+		for (const app of this.instances) {
+			const sourcePaths = await this.#getFolderAccessSourcePaths(app)
+			if (sourcePaths.some((sourcePath) => this.#storagePathsOverlap(path, sourcePath))) appIds.push(app.id)
+		}
+		return appIds
+	}
+
+	// A restored backup can include a move journal referencing storage this
+	// machine has never seen, where waiting for that storage to reconnect can
+	// never succeed. The restored data root location is authoritative, so drop
+	// the journal instead of blocking future moves on it.
+	async clearRestoredDataRootMoves() {
+		const appIds = (await this.#umbreld.store.get('apps')) ?? []
+		for (const appId of appIds) {
+			const app = new App(this.#umbreld, appId)
+			const move = await app.store.get('dataRootMove')
+			if (move === undefined) continue
+			this.logger.log(`Dropping restored storage move journal for app ${appId}`)
+			await app.store.delete('dataRootMove')
+		}
+	}
+
+	setDataRootLocation(appId: string, location: AppDataRootLocation | null) {
+		if (location) this.#dataRootLocations.set(appId, location)
+		else this.#dataRootLocations.delete(appId)
+		this.#dataRootChecks.clear()
+	}
+
+	setFolderAccessSourcePaths(appId: string, sourcePaths: string[]) {
+		const normalizedPaths = [...new Set(sourcePaths.map((path) => posix.normalize(path)))]
+		if (normalizedPaths.length > 0) this.#folderAccessSourcePaths.set(appId, normalizedPaths)
+		else this.#folderAccessSourcePaths.delete(appId)
+	}
+
+	async refreshFolderAccessSourcePaths(app: App) {
+		try {
+			this.setFolderAccessSourcePaths(app.id, await app.getEffectiveFolderAccessSourcePaths())
+		} catch (error) {
+			this.logger.error(`Could not refresh effective folder access for ${app.id}; using saved paths`, error)
+			try {
+				this.setFolderAccessSourcePaths(app.id, await app.getConfiguredFolderAccessSourcePaths())
+			} catch (fallbackError) {
+				// Preserve the last known paths instead of briefly allowing destructive
+				// operations when an app definition or settings file cannot be read.
+				this.logger.error(`Could not refresh saved folder access for ${app.id}`, fallbackError)
+			}
+		}
+	}
+
+	// A configured folder source remains ordinary writable user storage. Protect
+	// only the source itself and ancestors that would carry it along if moved;
+	// descendants stay fully mutable so users and apps can manage their data.
+	getFolderAccessPathRelation(
+		virtualPath: string,
+	): 'folder-root' | 'contains-folder-root' | 'inside-folder-root' | null {
+		const path = posix.normalize(virtualPath)
+		let isInsideRoot = false
+		for (const sourcePaths of this.#folderAccessSourcePaths.values()) {
+			for (const root of sourcePaths) {
+				if (path === root) return 'folder-root'
+				if (root.startsWith(`${path}/`)) return 'contains-folder-root'
+				if (path.startsWith(`${root}/`)) isInsideRoot = true
+			}
+		}
+		return isInsideRoot ? 'inside-folder-root' : null
+	}
+
+	// The selected folder remains ordinary user storage, but the managed root
+	// beneath it must not be moved, deleted, or shared behind the app lifecycle.
+	// Files protects the root and its ancestors from destructive actions,
+	// and uses the inside relation to keep the app-owned subtree unshareable.
+	getDataRootPathRelation(
+		virtualPath: string,
+	): 'active-root' | 'contains-root' | 'contains-active-root' | 'inside-root' | 'inside-active-root' | null {
+		const path = posix.normalize(virtualPath)
+		let isInsideRoot = false
+		let isInsideActiveRoot = false
+		const relationTo = (root: string) => {
+			if (path === root) return 'root' as const
+			if (root.startsWith(`${path}/`)) return 'contains-root' as const
+			if (path.startsWith(`${root}/`)) return 'inside-root' as const
+			return null
+		}
+		for (const operation of this.#storageOperations.values()) {
+			if (!operation.protectAsDataRoot) continue
+			for (const root of operation.paths) {
+				const relation = relationTo(root)
+				if (relation === 'root') return 'active-root'
+				if (relation === 'contains-root') return 'contains-active-root'
+				if (relation === 'inside-root') isInsideActiveRoot = true
+			}
+		}
+		for (const location of this.#dataRootLocations.values()) {
+			const relation = relationTo(location.path)
+			if (relation === 'root' || relation === 'contains-root') return 'contains-root'
+			if (relation === 'inside-root') isInsideRoot = true
+		}
+		if (isInsideActiveRoot) return 'inside-active-root'
+		return isInsideRoot ? 'inside-root' : null
+	}
+
+	hasActiveStoragePathOverlap(virtualPath: string) {
+		const path = posix.normalize(virtualPath)
+		return [...this.#storageOperations.values()].some((operation) =>
+			operation.paths.some((operationPath) => this.#storagePathsOverlap(path, operationPath)),
+		)
+	}
+
+	async getRuntimeDataRootContext(
+		appId: string,
+		{
+			requireAvailable = true,
+			fallbackToInternal = false,
+		}: {requireAvailable?: boolean; fallbackToInternal?: boolean} = {},
+	) {
+		const dataRoots: Record<string, string> = {}
+		const storagePaths = new Set<string>()
+		const appIds = await this.#getDependencyAppIds(appId).catch((error) => {
+			if (fallbackToInternal) return [appId]
+			throw error
+		})
+		for (const id of appIds) {
+			const app = this.instances.find((candidate) => candidate.id === id)
+			const internalPath = `${this.#umbreld.dataDirectory}/app-data/${id}/data`
+			dataRoots[id] = app
+				? await app.getDataRootSystemPath({requireAvailable}).catch((error) => {
+						if (fallbackToInternal) return internalPath
+						throw error
+					})
+				: internalPath
+			const location = await app?.getDataRootLocation().catch((error) => {
+				if (fallbackToInternal) return null
+				throw error
+			})
+			if (location) storagePaths.add(location.path)
+		}
+		return {dataRoots, storagePaths: [...storagePaths]}
+	}
+
+	// Dependents are returned leaf-first so a provider can stop every consumer
+	// before changing its storage, then restart them in reverse order.
+	async getDependentAppsInStopOrder(appId: string) {
+		const dependencies = new Map(
+			await Promise.all(this.instances.map(async (app) => [app.id, await app.getDependencies()] as const)),
+		)
+		const dependents: App[] = []
+		const visited = new Set([appId])
+		const visit = async (dependencyId: string) => {
+			for (const app of this.instances) {
+				if (visited.has(app.id) || !dependencies.get(app.id)?.includes(dependencyId)) continue
+				visited.add(app.id)
+				await visit(app.id)
+				dependents.push(app)
+			}
+		}
+		await visit(appId)
+		return dependents
+	}
+
+	// Whether a storage source path currently resolves to an accessible folder.
+	// This runs for every referenced source on the frequently queried apps.list
+	// path and a stat on a dead network mount can hang the libuv threadpool for
+	// minutes, so checks are single-flighted per path (a hung stat is reused,
+	// never duplicated) and cached briefly once they settle. The cache is
+	// cleared on storage change events so recovery shows promptly.
+	async isStorageSourceAvailable(virtualPath: string) {
+		const ttl = 15_000
+		let check = this.#storageSourceChecks.get(virtualPath)
+		if (!check || (check.settledAt !== undefined && Date.now() - check.settledAt > ttl)) {
+			const entry: {isDirectory: Promise<boolean>; settledAt?: number} = {
+				isDirectory: (async () => {
+					try {
+						const systemPath = await this.#umbreld.files.virtualToSystemPath(virtualPath, OWNER_USER_ID)
+						const stat = await fse.stat(systemPath)
+						return stat.isDirectory()
+					} catch {
+						return false
+					}
+				})(),
+			}
+			entry.isDirectory.finally(() => (entry.settledAt = Date.now()))
+			check = entry
+			this.#storageSourceChecks.set(virtualPath, check)
+		}
+
+		return check.isDirectory
+	}
+
+	// Data roots carry a filesystem/share identity, so availability must prove
+	// that the expected storage is mounted rather than merely statting a stale
+	// mountpoint directory on the internal disk.
+	async getDataRootStatus(location: AppDataRootLocation, {fresh = false}: {fresh?: boolean} = {}) {
+		const ttl = 15_000
+		const key = JSON.stringify(location)
+		if (fresh) this.#dataRootChecks.delete(key)
+		let check = this.#dataRootChecks.get(key)
+		if (!check || (check.settledAt !== undefined && Date.now() - check.settledAt > ttl)) {
+			const entry: {status: Promise<AppDataRootStatus>; settledAt?: number} = {
+				status: (async () => {
+					try {
+						// allowMissing still verifies the expected drive/share identity, but
+						// lets us distinguish a missing app directory from missing storage.
+						const systemPath = await this.#umbreld.files.resolveStorageDestination(location, OWNER_USER_ID, {
+							allowMissing: true,
+						})
+						const stat = await fse.lstat(systemPath).catch(() => null)
+						return stat?.isDirectory() ? 'available' : 'data-missing'
+					} catch (error) {
+						if (error instanceof Error && error.message === CLOUD_DESTINATION_MISSING_ERROR) {
+							return 'storage-unavailable'
+						}
+						return 'data-missing'
+					}
+				})(),
+			}
+			entry.status.finally(() => (entry.settledAt = Date.now()))
+			check = entry
+			this.#dataRootChecks.set(key, check)
+		}
+		return check.status
+	}
+
+	private async startAppsAwaitingStorage() {
+		// Storage events can fire in bursts (e.g. a NAS with several shares coming
+		// online mounts them concurrently) so runs are single-flighted with one
+		// queued re-run, otherwise the same app gets multiple concurrent starts
+		if (this.#storageRetryInFlight) {
+			this.#storageRetryQueued = true
+			return
+		}
+		this.#storageRetryInFlight = true
+		try {
+			do {
+				this.#storageRetryQueued = false
+				await Promise.all(
+					this.instances.map(async (app) => {
+						try {
+							// Only retry apps that failed to start and depend on custom storage
+							if (app.state !== 'unknown') return
+							if (!(await app.shouldAutoStart())) return
+							if ((await app.getEffectiveStorageSourcePaths()).length === 0) return
+
+							// Re-check the state since the checks above may have raced a state change
+							if (app.state !== 'unknown') return
+							this.logger.log(`Storage changed, retrying start of app ${app.id}`)
+							// Via startApp() so a downed app environment is repaired first
+							await this.startApp(app.id)
+						} catch (error) {
+							this.logger.error(`Failed to start app ${app.id} after storage change`, error)
+						}
+					}),
+				)
+			} while (this.#storageRetryQueued)
+		} finally {
+			this.#storageRetryInFlight = false
+		}
+	}
+
 	async stop() {
 		this.logger.log('Stopping apps')
+		this.#storageChangeUnsubscribes.forEach((unsubscribe) => unsubscribe())
+		this.#storageChangeUnsubscribes = []
 		await Promise.all(
 			this.instances.map((app) =>
 				app.stop().catch((error) => {
@@ -402,7 +862,33 @@ export default class Apps {
 		return {appTemplatePath, manifest}
 	}
 
-	async install(appId: string, alternatives?: AppSettings['dependencies']) {
+	async getInstallReview(appId: string) {
+		const {appTemplatePath, manifest} = await this.#readCompatibleAppTemplate(appId)
+		const compose = await readComposeInDirectory(appTemplatePath)
+		const requiredFolders = getFolderAccessSlots(this.#umbreld, compose, [], manifest).flatMap(
+			({id, name, note, defaultSourcePath, mounts}) =>
+				defaultSourcePath
+					? [{id, name, note: note ?? null, defaultSourcePath, readOnly: mounts.every((mount) => mount.readOnly)}]
+					: [],
+		)
+
+		return {
+			requiredFolders,
+			gpuAccess: manifest.permissions?.includes('GPU') ?? false,
+		}
+	}
+
+	async install(appId: string, options: InstallOptions = {}) {
+		if (this.#installsInProgress.has(appId)) throw new Error(`App ${appId} is already being installed`)
+		this.#installsInProgress.add(appId)
+		try {
+			return await this.#install(appId, options)
+		} finally {
+			this.#installsInProgress.delete(appId)
+		}
+	}
+
+	async #install(appId: string, {alternatives, folderAccess}: InstallOptions) {
 		if (await this.isInstalled(appId)) throw new Error(`App ${appId} is already installed`)
 
 		this.logger.log(`Installing app ${appId}`)
@@ -421,8 +907,12 @@ export default class Apps {
 
 		// Save reference to app instance
 		const app = new App(this.#umbreld, appId)
-		const filledSelectedDependencies = fillSelectedDependencies(manifest.dependencies, alternatives)
-		await app.store.set('dependencies', filledSelectedDependencies)
+		const dependencies = fillSelectedDependencies(manifest.dependencies, alternatives)
+		// The instance becomes reachable as soon as it is added below, so claim the
+		// lifecycle state before the first await. Settings and data-root changes must
+		// never observe a half-installed app as idle.
+		app.state = 'installing'
+		app.stateProgress = 1
 		this.instances.push(app)
 
 		// Complete the install process via the app script
@@ -431,17 +921,18 @@ export default class Apps {
 			// this just quickly returns and does nothing since the app env is already running.
 			// However in the case where the app env is down this ensures we start it again.
 			await appEnvironment(this.#umbreld, 'up')
-			await app.install()
+			await app.install({dependencies, folderAccess})
 		} catch (error) {
 			this.logger.error(`Failed to install app ${appId}`, error)
 			this.instances = this.instances.filter((app) => app.id !== appId)
+			this.#folderAccessSourcePaths.delete(appId)
 			this.#umbreld.eventBus.emit('apps:state:change', {appId, state: 'not-installed'})
 			await this.#umbreld.lanIngress
 				.refresh()
 				.catch((refreshError) =>
 					this.logger.error('Failed to refresh LAN ingress after failed app install', refreshError),
 				)
-			return false
+			throw error
 		}
 
 		// Save installed app
@@ -458,6 +949,19 @@ export default class Apps {
 	}
 
 	async uninstall(appId: string) {
+		const dataRootPath = this.#dataRootLocations.get(appId)?.path ?? `/Apps/${appId}/data`
+		if (this.hasActiveStoragePathOverlap(dataRootPath)) {
+			throw new Error('[apps-settings-source-managed] App storage is currently in use')
+		}
+		const releaseStorageOperation = this.beginStorageOperation(appId, [dataRootPath])
+		try {
+			return await this.#uninstall(appId)
+		} finally {
+			releaseStorageOperation()
+		}
+	}
+
+	async #uninstall(appId: string) {
 		// If we can't read an app's dependencies for any reason just skip that app, don't abort the uninstall
 		const allDependencies = await Promise.all(this.instances.map((app) => app.getDependencies().catch(() => null)))
 		const isDependency = allDependencies.some((dependencies) => dependencies?.includes(appId))
@@ -478,6 +982,8 @@ export default class Apps {
 		if (uninstalled) {
 			// Remove app instance
 			this.instances = this.instances.filter((app) => app.id !== appId)
+			this.#dataRootLocations.delete(appId)
+			this.#folderAccessSourcePaths.delete(appId)
 			this.#umbreld.eventBus.emit('apps:state:change', {appId, state: 'not-installed'})
 
 			// Close a concurrent share added while uninstall was in progress. Once the
@@ -576,6 +1082,21 @@ export default class Apps {
 	async setSelectedDependencies(appId: string, dependencies: Record<string, string>) {
 		const app = this.getApp(appId)
 		return app.setSelectedDependencies(dependencies)
+	}
+
+	// All app settings (proxy auth, storage, environment) save through this one
+	// method: one write, one restart
+	async setSettings(appId: string, settings: AppSettingsUpdate) {
+		const app = this.getApp(appId)
+		return app.setSettings(settings)
+	}
+
+	async moveDataRoot(appId: string, destinationParentPath: string | null) {
+		return this.getApp(appId).moveDataRoot(destinationParentPath)
+	}
+
+	async resetDataRoot(appId: string) {
+		return this.getApp(appId).resetDataRoot()
 	}
 
 	async getDependents(appId: string) {

@@ -6,6 +6,7 @@ import {FaShield} from 'react-icons/fa6'
 import {HiMiniRectangleStack} from 'react-icons/hi2'
 import {IoIosSettings} from 'react-icons/io'
 import {
+	PiAppWindowFill,
 	PiArrowCircleUpFill,
 	PiClockCounterClockwiseFill,
 	PiDevicesFill,
@@ -31,6 +32,7 @@ export type SettingsItemId =
 	| 'language'
 	| 'wifi'
 	| 'storage'
+	| 'apps'
 	| 'migration'
 	| 'device-info'
 	| 'mcp'
@@ -67,6 +69,7 @@ const SETTINGS_PAGE_ITEM_ORDER: SettingsItemId[] = [
 	'sessions',
 	'language',
 	'storage',
+	'apps',
 	'file-sharing',
 	'backups',
 	'migration',
@@ -261,6 +264,17 @@ export function createSettingsCatalog(
 				t('storage-manager.swap'),
 				t('storage-manager.replace'),
 			],
+		},
+		{
+			kind: 'page',
+			id: 'apps',
+			category: 'storage',
+			command: {},
+			icon: PiAppWindowFill,
+			title: t('app-settings-list.title'),
+			description: t('app-settings-list.description'),
+			to: '/settings/apps',
+			keywords: [t('app-settings.storage.title'), t('app-settings.advanced.title'), t('app-settings.auth.row-title')],
 		},
 		{
 			kind: 'page',

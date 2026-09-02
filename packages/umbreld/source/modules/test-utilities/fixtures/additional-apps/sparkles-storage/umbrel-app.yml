@@ -1,0 +1,20 @@
+manifestVersion: 1
+id: sparkles-storage
+name: Storage Test
+tagline: Exercises app data root storage
+storage:
+  dataRoot: data
+icon: https://svgur.com/i/mvA.svg
+category: Development
+version: '1.0.0'
+port: 4002
+description: >-
+  A test app whose complete persistent state lives beneath its declared data root.
+developer: Umbrel
+website: https://umbrel.com
+support: https://github.com/getumbrel/umbrel/issues
+gallery: []
+dependencies: []
+path: ''
+defaultUsername: ''
+defaultPassword: ''

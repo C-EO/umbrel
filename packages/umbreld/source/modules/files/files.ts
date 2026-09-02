@@ -133,11 +133,13 @@ const DEFAULT_VIEW_PREFERENCES: ViewPreferences = {
 }
 
 type OperationProgress = {
+	id: string
 	type: 'copy' | 'move'
 	// The account that started the operation, so progress is only reported back to them
 	userId: string
 	file: File
 	destinationPath: string
+	appId?: string
 	percent: number
 	bytesPerSecond: number
 	secondsRemaining?: number
@@ -219,7 +221,8 @@ export default class Files {
 		this.memberShares = new MemberShares(umbreld)
 		this.cloud = new CloudManager({
 			umbreld,
-			resolveDestination: (destination, userId, options) => this.resolveCloudDestination(destination, userId, options),
+			resolveDestination: (destination, userId, options) =>
+				this.resolveStorageDestination(destination, userId, options),
 			onActivity: (userId, activity) => this.#umbreld.eventBus.emit('files:cloud-progress', {userId, activity}),
 		})
 
@@ -448,11 +451,10 @@ export default class Files {
 		if (this.isCloudPathOverlap(virtualPath)) throw new Error('[cloud-read-only]')
 	}
 
-	// Resolve a user-selected Files path into a stable Cloud destination
-	// reference. The client never receives global device/share inventories just
-	// to construct this value, so members cannot infer storage they were not
-	// granted.
-	async getCloudDestination(virtualPath: string, userId: string): Promise<DestinationRef> {
+	// Resolve a user-selected Files path into a stable storage reference. The
+	// filesystem/share identity lets long-lived features distinguish a mounted
+	// destination from the stale directory left behind when storage is removed.
+	async getStorageDestination(virtualPath: string, userId: string): Promise<DestinationRef> {
 		const path = normalizePath(virtualPath)
 		await this.virtualToSystemPath(path, userId)
 
@@ -499,10 +501,25 @@ export default class Files {
 		throw new Error('[cloud-invalid-destination]')
 	}
 
-	async resolveCloudDestination(
+	// Resolve filesystem support by stable UUID rather than a user-facing mount
+	// path. A drive reconnect can reclaim the same label, while the UUID proves
+	// that this is still the partition selected for the app-data move.
+	async getExternalStorageFilesystemType(filesystemUuid: string) {
+		const partitions = (await this.externalStorage.getMountedExternalDevices()).flatMap((device) => device.partitions)
+		return partitions.find((partition) => partition.filesystemUuid === filesystemUuid)?.filesystemType.toLowerCase()
+	}
+
+	async resolveStorageDestination(
 		destination: DestinationRef,
 		userId: string,
-		{requireEmpty = false}: {requireEmpty?: boolean; checkOnly?: boolean} = {},
+		{
+			requireEmpty = false,
+			allowMissing = false,
+		}: {
+			requireEmpty?: boolean
+			allowMissing?: boolean
+			checkOnly?: boolean
+		} = {},
 	) {
 		const details = cloudDestinationDetails(destination, userId)
 		const virtualPath = details.path
@@ -529,12 +546,12 @@ export default class Files {
 			}
 		}
 
-		let systemPath: string
+		const systemPath = await this.virtualToSystemPath(virtualPath, userId)
 		let destinationStats: Stats
 		try {
-			systemPath = await this.virtualToSystemPath(virtualPath, userId)
 			destinationStats = await fse.lstat(systemPath)
-		} catch {
+		} catch (error) {
+			if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return systemPath
 			throw new Error(CLOUD_DESTINATION_MISSING_ERROR)
 		}
 		if (!destinationStats.isDirectory()) throw new Error('[cloud-invalid-destination]')
@@ -582,6 +599,9 @@ export default class Files {
 		if (this.isCloudPathOverlap(virtualPath)) throw new Error('[cloud-read-only]')
 
 		// Check if operation is allowed
+		const targetAllowedOperations = await this.getAllowedOperations(virtualPath, userId)
+		if (!targetAllowedOperations.includes('writable')) throw new Error('[operation-not-allowed]')
+
 		const containingDirectory = nodePath.dirname(virtualPath)
 		const containingDirectoryAllowedOperations = await this.getAllowedOperations(containingDirectory, userId)
 		if (!containingDirectoryAllowedOperations.includes('writable')) throw new Error('[operation-not-allowed]')
@@ -764,7 +784,9 @@ export default class Files {
 	// Checks if a filename is hidden
 	isHidden(filename: string) {
 		return (
-			this.hiddenFiles.includes(filename) || this.hiddenExtensions.some((extension) => filename.endsWith(extension))
+			this.hiddenFiles.includes(filename) ||
+			this.hiddenExtensions.some((extension) => filename.endsWith(extension)) ||
+			/^\.(?:data|[A-Za-z0-9_-]+)-moving-[0-9a-f-]+(?:\.tmp)?$/.test(filename)
 		)
 	}
 
@@ -906,7 +928,54 @@ export default class Files {
 		for await (const systemPath of directoryStream) yield systemPath
 	}
 
-	// Internal utility to copy (or copy and delete (psuedo-move)) a file or directory using rsync and report progress
+	// Track a copy/move in operationsInProgress so it shows in the floating
+	// operations island, run it, then clear it.
+	async trackOperation(
+		{
+			type,
+			sourceSystemPath,
+			destinationSystemPath,
+			destinationVirtualPath,
+			appId,
+			userId = OWNER_USER_ID,
+		}: {
+			type: 'copy' | 'move'
+			sourceSystemPath: string
+			destinationSystemPath: string
+			destinationVirtualPath?: string
+			appId?: string
+			userId?: string
+		},
+		run: (
+			onProgress: (progress: {progress: number; bytesPerSecond: number; secondsRemaining?: number}) => void,
+		) => Promise<void>,
+	) {
+		const operationProgress: OperationProgress = {
+			id: randomUUID(),
+			type,
+			userId,
+			file: await this.status(sourceSystemPath),
+			destinationPath: destinationVirtualPath ?? this.systemToVirtualPath(destinationSystemPath),
+			appId,
+			percent: 0,
+			bytesPerSecond: 0,
+		}
+		this.operationsInProgress.push(operationProgress)
+		this.#umbreld.eventBus.emit('files:operation-progress', this.operationsInProgress)
+
+		try {
+			await run((progress) => {
+				operationProgress.percent = progress.progress
+				operationProgress.bytesPerSecond = progress.bytesPerSecond
+				operationProgress.secondsRemaining = progress.secondsRemaining
+				this.#umbreld.eventBus.emit('files:operation-progress', this.operationsInProgress)
+			})
+		} finally {
+			this.operationsInProgress = this.operationsInProgress.filter((operation) => operation !== operationProgress)
+			this.#umbreld.eventBus.emit('files:operation-progress', this.operationsInProgress)
+		}
+	}
+
 	async #copyWithProgress(
 		sourceSystemPath: string,
 		destinationSystemPath: string,
@@ -917,42 +986,23 @@ export default class Files {
 		if (destinationExists) throw new Error('[destination-already-exists]')
 		if (destinationSystemPath.startsWith(sourceSystemPath)) throw new Error('[subdir-of-self]')
 
-		// Create initial progress tracker and emit operation progress event
-		const operationProgress: OperationProgress = {
-			type: move ? 'move' : 'copy',
-			userId,
-			file: await this.status(sourceSystemPath),
-			destinationPath: this.systemToVirtualPath(destinationSystemPath),
-			percent: 0,
-			bytesPerSecond: 0,
-		}
-		this.operationsInProgress.push(operationProgress)
-		this.#umbreld.eventBus.emit('files:operation-progress', this.operationsInProgress)
-
-		// Attempt instant copy via reflink on supported filesystems (e.g. zfs)
-		try {
-			await cp(sourceSystemPath, destinationSystemPath, {
-				recursive: true,
-				preserveTimestamps: true,
-				mode: constants.COPYFILE_FICLONE_FORCE,
-			})
-
-			// Emit 100% progress
-			operationProgress.percent = 100
-			this.#umbreld.eventBus.emit('files:operation-progress', this.operationsInProgress)
-		} catch {
-			// Reflink not supported, fall back to rsync with progress tracking
-			await copyWithProgress(sourceSystemPath, destinationSystemPath, (progress) => {
-				operationProgress.percent = progress.progress
-				operationProgress.bytesPerSecond = progress.bytesPerSecond
-				operationProgress.secondsRemaining = progress.secondsRemaining
-				this.#umbreld.eventBus.emit('files:operation-progress', this.operationsInProgress)
-			})
-		} finally {
-			// Remove the progress tracker and emit operation progress event
-			this.operationsInProgress = this.operationsInProgress.filter((operation) => operation !== operationProgress)
-			this.#umbreld.eventBus.emit('files:operation-progress', this.operationsInProgress)
-		}
+		await this.trackOperation(
+			{type: move ? 'move' : 'copy', sourceSystemPath, destinationSystemPath, userId},
+			async (onProgress) => {
+				// Attempt instant copy via reflink on supported filesystems (e.g. zfs)
+				try {
+					await cp(sourceSystemPath, destinationSystemPath, {
+						recursive: true,
+						preserveTimestamps: true,
+						mode: constants.COPYFILE_FICLONE_FORCE,
+					})
+					onProgress({progress: 100, bytesPerSecond: 0})
+				} catch {
+					// Reflink not supported, fall back to rsync with progress tracking
+					await copyWithProgress(sourceSystemPath, destinationSystemPath, onProgress)
+				}
+			},
+		)
 
 		// If we're moving, delete the source file or directory on completion
 		if (move) await fse.remove(sourceSystemPath)
@@ -1817,6 +1867,24 @@ export default class Files {
 			operations.delete('writable')
 		}
 
+		const dataRootRelation = this.#umbreld.apps.getDataRootPathRelation(rulePath)
+		if (
+			dataRootRelation === 'active-root' ||
+			dataRootRelation === 'contains-root' ||
+			dataRootRelation === 'contains-active-root' ||
+			dataRootRelation === 'inside-active-root'
+		) {
+			isProtected = true
+		}
+		if (dataRootRelation === 'active-root' || dataRootRelation === 'inside-active-root') {
+			operations.delete('writable')
+		}
+
+		const folderAccessRelation = this.#umbreld.apps.getFolderAccessPathRelation(rulePath)
+		if (folderAccessRelation === 'folder-root' || folderAccessRelation === 'contains-folder-root') {
+			isProtected = true
+		}
+
 		if (isProtected) {
 			operations.delete('move')
 			operations.delete('rename')
@@ -1837,7 +1905,7 @@ export default class Files {
 			'/Backups',
 			'/Backups/**',
 		])
-		if (isUnshareable) operations.delete('share')
+		if (isUnshareable || dataRootRelation) operations.delete('share')
 
 		// External files (not external root or top level mount points)
 		const isExternal = match(rulePath, ['/External/*/**'])
@@ -1845,7 +1913,7 @@ export default class Files {
 		if (isExternal || isNetwork) {
 			// Only allow hard delete so we don't copy to internal storage
 			operations.delete('trash')
-			operations.add('delete')
+			if (!isProtected) operations.add('delete')
 		}
 
 		// Add trash specific operations
@@ -2281,7 +2349,7 @@ async function isMountpoint(systemPath: string) {
 }
 
 async function isExternalFilesystemMountedAt(filesystemUuid: string, systemMountPath: string) {
-	const result = await $({reject: false})`findmnt --noheadings --output UUID --mountpoint ${systemMountPath}`
+	const result = await $({reject: false})`findmnt --noheadings --output UUID --target ${systemMountPath}`
 	return result.exitCode === 0 && result.stdout.trim() === filesystemUuid
 }
 

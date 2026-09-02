@@ -3,8 +3,10 @@ import {useTranslation} from 'react-i18next'
 
 import {CircularProgress} from '@/features/files/components/listing/file-item/circular-progress'
 import {EditableName} from '@/features/files/components/listing/file-item/editable-name'
+import {FolderAppStack} from '@/features/files/components/listing/file-item/folder-app-stack'
 import {TruncatedFilename} from '@/features/files/components/listing/file-item/truncated-filename'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
+import {useAppStorageFolderTags} from '@/features/files/hooks/use-app-storage-folder-tags'
 import {useIsTouchDevice} from '@/features/files/hooks/use-is-touch-device'
 import type {FileSystemItem} from '@/features/files/types'
 import {formatFilesystemSize} from '@/features/files/utils/format-filesystem-size'
@@ -34,6 +36,8 @@ export const IconsViewFileItem = ({
 	const isUploading = 'isUploading' in item && item.isUploading
 	const uploadingProgress = isUploading && 'progress' in item ? item.progress : 0
 	const isTouchDevice = useIsTouchDevice()
+	const {getFolderStorageApps} = useAppStorageFolderTags()
+	const folderApps = getFolderStorageApps(item)
 
 	const [isHovered, setIsHovered] = useState(false)
 
@@ -64,9 +68,13 @@ export const IconsViewFileItem = ({
 						filename={displayName}
 						view='icons'
 						className='mt-1 line-clamp-2 w-full text-center text-12 leading-tight'
+						// The app stack rides the name's own line flow, so a shorter name
+						// budget keeps it inside the two-line clamp
+						maxLength={folderApps ? 24 : undefined}
+						suffix={folderApps ? <FolderAppStack apps={folderApps} className='ml-0.5 align-[-3px]' /> : undefined}
 					/>
 				)}
-				<span className='w-full text-center text-12 text-white/40'>
+				<span className='w-full truncate text-center text-12 text-white/40'>
 					{isUploading
 						? uploadingProgress === 0
 							? t('files-state.waiting')

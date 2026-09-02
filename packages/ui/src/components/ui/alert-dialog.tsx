@@ -101,8 +101,14 @@ const AlertDialogHeader = ({
 }) => {
 	const IconComponent = icon
 	return (
-		<div className={cn('flex flex-col space-y-2 text-center', className)} {...props}>
-			{IconComponent && <IconComponent className='mx-auto h-7 w-7 rounded-full bg-white/10 p-1' />}
+		// min-h-0 + overflow lets a tall body scroll within the dialog's max height
+		// instead of pushing the action buttons off-screen on short viewports
+		<div className={cn('flex min-h-0 flex-col space-y-2 overflow-y-auto text-center', className)} {...props}>
+			{IconComponent && (
+				<div className='mx-auto flex h-7 w-7 items-center justify-center rounded-full bg-white/10'>
+					<IconComponent className='size-4.5' />
+				</div>
+			)}
 			{children}
 		</div>
 	)

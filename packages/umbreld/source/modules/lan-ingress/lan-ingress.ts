@@ -447,6 +447,12 @@ export default class LanIngress {
 							})
 						: null
 					if (gateway) {
+						// The user can override the app's default gateway authentication in
+						// app settings. Applied here so an auth change takes effect on the
+						// next ingress refresh without restarting the app.
+						const authOverride = await this.getAppProxyAuthOverride(appId)
+						if (typeof authOverride === 'boolean') gateway.auth = authOverride
+
 						const targetAddress = await this.resolveAppTarget(appId, gateway.targetHost, compose)
 						if (!targetAddress) {
 							this.logger.verbose(`Skipping LAN ingress route for ${appId}; app gateway target is unavailable`)
@@ -505,6 +511,17 @@ export default class LanIngress {
 		// intercept LAN traffic before it reaches the app-owned socket.
 		const hasHostNetworkService = Object.values(compose.services).some((service) => service.network_mode === 'host')
 		return hasHostNetworkService
+	}
+
+	// Read the app's saved auth override through the app-owned settings API. Kept safe
+	// against missing app instances since routes rebuild during install and
+	// uninstall.
+	private async getAppProxyAuthOverride(appId: string) {
+		try {
+			return await this.#umbreld.apps.getApp(appId).getAppProxyAuthOverride()
+		} catch {
+			return undefined
+		}
 	}
 
 	private async resolveAppTarget(appId: string, host: string, compose: ComposeFile | null) {

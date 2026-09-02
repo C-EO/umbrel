@@ -116,10 +116,7 @@ function RestoringItems({
 						const destinationFolderName = parts.length >= 2 ? parts[parts.length - 2] : parts[0]
 
 						return (
-							<div
-								key={`${operation.file.path}-${operation.destinationPath}-${operation.type}`}
-								className='flex items-center gap-2'
-							>
+							<div key={operation.id} className='flex items-center gap-2'>
 								<div className='flex-shrink-0'>
 									<FileItemIcon item={operation.file} className='h-7 w-7' />
 								</div>

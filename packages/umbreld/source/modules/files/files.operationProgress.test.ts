@@ -2,8 +2,10 @@ import {expect, beforeAll, afterAll, test, describe} from 'vitest'
 
 import fse from 'fs-extra'
 import {delay} from 'es-toolkit'
+import pWaitFor from 'p-wait-for'
 
 import createTestUmbreld from '../test-utilities/create-test-umbreld.js'
+import type {OperationsInProgress} from './files.js'
 
 let umbreld: Awaited<ReturnType<typeof createTestUmbreld>>
 
@@ -187,6 +189,36 @@ describe(`operationProgress()`, () => {
 
 		// Clean up
 		removeListener()
+		await fse.remove(testDirectory)
+	})
+
+	test('operation subscription starts with the current snapshot', async () => {
+		const testDirectory = `${umbreld.instance.dataDirectory}/home/test-operation-snapshot`
+		await fse.mkdir(`${testDirectory}/source`, {recursive: true})
+		await fse.writeFile(`${testDirectory}/source/source.bin`, Buffer.alloc(500 * 1024))
+		await fse.mkdir(`${testDirectory}/destination`)
+
+		const copyPromise = umbreld.client.files.copy.mutate({
+			path: '/Home/test-operation-snapshot/source/source.bin',
+			toDirectory: '/Home/test-operation-snapshot/destination',
+		})
+		await delay(100)
+
+		const subscription = umbreld.subscribeToEvents<OperationsInProgress>('files:operation-progress')
+		await subscription.started
+		await pWaitFor(() => subscription.collected.length > 0)
+
+		expect(subscription.collected[0]).toMatchObject([
+			{
+				id: expect.any(String),
+				type: 'copy',
+				file: expect.objectContaining({path: '/Home/test-operation-snapshot/source/source.bin'}),
+				destinationPath: '/Home/test-operation-snapshot/destination/source.bin',
+			},
+		])
+
+		subscription.unsubscribe()
+		await copyPromise
 		await fse.remove(testDirectory)
 	})
 })

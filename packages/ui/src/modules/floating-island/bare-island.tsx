@@ -75,7 +75,7 @@ export const Island = ({
 	const islandRef = useRef<HTMLDivElement>(null)
 	const willChange = useWillChange()
 	const minimizeTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
-	const hasAppearedRef = useRef(false)
+	const lastExpandKeyRef = useRef(expandKey)
 
 	// Force expansion when forceExpanded prop is true
 	useEffect(() => {
@@ -86,12 +86,15 @@ export const Island = ({
 
 	// Automatic expansions — appearing, and every expandKey change — settle
 	// back into the pill after minimizeAfter, unless the user engages first
-	// (see handlePointerDown). The user's own taps never settle.
+	// (see handlePointerDown). The user's own taps never settle. New work is
+	// detected by comparing expandKey against the last one seen, not by "has
+	// this effect run before": StrictMode double-invokes the mount effect, which
+	// used to expand islands that asked to appear minimized.
 	useEffect(() => {
 		if (forceExpanded) return
-		const appearing = !hasAppearedRef.current
-		hasAppearedRef.current = true
-		if (!appearing) setIsExpanded(true)
+		const newWork = !Object.is(lastExpandKeyRef.current, expandKey)
+		lastExpandKeyRef.current = expandKey
+		if (newWork) setIsExpanded(true)
 		else if (!defaultExpanded) return
 		if (minimizeAfter === undefined) return
 		const timer = setTimeout(() => setIsExpanded(false), minimizeAfter)

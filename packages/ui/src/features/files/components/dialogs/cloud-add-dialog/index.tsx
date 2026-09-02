@@ -568,7 +568,6 @@ export default function CloudAddDialog() {
 						<motion.div key='destination' {...stepFade}>
 							<DestinationStep
 								providerName={sourceName}
-								homePath={homePath}
 								destinationPath={destinationPath}
 								isProposing={isProposing}
 								changeable={!prefilledDestination}

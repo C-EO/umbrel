@@ -8,6 +8,7 @@ import {Button} from '@/components/ui/button'
 import {DialogFooter} from '@/components/ui/dialog'
 import {CaretRightIcon} from '@/features/files/assets/caret-right'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
+import {FolderPickerRow} from '@/features/files/components/shared/path-breadcrumbs'
 import {EXTERNAL_STORAGE_PATH, NETWORK_STORAGE_PATH} from '@/features/files/constants'
 import type {CloudSyncMode} from '@/features/files/hooks/use-cloud'
 import {formatItemName} from '@/features/files/utils/format-filesystem-name'
@@ -121,7 +122,6 @@ export function DestinationBreadcrumbs({path, homePath}: {path: string; homePath
 
 export function DestinationStep({
 	providerName,
-	homePath,
 	destinationPath,
 	isProposing,
 	changeable,
@@ -135,7 +135,6 @@ export function DestinationStep({
 	onStart,
 }: {
 	providerName: string
-	homePath: string
 	destinationPath: string | null
 	isProposing: boolean
 	changeable: boolean
@@ -156,18 +155,12 @@ export function DestinationStep({
 		<div className='space-y-4 py-2'>
 			<div className='space-y-1.5'>
 				<p className='text-13 text-white/60'>{t('files-cloud.destination-save-to')}</p>
-				<div className='flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/5 p-3'>
-					{isProposing || !destinationPath ? (
-						<span className='h-4 w-44 animate-pulse rounded bg-white/10' />
-					) : (
-						<DestinationBreadcrumbs path={destinationPath} homePath={homePath} />
-					)}
-					{changeable && (
-						<Button size='sm' className='shrink-0' onClick={onChange} disabled={isProposing}>
-							{t('files-cloud.destination-change')}
-						</Button>
-					)}
-				</div>
+				<FolderPickerRow
+					path={destinationPath}
+					loading={isProposing || !destinationPath}
+					onAction={changeable ? onChange : undefined}
+					disabled={isProposing}
+				/>
 			</div>
 
 			{/* Stacked rows absorb the modes' unequal descriptions; side by side,

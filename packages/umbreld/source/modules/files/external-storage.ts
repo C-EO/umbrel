@@ -29,6 +29,20 @@ type BlockDevice = {
 	}[]
 }
 
+// These filesystems cannot store Linux ownership or permissions, so mounts
+// synthesize them. Anything needing real ownership (e.g. an app data root
+// whose containers chown their files) cannot live on them.
+export function isSyntheticOwnershipFilesystem(filesystemType: string) {
+	return ['exfat', 'vfat', 'ntfs', 'ntfs3'].includes(filesystemType.toLowerCase())
+}
+
+// App data roots need the Linux ownership, permissions, links, and durability
+// semantics that umbrelOS supports and tests on ext4. Other filesystems remain
+// available for ordinary Files storage and app folder access.
+export function supportsAppDataRootFilesystem(filesystemType: string) {
+	return filesystemType.toLowerCase() === 'ext4'
+}
+
 export function isEligibleExternalStorageDevice(
 	device: Pick<BlockDevice, 'id' | 'transport' | 'size'>,
 	systemDiskNames: ReadonlySet<string>,
@@ -37,7 +51,7 @@ export function isEligibleExternalStorageDevice(
 }
 
 export function syntheticOwnershipMountOptions(filesystemType: string, userId: number, groupId: number) {
-	if (!['exfat', 'vfat', 'ntfs', 'ntfs3'].includes(filesystemType.toLowerCase())) return undefined
+	if (!isSyntheticOwnershipFilesystem(filesystemType)) return undefined
 	return `uid=${userId},gid=${groupId},fmask=0007,dmask=0007`
 }
 
@@ -334,10 +348,15 @@ export default class ExternalStorage {
 				.flatMap((partition) => partition.mountpoints)
 				.filter((mountpoint) => mountpoint.startsWith(externalBasePath))
 				.map((mountpoint) => this.#umbreld.files.systemToVirtualPath(mountpoint))
-			const releaseMachines = await this.#umbreld.machines.blockStoragePaths(virtualMountPaths)
+
+			// The app block is registered before any async detach work so a data-root
+			// move cannot begin after the in-use check and race the unmount.
+			const releaseApps = await this.#umbreld.apps.blockStoragePaths(virtualMountPaths)
+			let releaseMachines = () => {}
 			let releaseClouds = () => {}
 
 			try {
+				releaseMachines = await this.#umbreld.machines.blockStoragePaths(virtualMountPaths)
 				releaseClouds = blockCloud
 					? await this.#umbreld.files.cloud.blockExternalStorage(
 							blockDevice.partitions.map((partition) => ({
@@ -404,6 +423,7 @@ export default class ExternalStorage {
 			} finally {
 				releaseClouds()
 				releaseMachines()
+				releaseApps()
 			}
 		})
 	}

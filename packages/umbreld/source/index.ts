@@ -288,11 +288,13 @@ export default class Umbreld {
 		// nftables rules are in place before app proxies begin accepting traffic.
 		await this.lanIngress.start()
 
-		// Revoke restored credentials and pause restored Cloud entries before routes
-		// or schedulers can observe them. Consume the marker only after both writes succeed.
+		// Revoke restored credentials, pause restored Cloud entries and drop
+		// restored app storage move journals before routes or schedulers can
+		// observe them. Consume the marker only after every write succeeds.
 		if (this.isBackupRestoreFirstStart) {
 			await this.mcp.reset()
 			await this.files.cloud.pauseRestoredSyncs()
+			await this.apps.clearRestoredDataRootMoves()
 			await this.consumeBackupRestoreFirstStartFlag()
 		}
 
@@ -364,25 +366,24 @@ export default class Umbreld {
 	async stop() {
 		try {
 			await Promise.all([
-				// Stop backups before file/storage modules because backup work depends on them.
+				// Stop file consumers and public listeners before module teardown.
 				this.backups.stop(),
-				// Stop LAN ingress before app/module teardown so public listeners close and
-				// nftables rules are cleared before app shutdown tries to refresh ingress.
 				this.lanIngress.stop(),
+				this.mcp.stop(),
 			])
 
-			// Stop modules
+			// Keep external and network storage mounted until every writer has stopped.
+			await Promise.all([this.apps.stop(), this.machines.stop()])
+			await this.files.stop()
+
+			// Stop independent modules.
 			await Promise.all([
 				this.user.stop(),
-				this.files.stop(),
 				this.hardware.stop(),
-				this.apps.stop(),
 				this.appStore.stop(),
 				this.dbus.stop(),
 				this.systemNg.stop(),
-				this.machines.stop(),
 				this.auth.stop(),
-				this.mcp.stop(),
 				this.photos.stop(),
 			])
 			return true

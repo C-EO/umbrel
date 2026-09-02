@@ -166,6 +166,48 @@ describe('store.overwrite()', () => {
 	})
 })
 
+describe('store.update()', () => {
+	test('can mutate and write the latest store', async () => {
+		const store = await createStore()
+		await store.set('one', 1)
+
+		expect(
+			await store.update((values) => {
+				values.two = 2
+				delete values.one
+			}),
+		).toBe(true)
+
+		expect(await store.get()).toStrictEqual({
+			two: 2,
+		})
+	})
+
+	test('queues update writes', async () => {
+		const store = await createStore()
+		await store.set('counter', 0)
+
+		const increment = () =>
+			store.update((values) => {
+				values.counter++
+			})
+
+		await Promise.all([increment(), increment()])
+
+		expect(await store.get('counter')).toBe(2)
+	})
+
+	test('throws on missing or invalid arguments', async () => {
+		const store = await createStore()
+
+		// @ts-expect-error Testing invalid arguments
+		await expect(store.update()).rejects.toThrow('Invalid argument')
+
+		// @ts-expect-error Testing invalid arguments
+		await expect(store.update(null)).rejects.toThrow('Invalid argument')
+	})
+})
+
 describe('store.getWriteLock()', () => {
 	test('allows custom control over write lock', async () => {
 		const store = await createStore()

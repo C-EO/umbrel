@@ -13,6 +13,7 @@ import {
 	publicProcedureWhenNoUserExistsWithMembers,
 } from '../server/trpc/trpc.js'
 import {CLOUD_SYNC_MODE_IDS, CLOUD_WEBDAV_FLAVOR_IDS} from './cloud-types.js'
+import {supportsAppDataRootFilesystem} from './external-storage.js'
 import {getDirectoryStream} from './files.js'
 
 // Numeric collation matches the Files UI. Distinct names can collate equally
@@ -431,7 +432,12 @@ export default router({
 		const devices = await ctx.umbreld.files.externalStorage.getExternalDevicesWithVirtualMountPoints()
 		return devices.map((device) => ({
 			...device,
-			partitions: device.partitions.map(({filesystemType: _, ...partition}) => partition),
+			partitions: device.partitions.map(({filesystemType, ...partition}) => ({
+				...partition,
+				// Keep the policy server-owned: app data roots are only supported on
+				// ext4 even if another filesystem happens to expose Unix ownership.
+				supportsAppDataRoot: supportsAppDataRootFilesystem(filesystemType),
+			})),
 		}))
 	}),
 
@@ -512,7 +518,7 @@ export default router({
 		destination: cloudProcedure
 			.input(z.object({path: z.string()}))
 			.query(({ctx, input}) =>
-				ctx.umbreld.files.getCloudDestination(input.path, ctx.principal?.accountId ?? OWNER_USER_ID),
+				ctx.umbreld.files.getStorageDestination(input.path, ctx.principal?.accountId ?? OWNER_USER_ID),
 			),
 		locations: cloudProcedure
 			.input(z.object({accountId}))

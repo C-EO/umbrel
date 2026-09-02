@@ -4,14 +4,17 @@ import {mergeRefs} from 'react-merge-refs'
 export type FadeScrollerProps = ComponentPropsWithoutRef<'div'> & {
 	direction: 'x' | 'y'
 	debug?: boolean
+	/** Fade depth in px per scrollable edge. The 50px default suits wide rails;
+	 * compact scrollers (e.g. breadcrumbs) pass something smaller so the fade
+	 * doesn't swallow most of the visible content. */
+	fadeSize?: number
 	ref?: React.Ref<HTMLDivElement>
 }
 
 const FADE_SCROLLER_CLASS_X = 'umbrel-fade-scroller-x'
 const FADE_SCROLLER_CLASS_Y = 'umbrel-fade-scroller-y'
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-export function useFadeScroller(direction: 'x' | 'y', debug?: boolean) {
+export function useFadeScroller(direction: 'x' | 'y', debug?: boolean, fadeSize = 50) {
 	const ref = useRef<HTMLDivElement>(null)
 
 	// NOTE: useLayoutEffect is used to avoid flicker when fading is rendered
@@ -40,13 +43,13 @@ export function useFadeScroller(direction: 'x' | 'y', debug?: boolean) {
 				el.style.setProperty('--distance2', `0px`)
 			} else if (atStart) {
 				el.style.setProperty('--distance1', `0px`)
-				el.style.setProperty('--distance2', `50px`)
+				el.style.setProperty('--distance2', `${fadeSize}px`)
 			} else if (atEnd) {
-				el.style.setProperty('--distance1', `50px`)
+				el.style.setProperty('--distance1', `${fadeSize}px`)
 				el.style.setProperty('--distance2', `0px`)
 			} else {
-				el.style.setProperty('--distance1', `50px`)
-				el.style.setProperty('--distance2', `50px`)
+				el.style.setProperty('--distance1', `${fadeSize}px`)
+				el.style.setProperty('--distance2', `${fadeSize}px`)
 			}
 		}
 
@@ -96,7 +99,7 @@ export function useFadeScroller(direction: 'x' | 'y', debug?: boolean) {
 			resizeObserver.disconnect()
 			cancelAnimationFrame(rafId)
 		}
-	}, [direction])
+	}, [direction, fadeSize])
 
 	const scrollerClass =
 		direction === 'x' ? FADE_SCROLLER_CLASS_X : direction === 'y' ? FADE_SCROLLER_CLASS_Y : undefined
@@ -104,8 +107,8 @@ export function useFadeScroller(direction: 'x' | 'y', debug?: boolean) {
 	return {scrollerClass, ref}
 }
 
-export function FadeScroller({direction, debug, className, ref, ...props}: FadeScrollerProps) {
-	const {scrollerClass, ref: scrollerRef} = useFadeScroller(direction, debug)
+export function FadeScroller({direction, debug, fadeSize, className, ref, ...props}: FadeScrollerProps) {
+	const {scrollerClass, ref: scrollerRef} = useFadeScroller(direction, debug, fadeSize)
 
 	return <div ref={mergeRefs([ref, scrollerRef])} className={scrollerClass + ' ' + className} {...props} />
 }

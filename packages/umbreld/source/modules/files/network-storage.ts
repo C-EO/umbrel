@@ -151,6 +151,7 @@ export default class NetworkStorage {
 			await $`mount -t cifs ${smbPath} ${systemMountPath} -o credentials=${credentialsPath},uid=${userId},gid=${groupId},file_mode=0660,dir_mode=0770,iocharset=utf8`
 			this.mountedShares.add(share.mountPath)
 			this.logger.log(`Successfully mounted network share: ${smbPath} to ${share.mountPath}`)
+			this.#umbreld.eventBus.emit('files:network-storage:change')
 		} catch (error) {
 			// Clean up the directory we created if mount fails
 			this.logger.error(`Failed to mount network share: ${share.mountPath}, cleaning up mount directory`)
@@ -260,6 +261,10 @@ export default class NetworkStorage {
 	// Remove a share
 	async removeShare(sharePath: string) {
 		const share = await this.getShare(sharePath)
+
+		// Register the app block before any async detach work so a data-root move
+		// cannot begin after the in-use check and race the unmount.
+		const releaseApps = await this.#umbreld.apps.blockStoragePaths([share.mountPath])
 		let releaseClouds = () => {}
 		try {
 			releaseClouds = await this.#umbreld.files.cloud.blockNetworkStorage(share)
@@ -276,6 +281,7 @@ export default class NetworkStorage {
 			return true
 		} finally {
 			releaseClouds()
+			releaseApps()
 		}
 	}
 

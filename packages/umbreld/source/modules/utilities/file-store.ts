@@ -5,6 +5,8 @@ import yaml from 'js-yaml'
 import {getProperty, setProperty, deleteProperty} from 'dot-prop'
 import PQueue from 'p-queue'
 
+import {writeFileDurably} from './durable-filesystem.js'
+
 type DotProp<T, P extends string> = P extends `${infer K}.${infer R}`
 	? K extends keyof T
 		? DotProp<NonNullable<T[K]>, R>
@@ -81,8 +83,7 @@ export default class FileStore<T extends Serializable> {
 			// Write atomically
 			const processId = Number(process.pid)
 			const temporaryFilePath = `${this.filePath}.${processId}.${this.#writes++}.tmp`
-			await fs.writeFile(temporaryFilePath, rawData, 'utf8')
-			await fs.rename(temporaryFilePath, this.filePath)
+			await writeFileDurably(this.filePath, temporaryFilePath, rawData)
 
 			return true
 		} finally {
@@ -136,6 +137,17 @@ export default class FileStore<T extends Serializable> {
 
 		// Add this write job to the queue
 		return this.#writeQueue.add(async () => this.#write(store))
+	}
+
+	// Read the latest store, mutate it, and write it back as a single queued write.
+	async update(job: (store: T) => Promise<void> | void): Promise<boolean> {
+		if (typeof job !== 'function') throw new TypeError('Invalid argument')
+
+		return this.#writeQueue.add(async () => {
+			const store = await this.#read()
+			await job(store)
+			return this.#write(store)
+		})
 	}
 
 	async getWriteLock(

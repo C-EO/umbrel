@@ -1,5 +1,6 @@
-import {motion} from 'motion/react'
 import {useTranslation} from 'react-i18next'
+
+import {ProgressRing} from '@/modules/floating-island/progress-ring'
 
 import {DataStreamIcon, type DriveVariant} from './data-stream-icon'
 import {raidOperationLabels, type IslandRaidProgress} from './index'
@@ -42,11 +43,6 @@ export function ExpandedContent({
 	}
 	const stateDescription = getStateDescription()
 
-	// Progress ring calculations
-	const radius = 40
-	const circumference = 2 * Math.PI * radius
-	const strokeDashoffset = circumference - (operation.progress / 100) * circumference
-
 	// Check if operation is complete
 	const isComplete = operation.state === 'finished' || operation.state === 'complete'
 	const isCanceled = operation.state === 'canceled'
@@ -63,92 +59,10 @@ export function ExpandedContent({
 				</div>
 			</div>
 
-			{/* Right side - Progress ring */}
-			<motion.div
-				className='relative flex items-center justify-center'
-				initial={{scale: 0.6, opacity: 0, rotate: -10}}
-				animate={{scale: 1, opacity: 1, rotate: 0}}
-				exit={{scale: 0.6, opacity: 0, rotate: 10}}
-				transition={{
-					type: 'spring',
-					stiffness: 300,
-					damping: 20,
-					delay: 0.05,
-				}}
-			>
-				{/* Subtle background glow */}
-				<motion.div
-					className={`absolute inset-0 rounded-full bg-linear-to-br ${
-						isComplete ? 'from-brand/50' : 'from-brand/30'
-					} to-transparent`}
-					initial={{scale: 0.8, opacity: 0}}
-					animate={{scale: 1, opacity: 1}}
-					exit={{scale: 0.8, opacity: 0}}
-					transition={{
-						type: 'spring',
-						stiffness: 400,
-						damping: 25,
-						delay: 0.1,
-					}}
-				/>
-
-				{/* Main progress ring */}
-				<svg className='relative size-28 -rotate-90' viewBox='0 0 112 112'>
-					<defs>
-						<linearGradient id='raidProgressGradient' x1='0%' y1='0%' x2='100%' y2='100%'>
-							<stop offset='0%' stopColor='hsl(var(--color-brand))' />
-							<stop offset='100%' stopColor='hsl(var(--color-brand-lightest))' />
-						</linearGradient>
-						<filter id='raidGlow'>
-							<feGaussianBlur stdDeviation='2' result='coloredBlur' />
-							<feMerge>
-								<feMergeNode in='coloredBlur' />
-								<feMergeNode in='SourceGraphic' />
-							</feMerge>
-						</filter>
-					</defs>
-					{/* Background circle */}
-					<circle
-						cx='56'
-						cy='56'
-						r={radius}
-						stroke='currentColor'
-						strokeWidth='3'
-						fill='none'
-						className='text-white/10'
-					/>
-					{/* Progress circle with gradient */}
-					<circle
-						cx='56'
-						cy='56'
-						r={radius}
-						stroke='url(#raidProgressGradient)'
-						strokeWidth='3'
-						fill='none'
-						strokeDasharray={circumference}
-						strokeDashoffset={isCanceled ? circumference : strokeDashoffset}
-						className='transition-all duration-700 ease-out'
-						strokeLinecap='round'
-						filter='url(#raidGlow)'
-					/>
-				</svg>
-
-				{/* Data stream visualization */}
-				<motion.div
-					className='absolute inset-0 flex items-center justify-center'
-					initial={{scale: 0.7, opacity: 0}}
-					animate={{scale: 1, opacity: 1}}
-					exit={{scale: 0.7, opacity: 0}}
-					transition={{
-						type: 'spring',
-						stiffness: 350,
-						damping: 22,
-						delay: 0.2,
-					}}
-				>
-					<DataStreamIcon size={22} isActive={!isComplete && !isCanceled} variant={deviceType} />
-				</motion.div>
-			</motion.div>
+			{/* Right side - progress ring around the data stream visualization */}
+			<ProgressRing percent={isCanceled ? 0 : operation.progress} emphasized={isComplete}>
+				<DataStreamIcon size={22} isActive={!isComplete && !isCanceled} variant={deviceType} />
+			</ProgressRing>
 		</div>
 	)
 }
