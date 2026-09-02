@@ -7,9 +7,9 @@ final class NativeTransportTests: XCTestCase {
 		XCTAssertEqual(Umbreld.nativeScheme(for: "192.168.1.20"), "https")
 	}
 
-	func testTailscaleEndpointsUseHTTPInsideTunnel() {
-		XCTAssertEqual(Umbreld.nativeScheme(for: "100.64.0.1"), "http")
-		XCTAssertEqual(Umbreld.nativeScheme(for: "100.127.255.254"), "http")
+	func testTailscaleEndpointsUsePinnedHTTPS() {
+		XCTAssertEqual(Umbreld.nativeScheme(for: "100.64.0.1"), "https")
+		XCTAssertEqual(Umbreld.nativeScheme(for: "100.127.255.254"), "https")
 	}
 
 	func testPublicAddressesAreNeverClassifiedAsTailscale() {

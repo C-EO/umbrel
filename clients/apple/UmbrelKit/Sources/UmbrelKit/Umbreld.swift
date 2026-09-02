@@ -136,24 +136,6 @@ public enum Umbreld {
 			delegateQueue: nil)
 	}()
 
-	// Tailscale already authenticates and encrypts peer traffic with WireGuard. Native
-	// requests therefore use HTTP inside that tunnel, while LAN requests use the
-	// device's pinned HTTPS CA. Redirects are disabled because native credentials must
-	// never be forwarded to another origin.
-	private static let tailscaleSession: URLSession = {
-		let config = URLSessionConfiguration.ephemeral
-		config.timeoutIntervalForRequest = 10
-		config.requestCachePolicy = .reloadIgnoringLocalCacheData
-		config.urlCache = nil
-		config.httpShouldSetCookies = false
-		config.httpCookieStorage = nil
-		config.urlCredentialStorage = nil
-		return URLSession(
-			configuration: config,
-			delegate: UmbreldNoRedirectDelegate(),
-			delegateQueue: nil)
-	}()
-
 	// Avatar paths include their content hash, so entries never need invalidation.
 	// Keep only a small, evictable memory cache; account pickers do not need avatars
 	// persisted independently from the Umbrel that serves them.
@@ -407,24 +389,13 @@ public enum Umbreld {
 		return try decodeDiscoveryInfo(data: data, response: response)
 	}
 
-	private static func discoveryInfoOverTailscale(host: String) async throws -> DiscoveryInfo {
-		let request = try nativeRequest(host: host, path: "system.discoveryInfo", timeout: probeTimeout)
-		let (data, response) = try await tailscaleSession.data(for: request)
-		return try decodeDiscoveryInfo(data: data, response: response)
-	}
-
 	// A read-only availability check for addresses already learned from a saved Umbrel.
-	// Local routes must validate against the existing CA pin; this never creates or
-	// replaces trust merely because the access-method list became visible.
+	// Every route, including a 100.64/10 address, must validate against the existing CA
+	// pin. An address class alone does not prove that packets traversed Tailscale.
 	public static func isKnownEndpointAvailable(host: String, deviceId: String) async -> Bool {
 		do {
-			let identity: DiscoveryInfo
-			if isTailscaleHost(host) {
-				identity = try await discoveryInfoOverTailscale(host: host)
-			} else {
-				guard case .found = Keychain.readLocalHTTPSCA(deviceId: deviceId) else { return false }
-				identity = try await discoveryInfoOverHTTPS(host: host, deviceId: deviceId)
-			}
+			guard case .found = Keychain.readLocalHTTPSCA(deviceId: deviceId) else { return false }
+			let identity = try await discoveryInfoOverHTTPS(host: host, deviceId: deviceId)
 			return identity.id == deviceId
 		} catch {
 			return false
@@ -1415,15 +1386,12 @@ public enum Umbreld {
 
 	private static func verifyEndpoint(host: String, expectedDeviceId: String) async -> EndpointVerification {
 		do {
-			// Tailscale addresses are learned from this Umbrel over an authenticated
-			// session. Re-check the stable id over the tunnel before selecting one, so
-			// credentials are never sent merely because a 100.x address answered.
-			let identity = isTailscaleHost(host)
-				? try await discoveryInfoOverTailscale(host: host)
-				: try await verifiedLocalHTTPSIdentity(
-					host: host,
-					expectedDeviceId: expectedDeviceId
-				).discoveryInfo
+			// Treat every endpoint as an untrusted route. The device's pinned CA, not
+			// the shape of its address, proves where native credentials may be sent.
+			let identity = try await verifiedLocalHTTPSIdentity(
+				host: host,
+				expectedDeviceId: expectedDeviceId
+			).discoveryInfo
 			return identity.id == expectedDeviceId ? .verified : .rejected(.trust(
 				LocalHTTPSTransportError.identityChanged.localizedDescription))
 		} catch is CancellationError {
@@ -1757,8 +1725,8 @@ public enum Umbreld {
 		}
 	}
 
-	static func nativeScheme(for host: String) -> String {
-		isTailscaleHost(host) ? "http" : "https"
+	static func nativeScheme(for _: String) -> String {
+		"https"
 	}
 
 	private static func nativeRequest(host: String, path: String, timeout: TimeInterval) throws -> URLRequest {
@@ -1778,11 +1746,8 @@ public enum Umbreld {
 	private static func nativeData(
 		for request: URLRequest,
 		deviceId: String,
-		host: String
+		host _: String
 	) async throws -> (Data, URLResponse) {
-		if isTailscaleHost(host) {
-			return try await tailscaleSession.data(for: request)
-		}
 		return try await secureData(for: request, deviceId: deviceId)
 	}
 

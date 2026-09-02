@@ -74,9 +74,9 @@ public struct SavedDevice: Codable, Equatable, Sendable {
 		accountProfiles?[accountId]
 	}
 
-	// Every address must still prove the stable discovery id before use. LAN routes
-	// additionally use the device's pinned CA; Tailscale routes rely on the authenticated,
-	// encrypted tailnet. It remains one Umbrel account with multiple possible routes.
+	// Every address must prove the stable discovery id through the device's pinned
+	// HTTPS CA before use. Tailscale additionally encrypts the route between peers.
+	// It remains one Umbrel account with multiple possible routes.
 	public var connectionHosts: [String] {
 		var seen = Set<String>()
 		return ([host] + addresses)

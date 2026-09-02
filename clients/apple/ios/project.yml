@@ -86,9 +86,9 @@ targets:
         NSLocalNetworkUsageDescription: Umbrel finds your Umbrel devices on your local network.
         NSBonjourServices:
           - _umbrel._tcp
-        # LAN API traffic uses pinned HTTPS. Tailscale-address traffic uses HTTP; this
-        # narrow ATS exception allows special-use IP loads without allowing arbitrary
-        # internet HTTP.
+        # Native API traffic uses pinned HTTPS over both LAN and Tailscale. PhotoKit
+        # background uploads still use HTTP to a Tailscale-range literal, so keep this
+        # narrow exception without allowing arbitrary internet HTTP.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           # Since iOS 17, HTTP to literal IPs needs an explicit address exception.

@@ -72,12 +72,7 @@ targets:
         NSBonjourServices:
           - _umbrel._tcp.
         NSAppTransportSecurity:
-          # LAN API traffic uses pinned HTTPS. Tailscale traffic uses HTTP inside
-          # its encrypted tunnel, scoped here to Tailscale's CGNAT range.
           NSAllowsLocalNetworking: true
-          NSExceptionDomains:
-            "100.64.0.0/10":
-              NSExceptionAllowsInsecureHTTPLoads: true
         NSHumanReadableCopyright: Umbrel, Inc.
         # Sparkle is embedded in the app; both the feed and release artifacts are
         # hosted by Umbrel. Archive signatures and the signed feed are verified
