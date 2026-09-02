@@ -279,7 +279,7 @@ struct SectionBox<Content: View>: View {
 // ── Access row (URL row with copy + open) ──
 
 struct AccessRow: View {
-	let url: String
+	let url: URL
 	let label: String
 	var accessType: String? = nil
 	var isAvailable: Bool? = nil
@@ -345,14 +345,12 @@ struct AccessRow: View {
 	}
 
 	private func open() {
-		if let parsed = URL(string: url) {
-			NSWorkspace.shared.open(parsed)
-		}
+		NSWorkspace.shared.open(url)
 	}
 
 	private func copy() {
 		NSPasteboard.general.clearContents()
-		NSPasteboard.general.setString(url, forType: .string)
+		NSPasteboard.general.setString(url.absoluteString, forType: .string)
 		copied = true
 		Task {
 			try? await Task.sleep(for: .seconds(1.5))

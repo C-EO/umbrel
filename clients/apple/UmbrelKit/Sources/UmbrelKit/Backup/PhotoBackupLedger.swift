@@ -5,6 +5,10 @@ import SQLite3
 // extension open this database from their App Group. WAL plus SQLite transactions
 // make every receipt durable before PhotoKit is told to forget its terminal job.
 public final class PhotoBackupLedger {
+	public enum ReceiptError: Swift.Error, Equatable {
+		case invalidByteCount
+	}
+
 	public enum AssetState: Int64, Equatable, Sendable {
 		case pending = 0
 		case prepared = 1
@@ -96,6 +100,13 @@ public final class PhotoBackupLedger {
 	public static let resourceRegistered: Int64 = 1
 	public static let resourceSucceeded: Int64 = 2
 	public static let resourceFailed: Int64 = 3
+	// No PhotoKit resource produced by an iOS device can plausibly approach one
+	// tebibyte. Reject larger server-controlled receipts before they reach SQLite.
+	public static let maximumResourceBytes: Int64 = 1_024 * 1_024 * 1_024 * 1_024
+
+	public static func isValidResourceByteCount(_ bytes: Int64) -> Bool {
+		bytes > 0 && bytes <= maximumResourceBytes
+	}
 
 	private static let changeTokenKey = "photoLibraryChangeToken"
 	private static let schemaVersion: Int64 = 2
@@ -769,6 +780,7 @@ public final class PhotoBackupLedger {
 	}
 
 	public func recordResourceSucceeded(resourceKey: String, bytes: Int64) throws {
+		guard Self.isValidResourceByteCount(bytes) else { throw ReceiptError.invalidByteCount }
 		try queue.sync {
 			try transaction {
 				try recordResourceSucceededLocked(
@@ -785,9 +797,12 @@ public final class PhotoBackupLedger {
 	// this never creates, retries, cancels, or acknowledges a PhotoKit job.
 	public func recordConfirmedResources(_ receipts: [ResourceReceipt]) throws {
 		guard !receipts.isEmpty else { return }
+		guard receipts.allSatisfy({ Self.isValidResourceByteCount($0.bytes) }) else {
+			throw ReceiptError.invalidByteCount
+		}
 		try queue.sync {
 			try transaction {
-				for receipt in receipts where receipt.bytes > 0 {
+				for receipt in receipts {
 					try recordResourceSucceededLocked(
 						resourceKey: receipt.resourceKey,
 						bytes: receipt.bytes
@@ -954,7 +969,7 @@ public final class PhotoBackupLedger {
 					SUM(CASE WHEN state = ? AND mediaType = 1 THEN 1 ELSE 0 END),
 					SUM(CASE WHEN state = ? AND mediaType = 2 THEN 1 ELSE 0 END),
 					SUM(CASE WHEN state = ? AND \(mediaPredicate) THEN 1 ELSE 0 END),
-					COALESCE(SUM(CASE WHEN state = ? THEN uploadedBytes ELSE 0 END), 0)
+					CAST(MIN(TOTAL(CASE WHEN state = ? THEN uploadedBytes ELSE 0 END), 9223372036854775807) AS INTEGER)
 				FROM photo_assets WHERE deviceId = ?
 				""")
 			defer { sqlite3_finalize(counts) }
@@ -1263,7 +1278,7 @@ public final class PhotoBackupLedger {
 				COUNT(*),
 				SUM(CASE WHEN state = ? THEN 1 ELSE 0 END),
 				SUM(CASE WHEN state = ? THEN 1 ELSE 0 END),
-				COALESCE(SUM(CASE WHEN state = ? THEN bytes ELSE 0 END), 0),
+				CAST(MIN(TOTAL(CASE WHEN state = ? THEN bytes ELSE 0 END), 9223372036854775807) AS INTEGER),
 				MAX(CASE WHEN state = ? THEN lastError ELSE NULL END)
 			FROM photo_resources
 			WHERE deviceId = ? AND localIdentifier = ? AND revision = ?

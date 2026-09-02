@@ -7,6 +7,7 @@ import UmbrelKit
 // one place; single-user devices retain the compact password-only form.
 struct SignInSheet: View {
 	@Environment(OnboardingModel.self) private var model
+	@State private var claimedDeviceId: String?
 
 	var body: some View {
 		let device = model.selectedDevice
@@ -19,6 +20,14 @@ struct SignInSheet: View {
 			target: target,
 			browserHost: device?.host ?? "",
 			preferredUserId: nil,
+			onPrepare: {
+				guard let device = model.selectedDevice else {
+					throw SignInError.sessionStorageFailed
+				}
+				guard claimedDeviceId != device.id else { return }
+				try await Umbreld.claimLocalHTTPSIdentity(device)
+				claimedDeviceId = device.id
+			},
 			onCancel: { model.advance(to: .deviceFound) },
 			onRemove: nil
 		) { account, userId, password, totpToken in
@@ -44,6 +53,7 @@ struct UmbrelSignInForm: View {
 	let target: Umbreld.Target
 	let browserHost: String
 	let preferredUserId: String?
+	let onPrepare: @MainActor () async throws -> Void
 	let onCancel: @MainActor () -> Void
 	let onRemove: (@MainActor () async -> Void)?
 	let onConnect: @MainActor (Umbreld.Account?, String, String, String?) async throws -> Void
@@ -402,6 +412,7 @@ struct UmbrelSignInForm: View {
 	private func loadAccounts() async {
 		step = .loadingAccounts
 		do {
+			try await onPrepare()
 			accounts = try await Umbreld.listAccounts(target: target)
 		} catch {
 			step = await LocalNetworkProbe.isDenied() ? .localNetworkDenied : .loadFailed

@@ -50,12 +50,6 @@ struct Share: Identifiable, Equatable {
 	var status: MountStatus
 
 	var id: String { sharename }
-
-	// Where macOS mounts the share when there's no name conflict
-	var defaultMountPath: String { "/Volumes/\(sharename)" }
-
-	// Best known mount location: the tracked path, or the default
-	var resolvedMountPath: String { mountPath ?? defaultMountPath }
 }
 
 enum MountStatus: Equatable {

@@ -30,10 +30,13 @@ enum LocalHTTPSTransportError: LocalizedError, Equatable {
 // and the exact hostname/IP through SecPolicyCreateSSL.
 enum LocalHTTPSTransport {
 	private static let sessions = LocalHTTPSSessionPool()
+	private static let bootstrapResponseMaximumBytes = 64 * 1_024
+	private static let candidateResponseMaximumBytes = 64 * 1_024
 
 	private static let bootstrapSession: URLSession = {
 		let configuration = URLSessionConfiguration.ephemeral
 		configuration.timeoutIntervalForRequest = 10
+		configuration.timeoutIntervalForResource = 10
 		configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
 		configuration.urlCache = nil
 		configuration.httpShouldSetCookies = false
@@ -59,11 +62,26 @@ enum LocalHTTPSTransport {
 	}()
 
 	static func bootstrapData(for request: URLRequest) async throws -> (Data, URLResponse) {
-		try await bootstrapSession.data(for: request)
+		try await boundedData(
+			for: request,
+			session: bootstrapSession,
+			maximumBytes: bootstrapResponseMaximumBytes
+		)
 	}
 
 	static func fallbackDiscoveryData(for request: URLRequest, maximumBytes: Int) async throws -> (Data, URLResponse) {
-		let (bytes, response) = try await fallbackDiscoverySession.bytes(for: request)
+		try await boundedData(for: request, session: fallbackDiscoverySession, maximumBytes: maximumBytes)
+	}
+
+	// Internal so the streaming limit can be exercised with an isolated URLSession
+	// in tests; production callers use the bootstrap and discovery wrappers above.
+	static func boundedData(
+		for request: URLRequest,
+		session: URLSession,
+		maximumBytes: Int
+	) async throws -> (Data, URLResponse) {
+		precondition(maximumBytes >= 0)
+		let (bytes, response) = try await session.bytes(for: request)
 		defer { bytes.task.cancel() }
 		guard response.expectedContentLength <= Int64(maximumBytes) else {
 			throw URLError(.dataLengthExceedsMaximum)
@@ -92,9 +110,15 @@ enum LocalHTTPSTransport {
 		else { throw LocalHTTPSTransportError.invalidCertificate }
 
 		let delegate = LocalHTTPSSessionDelegate(expectedHost: host, anchor: anchor)
-		let session = URLSession(configuration: secureConfiguration(), delegate: delegate, delegateQueue: nil)
+		let configuration = secureConfiguration()
+		configuration.timeoutIntervalForResource = request.timeoutInterval
+		let session = URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
 		defer { session.finishTasksAndInvalidate() }
-		return try await session.data(for: request)
+		return try await boundedData(
+			for: request,
+			session: session,
+			maximumBytes: candidateResponseMaximumBytes
+		)
 	}
 
 	static func certificateData(fromPEM pem: String) throws -> Data {
@@ -108,6 +132,23 @@ enum LocalHTTPSTransport {
 			let certificate = SecCertificateCreateWithData(nil, decoded as CFData)
 		else { throw LocalHTTPSTransportError.invalidCertificate }
 		return SecCertificateCopyData(certificate) as Data
+	}
+
+	static func enroll(
+		certificate: Data,
+		deviceId: String,
+		replacingExisting: Bool = false
+	) async -> Keychain.LocalHTTPSCAStoreResult {
+		let result = replacingExisting
+			? Keychain.replaceLocalHTTPSCA(certificate, deviceId: deviceId)
+			: Keychain.storeLocalHTTPSCAIfAbsent(certificate, deviceId: deviceId)
+		// A previous build may already have constructed a session from a passively
+		// enrolled CA. Drop every cached session after an explicit claim so subsequent
+		// requests can only use the newly selected identity.
+		if replacingExisting, result == .stored {
+			await sessions.remove(deviceId: deviceId)
+		}
+		return result
 	}
 
 	static func forget(deviceId: String) async {

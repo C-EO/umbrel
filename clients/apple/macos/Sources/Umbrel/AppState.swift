@@ -67,6 +67,7 @@ final class AppState {
 	private var fallbackDiscoveryGeneration = 0
 	private var pendingNativeHosts: Set<String> = []
 	private var candidateIdentificationTask: Task<Void, Never>?
+	private var explicitlyClaimedDeviceIds = Set<String>()
 	private var initialDiscoveryWindowElapsed = false
 	private var probes: [String: ProbeRecord] = [:] // deviceId -> latest identity probe
 	private var probesInFlight: Set<String> = [] // device ids
@@ -94,6 +95,10 @@ final class AppState {
 
 	private var mountsInProgress: Set<String> = [] // per-device lock: connect flow vs health check
 	private var foregroundMounts: Set<String> = [] // user-initiated mounts (excludes silent health checks)
+	// Exact paths returned by successful NetFS calls in this process. Unlike paths
+	// recovered after launch, these retain enough provenance to manage safely when
+	// their old network route is temporarily unreachable.
+	private var processCreatedMountPaths: [String: Set<String>] = [:]
 	private var notifiedExpired: Set<String> = []
 	private var healthCheckRunning = false
 	private let discovery = Discovery()
@@ -322,15 +327,23 @@ final class AppState {
 		publishUpdateRequiredDevices()
 
 		candidateIdentificationTask = Task { [weak self] in
-			var identified = await Umbreld.identify(candidates: list)
+			guard let self else { return }
+			let knownDeviceIds = Set(config.savedDevices.keys).union(explicitlyClaimedDeviceIds)
+			var identified = await Umbreld.identify(
+				candidates: list,
+				knownDeviceIds: knownDeviceIds
+			)
 			// A first launch can overlap transient network and Keychain setup. Retry
 			// this already-discovered snapshot once before asking the user to rescan;
 			// every result still has to pass the same HTTPS identity verification.
-			if identified.isEmpty, self?.initialDiscoveryInProgress == true, !Task.isCancelled {
+			if identified.isEmpty, initialDiscoveryInProgress, !Task.isCancelled {
 				try? await Task.sleep(for: .milliseconds(500))
-				identified = await Umbreld.identify(candidates: list)
+				identified = await Umbreld.identify(
+					candidates: list,
+					knownDeviceIds: knownDeviceIds
+				)
 			}
-			guard !Task.isCancelled, let self else { return }
+			guard !Task.isCancelled else { return }
 			candidateIdentificationTask = nil
 			pendingNativeHosts = []
 			identifiedCandidates = identified
@@ -552,6 +565,7 @@ final class AppState {
 		)
 		do {
 			try config.save(savedDevice)
+			explicitlyClaimedDeviceIds.remove(deviceId)
 		} catch {
 			clearSession(deviceId: deviceId)
 			connectionHosts[deviceId] = nil
@@ -589,6 +603,7 @@ final class AppState {
 	func forget(deviceId: String) async throws {
 		try await disconnect(deviceId: deviceId)
 		await Umbreld.forgetLocalHTTPSIdentity(deviceId: deviceId)
+		explicitlyClaimedDeviceIds.remove(deviceId)
 		connectionHosts[deviceId] = nil
 		try config.remove(id: deviceId)
 		rebuild()
@@ -630,6 +645,27 @@ final class AppState {
 		}
 		guard !hosts.isEmpty else { return nil }
 		return Umbreld.Target(deviceId: deviceId, hosts: hosts)
+	}
+
+	// Selecting an unsaved card is the user action that establishes first-use trust.
+	// Remember the claim in memory immediately so later browse updates validate this
+	// id with its new pin even before a successful login saves the device.
+	func prepareToSignIn(deviceId: String) async throws {
+		if let saved = config.savedDevices[deviceId] {
+			let recovered = try await Umbreld.prepareSavedDeviceForSignIn(saved.nativeTarget)
+			guard recovered else { return }
+			guard let result = await Self.firstReachableEndpoint(for: saved) else {
+				throw DeviceIdentityUnavailableError()
+			}
+			probeCompleted(deviceId: deviceId, host: result.host, identity: result.identity)
+			return
+		}
+		guard !explicitlyClaimedDeviceIds.contains(deviceId) else { return }
+		guard let discovered = identifiedCandidates.first(where: { $0.id == deviceId }) else {
+			throw DeviceIdentityUnavailableError()
+		}
+		try await Umbreld.claimLocalHTTPSIdentity(discovered)
+		explicitlyClaimedDeviceIds.insert(deviceId)
 	}
 
 	func preferredAccountId(for deviceId: String) -> String? {
@@ -677,11 +713,64 @@ final class AppState {
 			hosts.insert(saved.host)
 			hosts.formUnion(saved.addresses)
 		}
-		return hosts
+		return hosts.filter(SavedDevice.isValidLocalEndpointHost)
+	}
+
+	// A server-reported address is only a candidate. Before treating a Finder
+	// volume as this Umbrel's, its SMB remount host must prove the same pinned
+	// device identity or already be the endpoint verified during this process.
+	private func verifiedMountedShares(
+		for deviceId: String,
+		additionallyTrusting additionalHosts: Set<String> = []
+	) async throws -> [Mounter.MountedShare] {
+		try Task.checkCancellation()
+		let candidates = await Mounter.mountedShares(hosts: knownHosts(for: deviceId))
+		try Task.checkCancellation()
+		guard !candidates.isEmpty else { return [] }
+
+		var trustedHosts = additionalHosts
+		if let connectionHost = connectionHosts[deviceId] {
+			trustedHosts.insert(connectionHost)
+		}
+		var verifiedHostKeys = Set(
+			candidates.compactMap { share in
+				trustedHosts.contains(where: { Mounter.hostsMatch($0, share.host) })
+					? Self.mountHostKey(share.host) : nil
+			}
+		)
+		let hostsToVerify = Dictionary(
+			candidates.map { (Self.mountHostKey($0.host), $0.host) },
+			uniquingKeysWith: { first, _ in first }
+		).filter { !verifiedHostKeys.contains($0.key) }
+
+		let newlyVerified = await withTaskGroup(of: (String, Bool).self) { group in
+			for (key, host) in hostsToVerify {
+				group.addTask {
+					(key, await Umbreld.isKnownEndpointAvailable(host: host, deviceId: deviceId))
+				}
+			}
+			var verified = Set<String>()
+			for await (key, isVerified) in group where isVerified {
+				verified.insert(key)
+			}
+			return verified
+		}
+		verifiedHostKeys.formUnion(newlyVerified)
+		try Task.checkCancellation()
+		return Mounter.shares(
+			candidates,
+			ownedByHosts: verifiedHostKeys,
+			orCreatedPaths: processCreatedMountPaths[deviceId] ?? []
+		)
+	}
+
+	private nonisolated static func mountHostKey(_ host: String) -> String {
+		host.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
 	}
 
 	private func clearSession(deviceId: String) {
 		sessions[deviceId] = nil
+		connectionHosts[deviceId] = nil
 		unavailableSessionIds.remove(deviceId)
 		sambaAccess[deviceId] = nil
 		sambaCredentials[deviceId] = nil
@@ -691,14 +780,19 @@ final class AppState {
 
 	private func unmountAllShares(_ deviceId: String) async throws {
 		let shares = deviceShares[deviceId] ?? []
-		let recoveredPaths = await Mounter.mountedShares(hosts: knownHosts(for: deviceId)).map(\.path)
-		let trackedPaths = shares.map(\.resolvedMountPath).filter(Mounter.isMounted(at:))
-		let mountedPaths = Array(Set(trackedPaths + recoveredPaths)).sorted()
+		let ownedMounts = try await verifiedMountedShares(for: deviceId)
+		let mountedPaths = Array(Set(ownedMounts.map(\.path))).sorted()
+		let ownedPaths = Set(mountedPaths)
+		let unresolvedTrackedPaths = Set(
+			shares.compactMap(\.mountPath).filter {
+				Mounter.isMounted(at: $0) && !ownedPaths.contains($0)
+			}
+		)
 
 		// Mark the whole batch first because unmounts run sequentially.
 		deviceShares[deviceId] = shares.map { share in
 			var updated = share
-			if Mounter.isMounted(at: share.resolvedMountPath) {
+			if let path = share.mountPath, ownedPaths.contains(path) {
 				updated.status = .unmounting
 			}
 			return updated
@@ -709,6 +803,9 @@ final class AppState {
 		for path in mountedPaths {
 			do {
 				try await Mounter.unmount(path: path)
+				if !Mounter.isMounted(at: path) {
+					processCreatedMountPaths[deviceId]?.remove(path)
+				}
 			} catch {
 				// The system call is synchronous, but verify the kernel mount table before
 				// reporting failure in case the volume disappeared concurrently.
@@ -724,7 +821,7 @@ final class AppState {
 
 		let updatedShares = shares.map { share in
 			var updated = share
-			if Mounter.isMounted(at: share.resolvedMountPath) {
+			if let path = share.mountPath, Mounter.isMounted(at: path) {
 				updated.status = .mounted
 			} else {
 				updated.mountPath = nil
@@ -732,10 +829,11 @@ final class AppState {
 			}
 			return updated
 		}
-		deviceShares[deviceId] = failedPaths.isEmpty ? nil : updatedShares
+		deviceShares[deviceId] = failedPaths.isEmpty && unresolvedTrackedPaths.isEmpty
+			? nil : updatedShares
 		rebuild()
 
-		if !failedPaths.isEmpty {
+		if !failedPaths.isEmpty || !unresolvedTrackedPaths.isEmpty {
 			throw ShareUnmountError()
 		}
 	}
@@ -933,25 +1031,6 @@ final class AppState {
 		}
 		sambaCredentials[deviceId] = credential
 
-		var mountedShares = await Mounter.mountedShares(hosts: knownHosts(for: deviceId))
-		guard isCurrentSession(session, deviceId: deviceId) else { return }
-
-		// Finder mounts survive an app relaunch, so use the recovered system list rather
-		// than only in-memory state. A busy orphan remains visible to the next health pass
-		// and is retried gracefully; it is never force-unmounted behind another app.
-		let currentSharenames = Set(apiShares.map(\.sharename))
-		for share in mountedShares where !currentSharenames.contains(share.sharename) {
-			do {
-				try await Mounter.unmount(path: share.path)
-			} catch {
-				let nsError = error as NSError
-				Self.logger.error(
-					"Orphan unmount failed: path=\(share.path, privacy: .private(mask: .hash)) domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public) description=\(nsError.localizedDescription, privacy: .private)"
-				)
-			}
-			guard isCurrentSession(session, deviceId: deviceId) else { return }
-		}
-
 		let connectionHost: String
 		do {
 			// API calls may have moved from a stale LAN route to Tailscale (or vice
@@ -963,27 +1042,61 @@ final class AppState {
 		}
 		guard isCurrentSession(session, deviceId: deviceId) else { return }
 
-		// A working Finder mount is more valuable than changing it to the resolver's
-		// newly preferred endpoint. Only replace a mount after its exact endpoint no
-		// longer answers as this Umbrel. Unmounting uses macOS's graceful API, so a busy
-		// volume is left completely untouched and can be retried by a later health pass.
-		let mountedHosts = Set(
-			mountedShares
-				.map(\.host)
-				.filter { !Mounter.hostsMatch($0, connectionHost) }
-		)
-		var unavailableMountedHosts = Set<String>()
-		for host in mountedHosts {
-			let isAvailable = await Umbreld.isKnownEndpointAvailable(host: host, deviceId: deviceId)
-			guard isCurrentSession(session, deviceId: deviceId) else { return }
-			if !isAvailable {
-				unavailableMountedHosts.insert(host)
-			}
+		var mountedShares: [Mounter.MountedShare]
+		do {
+			mountedShares = try await verifiedMountedShares(
+				for: deviceId,
+				additionallyTrusting: [connectionHost]
+			)
+		} catch {
+			return
 		}
+		guard isCurrentSession(session, deviceId: deviceId) else { return }
 
-		for share in mountedShares where unavailableMountedHosts.contains(share.host) {
+		// Finder mounts survive an app relaunch. Reconcile only mounts whose current
+		// remount host proved this Umbrel's identity; unverifiable candidates may be
+		// unrelated NAS volumes and are deliberately left untouched.
+		let currentSharenames = Set(apiShares.map(\.sharename))
+		for share in mountedShares where !currentSharenames.contains(share.sharename) {
 			do {
 				try await Mounter.unmount(path: share.path)
+				if !Mounter.isMounted(at: share.path) {
+					processCreatedMountPaths[deviceId]?.remove(share.path)
+				}
+			} catch {
+				let nsError = error as NSError
+				Self.logger.error(
+					"Orphan unmount failed: path=\(share.path, privacy: .private(mask: .hash)) domain=\(nsError.domain, privacy: .public) code=\(nsError.code, privacy: .public) description=\(nsError.localizedDescription, privacy: .private)"
+				)
+			}
+			guard isCurrentSession(session, deviceId: deviceId) else { return }
+		}
+		mountedShares.removeAll { !Mounter.isMounted(at: $0.path) }
+
+		// A route change may make a mount's original host unverifiable even though the
+		// Umbrel is now reachable elsewhere. Only mounts created by this process retain
+		// enough provenance to release in that state; inherited Finder mounts remain
+		// untouched unless their host can still prove the pinned device identity.
+		let createdPaths = processCreatedMountPaths[deviceId] ?? []
+		let alternateCreatedHosts = Set(
+			mountedShares.compactMap { share in
+				createdPaths.contains(share.path)
+					&& !Mounter.hostsMatch(share.host, connectionHost) ? share.host : nil
+			}
+		)
+		var unavailableCreatedHosts = Set<String>()
+		for host in alternateCreatedHosts {
+			let available = await Umbreld.isKnownEndpointAvailable(host: host, deviceId: deviceId)
+			guard isCurrentSession(session, deviceId: deviceId) else { return }
+			if !available { unavailableCreatedHosts.insert(host) }
+		}
+		for share in mountedShares where createdPaths.contains(share.path)
+			&& unavailableCreatedHosts.contains(share.host) {
+			do {
+				try await Mounter.unmount(path: share.path)
+				if !Mounter.isMounted(at: share.path) {
+					processCreatedMountPaths[deviceId]?.remove(share.path)
+				}
 			} catch {
 				if Mounter.isMounted(at: share.path) {
 					let nsError = error as NSError
@@ -994,9 +1107,7 @@ final class AppState {
 			}
 			guard isCurrentSession(session, deviceId: deviceId) else { return }
 		}
-		mountedShares.removeAll { share in
-			unavailableMountedHosts.contains(share.host) && !Mounter.isMounted(at: share.path)
-		}
+		mountedShares.removeAll { !Mounter.isMounted(at: $0.path) }
 		mergeShares(deviceId, apiShares, mountedShares: mountedShares)
 		rebuild()
 
@@ -1024,10 +1135,14 @@ final class AppState {
 					forceNewSession: needsFreshSession,
 					silent: silent
 				)
+				processCreatedMountPaths[deviceId, default: []].insert(path)
 				needsFreshSession = false
 				guard isCurrentSession(session, deviceId: deviceId) else {
 					// This mount completed for an account that is no longer active.
 					try? await Mounter.unmount(path: path)
+					if !Mounter.isMounted(at: path) {
+						processCreatedMountPaths[deviceId]?.remove(path)
+					}
 					return
 				}
 				setShare(deviceId, share.sharename, path: path, status: .mounted)
@@ -1042,8 +1157,8 @@ final class AppState {
 		}
 
 		if !silent, isCurrentSession(session, deviceId: deviceId),
-			let mounted = (deviceShares[deviceId] ?? []).first(where: { $0.status == .mounted }) {
-			await primeNetworkVolumeAccess(path: mounted.resolvedMountPath)
+			let path = (deviceShares[deviceId] ?? []).first(where: { $0.status == .mounted })?.mountPath {
+			await primeNetworkVolumeAccess(path: path)
 		}
 	}
 
@@ -1071,7 +1186,7 @@ final class AppState {
 		let existing = deviceShares[deviceId] ?? []
 		deviceShares[deviceId] = apiShares.map { api in
 			let old = existing.first { $0.sharename == api.sharename }
-			if let old, Mounter.isMounted(at: old.resolvedMountPath) {
+			if let old, let path = old.mountPath, Mounter.isMounted(at: path) {
 				return Share(
 					name: api.name,
 					path: api.path,
@@ -1138,12 +1253,13 @@ final class AppState {
 	// again. Owner accounts then reconcile Finder mounts against the verified route.
 	// This lets a Mac move cleanly between a local address and Tailscale.
 	private func refreshAfterNetworkPathChange() async {
-		// Fallback results are meaningful only on the network where they were observed.
-		// Invalidate and restart both discovery paths so hosts from the previous Wi-Fi
-		// cannot suppress or reappear among results from the new network.
-		invalidateFallbackDiscovery()
-		discovery.stop()
-		discovery.start()
+		// DNSServiceBrowse is continuous across interface changes and publishes real
+		// add/remove events itself. Restarting it here first publishes an empty snapshot,
+		// which makes every unsaved native device disappear during ordinary route churn
+		// (for example when Tailscale updates its routes). Likewise, keep the last bounded
+		// fallback snapshot visible until the replacement probe completes instead of
+		// briefly clearing every legacy device. The generation check in
+		// refreshFallbackDiscovery ensures only the newest path refresh can publish.
 		async let fallback: Void = refreshFallbackDiscovery()
 		let savedDevices = Array(config.savedDevices.values)
 		let deviceIds = Set(savedDevices.map(\.id))
@@ -1345,5 +1461,11 @@ private struct SessionStorageError: LocalizedError {
 private struct ShareUnmountError: LocalizedError {
 	var errorDescription: String? {
 		"Some shared folders couldn’t be disconnected. Close any files open from this Umbrel, then try again."
+	}
+}
+
+private struct DeviceIdentityUnavailableError: LocalizedError {
+	var errorDescription: String? {
+		"Couldn’t verify this Umbrel. Scan the network and try again."
 	}
 }

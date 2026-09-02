@@ -20,9 +20,28 @@ schemes:
     test:
       config: Debug
       targets:
+        - UmbrelTests
         - UmbrelUITests
 
 targets:
+  UmbrelTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Umbrel
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.umbrel.app.tests
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/Umbrel.app/Umbrel
+        BUNDLE_LOADER: $(TEST_HOST)
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.umbrel.app.dev.tests
+
   UmbrelUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -90,7 +109,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.umbrel.app
         APP_GROUP_IDENTIFIER: group.com.umbrel.app.photos
         MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "25"
+        CURRENT_PROJECT_VERSION: "26"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1"
@@ -138,7 +157,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.umbrel.app.photo-background-upload
         APP_GROUP_IDENTIFIER: group.com.umbrel.app.photos
         MARKETING_VERSION: "0.1"
-        CURRENT_PROJECT_VERSION: "25"
+        CURRENT_PROJECT_VERSION: "26"
         GENERATE_INFOPLIST_FILE: NO
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.9"

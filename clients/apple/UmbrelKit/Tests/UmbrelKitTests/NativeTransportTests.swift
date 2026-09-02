@@ -27,6 +27,19 @@ final class NativeTransportTests: XCTestCase {
 		XCTAssertFalse(SavedDevice.isIPv4Address("192.168.01.20.invalid"))
 	}
 
+	func testLocalEndpointHostsRejectURLSyntaxAndPublicNames() {
+		XCTAssertTrue(SavedDevice.isValidLocalEndpointHost("umbrel.local"))
+		XCTAssertTrue(SavedDevice.isValidLocalEndpointHost("Umbrel-Pro.local"))
+		XCTAssertTrue(SavedDevice.isValidLocalEndpointHost("192.168.1.20"))
+
+		XCTAssertFalse(SavedDevice.isValidLocalEndpointHost("example.com"))
+		XCTAssertFalse(SavedDevice.isValidLocalEndpointHost("umbrel.local/path"))
+		XCTAssertFalse(SavedDevice.isValidLocalEndpointHost("user@umbrel.local"))
+		XCTAssertFalse(SavedDevice.isValidLocalEndpointHost("umbrel.local:443"))
+		XCTAssertFalse(SavedDevice.isValidLocalEndpointHost("-umbrel.local"))
+		XCTAssertFalse(SavedDevice.isValidLocalEndpointHost("umbrel..local"))
+	}
+
 	func testAccountAvatarPathAcceptsOnlyUmbreldContentAddressedRoute() {
 		let hash = String(repeating: "a", count: 64)
 		XCTAssertTrue(Umbreld.isValidAccountAvatarPath("/api/accounts/alice-2/avatar/\(hash).webp"))

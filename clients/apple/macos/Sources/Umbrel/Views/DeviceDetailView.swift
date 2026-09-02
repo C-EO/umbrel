@@ -97,10 +97,19 @@ struct DeviceDetailView: View {
 		} else if device.reachability == .unverified {
 			ProgressView()
 				.controlSize(.small)
-		} else if !device.online {
-			Text("Device is offline")
-				.font(.system(size: 13))
-				.foregroundStyle(.white.opacity(0.4))
+		} else if !device.online && !(device.saved && showPasswordForm) {
+			VStack(alignment: .leading, spacing: 12) {
+				Text("Device is offline")
+					.font(.system(size: 13))
+					.foregroundStyle(.white.opacity(0.4))
+				if device.saved && device.connection == .notAuthenticated {
+					Button("Connect") {
+						showPasswordForm = true
+						Task { await loadAccounts(for: device) }
+					}
+					.buttonStyle(PillButtonStyle())
+				}
+			}
 		} else if !device.saved {
 			unsavedContent(device)
 		} else {
@@ -316,7 +325,7 @@ struct DeviceDetailView: View {
 				let key = AccessEndpointKey(deviceId: device.id, address: method.address)
 				let isActive = device.connectionHost?.caseInsensitiveCompare(method.address) == .orderedSame
 				AccessRow(
-					url: browserURL(for: method.address, device: device),
+					url: method.url,
 					label: method.address,
 					accessType: method.type,
 					isAvailable: accessAvailability[key] ?? (isActive ? true : nil),
@@ -352,15 +361,24 @@ struct DeviceDetailView: View {
 	private func accessMethods(for device: Device) -> [AccessMethod] {
 		var seen = Set<String>()
 		return ([device.host] + device.addresses)
-			.filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
-			.map { AccessMethod(address: $0, type: Self.isTailscaleAddress($0) ? "Tailscale" : nil) }
+			.filter { SavedDevice.isValidLocalEndpointHost($0) && seen.insert($0.lowercased()).inserted }
+			.compactMap { address in
+				guard let url = browserURL(for: address, device: device) else { return nil }
+				return AccessMethod(
+					address: address,
+					type: Self.isTailscaleAddress(address) ? "Tailscale" : nil,
+					url: url
+				)
+			}
 	}
 
-	private func browserURL(for address: String, device: Device) -> String {
+	private func browserURL(for address: String, device: Device) -> URL? {
 		// Tailscale already encrypts the connection. This preference only affects
 		// browser compatibility when opening Umbrel on the local network.
-		let scheme = device.dashboardUsesHTTPS && !Self.isTailscaleAddress(address) ? "https" : "http"
-		return "\(scheme)://\(address)"
+		var components = URLComponents()
+		components.scheme = device.dashboardUsesHTTPS && !Self.isTailscaleAddress(address) ? "https" : "http"
+		components.host = address
+		return components.url
 	}
 
 	private static func isTailscaleAddress(_ address: String) -> Bool {
@@ -458,6 +476,7 @@ struct DeviceDetailView: View {
 		defer { loadingAccounts = false }
 
 		do {
+			try await state.prepareToSignIn(deviceId: device.id)
 			guard let target = state.nativeTarget(for: device.id) else {
 				accountError = "Couldn\u{2019}t load accounts."
 				return
@@ -522,6 +541,7 @@ private struct AccountLoadContext: Hashable {
 private struct AccessMethod {
 	let address: String
 	let type: String?
+	let url: URL
 }
 
 private struct AccessAvailabilityContext: Hashable {
@@ -548,13 +568,21 @@ private struct ShareRow: View {
 		Group {
 			switch share.status {
 			case .mounted:
-				Button {
-					NSWorkspace.shared.open(URL(fileURLWithPath: share.resolvedMountPath))
-				} label: {
-					content
+				if let path = share.mountPath {
+					Button {
+						NSWorkspace.shared.open(URL(fileURLWithPath: path))
+					} label: {
+						content
+					}
+					.buttonStyle(.plain)
+					.accessibilityLabel("View \(share.sharename) in Finder")
+				} else {
+					Button(action: onReconnect) {
+						content
+					}
+					.buttonStyle(.plain)
+					.accessibilityLabel("Reconnect \(share.sharename)")
 				}
-				.buttonStyle(.plain)
-				.accessibilityLabel("View \(share.sharename) in Finder")
 			case .unmounted:
 				Button(action: onReconnect) {
 					content

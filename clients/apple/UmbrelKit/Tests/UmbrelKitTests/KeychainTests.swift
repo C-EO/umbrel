@@ -4,6 +4,39 @@ import XCTest
 @testable import UmbrelKit
 
 final class KeychainTests: XCTestCase {
+	func testExplicitClaimCanReplaceAStaleUnsavedCA() throws {
+		let deviceId = "keychain-test-\(UUID().uuidString)"
+		let staleCertificate = Data("stale-candidate".utf8)
+		let selectedCertificate = Data("explicitly-selected-candidate".utf8)
+		defer { Keychain.deleteLocalHTTPSCA(deviceId: deviceId) }
+
+		let initialEnrollment = Keychain.storeLocalHTTPSCAIfAbsent(
+			staleCertificate,
+			deviceId: deviceId
+		)
+		if initialEnrollment == .unavailable(status: Int32(errSecMissingEntitlement)) {
+			throw XCTSkip("The standalone SwiftPM test runner has no Data Protection Keychain entitlement")
+		}
+		XCTAssertEqual(
+			initialEnrollment,
+			.stored
+		)
+		// Ordinary enrollment remains write-once; only the explicit unsaved-device
+		// claim path below is permitted to recover this stale identity.
+		XCTAssertEqual(
+			Keychain.storeLocalHTTPSCAIfAbsent(selectedCertificate, deviceId: deviceId),
+			.conflicts
+		)
+		XCTAssertEqual(
+			Keychain.replaceLocalHTTPSCA(selectedCertificate, deviceId: deviceId),
+			.stored
+		)
+		XCTAssertEqual(
+			Keychain.readLocalHTTPSCA(deviceId: deviceId),
+			.found(selectedCertificate)
+		)
+	}
+
 	func testMissingItemIsDefinitive() {
 		guard case .missing = Keychain.classifySessionRead(status: errSecItemNotFound, data: nil) else {
 			return XCTFail("Expected a missing session")

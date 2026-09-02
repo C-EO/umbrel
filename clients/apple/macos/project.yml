@@ -21,8 +21,26 @@ schemes:
       config: Debug
     archive:
       config: Release
+    test:
+      config: Debug
+      targets:
+        - UmbrelTests
 
 targets:
+  UmbrelTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+      # Compile the production mount implementation directly so these remain
+      # unhosted logic tests and never launch the menu-bar app or touch volumes.
+      - path: Sources/Umbrel/Mounter.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.umbrel.mac.tests
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: YES
+
   Umbrel:
     type: application
     platform: macOS
@@ -76,7 +94,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.umbrel.mac
         PRODUCT_NAME: Umbrel
         MARKETING_VERSION: "0.1.0"
-        CURRENT_PROJECT_VERSION: "16"
+        CURRENT_PROJECT_VERSION: "21"
         GENERATE_INFOPLIST_FILE: NO
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Umbrel.entitlements

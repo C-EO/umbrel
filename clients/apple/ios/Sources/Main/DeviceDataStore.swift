@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import UmbrelKit
 
@@ -16,7 +17,9 @@ struct DeviceDataSnapshot: Codable {
 enum DeviceDataStore {
 	private static var directory: URL {
 		let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-		let dir = caches.appendingPathComponent("device-data", isDirectory: true)
+		// This cache is disposable, so use a new namespace rather than resolving
+		// legacy paths built from server-provided identifiers.
+		let dir = caches.appendingPathComponent("device-data-v2", isDirectory: true)
 		try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 		return dir
 	}
@@ -40,14 +43,24 @@ enum DeviceDataStore {
 	}
 
 	static func delete(deviceId: String) {
-		try? FileManager.default.removeItem(at: directory.appendingPathComponent(deviceId, isDirectory: true))
+		try? FileManager.default.removeItem(
+			at: directory.appendingPathComponent(cacheKey(deviceId), isDirectory: true)
+		)
 	}
 
 	private static func fileURL(deviceId: String, accountId: String) -> URL {
-		// umbreld device ids are UUIDs and account ids are immutable slugs.
 		directory
-			.appendingPathComponent(deviceId, isDirectory: true)
-			.appendingPathComponent(accountId)
+			.appendingPathComponent(cacheKey(deviceId), isDirectory: true)
+			.appendingPathComponent(cacheKey(accountId))
 			.appendingPathExtension("json")
+	}
+
+	// Device and account ids arrive from a remote endpoint. Hashing gives every
+	// possible value one flat, fixed-width filename instead of interpreting path
+	// separators or dot segments supplied by that endpoint.
+	private static func cacheKey(_ value: String) -> String {
+		SHA256.hash(data: Data(value.utf8))
+			.map { String(format: "%02x", $0) }
+			.joined()
 	}
 }

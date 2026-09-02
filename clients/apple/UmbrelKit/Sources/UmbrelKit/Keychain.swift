@@ -101,6 +101,37 @@ public enum Keychain {
 		}
 	}
 
+	// Claiming an unsaved discovery result is an explicit first-use trust action. It
+	// may replace a stale CA left by an older build's passive discovery, but callers
+	// must never use this for a device that is already saved. The mutation remains
+	// atomic with ordinary write-once enrollment inside this process.
+	static func replaceLocalHTTPSCA(_ certificate: Data, deviceId: String) -> LocalHTTPSCAStoreResult {
+		localHTTPSCAMutationLock.lock()
+		defer { localHTTPSCAMutationLock.unlock() }
+
+		switch readLocalHTTPSCAUnlocked(deviceId: deviceId) {
+		case .found(let existing):
+			guard existing != certificate else { return .alreadyMatches }
+			let update: [String: Any] = [
+				kSecValueData as String: certificate,
+				kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+			]
+			let status = SecItemUpdate(
+				localHTTPSCAQuery(deviceId: deviceId) as CFDictionary,
+				update as CFDictionary
+			)
+			return status == errSecSuccess ? .stored : .unavailable(status: Int32(status))
+		case .missing:
+			var add = localHTTPSCAQuery(deviceId: deviceId)
+			add[kSecValueData as String] = certificate
+			add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+			let status = SecItemAdd(add as CFDictionary, nil)
+			return status == errSecSuccess ? .stored : .unavailable(status: Int32(status))
+		case .unavailable(let status):
+			return .unavailable(status: status)
+		}
+	}
+
 	static func readLocalHTTPSCA(deviceId: String) -> LocalHTTPSCAReadResult {
 		localHTTPSCAMutationLock.lock()
 		defer { localHTTPSCAMutationLock.unlock() }

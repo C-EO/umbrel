@@ -179,6 +179,20 @@ final class PhotoBackupCoverageTests: XCTestCase {
 		XCTAssertEqual(coverage.backedUpBytes, 30)
 	}
 
+	func testCoverageSaturatesCorruptLegacyByteTotals() {
+		let coverage = PhotoBackupCoverage.calculate(
+			assets: [asset("one", mediaType: 1), asset("two", mediaType: 1)],
+			records: [
+				"one": record(.uploaded, modificationTime: 1, uploadedBytes: .max),
+				"two": record(.uploaded, modificationTime: 1, uploadedBytes: .max),
+			],
+			includePhotos: true,
+			includeVideos: true
+		)
+
+		XCTAssertEqual(coverage.backedUpBytes, .max)
+	}
+
 	private func asset(
 		_ identifier: String,
 		mediaType: Int64

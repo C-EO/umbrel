@@ -1185,7 +1185,7 @@ final class MainModel {
 
 			let confirmed = receipts.compactMap { receipt -> PhotoBackupLedger.ResourceReceipt? in
 				guard requestedKeys.contains(receipt.resourceKey),
-					receipt.bytes > 0
+					PhotoBackupLedger.isValidResourceByteCount(receipt.bytes)
 				else { return nil }
 				return .init(
 					resourceKey: receipt.resourceKey,

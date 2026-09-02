@@ -112,7 +112,28 @@ public struct SavedDevice: Codable, Equatable, Sendable {
 	}
 
 	public static func isBonjourHostname(_ host: String) -> Bool {
-		host.lowercased().hasSuffix(".local")
+		guard host.utf8.count <= 253 else { return false }
+		let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+		guard labels.count >= 2, labels.last?.lowercased() == "local" else { return false }
+		return labels.allSatisfy { label in
+			guard (1...63).contains(label.utf8.count),
+				let first = label.utf8.first,
+				let last = label.utf8.last,
+				isASCIILetterOrDigit(first),
+				isASCIILetterOrDigit(last)
+			else { return false }
+			return label.utf8.allSatisfy { isASCIILetterOrDigit($0) || $0 == 45 }
+		}
+	}
+
+	public static func isValidLocalEndpointHost(_ host: String) -> Bool {
+		isIPv4Address(host) || isBonjourHostname(host)
+	}
+
+	private static func isASCIILetterOrDigit(_ byte: UInt8) -> Bool {
+		(byte >= 48 && byte <= 57)
+			|| (byte >= 65 && byte <= 90)
+			|| (byte >= 97 && byte <= 122)
 	}
 
 	// PhotoKit stores one literal destination in every background job. Select only an

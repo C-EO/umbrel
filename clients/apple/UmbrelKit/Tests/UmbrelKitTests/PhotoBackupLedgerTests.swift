@@ -60,6 +60,75 @@ final class PhotoBackupLedgerTests: XCTestCase {
 		XCTAssertEqual(try userVersion(), 2)
 	}
 
+	func testImplausibleReceiptBytesAreRejectedAtomically() throws {
+		let ledger = try makeLedger()
+		try ledger.seedInventory(
+			[candidate("photo", mediaType: 1)],
+			deviceId: "device",
+			changeToken: Data()
+		)
+		try ledger.prepareAsset(
+			deviceId: "device",
+			localIdentifier: "photo",
+			revision: 1,
+			resources: [
+				.init(resourceKey: "still", filename: "photo.heic", destinationPath: "/photo.heic"),
+				.init(resourceKey: "motion", filename: "photo.mov", destinationPath: "/photo.mov"),
+			]
+		)
+
+		XCTAssertThrowsError(
+			try ledger.recordResourceSucceeded(resourceKey: "still", bytes: .max)
+		) { error in
+			XCTAssertEqual(error as? PhotoBackupLedger.ReceiptError, .invalidByteCount)
+		}
+		XCTAssertThrowsError(
+			try ledger.recordConfirmedResources([
+				.init(resourceKey: "still", bytes: 10),
+				.init(resourceKey: "motion", bytes: 0),
+			])
+		) { error in
+			XCTAssertEqual(error as? PhotoBackupLedger.ReceiptError, .invalidByteCount)
+		}
+
+		let resources = try ledger.resources(deviceId: "device", localIdentifier: "photo", revision: 1)
+		XCTAssertTrue(resources.allSatisfy { $0.state == PhotoBackupLedger.resourcePending })
+	}
+
+	func testMaximumPlausibleReceiptsRemainSummable() throws {
+		let ledger = try makeLedger()
+		try ledger.seedInventory(
+			[candidate("photo", mediaType: 1)],
+			deviceId: "device",
+			changeToken: Data()
+		)
+		try ledger.prepareAsset(
+			deviceId: "device",
+			localIdentifier: "photo",
+			revision: 1,
+			resources: [
+				.init(resourceKey: "still", filename: "photo.heic", destinationPath: "/photo.heic"),
+				.init(resourceKey: "motion", filename: "photo.mov", destinationPath: "/photo.mov"),
+			]
+		)
+
+		try ledger.recordResourceSucceeded(
+			resourceKey: "still",
+			bytes: PhotoBackupLedger.maximumResourceBytes
+		)
+		try ledger.recordResourceSucceeded(
+			resourceKey: "motion",
+			bytes: PhotoBackupLedger.maximumResourceBytes
+		)
+
+		let expected = PhotoBackupLedger.maximumResourceBytes * 2
+		XCTAssertEqual(try ledger.statistics(deviceId: "device").uploadedBytes, expected)
+		XCTAssertEqual(
+			try ledger.assetRecord(deviceId: "device", localIdentifier: "photo")?.uploadedBytes,
+			expected
+		)
+	}
+
 	func testInventoryFiltersDisabledMediaAndFinalizesEveryResourceTogether() throws {
 		let ledger = try makeLedger()
 		try ledger.seedInventory(

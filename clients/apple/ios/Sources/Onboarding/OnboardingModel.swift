@@ -256,7 +256,10 @@ final class OnboardingModel {
 		publishDiscoveryResults()
 
 		identificationTask = Task { [weak self] in
-			let identified = await Umbreld.identify(candidates: candidates)
+			let identified = await Umbreld.identify(
+				candidates: candidates,
+				knownDeviceIds: savedIds
+			)
 			guard !Task.isCancelled, let self else { return }
 			pendingNativeHosts = []
 			mdnsDevices = identified

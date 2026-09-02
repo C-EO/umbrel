@@ -82,6 +82,9 @@ struct RootView: View {
 					target: device.nativeTarget,
 					browserHost: device.host,
 					preferredUserId: device.lastAccountId,
+					onPrepare: {
+						try await Umbreld.prepareSavedDeviceForSignIn(device.nativeTarget)
+					},
 					onCancel: { signInDevice = nil },
 					onRemove: {
 						do {

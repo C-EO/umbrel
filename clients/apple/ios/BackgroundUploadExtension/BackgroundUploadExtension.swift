@@ -643,7 +643,7 @@ final class BackgroundUploadExtension: PHBackgroundResourceUploadExtension {
 			job.state == .succeeded,
 			job.responseHeaderFields?["x-umbrel-photo-backup-key"] == key,
 			let bytes = Int64(job.responseHeaderFields?["x-umbrel-upload-bytes"] ?? ""),
-			bytes > 0
+			PhotoBackupLedger.isValidResourceByteCount(bytes)
 		else { return nil }
 		return (key, bytes)
 	}

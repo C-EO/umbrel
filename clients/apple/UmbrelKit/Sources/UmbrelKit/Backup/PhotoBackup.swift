@@ -434,7 +434,9 @@ public struct PhotoBackupCoverage: Equatable, Sendable {
 				} else {
 					backedUpPhotos += 1
 				}
-				backedUpBytes += max(0, currentRecord.uploadedBytes)
+				let bytes = max(0, currentRecord.uploadedBytes)
+				let (sum, overflowed) = backedUpBytes.addingReportingOverflow(bytes)
+				backedUpBytes = overflowed ? .max : sum
 			}
 
 			let isIncluded = asset.mediaType == 2 ? includeVideos : includePhotos

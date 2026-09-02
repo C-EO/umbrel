@@ -188,16 +188,40 @@ public enum Umbreld {
 		let caCertificate: String
 	}
 
-	// The sole first-use trust path. HTTP carries only a candidate public CA and
-	// discovery id. We keep both in memory until that CA validates the live HTTPS
-	// endpoint and the same id comes back over HTTPS; only then is the CA persisted.
-	public static func identify(host: String, expectedDeviceId: String? = nil) async -> DiscoveryInfo? {
-		try? await enrollLocalHTTPS(host: host, expectedDeviceId: expectedDeviceId)
+	private struct VerifiedLocalHTTPSCandidate {
+		let discoveryInfo: DiscoveryInfo
+		let certificate: Data
 	}
 
-	private static func enrollLocalHTTPS(host: String, expectedDeviceId: String?) async throws -> DiscoveryInfo {
-		// A known Umbrel with an enrolled CA needs no plaintext bootstrap. Validate
-		// its live endpoint directly with the existing pin and confirm its stable id.
+	enum SavedIdentityRecoveryDecision: Equatable {
+		case alreadyEnrolled
+		case claim(host: String)
+	}
+
+	struct IdentityProbeResult: Sendable {
+		let discoveryInfo: DiscoveryInfo
+		// Present only for first-use verification. Saved-device probes validate with
+		// the existing Keychain pin and therefore have no candidate anchor to claim.
+		let candidateCertificate: Data?
+	}
+
+	// Passive discovery is deliberately read-only. HTTP carries only a candidate
+	// public CA and discovery id; the candidate stays in memory long enough to prove
+	// the same id over HTTPS, but opening the app never persists it to the Keychain.
+	public static func identify(host: String, expectedDeviceId: String? = nil) async -> DiscoveryInfo? {
+		try? await verifiedLocalHTTPSIdentity(
+			host: host,
+			expectedDeviceId: expectedDeviceId
+		).discoveryInfo
+	}
+
+	private static func verifiedLocalHTTPSIdentity(
+		host: String,
+		expectedDeviceId: String?
+	) async throws -> IdentityProbeResult {
+		// A saved Umbrel must validate directly against its existing pin. With no
+		// expected saved id, deliberately ignore any stale passive pin left by an older
+		// development build so the real device can still appear and be claimed again.
 		if let expectedDeviceId {
 			switch Keychain.readLocalHTTPSCA(deviceId: expectedDeviceId) {
 			case .found:
@@ -205,41 +229,152 @@ public enum Umbreld {
 				guard identity.id == expectedDeviceId else {
 					throw LocalHTTPSTransportError.identityChanged
 				}
-				return identity
+				return IdentityProbeResult(
+					discoveryInfo: identity,
+					candidateCertificate: nil
+				)
 			case .missing:
-				break
+				throw LocalHTTPSTransportError.notEnrolled
 			case .unavailable:
 				throw LocalHTTPSTransportError.storageUnavailable
 			}
 		}
 
+		let candidate = try await verifiedFirstUseCandidate(
+			host: host,
+			expectedDeviceId: expectedDeviceId
+		)
+		return IdentityProbeResult(
+			discoveryInfo: candidate.discoveryInfo,
+			candidateCertificate: candidate.certificate
+		)
+	}
+
+	private static func verifiedFirstUseCandidate(
+		host: String,
+		expectedDeviceId: String?
+	) async throws -> VerifiedLocalHTTPSCandidate {
 		let bootstrap = try await localHTTPSIdentity(host: host)
 		if let expectedDeviceId, bootstrap.id != expectedDeviceId {
 			throw LocalHTTPSTransportError.identityChanged
 		}
+		let candidate = try LocalHTTPSTransport.certificateData(fromPEM: bootstrap.caCertificate)
+		let identity = try await discoveryInfoOverHTTPS(host: host, candidateCertificate: candidate)
+		guard identity.id == bootstrap.id else { throw LocalHTTPSTransportError.identityChanged }
+		return VerifiedLocalHTTPSCandidate(discoveryInfo: identity, certificate: candidate)
+	}
 
-		let identity: DiscoveryInfo
-		switch Keychain.readLocalHTTPSCA(deviceId: bootstrap.id) {
-		case .found:
-			identity = try await discoveryInfoOverHTTPS(host: host, deviceId: bootstrap.id)
-		case .missing:
-			let candidate = try LocalHTTPSTransport.certificateData(fromPEM: bootstrap.caCertificate)
-			identity = try await discoveryInfoOverHTTPS(host: host, candidateCertificate: candidate)
-			guard identity.id == bootstrap.id else { throw LocalHTTPSTransportError.identityChanged }
-			switch Keychain.storeLocalHTTPSCAIfAbsent(candidate, deviceId: bootstrap.id) {
-			case .stored, .alreadyMatches:
+	// Explicitly selecting an unsaved card establishes first-use trust. Re-verify the
+	// exact endpoint with the candidate anchor held from that scan, then replace a stale
+	// unsaved pin left by older passive-discovery builds. Saved devices never call this
+	// API and retain write-once identity semantics.
+	@discardableResult
+	public static func claimLocalHTTPSIdentity(_ device: IdentifiedDevice) async throws -> DiscoveryInfo {
+		guard let certificate = device.candidateCACertificate else {
+			throw LocalHTTPSTransportError.identityChanged
+		}
+		let identity = try await discoveryInfoOverHTTPS(
+			host: device.host,
+			candidateCertificate: certificate
+		)
+		guard identity.id == device.id else { throw LocalHTTPSTransportError.identityChanged }
+		switch await LocalHTTPSTransport.enroll(
+			certificate: certificate,
+			deviceId: device.id,
+			replacingExisting: true
+		) {
+		case .stored, .alreadyMatches:
+			return identity
+		case .conflicts:
+			// Replacement enrollment cannot conflict; preserve fail-closed behavior if
+			// the storage implementation ever gains another outcome.
+			throw LocalHTTPSTransportError.identityChanged
+		case .unavailable:
+			throw LocalHTTPSTransportError.storageUnavailable
+		}
+	}
+
+	// A restored config can outlive both device-local Keychain items. Recover only
+	// from an explicit sign-in, only when neither a pin nor a session exists, and only
+	// through the saved primary LAN endpoint. The expected device id is proved before
+	// the candidate CA is enrolled with the normal write-once path.
+	@discardableResult
+	public static func prepareSavedDeviceForSignIn(_ target: Target) async throws -> Bool {
+		switch try savedIdentityRecoveryDecision(
+			for: target,
+			caRead: Keychain.readLocalHTTPSCA(deviceId: target.deviceId),
+			sessionRead: Keychain.readSession(deviceId: target.deviceId)
+		) {
+		case .alreadyEnrolled:
+			return false
+		case .claim(let host):
+			let candidate = try await verifiedFirstUseCandidate(
+				host: host,
+				expectedDeviceId: target.deviceId
+			)
+
+			// Re-check after the network operation. If another explicit flow installed a
+			// pin, validate with that pin; never replace it from this recovery path.
+			switch try savedIdentityRecoveryDecision(
+				for: target,
+				caRead: Keychain.readLocalHTTPSCA(deviceId: target.deviceId),
+				sessionRead: Keychain.readSession(deviceId: target.deviceId)
+			) {
+			case .alreadyEnrolled:
+				let identity = try await discoveryInfoOverHTTPS(
+					host: host,
+					deviceId: target.deviceId
+				)
+				guard identity.id == target.deviceId else {
+					throw LocalHTTPSTransportError.identityChanged
+				}
+				return true
+			case .claim:
 				break
+			}
+
+			switch await LocalHTTPSTransport.enroll(
+				certificate: candidate.certificate,
+				deviceId: target.deviceId
+			) {
+			case .stored, .alreadyMatches:
+				return true
 			case .conflicts:
 				throw LocalHTTPSTransportError.identityChanged
 			case .unavailable:
 				throw LocalHTTPSTransportError.storageUnavailable
 			}
+		}
+	}
+
+	static func savedIdentityRecoveryDecision(
+		for target: Target,
+		caRead: Keychain.LocalHTTPSCAReadResult,
+		sessionRead: Keychain.SessionReadResult
+	) throws -> SavedIdentityRecoveryDecision {
+		switch caRead {
+		case .found:
+			return .alreadyEnrolled
 		case .unavailable:
 			throw LocalHTTPSTransportError.storageUnavailable
+		case .missing:
+			break
 		}
 
-		guard identity.id == bootstrap.id else { throw LocalHTTPSTransportError.identityChanged }
-		return identity
+		switch sessionRead {
+		case .missing:
+			break
+		case .unavailable:
+			throw LocalHTTPSTransportError.storageUnavailable
+		case .found, .invalid:
+			throw LocalHTTPSTransportError.notEnrolled
+		}
+
+		guard let host = target.hosts.first,
+			SavedDevice.isValidLocalEndpointHost(host),
+			!SavedDevice.isTailscaleAddress(host)
+		else { throw LocalHTTPSTransportError.trustFailed }
+		return .claim(host: host)
 	}
 
 	private static func localHTTPSIdentity(host: String) async throws -> LocalHTTPSIdentity {
@@ -307,7 +442,7 @@ public enum Umbreld {
 	// addresses. Retaining the exact endpoint that answered ensures login happens
 	// against the same host whose authoritative identity the app displayed.
 	public static func identify(candidate: Candidate) async -> IdentifiedDevice? {
-		await identifyCandidate(candidate, expectedDeviceId: nil)
+		await identifyCandidate(candidate, knownDeviceIds: [])
 	}
 
 	// Refresh a saved device through a newly advertised Bonjour route. Unlike first-time
@@ -318,18 +453,47 @@ public enum Umbreld {
 		expectedDeviceId: String
 	) async -> IdentifiedDevice? {
 		guard case .found = Keychain.readLocalHTTPSCA(deviceId: expectedDeviceId) else { return nil }
-		return await identifyCandidate(candidate, expectedDeviceId: expectedDeviceId)
+		return await identifyCandidate(
+			candidate,
+			knownDeviceIds: [expectedDeviceId],
+			requiredDeviceId: expectedDeviceId
+		)
 	}
 
-	private static func identifyCandidate(
+	typealias IdentityProbe = @Sendable (String, String?) async -> IdentityProbeResult?
+
+	// The TXT id is only an optimization. A candidate claiming a saved id is probed
+	// with that pin immediately; if an unhinted candidate later returns a saved id,
+	// repeat the probe with the saved pin before admitting it. Unsaved ids deliberately
+	// use first-use verification even if an obsolete passive pin exists in Keychain.
+	static func identifyCandidate(
 		_ candidate: Candidate,
-		expectedDeviceId: String?
+		knownDeviceIds: Set<String>,
+		requiredDeviceId: String? = nil,
+		probe: IdentityProbe? = nil
 	) async -> IdentifiedDevice? {
 		guard let candidate = localDiscoveryCandidate(candidate) else { return nil }
+		let probe = probe ?? { host, expectedDeviceId in
+			try? await verifiedLocalHTTPSIdentity(host: host, expectedDeviceId: expectedDeviceId)
+		}
+		let hintedDeviceId = requiredDeviceId
+			?? candidate.id.flatMap { knownDeviceIds.contains($0) ? $0 : nil }
 		var attemptedHosts = Set<String>()
 		for host in [candidate.host] + candidate.addresses where attemptedHosts.insert(host).inserted {
 			guard !Task.isCancelled else { return nil }
-			guard let identity = await identify(host: host, expectedDeviceId: expectedDeviceId) else { continue }
+			guard var verified = await probe(host, hintedDeviceId) else { continue }
+			var identity = verified.discoveryInfo
+			if let hintedDeviceId {
+				guard identity.id == hintedDeviceId else { continue }
+			} else if knownDeviceIds.contains(identity.id) {
+				// The authoritative response identified a saved device whose TXT hint did
+				// not. Discard the first-use result unless its stored pin also validates.
+				guard let pinned = await probe(host, identity.id),
+					pinned.discoveryInfo.id == identity.id
+				else { continue }
+				verified = pinned
+				identity = pinned.discoveryInfo
+			}
 			return IdentifiedDevice(
 				host: host,
 				discoveryHost: candidate.host,
@@ -337,7 +501,8 @@ public enum Umbreld {
 				name: candidate.name,
 				id: identity.id,
 				model: identity.device,
-				onboarded: identity.onboarded
+				onboarded: identity.onboarded,
+				candidateCACertificate: verified.candidateCertificate
 			)
 		}
 		return nil
@@ -356,10 +521,15 @@ public enum Umbreld {
 	// Probe a discovery snapshot concurrently and collapse duplicate advertisements
 	// by the authoritative id returned from each device. Sorting before deduplication
 	// makes the selected endpoint stable even when task completion order differs.
-	public static func identify(candidates: [Candidate]) async -> [IdentifiedDevice] {
+	public static func identify(
+		candidates: [Candidate],
+		knownDeviceIds: Set<String> = []
+	) async -> [IdentifiedDevice] {
 		let identified = await withTaskGroup(of: IdentifiedDevice?.self) { group in
 			for candidate in candidates {
-				group.addTask { await identify(candidate: candidate) }
+				group.addTask {
+					await identifyCandidate(candidate, knownDeviceIds: knownDeviceIds)
+				}
 			}
 
 			var results: [IdentifiedDevice] = []
@@ -1210,15 +1380,7 @@ public enum Umbreld {
 		case .found:
 			return try await resolvePinnedHost(for: target)
 		case .missing:
-			// Preserve the existing TOFU boundary for pre-HTTPS saved devices: enroll
-			// only through the original paired host. Once pinned, alternate LAN and
-			// Tailscale routes may safely race under that same CA and stable id.
-			guard let canonicalHost = target.hosts.first else {
-				throw Error(status: 0, message: "Could not reach this Umbrel", kind: .connectivity)
-			}
-			return try await requireVerifiedEndpoint(
-				await verifyEndpoint(host: canonicalHost, expectedDeviceId: target.deviceId),
-				host: canonicalHost)
+			throw transportError(.notEnrolled)
 		case .unavailable:
 			throw Error(
 				status: 0,
@@ -1258,7 +1420,10 @@ public enum Umbreld {
 			// credentials are never sent merely because a 100.x address answered.
 			let identity = isTailscaleHost(host)
 				? try await discoveryInfoOverTailscale(host: host)
-				: try await enrollLocalHTTPS(host: host, expectedDeviceId: expectedDeviceId)
+				: try await verifiedLocalHTTPSIdentity(
+					host: host,
+					expectedDeviceId: expectedDeviceId
+				).discoveryInfo
 			return identity.id == expectedDeviceId ? .verified : .rejected(.trust(
 				LocalHTTPSTransportError.identityChanged.localizedDescription))
 		} catch is CancellationError {
@@ -1618,30 +1783,15 @@ public enum Umbreld {
 		if isTailscaleHost(host) {
 			return try await tailscaleSession.data(for: request)
 		}
-		return try await secureData(for: request, deviceId: deviceId, host: host)
+		return try await secureData(for: request, deviceId: deviceId)
 	}
 
 	private static func secureData(
 		for request: URLRequest,
-		deviceId: String,
-		host: String
+		deviceId: String
 	) async throws -> (Data, URLResponse) {
 		do {
 			return try await LocalHTTPSTransport.data(for: request, deviceId: deviceId)
-		} catch LocalHTTPSTransportError.notEnrolled {
-			// Existing saved devices from pre-HTTPS builds enroll lazily before their
-			// first credential-bearing request. Enrollment itself sends no credentials.
-			do {
-				_ = try await enrollLocalHTTPS(host: host, expectedDeviceId: deviceId)
-				return try await LocalHTTPSTransport.data(for: request, deviceId: deviceId)
-			} catch let error as LocalHTTPSTransportError {
-				throw transportError(error)
-			} catch let error as URLError where isServerTrustError(error) {
-				throw Umbreld.Error(
-					status: 0,
-					message: LocalHTTPSTransportError.trustFailed.localizedDescription,
-					kind: .trust)
-			}
 		} catch let error as LocalHTTPSTransportError {
 			throw transportError(error)
 		} catch let error as URLError where isServerTrustError(error) {

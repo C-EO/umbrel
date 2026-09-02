@@ -47,6 +47,29 @@ public struct IdentifiedDevice: Equatable, Sendable {
 	public let id: String
 	public let model: String
 	public let onboarded: Bool
+	// Kept inside UmbrelKit so passive scans can hand the exact verified candidate
+	// anchor to an explicit claim without exposing trust material to app UI code.
+	let candidateCACertificate: Data?
+
+	init(
+		host: String,
+		discoveryHost: String,
+		addresses: [String],
+		name: String,
+		id: String,
+		model: String,
+		onboarded: Bool,
+		candidateCACertificate: Data? = nil
+	) {
+		self.host = host
+		self.discoveryHost = discoveryHost
+		self.addresses = addresses
+		self.name = name
+		self.id = id
+		self.model = model
+		self.onboarded = onboarded
+		self.candidateCACertificate = candidateCACertificate
+	}
 }
 
 // Browses for _umbrel._tcp through the system mDNSResponder daemon (dnssd C API).

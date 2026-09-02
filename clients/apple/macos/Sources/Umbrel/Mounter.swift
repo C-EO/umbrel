@@ -83,11 +83,23 @@ enum Mounter {
 					return
 				}
 
-				if let paths = mountpoints?.takeRetainedValue() as? [String], let path = paths.first {
+				if let paths = mountpoints?.takeRetainedValue() as? [String],
+					let path = paths.first(where: { !$0.isEmpty }) {
 					continuation.resume(returning: path)
 				} else {
-					// Mounted but no path reported; fall back to the default location
-					continuation.resume(returning: "/Volumes/\(sharename)")
+					// NetFS occasionally omits its result. Recover only from the system's
+					// SMB remount metadata; a guessed /Volumes name may belong to a local disk.
+					guard let path = recoveredMountPath(
+						host: host,
+						sharename: sharename,
+						from: mountedSharesSnapshot(hosts: [host])
+					) else {
+						continuation.resume(throwing: MountError(
+							message: "Mounted \(sharename), but couldn't determine its location"
+						))
+						return
+					}
+					continuation.resume(returning: path)
 				}
 			}
 		}
@@ -97,32 +109,58 @@ enum Mounter {
 	// crash or relaunch. Foundation exposes each network volume's remount URL; use
 	// its SMB host to recover every volume belonging to this Umbrel.
 	static func mountedShares(hosts: Set<String>) async -> [MountedShare] {
+		return await withCheckedContinuation { (continuation: CheckedContinuation<[MountedShare], Never>) in
+			blockingQueue.async(qos: .utility) {
+				continuation.resume(returning: mountedSharesSnapshot(hosts: hosts))
+			}
+		}
+	}
+
+	private static func mountedSharesSnapshot(hosts: Set<String>) -> [MountedShare] {
 		let normalizedHosts = Set(hosts.map(normalize(host:)))
 		guard !normalizedHosts.isEmpty else { return [] }
 
-		return await withCheckedContinuation { (continuation: CheckedContinuation<[MountedShare], Never>) in
-			blockingQueue.async(qos: .utility) {
-				let key: URLResourceKey = .volumeURLForRemountingKey
-				let volumes = FileManager.default.mountedVolumeURLs(
-					includingResourceValuesForKeys: [key]
-				) ?? []
-				let shares: [MountedShare] = volumes.compactMap { volume in
-					guard let values = try? volume.resourceValues(forKeys: [key]),
-						let remote = values.volumeURLForRemounting,
-						remote.scheme?.lowercased() == "smb",
-						let host = remote.host,
-						normalizedHosts.contains(normalize(host: host)),
-						!remote.lastPathComponent.isEmpty
-					else { return nil }
-					return MountedShare(host: host, sharename: remote.lastPathComponent, path: volume.path)
-				}
-				continuation.resume(returning: shares)
-			}
+		let key: URLResourceKey = .volumeURLForRemountingKey
+		let volumes = FileManager.default.mountedVolumeURLs(
+			includingResourceValuesForKeys: [key]
+		) ?? []
+		return volumes.compactMap { volume in
+			guard let values = try? volume.resourceValues(forKeys: [key]),
+				let remote = values.volumeURLForRemounting,
+				remote.scheme?.lowercased() == "smb",
+				let host = remote.host,
+				normalizedHosts.contains(normalize(host: host)),
+				!remote.lastPathComponent.isEmpty
+			else { return nil }
+			return MountedShare(host: host, sharename: remote.lastPathComponent, path: volume.path)
 		}
 	}
 
 	static func hostsMatch(_ lhs: String, _ rhs: String) -> Bool {
 		normalize(host: lhs) == normalize(host: rhs)
+	}
+
+	static func recoveredMountPath(
+		host: String,
+		sharename: String,
+		from shares: [MountedShare]
+	) -> String? {
+		let matches = shares.filter {
+			hostsMatch($0.host, host) && $0.sharename == sharename
+		}
+		guard matches.count == 1 else { return nil }
+		return matches[0].path
+	}
+
+	static func shares(
+		_ shares: [MountedShare],
+		ownedByHosts hosts: Set<String>,
+		orCreatedPaths createdPaths: Set<String> = []
+	) -> [MountedShare] {
+		let hostKeys = Set(hosts.map(normalize(host:)))
+		return shares.filter {
+			hostKeys.contains(normalize(host: $0.host)) || createdPaths.contains($0.path)
+		}
 	}
 
 	// Use the same graceful system operation as Finder. If files are still active,

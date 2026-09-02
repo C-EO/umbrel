@@ -1,5 +1,7 @@
 import SwiftUI
+import UIKit
 import UmbrelKit
+import UniformTypeIdentifiers
 
 // Shown before the first open of an app that ships default sign-in credentials
 // (umbrelOS web parity): the user copies them, then continues into the app.
@@ -106,12 +108,30 @@ private struct CredentialRow: View {
 		.frame(minHeight: 52)
 		.contentShape(Rectangle())
 		.onTapGesture {
-			UIPasteboard.general.string = value
+			CredentialPasteboard.copy(value)
 			copied = true
 			Task {
 				try? await Task.sleep(for: .seconds(1.5))
 				copied = false
 			}
 		}
+	}
+}
+
+enum CredentialPasteboard {
+	static let expirationInterval: TimeInterval = 2 * 60
+
+	static func copy(_ value: String, now: Date = Date()) {
+		UIPasteboard.general.setItems(
+			[[UTType.utf8PlainText.identifier: value]],
+			options: options(now: now)
+		)
+	}
+
+	static func options(now: Date) -> [UIPasteboard.OptionsKey: Any] {
+		[
+			.localOnly: true,
+			.expirationDate: now.addingTimeInterval(expirationInterval),
+		]
 	}
 }
