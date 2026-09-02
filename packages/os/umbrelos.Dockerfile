@@ -573,8 +573,10 @@ RUN set -e; \
 
 # Rebuild initramfs after overlay changes so custom udev rules are available
 # during early boot coldplug and /dev/disk/by-umbrel-id exists before the
-# mount script runs.
-RUN update-initramfs -u
+# mount script runs. Pi images ship two kernels (Pi 4 and Pi 5) and
+# update-initramfs only regenerates the highest version by default, so
+# regenerate every installed kernel's initramfs.
+RUN update-initramfs -u -k all
 
 # Move persistant locations to /data to be bind mounted over the OS.
 # /data will exist on a seperate partition that survives OS updates.

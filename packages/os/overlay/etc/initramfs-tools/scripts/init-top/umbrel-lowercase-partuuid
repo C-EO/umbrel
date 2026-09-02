@@ -1,0 +1,51 @@
+#!/bin/sh
+
+PREREQ=""
+
+prereqs() {
+	echo "${PREREQ}"
+}
+
+case "${1:-}" in
+	prereqs)
+		prereqs
+		exit 0
+		;;
+esac
+
+# The initramfs resolves root=PARTUUID= with `blkid -l -t`, which compares the
+# value byte for byte against the lowercase GUIDs libblkid reports, whereas the
+# kernel's own root= parsing is case-insensitive. Rugix Ctrl before v1.1.2
+# patches cmdline.txt on the spare boot slot with an uppercase GPT PARTUUID
+# during an OTA update, so an installer on an older umbrelOS release would leave
+# the updated slot unable to find its root device and the device would fall
+# back to the previous release on every attempt. Normalise the value here so
+# the root device resolves regardless of which installer wrote it.
+case "${ROOT:-}" in
+	PARTUUID=*) ;;
+	*) exit 0 ;;
+esac
+
+remaining="${ROOT#PARTUUID=}"
+lowercased=""
+while [ -n "${remaining}" ]; do
+	char="${remaining%"${remaining#?}"}"
+	remaining="${remaining#?}"
+	case "${char}" in
+		A) char="a" ;;
+		B) char="b" ;;
+		C) char="c" ;;
+		D) char="d" ;;
+		E) char="e" ;;
+		F) char="f" ;;
+	esac
+	lowercased="${lowercased}${char}"
+done
+
+[ "${lowercased}" != "${ROOT#PARTUUID=}" ] || exit 0
+
+# init sources /conf/param.conf after each boot script, which is the supported
+# way for a script to change variables such as ROOT in init's own shell.
+conf_root="${CONF_ROOT:-/conf}"
+mkdir -p "${conf_root}"
+echo "ROOT=PARTUUID=${lowercased}" >> "${conf_root}/param.conf"
