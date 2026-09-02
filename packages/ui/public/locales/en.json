@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Turning on",
   "machines.state.stopped": "Turned off",
   "machines.state.stopping": "Shutting down",
+  "machines.state.suspended": "Sleeping",
   "machines.state.uninstalling": "Uninstalling",
   "machines.storage": "Storage",
   "machines.storage-used-of-total": "{{used}} of {{total}}",

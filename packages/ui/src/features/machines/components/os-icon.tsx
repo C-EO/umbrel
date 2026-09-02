@@ -44,6 +44,7 @@ const stateVariant: Record<MachineState, MachineIconVariant> = {
 	stopping: 'loading',
 	restarting: 'loading',
 	stopped: 'off',
+	suspended: 'off',
 	error: 'error',
 }
 

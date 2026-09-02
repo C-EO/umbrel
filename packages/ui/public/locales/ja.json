@@ -1422,6 +1422,7 @@
   "machines.state.starting": "起動中",
   "machines.state.stopped": "オフ",
   "machines.state.stopping": "シャットダウン中",
+  "machines.state.suspended": "スリープ中",
   "machines.state.uninstalling": "アンインストール中",
   "machines.storage": "ストレージ",
   "machines.storage-used-of-total": "{{total}}中{{used}}",

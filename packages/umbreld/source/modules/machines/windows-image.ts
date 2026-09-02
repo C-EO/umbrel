@@ -91,8 +91,11 @@ function requireLegacyLicenseKey(options: WindowsInstallOptions) {
 	return key
 }
 
-function windowsCompletionCommand(completionUrl: string) {
-	return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ok=$false; 1..60 | ForEach-Object { if (-not $ok) { try { $request=New-Object -ComObject WinHttp.WinHttpRequest.5.1; $request.SetTimeouts(5000,5000,5000,5000); $request.Open('POST','${completionUrl}',$false); $request.Send(); $ok=$request.Status -ge 200 -and $request.Status -lt 300 } catch {}; if (-not $ok) { Start-Sleep -Seconds 5 } } }; if (-not $ok) { exit 1 }"`
+function windowsCompletionCommand(completionUrl: string, {disableSleep = false} = {}) {
+	const powerManagement = disableSleep
+		? 'powercfg.exe /change standby-timeout-ac 0; powercfg.exe /change standby-timeout-dc 0; powercfg.exe /hibernate off; '
+		: ''
+	return `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "${powerManagement}$ok=$false; 1..60 | ForEach-Object { if (-not $ok) { try { $request=New-Object -ComObject WinHttp.WinHttpRequest.5.1; $request.SetTimeouts(5000,5000,5000,5000); $request.Open('POST','${completionUrl}',$false); $request.Send(); $ok=$request.Status -ge 200 -and $request.Status -lt 300 } catch {}; if (-not $ok) { Start-Sleep -Seconds 5 } } }; if (-not $ok) { exit 1 }"`
 }
 
 export function renderWindowsSetupComplete(options: WindowsInstallOptions) {
@@ -107,8 +110,8 @@ export function renderWindowsUnattend(options: WindowsInstallOptions) {
 	const username = escapeXml(options.username)
 	const password = escapeXml(options.password)
 	const processorArchitecture = options.arch
-	const completionCommand = escapeXml(windowsCompletionCommand(options.completionUrl))
 	const modern = installer === 'windows-11' || installer === 'windows-server-2025'
+	const completionCommand = escapeXml(windowsCompletionCommand(options.completionUrl, {disableSleep: modern}))
 	const installMetadata =
 		installer === 'windows-server-2025'
 			? `<MetaData wcm:action="add"><Key>/IMAGE/INDEX</Key><Value>2</Value></MetaData>`

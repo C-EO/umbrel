@@ -1422,6 +1422,7 @@
   "machines.state.starting": "正在開機",
   "machines.state.stopped": "已關機",
   "machines.state.stopping": "正在關機",
+  "machines.state.suspended": "睡眠中",
   "machines.state.uninstalling": "正在解除安裝",
   "machines.storage": "儲存空間",
   "machines.storage-used-of-total": "{{used}} / {{total}}",

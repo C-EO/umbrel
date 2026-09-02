@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Slås på",
   "machines.state.stopped": "Avstängd",
   "machines.state.stopping": "Stänger av",
+  "machines.state.suspended": "Vilar",
   "machines.state.uninstalling": "Avinstallerar",
   "machines.storage": "Lagring",
   "machines.storage-used-of-total": "{{used}} av {{total}}",

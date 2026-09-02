@@ -22,6 +22,8 @@ const downloadHooks = vi.hoisted(() => ({onStart: undefined as (() => void) | un
 const guestApiControls = vi.hoisted(() => ({starts: 0, stops: 0}))
 const libvirtControls = vi.hoisted(() => ({
 	startCalls: [] as string[],
+	stopCalls: [] as Array<{id: string; force: boolean}>,
+	suspendedIds: new Set<string>(),
 	resizeCalls: [] as Array<{id: string; disk: string; sizeGb: number}>,
 	diskVirtualSizes: new Map<string, number>(),
 	ejectCalls: [] as string[],
@@ -138,6 +140,7 @@ vi.mock('./libvirt.js', async () => {
 
 			async state(id: string) {
 				if (libvirtControls.stateFailures.has(id)) throw new Error('[machine-state-unavailable]')
+				if (libvirtControls.suspendedIds.has(id)) return 'suspended'
 				return this.states.get(id) ?? 'stopped'
 			}
 
@@ -194,11 +197,14 @@ vi.mock('./libvirt.js', async () => {
 			}) {
 				libvirtControls.startCalls.push(definition.id)
 				await libvirtControls.startBarrier
+				libvirtControls.suspendedIds.delete(definition.id)
 				this.states.set(definition.id, 'running')
 				return {acceleration: 'tcg' as const}
 			}
 
-			async stop(id: string) {
+			async stop(id: string, {force = false} = {}) {
+				libvirtControls.stopCalls.push({id, force})
+				libvirtControls.suspendedIds.delete(id)
 				this.states.set(id, 'stopped')
 			}
 			async restart() {}
@@ -238,6 +244,8 @@ afterEach(async () => {
 	guestApiControls.starts = 0
 	guestApiControls.stops = 0
 	libvirtControls.startCalls.splice(0)
+	libvirtControls.stopCalls.splice(0)
+	libvirtControls.suspendedIds.clear()
 	libvirtControls.resizeCalls.splice(0)
 	libvirtControls.diskVirtualSizes.clear()
 	libvirtControls.ejectCalls.splice(0)
@@ -744,6 +752,54 @@ describe('background machine installation', () => {
 		await expect(first).resolves.toBe(true)
 		await expect(second).rejects.toThrow('[machine-not-stopped]')
 		expect(libvirtControls.startCalls).toHaveLength(startsBeforeRace + 1)
+	})
+
+	test('destroys a power-management-suspended domain before starting it again', async () => {
+		const {machines, filesRoot} = await createMachines()
+		const imports = nodePath.join(filesRoot, 'External', 'imports')
+		await fse.ensureDir(imports)
+		await fsp.writeFile(nodePath.join(imports, 'source.img'), 'source')
+		const machine = await machines.create({
+			name: 'Suspended lifecycle',
+			imagePath: '/External/imports/source.img',
+			diskSizeGb: 1,
+			cores: 1,
+			memoryGb: 1,
+		})
+		await pWaitFor(async () => (await machines.list()).some(({id, state}) => id === machine.id && state === 'running'))
+		libvirtControls.suspendedIds.add(machine.id)
+		expect((await machines.list()).find(({id}) => id === machine.id)?.state).toBe('suspended')
+		const startsBefore = libvirtControls.startCalls.length
+		const stopsBefore = libvirtControls.stopCalls.length
+
+		await expect(machines.startMachine(machine.id)).resolves.toBe(true)
+
+		expect(libvirtControls.stopCalls.slice(stopsBefore)).toEqual([{id: machine.id, force: true}])
+		expect(libvirtControls.startCalls).toHaveLength(startsBefore + 1)
+		expect((await machines.list()).find(({id}) => id === machine.id)?.state).toBe('running')
+	})
+
+	test('force-stops a power-management-suspended domain', async () => {
+		const {machines, filesRoot} = await createMachines()
+		const imports = nodePath.join(filesRoot, 'External', 'imports')
+		await fse.ensureDir(imports)
+		await fsp.writeFile(nodePath.join(imports, 'source.img'), 'source')
+		const machine = await machines.create({
+			name: 'Suspended force stop',
+			imagePath: '/External/imports/source.img',
+			diskSizeGb: 1,
+			cores: 1,
+			memoryGb: 1,
+		})
+		await pWaitFor(async () => (await machines.list()).some(({id, state}) => id === machine.id && state === 'running'))
+		libvirtControls.suspendedIds.add(machine.id)
+		expect((await machines.list()).find(({id}) => id === machine.id)?.state).toBe('suspended')
+		const stopsBefore = libvirtControls.stopCalls.length
+
+		await expect(machines.forceStopMachine(machine.id)).resolves.toBe(true)
+
+		expect(libvirtControls.stopCalls.slice(stopsBefore)).toEqual([{id: machine.id, force: true}])
+		expect((await machines.list()).find(({id}) => id === machine.id)?.state).toBe('stopped')
 	})
 
 	test('remembers explicit lifecycle state for autostart', async () => {

@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Bekapcsolás folyamatban",
   "machines.state.stopped": "Kikapcsolva",
   "machines.state.stopping": "Leállítás folyamatban",
+  "machines.state.suspended": "Alvó állapotban",
   "machines.state.uninstalling": "Eltávolítás folyamatban",
   "machines.storage": "Tárhely",
   "machines.storage-used-of-total": "{{used}} / {{total}}",

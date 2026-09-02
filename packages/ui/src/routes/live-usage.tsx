@@ -26,6 +26,7 @@ import {useUninstallMachine} from '@/features/machines/components/machines-list'
 import {useMachineActions} from '@/features/machines/hooks/use-machine-actions'
 import {useMachine} from '@/features/machines/hooks/use-machines'
 import type {Machine, MachineState} from '@/features/machines/types'
+import {isMachineStartable} from '@/features/machines/utils'
 import {canRestart, canStart, canStop, useAppInstall, useAppState} from '@/hooks/use-app-install'
 import {extractIconAccentColor} from '@/hooks/use-color-thief'
 import {useCpuForUi} from '@/hooks/use-cpu'
@@ -1207,6 +1208,7 @@ function MachineRowStatus({machineId}: {machineId: string}) {
 		starting: t('machines.state.starting'),
 		stopped: t('machines.state.stopped'),
 		stopping: t('machines.state.stopping'),
+		suspended: t('machines.state.suspended'),
 	}
 	const transient = (['installing', 'starting', 'stopping', 'restarting'] as MachineState[]).includes(machine.state)
 	return (
@@ -1231,9 +1233,9 @@ function MachineRowMenuContent({machine, onOpenChange}: {machine: Machine; onOpe
 	const promptUninstall = useUninstallMachine(machine)
 
 	const state = machine.state
-	// Both 'stopped' and 'error' get a one-click start (error recovery),
+	// Stopped, suspended, and error states get a one-click start,
 	// matching the Machines list's power button
-	const startable = state === 'stopped' || state === 'error'
+	const startable = isMachineStartable(state)
 	const stopDisabled = state !== 'running'
 	const restartDisabled = state !== 'running'
 	// The escape hatch for any non-stopped state — except 'installing', where

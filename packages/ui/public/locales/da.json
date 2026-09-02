@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Tænder",
   "machines.state.stopped": "Slukket",
   "machines.state.stopping": "Lukker ned",
+  "machines.state.suspended": "I dvale",
   "machines.state.uninstalling": "Afinstallerer",
   "machines.storage": "Lagerplads",
   "machines.storage-used-of-total": "{{used}} af {{total}}",

@@ -16,7 +16,7 @@ import {
 } from '@/features/machines/constants'
 import {getMachinesErrorMessage, useMachineActions} from '@/features/machines/hooks/use-machine-actions'
 import type {Machine} from '@/features/machines/types'
-import {prettyMbPair} from '@/features/machines/utils'
+import {isMachineStartable, prettyMbPair} from '@/features/machines/utils'
 import {cn} from '@/lib/utils'
 import {useConfirmation} from '@/providers/confirmation'
 import {t} from '@/utils/i18n'
@@ -90,17 +90,19 @@ function MachineRow({machine, index}: {machine: Machine; index: number}) {
 			? `${t('machines.state.setting-up')}…`
 			: machine.state === 'running'
 				? t('machines.state.running')
-				: machine.state === 'stopped'
-					? t('machines.state.stopped')
-					: machine.state === 'installing'
-						? `${t('machines.state.installing')}…`
-						: machine.state === 'starting'
-							? `${t('machines.state.starting')}…`
-							: machine.state === 'stopping'
-								? `${t('machines.state.stopping')}…`
-								: machine.state === 'restarting'
-									? `${t('machines.state.restarting')}…`
-									: undefined
+				: machine.state === 'suspended'
+					? t('machines.state.suspended')
+					: machine.state === 'stopped'
+						? t('machines.state.stopped')
+						: machine.state === 'installing'
+							? `${t('machines.state.installing')}…`
+							: machine.state === 'starting'
+								? `${t('machines.state.starting')}…`
+								: machine.state === 'stopping'
+									? `${t('machines.state.stopping')}…`
+									: machine.state === 'restarting'
+										? `${t('machines.state.restarting')}…`
+										: undefined
 
 	return (
 		// Non-interactive container: the primary open affordance is a real button
@@ -199,8 +201,9 @@ function MachinePowerButton({machine}: {machine: Machine}) {
 		)
 	}
 
-	// Both 'stopped' and 'error' get a one-click start (error recovery)
-	if (machine.state === 'stopped' || machine.state === 'error') {
+	// Stopped, suspended, and error states get a one-click start. Starting a
+	// suspended guest first resets it so libvirt can boot it normally.
+	if (isMachineStartable(machine.state)) {
 		const retryingInstall = machine.state === 'error' && machine.installPending
 		const label = retryingInstall
 			? t('machines.retry-install')

@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Ενεργοποιείται",
   "machines.state.stopped": "Απενεργοποιημένη",
   "machines.state.stopping": "Τερματίζεται",
+  "machines.state.suspended": "Σε αναστολή",
   "machines.state.uninstalling": "Καταργείται",
   "machines.storage": "Χώρος αποθήκευσης",
   "machines.storage-used-of-total": "{{used}} από {{total}}",

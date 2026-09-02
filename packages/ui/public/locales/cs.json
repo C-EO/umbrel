@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Zapínání",
   "machines.state.stopped": "Vypnuto",
   "machines.state.stopping": "Vypínání",
+  "machines.state.suspended": "V režimu spánku",
   "machines.state.uninstalling": "Odinstalace",
   "machines.storage": "Úložiště",
   "machines.storage-used-of-total": "{{used}} z {{total}}",

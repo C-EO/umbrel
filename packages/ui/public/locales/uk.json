@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Увімкнення",
   "machines.state.stopped": "Вимкнено",
   "machines.state.stopping": "Вимкнення",
+  "machines.state.suspended": "У режимі сну",
   "machines.state.uninstalling": "Видалення",
   "machines.storage": "Сховище",
   "machines.storage-used-of-total": "{{used}} з {{total}}",

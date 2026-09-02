@@ -122,7 +122,7 @@ export async function createWithGraphicsFallback(
 	}
 }
 
-export type DomainState = 'running' | 'paused' | 'stopped'
+export type DomainState = 'running' | 'paused' | 'suspended' | 'stopped'
 
 export function isMissingDomainError(output: string) {
 	return /\bdomain not found\b|\bno domain with matching name\b|^error:\s*failed to get domain\s+['"][^'"]+['"]\s*$/i.test(
@@ -735,9 +735,11 @@ export default class Libvirt {
 			throw new Error(`[machine-state-unavailable]${output ? ` ${output}` : ''}`)
 		}
 		const state = result.stdout.trim().toLowerCase()
+		if (state.includes('pmsuspended')) return 'suspended'
 		if (state.includes('paused')) return 'paused'
 		if (state.includes('running') || state.includes('idle') || state.includes('blocked')) return 'running'
-		return 'stopped'
+		if (state.includes('shut off') || state.includes('shutdown') || state.includes('crashed')) return 'stopped'
+		throw new Error(`[machine-state-unavailable] Unexpected state: ${state || '(empty)'}`)
 	}
 
 	async stop(id: string, {force = false, timeout = 30_000} = {}) {
@@ -974,7 +976,7 @@ export default class Libvirt {
 
 	async commitBackupOverlay(definition: MachineDefinition, overlay: string) {
 		const state = await this.state(definition.id)
-		if (state === 'running' || state === 'paused') {
+		if (state === 'running' || state === 'paused' || state === 'suspended') {
 			const target = machineDiskTarget(definition)
 			await execa('virsh', [
 				'--connect',

@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Kveiki",
   "machines.state.stopped": "Slökkt",
   "machines.state.stopping": "Slekk",
+  "machines.state.suspended": "Sofandi",
   "machines.state.uninstalling": "Fjarlægi",
   "machines.storage": "Geymsla",
   "machines.storage-used-of-total": "{{used}} af {{total}}",

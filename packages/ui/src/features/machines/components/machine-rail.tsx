@@ -6,6 +6,7 @@ import {machineFullscreenPath, machineRailButtonClass, machineStopTextClass} fro
 import {useMachineActions} from '@/features/machines/hooks/use-machine-actions'
 import {useMachineAudioPreference} from '@/features/machines/hooks/use-machine-audio-preference'
 import type {Machine} from '@/features/machines/types'
+import {isMachineStartable} from '@/features/machines/utils'
 import {cn} from '@/lib/utils'
 import {t} from '@/utils/i18n'
 
@@ -80,7 +81,7 @@ export function MachineRail({machine, onClose}: {machine: Machine; onClose?: () 
 						</button>
 					</DarkTooltip>
 				</>
-			) : machine.state === 'stopped' || machine.state === 'error' ? (
+			) : isMachineStartable(machine.state) ? (
 				<DarkTooltip
 					label={
 						machine.state === 'error' && machine.installPending

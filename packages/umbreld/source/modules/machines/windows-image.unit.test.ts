@@ -39,6 +39,9 @@ describe('Windows unattended installers', () => {
 		expect(answer).toContain('Start-Sleep -Seconds 5')
 		expect(answer).toContain('SetTimeouts(5000,5000,5000,5000)')
 		expect(answer).toContain('-lt 300')
+		expect(answer).toContain('powercfg.exe /change standby-timeout-ac 0')
+		expect(answer).toContain('powercfg.exe /change standby-timeout-dc 0')
+		expect(answer).toContain('powercfg.exe /hibernate off')
 	})
 
 	test('selects the Desktop Experience image from Windows Server evaluation media', () => {
@@ -56,6 +59,7 @@ describe('Windows unattended installers', () => {
 		expect(setupComplete).toContain('WinHttp.WinHttpRequest.5.1')
 		expect(setupComplete).toContain(common.completionUrl)
 		expect(setupComplete).toContain('exit /b 0')
+		expect(setupComplete).not.toContain('powercfg.exe')
 		expect(setupComplete).not.toMatch(/(?<!\r)\n/)
 	})
 

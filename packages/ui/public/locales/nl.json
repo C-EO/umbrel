@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Wordt ingeschakeld",
   "machines.state.stopped": "Uitgeschakeld",
   "machines.state.stopping": "Wordt afgesloten",
+  "machines.state.suspended": "In slaapstand",
   "machines.state.uninstalling": "Wordt verwijderd",
   "machines.storage": "Opslag",
   "machines.storage-used-of-total": "{{used}} van {{total}}",

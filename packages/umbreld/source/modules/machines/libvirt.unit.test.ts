@@ -234,6 +234,33 @@ Domain: 'umbrel-machine-22222222-2222-4222-8222-222222222222'
 })
 
 describe('libvirt domain state', () => {
+	test.each([
+		['running', 'running'],
+		['idle', 'running'],
+		['blocked', 'running'],
+		['paused', 'paused'],
+		['pmsuspended', 'suspended'],
+		['shut off', 'stopped'],
+		['in shutdown', 'stopped'],
+		['crashed', 'stopped'],
+	] as const)('maps %s to %s', async (reported, expected) => {
+		const libvirt = new Libvirt({
+			logger: {createChildLogger: () => ({log: vi.fn(), error: vi.fn()})},
+		} as unknown as Umbreld)
+		execaMock.mockResolvedValueOnce({stdout: reported, stderr: '', exitCode: 0})
+
+		await expect(libvirt.state('machine')).resolves.toBe(expected)
+	})
+
+	test('fails closed for an unrecognized successful response', async () => {
+		const libvirt = new Libvirt({
+			logger: {createChildLogger: () => ({log: vi.fn(), error: vi.fn()})},
+		} as unknown as Umbreld)
+		execaMock.mockResolvedValueOnce({stdout: 'no state', stderr: '', exitCode: 0})
+
+		await expect(libvirt.state('machine')).rejects.toThrow('[machine-state-unavailable] Unexpected state: no state')
+	})
+
 	test('only treats an explicitly missing domain as stopped', async () => {
 		const libvirt = new Libvirt({
 			logger: {createChildLogger: () => ({log: vi.fn(), error: vi.fn()})},
@@ -247,6 +274,27 @@ describe('libvirt domain state', () => {
 		await expect(libvirt.state('missing')).resolves.toBe('stopped')
 		execaMock.mockResolvedValueOnce({stdout: '', stderr: 'error: failed to connect to the hypervisor', exitCode: 1})
 		await expect(libvirt.state('unknown')).rejects.toThrow('[machine-state-unavailable]')
+	})
+
+	test('force-stops a power-management-suspended domain with destroy', async () => {
+		const libvirt = new Libvirt({
+			logger: {createChildLogger: () => ({log: vi.fn(), error: vi.fn()})},
+		} as unknown as Umbreld)
+		let destroyed = false
+		execaMock.mockImplementation(async (command?: string, args?: string[]) => {
+			if (command === 'virsh' && args?.includes('domstate')) {
+				return {stdout: destroyed ? 'shut off' : 'pmsuspended', stderr: '', exitCode: 0}
+			}
+			if (command === 'virsh' && args?.includes('destroy')) destroyed = true
+			return {stdout: '', stderr: '', exitCode: 0}
+		})
+
+		await expect(libvirt.stop('sleeping', {force: true})).resolves.toBeUndefined()
+		expect(execaMock).toHaveBeenCalledWith(
+			'virsh',
+			['--connect', 'qemu:///system', 'destroy', 'umbrel-machine-sleeping'],
+			{reject: false, timeout: 10_000},
+		)
 	})
 
 	test('recognizes only libvirt missing-domain diagnostics', () => {

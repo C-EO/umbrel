@@ -7,6 +7,7 @@ import {MachineAppIcon} from '@/features/machines/components/machine-app-icon'
 import {machinePath} from '@/features/machines/constants'
 import {useMachineActions} from '@/features/machines/hooks/use-machine-actions'
 import type {Machine} from '@/features/machines/types'
+import {isMachineStartable} from '@/features/machines/utils'
 import {t} from '@/utils/i18n'
 
 // Desktop icon for a machine pinned to the homescreen. Looks like an app icon
@@ -40,7 +41,7 @@ export function MachineIcon({machine}: {machine: Machine}) {
 			</ContextMenuTrigger>
 			<ContextMenuContent>
 				<ContextMenuItem onSelect={() => navigate(machinePath(machine.id))}>{t('machines.open')}</ContextMenuItem>
-				{machine.state === 'stopped' || machine.state === 'error' ? (
+				{isMachineStartable(machine.state) ? (
 					<ContextMenuItem onSelect={() => start({id: machine.id})}>
 						{machine.state === 'error' ? t('machines.turn-on-again') : t('machines.turn-on')}
 					</ContextMenuItem>

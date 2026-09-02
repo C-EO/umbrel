@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Включване",
   "machines.state.stopped": "Изключена",
   "machines.state.stopping": "Изключване",
+  "machines.state.suspended": "В спящ режим",
   "machines.state.uninstalling": "Деинсталиране",
   "machines.storage": "Хранилище",
   "machines.storage-used-of-total": "{{used}} от {{total}}",

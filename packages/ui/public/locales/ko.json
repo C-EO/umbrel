@@ -1422,6 +1422,7 @@
   "machines.state.starting": "켜는 중",
   "machines.state.stopped": "꺼짐",
   "machines.state.stopping": "종료 중",
+  "machines.state.suspended": "잠자기 중",
   "machines.state.uninstalling": "삭제 중",
   "machines.storage": "저장 공간",
   "machines.storage-used-of-total": "{{total}} 중 {{used}}",

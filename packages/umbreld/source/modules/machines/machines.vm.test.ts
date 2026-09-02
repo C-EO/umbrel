@@ -233,6 +233,55 @@ curl --silent --output /dev/null --write-out '%{http_code}' http://10.203.0.1:22
 		)
 	})
 
+	test('recreates a power-management-suspended domain before starting it', async () => {
+		// This tiny BIOS guest replaces its own first instruction with a halt loop,
+		// persists that sector through INT 13h, then writes the Q35 ACPI S3 value.
+		// The first boot therefore reaches pmsuspended; the recreated domain stays
+		// running on its second boot without needing a heavyweight guest image.
+		const disk = Buffer.alloc(1024 * 1024)
+		disk.set([
+			0xfa, 0x31, 0xc0, 0x8e, 0xd8, 0x8e, 0xc0, 0xc7, 0x06, 0x00, 0x7c, 0xfa, 0xf4, 0xc7, 0x06, 0x02, 0x7c, 0xeb, 0xfd,
+			0xb8, 0x01, 0x03, 0xbb, 0x00, 0x7c, 0xb9, 0x01, 0x00, 0xb6, 0x00, 0xcd, 0x13, 0xba, 0x04, 0x06, 0xb8, 0x00, 0x24,
+			0xef, 0xf4, 0xeb, 0xfd,
+		])
+		disk.set([0x55, 0xaa], 510)
+		await umbreld.api.post('files/upload?path=/Home/machines-acpi-s3.img', {body: disk})
+		const machine = await umbreld.client.machines.create.mutate({
+			name: 'ACPI S3 test machine',
+			imagePath: '/Home/machines-acpi-s3.img',
+			arch: 'amd64',
+			firmware: 'bios',
+			diskSizeGb: 1,
+			cores: 1,
+			memoryGb: 1,
+		})
+		const domain = `umbrel-machine-${machine.id}`
+
+		await pRetry(
+			async () => {
+				const current = (await umbreld.client.machines.list.query()).find(({id}) => id === machine.id)
+				expect(current?.state).toBe('suspended')
+				await expect(umbreld.vm.sshAsRoot(`virsh --connect qemu:///system domstate '${domain}'`)).resolves.toBe(
+					'pmsuspended',
+				)
+			},
+			{retries: 120, minTimeout: 500, maxTimeout: 500},
+		)
+
+		await umbreld.client.machines.start.mutate({id: machine.id})
+		await pRetry(
+			async () => {
+				const current = (await umbreld.client.machines.list.query()).find(({id}) => id === machine.id)
+				expect(current?.state).toBe('running')
+			},
+			{retries: 60, minTimeout: 500, maxTimeout: 500},
+		)
+		const domains = await umbreld.vm.sshAsRoot(`virsh --connect qemu:///system list --name | grep -Fxc '${domain}'`)
+		expect(domains).toBe('1')
+
+		await umbreld.client.machines.uninstall.mutate({id: machine.id})
+	})
+
 	test('exposes machine data through Files without allowing the machine root to be removed', async () => {
 		const root = await umbreld.client.files.list.query({path: '/'})
 		expect(root.files).toContainEqual(expect.objectContaining({path: '/Machines'}))

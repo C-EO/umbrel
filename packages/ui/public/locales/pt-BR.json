@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Ligando",
   "machines.state.stopped": "Desligada",
   "machines.state.stopping": "Desligando",
+  "machines.state.suspended": "Em repouso",
   "machines.state.uninstalling": "Desinstalando",
   "machines.storage": "Armazenamento",
   "machines.storage-used-of-total": "{{used}} de {{total}}",

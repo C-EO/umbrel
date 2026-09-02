@@ -1,6 +1,10 @@
 import prettyBytes from 'pretty-bytes'
 
 import {EXTERNAL_STORAGE_PATH, NETWORK_STORAGE_PATH} from '@/features/files/constants'
+import type {MachineState} from '@/features/machines/types'
+
+export const isMachineStartable = (state: MachineState) =>
+	state === 'stopped' || state === 'suspended' || state === 'error'
 
 // OS image sizes are modelled in MB (SI)
 export const prettyMb = (mb: number) => prettyBytes(mb * 1e6)

@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Włączanie",
   "machines.state.stopped": "Wyłączona",
   "machines.state.stopping": "Wyłączanie",
+  "machines.state.suspended": "Uśpiona",
   "machines.state.uninstalling": "Odinstalowywanie",
   "machines.storage": "Pamięć masowa",
   "machines.storage-used-of-total": "{{used}} z {{total}}",

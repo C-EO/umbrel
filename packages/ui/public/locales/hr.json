@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Uključivanje",
   "machines.state.stopped": "Isključen",
   "machines.state.stopping": "Isključivanje",
+  "machines.state.suspended": "U mirovanju",
   "machines.state.uninstalling": "Deinstaliranje",
   "machines.storage": "Pohrana",
   "machines.storage-used-of-total": "{{used}} od {{total}}",

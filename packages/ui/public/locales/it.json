@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Accensione",
   "machines.state.stopped": "Spenta",
   "machines.state.stopping": "Spegnimento",
+  "machines.state.suspended": "In sospensione",
   "machines.state.uninstalling": "Disinstallazione",
   "machines.storage": "Spazio di archiviazione",
   "machines.storage-used-of-total": "{{used}} di {{total}}",

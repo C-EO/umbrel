@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Başlatılıyor",
   "machines.state.stopped": "Kapalı",
   "machines.state.stopping": "Kapatılıyor",
+  "machines.state.suspended": "Uykuda",
   "machines.state.uninstalling": "Kaldırılıyor",
   "machines.storage": "Depolama",
   "machines.storage-used-of-total": "{{total}} içinden {{used}}",

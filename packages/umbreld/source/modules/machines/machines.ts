@@ -38,7 +38,15 @@ import {installCommandOptions, MACHINE_INSTALL_SHORT_COMMAND_TIMEOUT_MS} from '.
 export const FIRST_BOOT_SETUP_TIMEOUT_MS = 60 * 60 * 1_000
 export const WINDOWS_ARM_FIRST_BOOT_SETUP_TIMEOUT_MS = 4 * FIRST_BOOT_SETUP_TIMEOUT_MS
 
-export type MachineState = 'installing' | 'stopped' | 'starting' | 'running' | 'stopping' | 'restarting' | 'error'
+export type MachineState =
+	| 'installing'
+	| 'stopped'
+	| 'starting'
+	| 'running'
+	| 'stopping'
+	| 'restarting'
+	| 'suspended'
+	| 'error'
 export type MachineInstallationState = 'preparing' | 'starting' | 'setting-up' | 'setup-delayed' | 'ready-for-setup'
 
 export type Machine = {
@@ -1325,7 +1333,9 @@ export default class Machines {
 				? 'error'
 				: domainState === 'running'
 					? 'running'
-					: 'stopped')
+					: domainState === 'suspended'
+						? 'suspended'
+						: 'stopped')
 		)
 	}
 
@@ -2002,7 +2012,9 @@ export default class Machines {
 			if (definition.installSource) throw new Error('[machine-install-not-complete]')
 			this.#assertExternalStorageNotBlocked(definition)
 			if (!(await this.#externalDiskAvailable(definition))) throw new Error('[machine-external-disk-unavailable]')
-			if ((await this.#libvirt.state(id)) !== 'stopped') throw new Error('[machine-not-stopped]')
+			const state = await this.#libvirt.state(id)
+			if (state === 'suspended') await this.#libvirt.stop(id, {force: true})
+			else if (state !== 'stopped') throw new Error('[machine-not-stopped]')
 			await this.#assertPortsCanBind(definition.portForwards)
 			this.#operations.set(id, 'starting')
 			this.#errors.delete(id)

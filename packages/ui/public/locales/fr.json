@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Allumage",
   "machines.state.stopped": "Éteinte",
   "machines.state.stopping": "Arrêt",
+  "machines.state.suspended": "En veille",
   "machines.state.uninstalling": "Désinstallation",
   "machines.storage": "Stockage",
   "machines.storage-used-of-total": "{{used}} sur {{total}}",

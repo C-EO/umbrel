@@ -1422,6 +1422,7 @@
   "machines.state.starting": "Slår på",
   "machines.state.stopped": "Slått av",
   "machines.state.stopping": "Slår av",
+  "machines.state.suspended": "I dvale",
   "machines.state.uninstalling": "Avinstallerer",
   "machines.storage": "Lagringsplass",
   "machines.storage-used-of-total": "{{used}} av {{total}}",
