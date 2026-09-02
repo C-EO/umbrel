@@ -247,6 +247,10 @@ export default class Umbreld {
 			return
 		}
 
+		if (!(await this.store.get('settings.releaseChannel'))) {
+			await this.store.set('settings.releaseChannel', this.version.includes('-beta') ? 'beta' : 'stable')
+		}
+
 		// Detect first boot after a backup restore (we run after migrations move 'import' into dataDirectory)
 		await this.setBackupRestoreFirstStartFlag()
 		await this.auth.start()
