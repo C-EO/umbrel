@@ -8,6 +8,7 @@ import {
 	buildMachinePortForwardNftables,
 	MACHINE_GUEST_HOST_ADDRESS,
 	MACHINE_NETWORK_BRIDGE,
+	machineDnsServersFromResolvConf,
 	machineIpAddressSchema,
 	nextMachineIpAddress,
 	parseActiveMachineLeaseAddresses,
@@ -68,17 +69,44 @@ Expiry Time           MAC address         Protocol   IP address      Hostname
 
 	test('generates a transient NAT bridge with static MAC-keyed DHCP leases', () => {
 		const definitions = [definition('first', '10.203.0.2'), definition('second', '10.203.0.3')]
-		const xml = buildMachineNetworkXml(definitions)
+		const xml = buildMachineNetworkXml(definitions, ['192.168.1.1', '1.1.1.1'])
 
 		expect(xml).toContain('<name>umbrel-machines</name>')
 		expect(xml).toContain("<forward mode='nat'>")
 		expect(xml).toContain(`<bridge name='${MACHINE_NETWORK_BRIDGE}'`)
 		expect(xml).toContain("<port isolated='yes'/>")
+		expect(xml).toContain("<dns enable='no'/>")
+		expect(xml).toContain("value='dhcp-option=option:dns-server,192.168.1.1,1.1.1.1'")
 		expect(xml).toContain(`<ip address='${MACHINE_GUEST_HOST_ADDRESS}'`)
 		expect(parseMachineDhcpLeases(xml)).toEqual([
 			{macAddress: '02:00:00:00:00:01', ipAddress: '10.203.0.2', name: 'first'},
 			{macAddress: '02:00:00:00:00:02', ipAddress: '10.203.0.3', name: 'second'},
 		])
+	})
+
+	test('uses reachable IPv4 host resolvers for guest DHCP', () => {
+		expect(
+			machineDnsServersFromResolvConf(`
+nameserver 127.0.0.53
+nameserver ::1
+nameserver 192.168.1.1
+nameserver 1.1.1.1
+nameserver 192.168.1.1
+nameserver 9.9.9.9
+nameserver 8.8.8.8
+`),
+		).toEqual(['192.168.1.1', '1.1.1.1', '9.9.9.9'])
+	})
+
+	test('falls back to public resolvers when host resolvers are not guest-reachable', () => {
+		expect(
+			machineDnsServersFromResolvConf(`
+nameserver 127.0.0.1
+nameserver 169.254.1.1
+nameserver 10.203.0.1
+nameserver ::1
+`),
+		).toEqual(['1.1.1.1', '9.9.9.9', '8.8.8.8'])
 	})
 
 	test('maps every configured forward onto the LAN and host LAN-address paths', () => {

@@ -1,3 +1,5 @@
+import {isIPv4} from 'node:net'
+
 import {z} from 'zod'
 
 import {MACHINE_NETWORK_NAME, type MachineDefinition} from './domain.js'
@@ -9,6 +11,31 @@ export const MACHINE_NETWORK_PREFIX = '10.203.0'
 export const MACHINE_GUEST_HOST_ADDRESS = `${MACHINE_NETWORK_PREFIX}.1`
 export const MACHINE_GUEST_FIRST_ADDRESS = 2
 export const MACHINE_GUEST_LAST_ADDRESS = 254
+export const MACHINE_DNS_FALLBACK_SERVERS = ['1.1.1.1', '9.9.9.9', '8.8.8.8'] as const
+const MACHINE_DNS_SERVER_LIMIT = 3
+
+function isGuestReachableDnsServer(address: string) {
+	if (!isIPv4(address)) return false
+	const [first, second] = address.split('.').map(Number)
+	return (
+		first !== 0 &&
+		first !== 127 &&
+		first < 224 &&
+		!(first === 169 && second === 254) &&
+		!address.startsWith(`${MACHINE_NETWORK_PREFIX}.`)
+	)
+}
+
+export function machineDnsServersFromResolvConf(resolvConf: string) {
+	const servers: string[] = []
+	for (const line of resolvConf.split('\n')) {
+		const address = /^\s*nameserver\s+(\S+)/.exec(line)?.[1]
+		if (!address || !isGuestReachableDnsServer(address) || servers.includes(address)) continue
+		servers.push(address)
+		if (servers.length === MACHINE_DNS_SERVER_LIMIT) break
+	}
+	return servers.length > 0 ? servers : [...MACHINE_DNS_FALLBACK_SERVERS]
+}
 
 export const machineIpAddressSchema = z.string().refine((value) => {
 	const prefix = `${MACHINE_NETWORK_PREFIX}.`
@@ -55,22 +82,33 @@ export function machineDhcpLeases(definitions: MachineDefinition[]): MachineDhcp
 	}))
 }
 
-export function buildMachineNetworkXml(definitions: MachineDefinition[]) {
+export function buildMachineNetworkXml(
+	definitions: MachineDefinition[],
+	dnsServers: readonly string[] = MACHINE_DNS_FALLBACK_SERVERS,
+) {
+	if (dnsServers.length === 0 || dnsServers.some((server) => !isGuestReachableDnsServer(server))) {
+		throw new Error('[machine-dns-server-invalid]')
+	}
 	const hosts = machineDhcpLeases(definitions)
 		.map(
 			({macAddress, ipAddress, name}) =>
 				`<host mac='${escapeXml(macAddress)}' name='${escapeXml(name!)}' ip='${escapeXml(ipAddress)}'/>`,
 		)
 		.join('')
+	const dnsOption = escapeXml(`dhcp-option=option:dns-server,${dnsServers.join(',')}`)
 	return `<?xml version='1.0' encoding='UTF-8'?>
-<network>
+<network xmlns:dnsmasq='http://libvirt.org/schemas/network/dnsmasq/1.0'>
   <name>${MACHINE_NETWORK_NAME}</name>
   <forward mode='nat'><nat><port start='1024' end='65535'/></nat></forward>
   <bridge name='${MACHINE_NETWORK_BRIDGE}' stp='on' delay='0'/>
   <port isolated='yes'/>
+  <dns enable='no'/>
   <ip address='${MACHINE_GUEST_HOST_ADDRESS}' netmask='255.255.255.0'>
     <dhcp>${hosts}</dhcp>
   </ip>
+  <dnsmasq:options>
+    <dnsmasq:option value='${dnsOption}'/>
+  </dnsmasq:options>
 </network>
 `
 }

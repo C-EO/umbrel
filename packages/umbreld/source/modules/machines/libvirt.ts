@@ -22,6 +22,7 @@ import {
 	dhcpHostXml,
 	MACHINE_GUEST_HOST_ADDRESS,
 	MACHINE_NETWORK_BRIDGE,
+	machineDnsServersFromResolvConf,
 	machineDhcpLeases,
 	parseActiveMachineLeaseAddresses,
 	parseMachineDhcpLeases,
@@ -297,7 +298,9 @@ export default class Libvirt {
 	async #reconcileNetworkUnlocked(definitions: MachineDefinition[]) {
 		await fse.ensureDir(this.#runtimeRoot)
 		if (!(await this.#networkExists())) {
-			await fsp.writeFile(this.#networkXmlPath(), buildMachineNetworkXml(definitions), {
+			const resolvConf = await fsp.readFile('/etc/resolv.conf', 'utf8').catch(() => '')
+			const dnsServers = machineDnsServersFromResolvConf(resolvConf)
+			await fsp.writeFile(this.#networkXmlPath(), buildMachineNetworkXml(definitions, dnsServers), {
 				encoding: 'utf8',
 				mode: 0o600,
 			})

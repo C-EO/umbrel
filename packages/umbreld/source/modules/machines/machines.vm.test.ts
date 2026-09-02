@@ -3,7 +3,51 @@ import {fileURLToPath} from 'node:url'
 import {afterAll, afterEach, beforeAll, beforeEach, describe, expect, test} from 'vitest'
 import pRetry from 'p-retry'
 
+import {installPreStartHook} from '../system/custom-hooks.vm-test-helpers.js'
 import {createTestVm} from '../test-utilities/create-test-umbreld.js'
+
+const dnsPortHolderScript = `#!/usr/bin/python3
+import select
+import socket
+
+sockets = []
+for socket_type in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+    server = socket.socket(socket.AF_INET, socket_type)
+    server.bind(('0.0.0.0', 53))
+    if socket_type == socket.SOCK_STREAM:
+        server.listen()
+    sockets.append(server)
+
+while True:
+    readable, _, _ = select.select(sockets, [], [])
+    for server in readable:
+        if server.type == socket.SOCK_STREAM:
+            connection, _ = server.accept()
+            connection.close()
+        else:
+            server.recvfrom(512)
+`
+
+const encodedDnsPortHolderScript = Buffer.from(dnsPortHolderScript).toString('base64')
+const dnsPortHolderPreStartHook = `#!/bin/bash
+set -eu
+
+holder=/run/umbrel-test-dns-port-holder
+printf '%s' '${encodedDnsPortHolderScript}' | base64 --decode > "$holder"
+chmod 755 "$holder"
+
+if ! systemctl is-active --quiet umbrel-test-dns-port-holder.service; then
+  systemd-run --quiet --unit=umbrel-test-dns-port-holder /usr/bin/python3 "$holder"
+fi
+
+for attempt in $(seq 1 50); do
+  if ss -Hlnpt 'sport = :53' | grep -Fq '0.0.0.0:53' && ss -Hlnpu 'sport = :53' | grep -Fq '0.0.0.0:53'; then
+    exit 0
+  fi
+  sleep 0.1
+done
+exit 1
+`
 
 describe('Umbrel Machines host virtualization', () => {
 	let umbreld: Awaited<ReturnType<typeof createTestVm>>
@@ -23,6 +67,13 @@ describe('Umbrel Machines host virtualization', () => {
 	beforeAll(async () => {
 		const image = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../os/build/umbrelos-amd64.img')
 		umbreld = await createTestVm({device: 'umbrel-home', image, memory: 4096})
+		await umbreld.vm.powerOn()
+
+		// Model a host-networked DNS app that starts before umbreld. Keep it in
+		// place for the entire scenario so every VM lifecycle check runs with
+		// TCP and UDP port 53 already occupied.
+		await installPreStartHook(umbreld, dnsPortHolderPreStartHook)
+		await umbreld.vm.powerOff()
 		await umbreld.vm.powerOn()
 		await umbreld.registerAndLogin()
 	})
@@ -81,6 +132,21 @@ virsh --connect qemu:///system nwfilter-list | grep -Fq 'clean-traffic'
 		expect(capabilities.guestHostAddress).toBe('10.203.0.1')
 		expect(['kvm', 'tcg']).toContain(capabilities.nativeAcceleration)
 		if (!capabilities.kvmAvailable) expect(capabilities.performanceWarning).toContain('software emulation')
+	})
+
+	test('starts the machine bridge without taking port 53 from host apps', async () => {
+		await umbreld.client.machines.capabilities.query()
+		const output = await umbreld.vm.sshAsRoot(`
+set -eu
+test "$(systemctl is-active umbrel-test-dns-port-holder.service)" = active
+ss -Hlnpt 'sport = :53' | grep -Fq '0.0.0.0:53'
+ss -Hlnpu 'sport = :53' | grep -Fq '0.0.0.0:53'
+virsh --connect qemu:///system net-info umbrel-machines | grep -q '^Active:.*yes$'
+virsh --connect qemu:///system net-dumpxml umbrel-machines | grep -Fq "<dns enable='no'/>"
+echo coexisting
+`)
+
+		expect(output).toBe('coexisting')
 	})
 
 	test('binds only the minimal first-boot callback API to the guest bridge', async () => {
@@ -231,6 +297,40 @@ curl --silent --output /dev/null --write-out '%{http_code}' http://10.203.0.1:22
 			},
 			{retries: 60, minTimeout: 500, maxTimeout: 500},
 		)
+	})
+
+	test('advertises a working guest resolver without running a DNS proxy', async () => {
+		const output = await umbreld.vm.sshAsRoot(`
+set -eu
+config=/var/lib/libvirt/dnsmasq/umbrel-machines.conf
+grep -Fqx 'port=0' "$config"
+dns_servers=$(sed -n 's/^dhcp-option=option:dns-server,//p' "$config")
+test -n "$dns_servers"
+server=$(printf '%s' "$dns_servers" | cut -d, -f1)
+
+# Confirm the host can reach the first resolver offered to guests. The existing
+# libvirt NAT path remains unchanged and masquerades guest traffic through it.
+python3 - "$server" <<'PY'
+import socket
+import sys
+
+query = b'\\x12\\x34\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x07example\\x03com\\x00\\x00\\x01\\x00\\x01'
+client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+client.settimeout(5)
+client.sendto(query, (sys.argv[1], 53))
+response, _ = client.recvfrom(512)
+assert response[:2] == b'\\x12\\x34'
+assert response[2] & 0x80
+assert response[3] & 0x0f == 0
+PY
+
+test "$(systemctl is-active umbrel-test-dns-port-holder.service)" = active
+ss -Hlnpt 'sport = :53' | grep -Fq '0.0.0.0:53'
+ss -Hlnpu 'sport = :53' | grep -Fq '0.0.0.0:53'
+echo configured
+`)
+
+		expect(output).toBe('configured')
 	})
 
 	test('recreates a power-management-suspended domain before starting it', async () => {
