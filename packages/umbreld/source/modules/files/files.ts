@@ -233,13 +233,19 @@ export default class Files {
 	async start() {
 		this.logger.log('Starting files')
 
-		// Ensure all base directories exist
+		// Ensure all base directories exist. Create them on their system paths
+		// directly rather than via createDirectory(): the /External, /Backups and
+		// /Network roots are read-only in the virtual filesystem, so its
+		// permission checks would refuse to create them.
 		await Promise.all(
-			[...this.baseDirectories.keys()].map((baseDirectory) =>
-				this.createDirectory(baseDirectory).catch((error) => {
-					this.logger.error(`Failed to ensure directory '${baseDirectory}' exists`, error)
-				}),
-			),
+			[...this.baseDirectories].map(async ([virtualPath, systemPath]) => {
+				try {
+					await fse.ensureDir(systemPath)
+					await this.chownSystemPath(systemPath).catch(() => {})
+				} catch (error) {
+					this.logger.error(`Failed to ensure directory '${virtualPath}' exists`, error)
+				}
+			}),
 		)
 
 		// Ensure the trash meta directory exists
