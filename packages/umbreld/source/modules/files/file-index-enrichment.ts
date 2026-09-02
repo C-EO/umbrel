@@ -163,7 +163,10 @@ export type FileIndexEnrichmentOptions = {
 	photosAvailable: () => boolean
 	onStalePath: (systemPath: string) => Promise<void>
 	onContentAttached?: (entryId: number, hash: Buffer) => Promise<void>
-	onMediaMetadataReady?: (contentId: number) => Promise<void>
+	// The returned callback runs after the surrounding database transaction
+	// commits, so consumers can update durable projections atomically while
+	// deferring notifications until the new state is visible.
+	onMediaMetadataReady?: (database: Database, contentId: number) => void | (() => void)
 	onThumbnailReady?: (contentId: number, variant: ThumbnailVariant) => void
 	onHashFailure?: (entryId: number) => Promise<void>
 	onContentFailure?: (contentId: number) => Promise<void>
@@ -205,7 +208,7 @@ export default class FileIndexEnrichment {
 	#photosAvailable: () => boolean
 	#onStalePath: (systemPath: string) => Promise<void>
 	#onContentAttached?: (entryId: number, hash: Buffer) => Promise<void>
-	#onMediaMetadataReady?: (contentId: number) => Promise<void>
+	#onMediaMetadataReady?: (database: Database, contentId: number) => void | (() => void)
 	#onThumbnailReady?: (contentId: number, variant: ThumbnailVariant) => void
 	#onHashFailure?: (entryId: number) => Promise<void>
 	#onContentFailure?: (contentId: number) => Promise<void>
@@ -881,53 +884,57 @@ export default class FileIndexEnrichment {
 					}
 				}
 				await assertHandleContentRevision(source, content.fingerprint)
-				await this.#withDatabase((database) => {
-					const source = database
-						.prepare(
-							`SELECT 1 FROM entries WHERE content_id = ? AND inode = ? AND size = ?
-							AND modified_ns = ?`,
-						)
-						.get(content.id, content.fingerprint.inode, content.fingerprint.size, content.fingerprint.modifiedNs)
-					if (!source) throw new StaleFileRevisionError('File changed while extracting media metadata')
-					database
-						.prepare(
-							`UPDATE media_metadata SET state = 'ready', kind = ?, sub_kind = ?, taken_at = ?,
-							taken_at_offset_minutes = ?, created_at = ?, width = ?, height = ?, duration_ms = ?, tint = COALESCE(?, tint),
-							camera_make = ?, camera_model = ?, lens = ?, focal_length = ?, aperture = ?, exposure = ?,
-							iso = ?, latitude = ?, longitude = ?, altitude = ?, user_comment = ?, live_identifier = ?, search_text = ?,
-							failure_count = 0, retry_at = NULL,
-							last_error = NULL, updated_at = ? WHERE content_id = ?`,
-						)
-						.run(
-							metadata.kind,
-							metadata.subKind ?? null,
-							metadata.takenAt,
-							metadata.takenAtOffsetMinutes ?? null,
-							metadata.createdAt,
-							metadata.width,
-							metadata.height,
-							metadata.durationMs ?? null,
-							tint ?? null,
-							metadata.cameraMake ?? null,
-							metadata.cameraModel ?? null,
-							metadata.lens ?? null,
-							metadata.focalLength ?? null,
-							metadata.aperture ?? null,
-							metadata.exposure ?? null,
-							metadata.iso ?? null,
-							metadata.latitude ?? null,
-							metadata.longitude ?? null,
-							metadata.altitude ?? null,
-							metadata.userComment ?? null,
-							metadata.liveIdentifier ?? null,
-							foldSearchName(
-								[metadata.cameraMake, metadata.cameraModel, metadata.userComment].filter(Boolean).join(' '),
-							),
-							Date.now(),
-							content.id,
-						)
+				const afterCommit = await this.#withDatabase((database) => {
+					const persist = database.transaction(() => {
+						const source = database
+							.prepare(
+								`SELECT 1 FROM entries WHERE content_id = ? AND inode = ? AND size = ?
+								AND modified_ns = ?`,
+							)
+							.get(content.id, content.fingerprint.inode, content.fingerprint.size, content.fingerprint.modifiedNs)
+						if (!source) throw new StaleFileRevisionError('File changed while extracting media metadata')
+						database
+							.prepare(
+								`UPDATE media_metadata SET state = 'ready', kind = ?, sub_kind = ?, taken_at = ?,
+								taken_at_offset_minutes = ?, created_at = ?, width = ?, height = ?, duration_ms = ?, tint = COALESCE(?, tint),
+								camera_make = ?, camera_model = ?, lens = ?, focal_length = ?, aperture = ?, exposure = ?,
+								iso = ?, latitude = ?, longitude = ?, altitude = ?, user_comment = ?, live_identifier = ?, search_text = ?,
+								failure_count = 0, retry_at = NULL,
+								last_error = NULL, updated_at = ? WHERE content_id = ?`,
+							)
+							.run(
+								metadata.kind,
+								metadata.subKind ?? null,
+								metadata.takenAt,
+								metadata.takenAtOffsetMinutes ?? null,
+								metadata.createdAt,
+								metadata.width,
+								metadata.height,
+								metadata.durationMs ?? null,
+								tint ?? null,
+								metadata.cameraMake ?? null,
+								metadata.cameraModel ?? null,
+								metadata.lens ?? null,
+								metadata.focalLength ?? null,
+								metadata.aperture ?? null,
+								metadata.exposure ?? null,
+								metadata.iso ?? null,
+								metadata.latitude ?? null,
+								metadata.longitude ?? null,
+								metadata.altitude ?? null,
+								metadata.userComment ?? null,
+								metadata.liveIdentifier ?? null,
+								foldSearchName(
+									[metadata.cameraMake, metadata.cameraModel, metadata.userComment].filter(Boolean).join(' '),
+								),
+								Date.now(),
+								content.id,
+							)
+						return this.#onMediaMetadataReady?.(database, content.id)
+					})
+					return persist.immediate()
 				}, priority)
-				await this.#onMediaMetadataReady?.(content.id)
+				afterCommit?.()
 				return
 			} catch (error) {
 				const referenceFailure = referenceFailureKind(error) ?? (await contentReferenceFailure(error, content))

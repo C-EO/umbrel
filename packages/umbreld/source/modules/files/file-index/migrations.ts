@@ -1,5 +1,7 @@
 import type BetterSqlite3 from 'better-sqlite3'
 
+import {PHOTO_EXTENSIONS, VIDEO_EXTENSIONS} from '../../photos/types.js'
+
 export type FileIndexMigration = {
 	version: number
 	up: (database: BetterSqlite3.Database) => void
@@ -7,6 +9,22 @@ export type FileIndexMigration = {
 
 export function foldSearchName(value: string) {
 	return value.normalize('NFC').toLowerCase()
+}
+
+export function filenameStemSql(nameSql: string, extensions: string[]) {
+	const extensionsByLength = new Map<number, string[]>()
+	for (const extension of new Set(extensions)) {
+		extensionsByLength.set(extension.length, [...(extensionsByLength.get(extension.length) ?? []), extension])
+	}
+	const branches = [...extensionsByLength]
+		.toSorted(([left], [right]) => right - left)
+		.map(
+			([length, values]) =>
+				`WHEN substr(lower(${nameSql}), -${length}) IN (${values.map((value) => `'${value}'`).join(', ')}) ` +
+				`THEN substr(lower(${nameSql}), 1, length(${nameSql}) - ${length})`,
+		)
+		.join('\n\t\t\t')
+	return `CASE ${branches} ELSE lower(${nameSql}) END`
 }
 
 export const fileIndexMigrations: FileIndexMigration[] = [
@@ -400,6 +418,35 @@ export const fileIndexMigrations: FileIndexMigration[] = [
 				CREATE INDEX entries_by_recent_modification
 					ON entries(root_id, modified_ms DESC, id DESC)
 					WHERE type = 'file' AND hidden = 0;
+			`)
+		},
+	},
+	{
+		version: 14,
+		up: (database) => {
+			// TODO(photos-live-fallback-index): This expression is part of the
+			// targeted Photos resolver's Live Photo fallback lookup. Changes to
+			// supported media extensions or pairing rules require a new migration
+			// that rebuilds this index as well as updating the resolver.
+			const fallbackStem = filenameStemSql('name', [...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS])
+			database.exec(`
+				CREATE INDEX entries_by_photos_live_fallback ON entries(
+					root_id,
+					substr(relative_path, 1, length(relative_path) - length(name)),
+					${fallbackStem}
+				) WHERE type = 'file' AND hidden = 0 AND thumbnail_identity_kind = 'content';
+			`)
+		},
+	},
+	{
+		version: 15,
+		up: (database) => {
+			database.exec(`
+				CREATE TABLE photos_projection_state (
+					id INTEGER PRIMARY KEY CHECK (id = 1),
+					generation INTEGER NOT NULL
+				);
+				INSERT INTO photos_projection_state(id, generation) VALUES (1, 0);
 			`)
 		},
 	},

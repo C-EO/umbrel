@@ -1,6 +1,6 @@
 import type BetterSqlite3 from 'better-sqlite3'
 
-export const PHOTOS_SCHEMA_VERSION = 5
+export const PHOTOS_SCHEMA_VERSION = 7
 export const PHOTOS_MIGRATION_MODULE = 'photos'
 
 export class UnsupportedPhotosSchemaError extends Error {}
@@ -170,6 +170,40 @@ export function migratePhotos(database: BetterSqlite3.Database) {
 
 			database
 				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 5, ?)')
+				.run(PHOTOS_MIGRATION_MODULE, Date.now())
+		}
+		if (version < 6) {
+			const contentStateColumns = new Set(
+				(database.prepare("PRAGMA table_info('photos_content_state')").all() as Array<{name: string}>).map(
+					({name}) => name,
+				),
+			)
+			if (!contentStateColumns.has('effective_taken_at')) {
+				database.exec(`
+					ALTER TABLE photos_content_state ADD COLUMN effective_taken_at INTEGER;
+					UPDATE photos_content_state SET effective_taken_at = -8640000000000000;
+				`)
+			}
+			database.exec(`
+				CREATE INDEX IF NOT EXISTS photos_content_state_by_effective_taken_at
+					ON photos_content_state(account_id, effective_taken_at DESC, content_hash)
+					WHERE effective_taken_at IS NOT NULL;
+			`)
+			database
+				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 6, ?)')
+				.run(PHOTOS_MIGRATION_MODULE, Date.now())
+		}
+		if (version < 7) {
+			database.exec(`
+				CREATE TABLE IF NOT EXISTS photos_projection_state (
+					id INTEGER PRIMARY KEY CHECK (id = 1),
+					generation INTEGER NOT NULL
+				);
+				INSERT INTO photos_projection_state(id, generation) VALUES (1, 0)
+					ON CONFLICT(id) DO NOTHING;
+			`)
+			database
+				.prepare('INSERT INTO schema_migrations(module, version, applied_at) VALUES (?, 7, ?)')
 				.run(PHOTOS_MIGRATION_MODULE, Date.now())
 		}
 	})

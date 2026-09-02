@@ -98,6 +98,20 @@ type PathMutation =
 	| {type: 'write'; entries: EntryWrite[]; markSeen: boolean}
 	| {type: 'delete'; rootId: number; relativePath: string}
 
+type PhotoEntrySnapshot = {
+	relative_path: string
+	name: string
+	type: EntryType
+	size: number
+	modified_ms: number
+	birthtime_ms: number | null
+	device: string
+	inode: string
+	modified_ns: string
+	thumbnail_identity_kind: ThumbnailIdentityKind | null
+	hidden: number
+}
+
 export type IndexedEntry = Omit<EntryWrite, 'rootId' | 'hidden' | 'hashNotBefore' | 'observedAt'> & {
 	id: number
 	rootId: number
@@ -355,10 +369,10 @@ export default class FileIndexEngine {
 					})
 					this.#notifyPhotosChanged(accountIds)
 				},
-				onMediaMetadataReady: async (contentId) => {
+				onMediaMetadataReady: (database, contentId) => {
 					if (!this.#photosAvailable) return
-					const accountIds = await this.#mutate((database) => this.#photos.accountIdsForContent(database, contentId))
-					this.#notifyPhotosChanged(accountIds)
+					const accountIds = this.#photos.refreshContentEffectiveTakenAt(database, contentId)
+					return () => this.#notifyPhotosChanged(accountIds)
 				},
 				onThumbnailReady: async (contentId) => {
 					if (!this.#photosAvailable) return
@@ -372,7 +386,9 @@ export default class FileIndexEngine {
 				},
 				onContentFailure: async (contentId) => {
 					if (!this.#photosAvailable) return
-					const accountIds = await this.#mutate((database) => this.#photos.accountIdsForContent(database, contentId))
+					const accountIds = await this.#mutate((database) =>
+						this.#photos.refreshContentEffectiveTakenAt(database, contentId),
+					)
 					this.#notifyPhotosChanged(accountIds)
 				},
 			},
@@ -941,7 +957,7 @@ export default class FileIndexEngine {
 			await this.#mutate((database) => {
 				this.#throwIfRootScanCancelled(root)
 				const finishScan = database.transaction(() => {
-					if (this.#photosAvailable) this.#photos.detachUnseen(database, root.id!)
+					const detached = this.#photosAvailable ? this.#photos.detachUnseen(database, root.id!) : []
 					run(
 						database,
 						`DELETE FROM entries
@@ -954,6 +970,7 @@ export default class FileIndexEngine {
 							)`,
 						root.id,
 					)
+					if (this.#photosAvailable) this.#photos.refreshEffectiveTakenAt(database, detached)
 					run(database, 'DELETE FROM reconciliation_seen')
 					run(
 						database,
@@ -1360,10 +1377,13 @@ export default class FileIndexEngine {
 		const photosChangedAccountIds = new Set<string>()
 		const apply = database.transaction((mutation: PathMutation) => {
 			if (mutation.type === 'delete') {
-				if (this.#photosAvailable) this.#photos.detachPath(database, mutation.rootId, mutation.relativePath)
+				const detached = this.#photosAvailable
+					? this.#photos.detachPath(database, mutation.rootId, mutation.relativePath)
+					: []
 				if (mutation.relativePath === '') {
 					run(database, 'DELETE FROM entries WHERE root_id = ?', mutation.rootId)
 					run(database, 'DELETE FROM reconciliation_seen WHERE root_id = ?', mutation.rootId)
+					if (this.#photosAvailable) this.#photos.refreshEffectiveTakenAt(database, detached)
 					return
 				}
 				// SQLite's default binary ordering places every `path/...`
@@ -1399,6 +1419,7 @@ export default class FileIndexEngine {
 					prefix,
 					prefixEnd,
 				)
+				if (this.#photosAvailable) this.#photos.refreshEffectiveTakenAt(database, detached)
 				return
 			}
 
@@ -1508,9 +1529,39 @@ export default class FileIndexEngine {
 						ON CONFLICT(root_id, relative_path) DO NOTHING
 					`)
 				: undefined
+			const previousPhotoEntries = new Map<number, Map<string, PhotoEntrySnapshot>>()
+			if (this.#photosAvailable) {
+				const pathsByRoot = new Map<number, Set<string>>()
+				for (const {rootId, relativePath} of mutation.entries) {
+					const paths = pathsByRoot.get(rootId) ?? new Set<string>()
+					paths.add(relativePath)
+					pathsByRoot.set(rootId, paths)
+				}
+				for (const [rootId, paths] of pathsByRoot) {
+					const rows = database
+						.prepare(
+							`SELECT entries.relative_path, entries.name, entries.type, entries.size,
+								entries.modified_ms, entries.birthtime_ms, entries.device, entries.inode,
+								entries.modified_ns, entries.thumbnail_identity_kind, entries.hidden
+							FROM entries
+							JOIN index_roots ON index_roots.id = entries.root_id
+							WHERE entries.root_id = ?
+								AND entries.relative_path IN (${[...paths].map(() => '?').join(', ')})
+								AND entries.content_id IS NOT NULL
+								AND index_roots.kind IN ('home', 'trash')`,
+						)
+						.all(rootId, ...paths) as PhotoEntrySnapshot[]
+					previousPhotoEntries.set(rootId, new Map(rows.map((row) => [row.relative_path, row])))
+				}
+			}
 
 			for (const entry of mutation.entries) {
 				markSeenStatement?.run(entry.rootId, entry.relativePath)
+				const previous = previousPhotoEntries.get(entry.rootId)?.get(entry.relativePath)
+				const detached =
+					previous && photoEntrySortInputsChanged(previous, entry)
+						? this.#photos.detachEntry(database, entry.rootId, entry.relativePath)
+						: []
 				const observationCutoff = entry.observedAt === null ? null : entry.observedAt - TRANSIENT_OBSERVATION_REFRESH_MS
 				const result = writeStatement.run(
 					entry.rootId,
@@ -1541,6 +1592,7 @@ export default class FileIndexEngine {
 						if (owner) photosChangedAccountIds.add(owner.owner_id)
 					}
 				}
+				if (detached.length > 0) this.#photos.refreshEffectiveTakenAt(database, detached)
 			}
 		})
 		apply.immediate(mutation)
@@ -2572,6 +2624,21 @@ function fileIdentity(stats: FileStats) {
 
 function isBigIntStats(stats: FileStats): stats is BigIntStats {
 	return typeof stats.size === 'bigint'
+}
+
+function photoEntrySortInputsChanged(previous: PhotoEntrySnapshot, next: EntryWrite) {
+	return (
+		previous.name !== next.name ||
+		previous.type !== next.type ||
+		Number(previous.size) !== next.size ||
+		Number(previous.modified_ms) !== next.modifiedMs ||
+		(previous.birthtime_ms === null ? null : Number(previous.birthtime_ms)) !== next.birthtimeMs ||
+		previous.device !== next.device ||
+		previous.inode !== next.inode ||
+		previous.modified_ns !== next.modifiedNs ||
+		previous.thumbnail_identity_kind !== next.thumbnailIdentityKind ||
+		Number(previous.hidden) !== next.hidden
+	)
 }
 
 function entrySelectSql() {

@@ -3,7 +3,7 @@ import nodePath from 'node:path'
 
 import type DatabaseTypes from 'better-sqlite3'
 
-import {foldSearchName} from '../files/file-index/migrations.js'
+import {filenameStemSql, foldSearchName} from '../files/file-index/migrations.js'
 import type {
 	PhotoAlbum,
 	PhotoFilter,
@@ -63,12 +63,102 @@ type ItemDetailRow = ItemRow & {
 
 type Query = {sql: string; parameters: unknown[]}
 type PhotoRootKind = 'home' | 'trash'
+type PhotoContentReference = {accountId: string; hash: Buffer}
+type PhotoContentRefresh = {accountId: string; hashes?: Buffer[]}
 
 const HASH_PATTERN = /^[a-f0-9]{64}$/
-const LIVE_FALLBACK_STEM_SQL = filenameStemSql('entries.name', [...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS])
+const UNKNOWN_EFFECTIVE_TAKEN_AT = -8_640_000_000_000_000
+const TARGETED_HASH_BATCH_SIZE = 128
+const ACCOUNT_WIDE_REFRESH_THRESHOLD = 32_768
+const PHOTO_MEDIA_EXTENSIONS = [...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS]
+const LIVE_FALLBACK_STEM_SQL = filenameStemSql('entries.name', PHOTO_MEDIA_EXTENSIONS)
 
-const PHOTO_LIBRARY_CTE = `
-	WITH indexed_locations AS (
+function targetedPhotoContentCtes(hashCount: number) {
+	const fallbackEntryStem = filenameStemSql('fallback_entry.name', PHOTO_MEDIA_EXTENSIONS)
+	const fallbackEntryParent =
+		'substr(fallback_entry.relative_path, 1, length(fallback_entry.relative_path) - length(fallback_entry.name))'
+	const requestedValues = Array.from({length: hashCount}, () => '(?)').join(', ')
+	return `WITH RECURSIVE requested_values(content_hash) AS (VALUES ${requestedValues}),
+	requested_hashes(content_hash) AS MATERIALIZED (
+		SELECT DISTINCT content_hash FROM requested_values WHERE content_hash IS NOT NULL
+	),
+	requested_account(account_id) AS (VALUES (?)),
+	related_content_ids(content_id) AS (
+		SELECT contents.id
+		FROM requested_hashes
+		CROSS JOIN contents INDEXED BY sqlite_autoindex_contents_1
+			ON contents.blake3 = requested_hashes.content_hash
+
+		-- Apple identifiers connect every still and competing motion that can
+		-- change exact-pair selection or visibility for the current component.
+		UNION
+		SELECT peer_metadata.content_id
+		FROM related_content_ids AS related
+		CROSS JOIN media_metadata AS related_metadata ON related_metadata.content_id = related.content_id
+		CROSS JOIN media_metadata AS peer_metadata INDEXED BY media_metadata_by_live_identifier
+			ON peer_metadata.live_identifier = related_metadata.live_identifier
+		WHERE related_metadata.state = 'ready' AND related_metadata.live_identifier IS NOT NULL
+			AND peer_metadata.state = 'ready'
+			AND EXISTS (
+				SELECT 1 FROM entries AS account_entry
+				JOIN index_roots AS account_root ON account_root.id = account_entry.root_id
+				WHERE account_entry.content_id = peer_metadata.content_id
+					AND account_root.owner_id = (SELECT account_id FROM requested_account)
+					AND account_root.kind IN ('home', 'trash')
+					AND account_entry.type = 'file' AND account_entry.hidden = 0
+			)
+
+		-- The same-folder/stem fallback can overlap exact-ID groups. Recursing
+		-- until convergence is necessary: a newly selected exact pair can expose
+		-- a fallback motion, which can in turn change another exact group.
+		UNION
+		SELECT fallback_entry.content_id
+		FROM related_content_ids AS related
+		CROSS JOIN entries AS related_entry INDEXED BY entries_by_content
+			ON related_entry.content_id = related.content_id
+		JOIN index_roots ON index_roots.id = related_entry.root_id
+		JOIN media_metadata AS related_metadata ON related_metadata.content_id = related.content_id
+			AND related_metadata.state = 'ready'
+		CROSS JOIN entries AS fallback_entry INDEXED BY entries_by_photos_live_fallback
+			ON fallback_entry.root_id = related_entry.root_id
+			AND ${fallbackEntryParent} =
+				substr(related_entry.relative_path, 1, length(related_entry.relative_path) - length(related_entry.name))
+			AND ${fallbackEntryStem} = ${filenameStemSql('related_entry.name', PHOTO_MEDIA_EXTENSIONS)}
+		JOIN media_metadata AS fallback_metadata ON fallback_metadata.content_id = fallback_entry.content_id
+			AND fallback_metadata.state = 'ready'
+		WHERE index_roots.owner_id = (SELECT account_id FROM requested_account)
+			AND index_roots.kind IN ('home', 'trash')
+			AND related_entry.type = 'file' AND related_entry.hidden = 0
+			AND fallback_entry.type = 'file' AND fallback_entry.hidden = 0
+			AND fallback_entry.thumbnail_identity_kind = 'content'
+			AND ((related_metadata.kind = 'photo' AND fallback_metadata.kind = 'video'
+					AND fallback_metadata.duration_ms <= 10000)
+				OR (related_metadata.kind = 'video' AND related_metadata.duration_ms <= 10000
+					AND fallback_metadata.kind = 'photo'))
+	),
+	relevant_contents(content_hash) AS MATERIALIZED (
+		SELECT content_hash FROM requested_hashes
+		UNION
+		SELECT contents.blake3 FROM related_content_ids
+		CROSS JOIN contents ON contents.id = related_content_ids.content_id
+	),`
+}
+
+function photoLibraryCte(targetHashCount = 0) {
+	const targeted = targetHashCount > 0
+	const ctePrefix = targeted ? targetedPhotoContentCtes(targetHashCount) : 'WITH'
+	const accountSql = targeted ? '(SELECT account_id FROM requested_account)' : '?'
+	const indexedFromSql = targeted
+		? `FROM relevant_contents
+		CROSS JOIN contents INDEXED BY sqlite_autoindex_contents_1
+			ON contents.blake3 = relevant_contents.content_hash
+		CROSS JOIN entries INDEXED BY entries_by_content ON entries.content_id = contents.id
+		JOIN index_roots ON index_roots.id = entries.root_id`
+		: `FROM index_roots
+		JOIN entries ON entries.root_id = index_roots.id
+		JOIN contents ON contents.id = entries.content_id`
+	return `
+	${ctePrefix} indexed_locations AS ${targeted ? 'MATERIALIZED' : ''} (
 		SELECT index_roots.owner_id AS account_id,
 			index_roots.kind AS root_kind,
 			contents.blake3 AS content_hash, lower(hex(contents.blake3)) AS id,
@@ -86,11 +176,9 @@ const PHOTO_LIBRARY_CTE = `
 			substr(entries.relative_path, 1, length(entries.relative_path) - length(entries.name))
 				AS live_fallback_parent,
 			${LIVE_FALLBACK_STEM_SQL} AS live_fallback_stem
-		FROM index_roots
-		JOIN entries ON entries.root_id = index_roots.id
-		JOIN contents ON contents.id = entries.content_id
+		${indexedFromSql}
 		JOIN media_metadata ON media_metadata.content_id = entries.content_id AND media_metadata.state = 'ready'
-		WHERE index_roots.owner_id = ? AND index_roots.kind IN ('home', 'trash')
+		WHERE index_roots.owner_id = ${accountSql} AND index_roots.kind IN ('home', 'trash')
 			AND entries.type = 'file' AND entries.hidden = 0
 	),
 	authorized_locations AS (
@@ -238,12 +326,17 @@ const PHOTO_LIBRARY_CTE = `
 				AND hidden_motion.root_kind = canonical_locations.root_kind
 		)
 	)`
+}
+
+const PHOTO_LIBRARY_CTE = photoLibraryCte()
 
 const ITEM_SELECT = `
 	SELECT id, kind, logical_sub_kind AS sub_kind, logical_taken_at AS taken_at,
 		taken_at_offset_minutes, width, height, duration_ms, is_favorite, tint`
 
 export default class PhotosRepository {
+	#preparedStatements = new WeakMap<Database, Map<string, DatabaseTypes.Statement>>()
+
 	syncEntry(database: Database, entry: IndexedPhotoEntry) {
 		const root = database.prepare('SELECT owner_id, kind FROM index_roots WHERE id = ?').get(entry.rootId) as
 			| {owner_id: string; kind: string}
@@ -258,29 +351,97 @@ export default class PhotosRepository {
 				WHERE entries.root_id = ? AND entries.relative_path = ?`,
 			)
 			.get(entry.rootId, entry.relativePath) as {blake3: Buffer} | undefined
-		if (content) this.#ensureContentState(database, root.owner_id, content.blake3)
+		if (content) {
+			this.#ensureContentState(database, root.owner_id, content.blake3)
+			this.#refreshEffectiveTakenAt(database, root.owner_id, [content.blake3])
+		}
 		return true
 	}
 
-	detachPath(_database: Database, _rootId: number, _relativePath: string) {
-		return false
+	detachPath(database: Database, rootId: number, relativePath: string) {
+		if (relativePath === '') {
+			const references = this.#pathContentReferences(database, rootId, '1', [])
+			return this.#invalidateEffectiveTakenAt(database, references)
+		}
+		const prefix = `${relativePath}/`
+		const prefixEnd = `${relativePath}0`
+		const references = this.#pathContentReferences(
+			database,
+			rootId,
+			`entries.relative_path = ? OR (entries.relative_path >= ? AND entries.relative_path < ?)`,
+			[relativePath, prefix, prefixEnd],
+		)
+		return this.#invalidateEffectiveTakenAt(database, references)
 	}
 
-	detachUnseen(_database: Database, _rootId: number) {
-		return false
+	detachUnseen(database: Database, rootId: number) {
+		const references = this.#pathContentReferences(
+			database,
+			rootId,
+			`NOT EXISTS (
+				SELECT 1 FROM reconciliation_seen
+				WHERE reconciliation_seen.root_id = entries.root_id
+					AND reconciliation_seen.relative_path = entries.relative_path
+			)`,
+			[],
+		)
+		return this.#invalidateEffectiveTakenAt(database, references)
+	}
+
+	detachEntry(database: Database, rootId: number, relativePath: string) {
+		const references = this.#pathContentReferences(database, rootId, 'entries.relative_path = ?', [relativePath])
+		return this.#invalidateEffectiveTakenAt(database, references)
+	}
+
+	refreshEffectiveTakenAt(database: Database, refreshes: PhotoContentRefresh[]) {
+		for (const {accountId, hashes} of refreshes) {
+			this.#refreshEffectiveTakenAt(database, accountId, hashes)
+		}
 	}
 
 	syncAll(database: Database, accountId?: string) {
+		const projectionRecovery = !this.#projectionGenerationMatches(database)
 		const accounts = database
 			.prepare(
 				`SELECT DISTINCT owner_id FROM index_roots
-				WHERE kind IN ('home', 'trash') ${accountId ? 'AND owner_id = ?' : ''}`,
+				WHERE kind IN ('home', 'trash') ${accountId && !projectionRecovery ? 'AND owner_id = ?' : ''}`,
 			)
-			.all(...(accountId ? [accountId] : [])) as Array<{owner_id: string}>
-		let changed = false
+			.all(...(accountId && !projectionRecovery ? [accountId] : [])) as Array<{owner_id: string}>
+		let changed = projectionRecovery
 		for (const {owner_id: ownerId} of accounts) {
 			const sourceId = this.#ensureSource(database, ownerId)
-			const result = database
+			const hasReadyHomeMedia = Boolean(
+				database
+					.prepare(
+						`SELECT 1 FROM index_roots
+						JOIN entries ON entries.root_id = index_roots.id
+						JOIN media_metadata ON media_metadata.content_id = entries.content_id
+							AND media_metadata.state = 'ready'
+						WHERE index_roots.owner_id = ? AND index_roots.kind = 'home'
+							AND entries.type = 'file' AND entries.hidden = 0 LIMIT 1`,
+					)
+					.get(ownerId),
+			)
+			if (!hasReadyHomeMedia) {
+				// A rebuilt disposable index must not inherit visible timeline rows
+				// from durable state before its replacement metadata is ready.
+				database
+					.prepare(
+						`UPDATE umbrel.photos_content_state SET effective_taken_at = NULL
+						WHERE account_id = ? AND effective_taken_at IS NOT NULL
+							AND effective_taken_at <> ?`,
+					)
+					.run(ownerId, UNKNOWN_EFFECTIVE_TAKEN_AT)
+			}
+			const requiresBackfill = Boolean(
+				database
+					.prepare(
+						`SELECT 1 FROM umbrel.photos_content_state
+						WHERE account_id = ? AND effective_taken_at = ? LIMIT 1`,
+					)
+					.get(ownerId, UNKNOWN_EFFECTIVE_TAKEN_AT),
+			)
+			const inserted = database
 				.prepare(
 					`INSERT INTO umbrel.photos_content_state(
 						account_id, content_hash, source_id, is_favorite, imported_at
@@ -293,11 +454,23 @@ export default class PhotosRepository {
 					WHERE index_roots.owner_id = ? AND index_roots.kind IN ('home', 'trash')
 						AND entries.type = 'file' AND entries.hidden = 0
 					GROUP BY contents.blake3
-					ON CONFLICT(account_id, content_hash) DO NOTHING`,
+					ON CONFLICT(account_id, content_hash) DO NOTHING
+					RETURNING content_hash`,
 				)
-				.run(ownerId, sourceId, ownerId)
-			changed = result.changes > 0 || changed
+				.all(ownerId, sourceId, ownerId) as Array<{content_hash: Buffer}>
+			changed = inserted.length > 0 || changed
+			if (projectionRecovery || requiresBackfill || inserted.length > TARGETED_HASH_BATCH_SIZE) {
+				this.#refreshEffectiveTakenAt(database, ownerId, undefined, false)
+			} else if (inserted.length > 0) {
+				this.#refreshEffectiveTakenAt(
+					database,
+					ownerId,
+					inserted.map(({content_hash}) => content_hash),
+					false,
+				)
+			}
 		}
+		this.#synchronizeProjectionGeneration(database)
 		return changed
 	}
 
@@ -373,6 +546,7 @@ export default class PhotosRepository {
 						source_created_at = COALESCE(photos_content_state.source_created_at, excluded.source_created_at)`,
 				)
 				.run(accountId, hash, sourceId, now, sourceCreationDate ?? null)
+			this.#refreshEffectiveTakenAt(database, accountId, [hash])
 		}
 		database.prepare('UPDATE umbrel.photos_sources SET last_import_at = ? WHERE id = ?').run(now, sourceId)
 		return {
@@ -535,7 +709,19 @@ export default class PhotosRepository {
 			)
 			.get(entryId) as {owner_id: string; kind: string} | undefined
 		if (!root || !isPhotoRootKind(root.kind)) return false
-		return this.#ensureContentState(database, root.owner_id, hash)
+		const changed = this.#ensureContentState(database, root.owner_id, hash)
+		this.#refreshEffectiveTakenAt(database, root.owner_id, [hash])
+		return changed
+	}
+
+	refreshContentEffectiveTakenAt(database: Database, contentId: number) {
+		const content = database.prepare('SELECT blake3 FROM contents WHERE id = ?').get(contentId) as
+			| {blake3: Buffer}
+			| undefined
+		if (!content) return []
+		const accountIds = this.accountIdsForContent(database, contentId)
+		for (const accountId of accountIds) this.#refreshEffectiveTakenAt(database, accountId, [content.blake3])
+		return accountIds
 	}
 
 	accountIdsForContent(database: Database, contentId: number) {
@@ -574,7 +760,9 @@ export default class PhotosRepository {
 			)
 			.get(entryId, accountId) as {blake3: Buffer} | undefined
 		if (!uploaded) throw new Error('Uploaded Photos item was not indexed')
-		this.#ensureContentState(database, accountId, uploaded.blake3)
+		if (this.#ensureContentState(database, accountId, uploaded.blake3)) {
+			this.#refreshEffectiveTakenAt(database, accountId, [uploaded.blake3])
+		}
 		if (albumId) this.#addAlbumHash(database, accountId, albumId, uploaded.blake3)
 		const id = hashToId(uploaded.blake3)
 		return {status: 'imported' as const, itemId: id, uploadedItemId: id}
@@ -599,21 +787,41 @@ export default class PhotosRepository {
 			)
 			.get(accountId, hash)
 		if (!duplicate) return {status: 'new' as const}
-		this.#ensureContentState(database, accountId, hash)
+		if (this.#ensureContentState(database, accountId, hash)) {
+			this.#refreshEffectiveTakenAt(database, accountId, [hash])
+		}
 		if (albumId) this.#addAlbumHash(database, accountId, albumId, hash)
 		return {status: 'duplicate' as const, itemId: hashToId(hash)}
 	}
 
 	moveItems(
-		_database: Database,
-		_source: {accountId: string; rootVirtualPath: string; relativePath: string},
-		_destination: {accountId: string; rootVirtualPath: string; relativePath: string},
+		database: Database,
+		source: {accountId: string; rootVirtualPath: string; relativePath: string},
+		destination: {accountId: string; rootVirtualPath: string; relativePath: string},
 	) {
-		return false
+		const references: PhotoContentReference[] = []
+		for (const location of [source, destination]) {
+			const row = database
+				.prepare(
+					`SELECT contents.blake3 FROM index_roots
+					JOIN entries ON entries.root_id = index_roots.id
+					JOIN contents ON contents.id = entries.content_id
+					WHERE index_roots.owner_id = ? AND index_roots.virtual_path = ?
+						AND entries.relative_path = ?`,
+				)
+				.get(location.accountId, location.rootVirtualPath, location.relativePath) as {blake3: Buffer} | undefined
+			if (row) references.push({accountId: location.accountId, hash: row.blake3})
+		}
+		this.refreshEffectiveTakenAt(
+			database,
+			groupContentReferences(references).map(([accountId, hashes]) => ({accountId, hashes})),
+		)
+		return references.length > 0
 	}
 
 	listItems(database: Database, accountId: string, filter: PhotoFilter, cursor: string | undefined, limit: number) {
 		this.#ensureSource(database, accountId)
+		if (isDefaultTimelineFilter(filter)) return this.#listIndexedTimeline(database, accountId, cursor, limit)
 		const where = filterQuery(filter)
 		if (cursor) {
 			const decoded = decodeCursor(cursor)
@@ -635,6 +843,61 @@ export default class PhotosRepository {
 						database
 							.prepare(`${PHOTO_LIBRARY_CTE} SELECT COUNT(*) AS count FROM logical_items WHERE ${where.sql}`)
 							.get(...parameters) as {count: number}
+					).count,
+				)
+		const last = page.at(-1)
+		return {
+			items: page.map(item),
+			...(total === undefined ? {} : {total}),
+			...(rows.length > limit && last ? {nextCursor: encodeCursor(Number(last.taken_at), last.id)} : {}),
+		}
+	}
+
+	#listIndexedTimeline(database: Database, accountId: string, cursor: string | undefined, limit: number) {
+		const cursorValue = cursor ? decodeCursor(cursor) : undefined
+		const cursorHash = cursorValue ? idToHash(cursorValue.id)! : undefined
+		const candidates = database
+			.prepare(
+				`SELECT content_hash FROM umbrel.photos_content_state AS state
+					INDEXED BY photos_content_state_by_effective_taken_at
+				WHERE account_id = ? AND effective_taken_at IS NOT NULL
+					${cursorValue ? 'AND (effective_taken_at < ? OR (effective_taken_at = ? AND content_hash > ?))' : ''}
+				ORDER BY effective_taken_at DESC, content_hash LIMIT ?`,
+			)
+			.all(
+				accountId,
+				...(cursorValue ? [cursorValue.takenAt, cursorValue.takenAt, cursorHash] : []),
+				limit + 1,
+			) as Array<{content_hash: Buffer}>
+		const hashes = candidates.map(({content_hash}) => content_hash)
+		const target = targetedHashes(hashes)
+		const rows =
+			target === undefined
+				? []
+				: (this.#prepare(
+						database,
+						`timeline-items:${target.capacity}`,
+						`${photoLibraryCte(target.capacity)} ${ITEM_SELECT} FROM logical_items
+							JOIN (
+								SELECT account_id, content_hash, effective_taken_at
+								FROM umbrel.photos_content_state
+							) AS timeline_state ON timeline_state.account_id = logical_items.account_id
+								AND timeline_state.content_hash = logical_items.content_hash
+							WHERE logical_items.root_kind = 'home'
+								AND logical_items.content_hash IN (SELECT content_hash FROM requested_hashes)
+							ORDER BY timeline_state.effective_taken_at DESC, logical_items.content_hash`,
+					).all(...target.parameters, accountId) as ItemRow[])
+		const page = rows.slice(0, limit)
+		const total = cursor
+			? undefined
+			: Number(
+					(
+						database
+							.prepare(
+								`SELECT COUNT(*) AS count FROM umbrel.photos_content_state
+								WHERE account_id = ? AND effective_taken_at IS NOT NULL`,
+							)
+							.get(accountId) as {count: number}
 					).count,
 				)
 		const last = page.at(-1)
@@ -781,7 +1044,9 @@ export default class PhotosRepository {
 		const hashes = this.#accessibleHashes(database, accountId, ids)
 		let changes = 0
 		for (const hash of hashes) {
-			this.#ensureContentState(database, accountId, hash)
+			if (this.#ensureContentState(database, accountId, hash)) {
+				this.#refreshEffectiveTakenAt(database, accountId, [hash])
+			}
 			changes += database
 				.prepare(
 					`UPDATE umbrel.photos_content_state SET is_favorite = ?
@@ -793,23 +1058,27 @@ export default class PhotosRepository {
 	}
 
 	resolveItems(database: Database, accountId: string, ids: string[]) {
-		const validIds = [...new Set(ids.filter((id) => idToHash(id)))]
-		if (validIds.length === 0) return []
+		const hashes = uniqueBuffers(ids.map(idToHash).filter((hash): hash is Buffer => hash !== undefined))
+		if (hashes.length === 0) return []
 		this.#ensureSource(database, accountId)
-		const placeholders = validIds.map(() => '?').join(', ')
-		const rows = database
-			.prepare(
-				`${PHOTO_LIBRARY_CTE} SELECT id, root_virtual_path, relative_path FROM logical_items
-				WHERE id IN (${placeholders}) ORDER BY id, root_kind = 'home' DESC`,
-			)
-			.all(accountId, ...validIds) as Array<{id: string; root_virtual_path: string; relative_path: string}>
 		const resolved = new Map<string, {id: string; path: string}>()
-		for (const row of rows) {
-			if (!resolved.has(row.id)) {
-				resolved.set(row.id, {id: row.id, path: joinVirtualPath(row.root_virtual_path, row.relative_path)})
+		for (const batch of hashBatches(hashes)) {
+			const target = targetedHashes(batch)!
+			const rows = this.#prepare(
+				database,
+				`resolve-items:${target.capacity}`,
+				`${photoLibraryCte(target.capacity)}
+					SELECT id, root_virtual_path, relative_path FROM logical_items
+					WHERE content_hash IN (SELECT content_hash FROM requested_hashes)
+					ORDER BY id, root_kind = 'home' DESC`,
+			).all(...target.parameters, accountId) as Array<{id: string; root_virtual_path: string; relative_path: string}>
+			for (const row of rows) {
+				if (!resolved.has(row.id)) {
+					resolved.set(row.id, {id: row.id, path: joinVirtualPath(row.root_virtual_path, row.relative_path)})
+				}
 			}
 		}
-		return [...resolved.values()]
+		return [...resolved.values()].sort((left, right) => left.id.localeCompare(right.id))
 	}
 
 	resolveItemFiles(database: Database, accountId: string, ids: string[] | undefined, rootKind: PhotoRootKind) {
@@ -1047,9 +1316,13 @@ export default class PhotosRepository {
 			if (paths.some((path) => path !== root && !path.startsWith(`${root}/`))) {
 				throw new Error('[photos-invalid-scope-path]')
 			}
-			database
-				.prepare('UPDATE umbrel.photos_sources SET scope_mode = ?, scope_paths = ? WHERE id = ? AND account_id = ?')
-				.run(scope.mode, JSON.stringify(paths), id, accountId)
+			const update = database.transaction(() => {
+				database
+					.prepare('UPDATE umbrel.photos_sources SET scope_mode = ?, scope_paths = ? WHERE id = ? AND account_id = ?')
+					.run(scope.mode, JSON.stringify(paths), id, accountId)
+				this.#refreshEffectiveTakenAt(database, accountId)
+			})
+			update.immediate()
 		}
 		return this.listSources(database, accountId).find((candidate) => candidate.id === id)
 	}
@@ -1071,6 +1344,7 @@ export default class PhotosRepository {
 				)
 				.run(id, replacement, id, accountId)
 			database.prepare('DELETE FROM umbrel.photos_sources WHERE id = ? AND account_id = ?').run(id, accountId)
+			this.#refreshEffectiveTakenAt(database, accountId)
 		})
 		remove.immediate()
 		return true
@@ -1147,6 +1421,163 @@ export default class PhotosRepository {
 				)
 				.run(accountId, hash, sourceId, Date.now()).changes > 0
 		)
+	}
+
+	// TODO(photos-denormalization): effective_taken_at is both the Home timeline
+	// sort key and its ready/visible membership marker. Any future input to
+	// logical_items (authorization, canonical locations, metadata, or Live Photo
+	// pairing) must invalidate and refresh the affected hashes in the same
+	// transaction. Missing an invalidation can otherwise make indexed pagination
+	// stale even though the broad projection remains correct.
+	#refreshEffectiveTakenAt(database: Database, accountId: string, hashes?: Buffer[], advanceGeneration = true) {
+		const requested = hashes ? uniqueBuffers(hashes) : undefined
+		if (requested?.length === 0) return
+		if (requested && requested.length > TARGETED_HASH_BATCH_SIZE) {
+			for (let offset = 0; offset < requested.length; offset += TARGETED_HASH_BATCH_SIZE) {
+				this.#refreshEffectiveTakenAt(
+					database,
+					accountId,
+					requested.slice(offset, offset + TARGETED_HASH_BATCH_SIZE),
+					false,
+				)
+			}
+			if (advanceGeneration) this.#advanceProjectionGeneration(database)
+			return
+		}
+		const target = requested ? targetedHashes(requested)! : undefined
+		const cte = photoLibraryCte(target?.capacity ?? 0)
+		const targetedWhere = requested ? 'AND state.content_hash IN (SELECT content_hash FROM relevant_contents)' : ''
+		this.#prepare(
+			database,
+			`refresh-effective-taken-at:${target?.capacity ?? 0}`,
+			`${cte}
+				UPDATE umbrel.photos_content_state AS state
+				SET effective_taken_at = (
+					SELECT logical_items.logical_taken_at FROM logical_items
+					WHERE logical_items.account_id = state.account_id
+						AND logical_items.content_hash = state.content_hash
+						AND logical_items.root_kind = 'home'
+				)
+				WHERE state.account_id = ? ${targetedWhere}`,
+		).run(...(target?.parameters ?? []), accountId, accountId)
+		if (advanceGeneration) this.#advanceProjectionGeneration(database)
+	}
+
+	#invalidateEffectiveTakenAt(database: Database, references: PhotoContentReference[]) {
+		const refreshes: PhotoContentRefresh[] = []
+		for (const [accountId, hashes] of groupContentReferences(references)) {
+			// For ordinary mutations, only recompute affected hashes. Once a single
+			// mutation touches tens of thousands of items, one account projection is
+			// cheaper than compiling and executing hundreds of dependency batches.
+			if (hashes.length > ACCOUNT_WIDE_REFRESH_THRESHOLD) {
+				this.#invalidateEffectiveTakenAtForAccount(database, accountId)
+				refreshes.push({accountId})
+				continue
+			}
+			const related = uniqueBuffers(
+				hashBatches(hashes).flatMap((batch) => {
+					const target = targetedHashes(batch)!
+					return (
+						this.#prepare(
+							database,
+							`effective-date-dependencies:${target.capacity}`,
+							`${photoLibraryCte(target.capacity)}
+								SELECT content_hash FROM relevant_contents`,
+						).all(...target.parameters, accountId) as Array<{content_hash: Buffer}>
+					).map(({content_hash}) => content_hash)
+				}),
+			)
+			if (related.length === 0) continue
+			if (related.length > ACCOUNT_WIDE_REFRESH_THRESHOLD) {
+				this.#invalidateEffectiveTakenAtForAccount(database, accountId)
+				refreshes.push({accountId})
+				continue
+			}
+			for (const batch of hashBatches(related)) {
+				const placeholders = batch.map(() => '?').join(', ')
+				database
+					.prepare(
+						`UPDATE umbrel.photos_content_state SET effective_taken_at = NULL
+						WHERE account_id = ? AND content_hash IN (${placeholders})`,
+					)
+					.run(accountId, ...batch)
+			}
+			refreshes.push({accountId, hashes: related})
+		}
+		return refreshes
+	}
+
+	#invalidateEffectiveTakenAtForAccount(database: Database, accountId: string) {
+		database
+			.prepare('UPDATE umbrel.photos_content_state SET effective_taken_at = NULL WHERE account_id = ?')
+			.run(accountId)
+	}
+
+	#pathContentReferences(
+		database: Database,
+		rootId: number,
+		whereSql: string,
+		parameters: unknown[],
+	): PhotoContentReference[] {
+		return (
+			database
+				.prepare(
+					`SELECT DISTINCT index_roots.owner_id, contents.blake3
+					FROM entries
+					JOIN index_roots ON index_roots.id = entries.root_id
+					JOIN contents ON contents.id = entries.content_id
+					WHERE entries.root_id = ? AND index_roots.kind IN ('home', 'trash')
+						AND (${whereSql})`,
+				)
+				.all(rootId, ...parameters) as Array<{owner_id: string; blake3: Buffer}>
+		).map(({owner_id, blake3}) => ({accountId: owner_id, hash: blake3}))
+	}
+
+	#prepare(database: Database, key: string, sql: string) {
+		let statements = this.#preparedStatements.get(database)
+		if (!statements) {
+			statements = new Map()
+			this.#preparedStatements.set(database, statements)
+		}
+		let statement = statements.get(key)
+		if (!statement) {
+			statement = database.prepare(sql)
+			statements.set(key, statement)
+		}
+		return statement
+	}
+
+	#projectionGenerationMatches(database: Database) {
+		return Boolean(
+			(
+				database
+					.prepare(
+						`SELECT main_state.generation = durable_state.generation AS matches
+						FROM main.photos_projection_state AS main_state
+						CROSS JOIN umbrel.photos_projection_state AS durable_state
+						WHERE main_state.id = 1 AND durable_state.id = 1`,
+					)
+					.get() as {matches: number} | undefined
+			)?.matches,
+		)
+	}
+
+	#advanceProjectionGeneration(database: Database) {
+		// WAL guarantees each database file independently, but not an attached
+		// multi-database commit as a set. Advancing the same marker in both files
+		// lets startup detect and repair the rare split-commit case.
+		database.exec(`
+			UPDATE main.photos_projection_state SET generation = generation + 1 WHERE id = 1;
+			UPDATE umbrel.photos_projection_state SET generation = generation + 1 WHERE id = 1;
+		`)
+	}
+
+	#synchronizeProjectionGeneration(database: Database) {
+		database.exec(`
+			UPDATE umbrel.photos_projection_state
+			SET generation = (SELECT generation FROM main.photos_projection_state WHERE id = 1)
+			WHERE id = 1;
+		`)
 	}
 
 	#accessibleHashes(database: Database, accountId: string, ids: string[]) {
@@ -1283,6 +1714,23 @@ function filterQuery(filter: PhotoFilter): Query {
 	return {sql: clauses.join(' AND '), parameters}
 }
 
+function isDefaultTimelineFilter(filter: PhotoFilter) {
+	// TODO(photos-indexed-timeline): Filters added to this fast path must either
+	// be represented by photos_content_state or hydrate bounded candidate batches.
+	// Joining the full logical_items projection before LIMIT would silently bring
+	// back the library-wide sort this path exists to avoid.
+	return (
+		!filter.deleted &&
+		filter.kind === undefined &&
+		filter.subKind === undefined &&
+		filter.favorite === undefined &&
+		!filter.sourceIds?.length &&
+		!filter.albumIds?.length &&
+		!filter.dates?.length &&
+		!filter.query?.trim()
+	)
+}
+
 function sourceScopeSql(
 	source = 'umbrel.photos_sources',
 	root = 'index_roots',
@@ -1406,20 +1854,30 @@ function uniqueBuffers(values: Buffer[]) {
 	return [...new Map(values.map((value) => [hashToId(value), value])).values()]
 }
 
-function filenameStemSql(nameSql: string, extensions: string[]) {
-	const extensionsByLength = new Map<number, string[]>()
-	for (const extension of new Set(extensions)) {
-		extensionsByLength.set(extension.length, [...(extensionsByLength.get(extension.length) ?? []), extension])
+// A small set of reusable placeholder counts keeps the prepared-statement cache
+// bounded. NULL padding is discarded by requested_hashes in the targeted CTE.
+function targetedHashes(hashes: Buffer[]) {
+	if (hashes.length === 0) return
+	let capacity = 1
+	while (capacity < hashes.length) capacity *= 2
+	return {
+		capacity,
+		parameters: [...hashes, ...Array<null>(capacity - hashes.length).fill(null)],
 	}
-	const branches = [...extensionsByLength]
-		.toSorted(([left], [right]) => right - left)
-		.map(
-			([length, values]) =>
-				`WHEN substr(lower(${nameSql}), -${length}) IN (${values.map((value) => `'${value}'`).join(', ')}) ` +
-				`THEN substr(lower(${nameSql}), 1, length(${nameSql}) - ${length})`,
-		)
-		.join('\n\t\t\t')
-	return `CASE ${branches} ELSE lower(${nameSql}) END`
+}
+
+function hashBatches(hashes: Buffer[]) {
+	const batches: Buffer[][] = []
+	for (let offset = 0; offset < hashes.length; offset += TARGETED_HASH_BATCH_SIZE) {
+		batches.push(hashes.slice(offset, offset + TARGETED_HASH_BATCH_SIZE))
+	}
+	return batches
+}
+
+function groupContentReferences(references: PhotoContentReference[]) {
+	const grouped = new Map<string, Buffer[]>()
+	for (const {accountId, hash} of references) grouped.set(accountId, [...(grouped.get(accountId) ?? []), hash])
+	return [...grouped].map(([accountId, hashes]) => [accountId, uniqueBuffers(hashes)] as const)
 }
 
 function ftsTrigramExpression(term: string) {

@@ -7,6 +7,7 @@ import pRetry from 'p-retry'
 import {afterEach, describe, expect, test, vi} from 'vitest'
 
 import {migratePhotos} from '../photos/migrations.js'
+import {PHOTO_EXTENSIONS, VIDEO_EXTENSIONS} from '../photos/types.js'
 import temporaryDirectory from '../utilities/temporary-directory.js'
 import FileIndex, {
 	walkFileTree,
@@ -17,6 +18,7 @@ import FileIndex, {
 import {
 	FILE_INDEX_SCHEMA_VERSION,
 	fileIndexMigrations,
+	filenameStemSql,
 	migrateFileIndex,
 	type FileIndexMigration,
 } from './file-index/migrations.js'
@@ -164,6 +166,63 @@ test('creates a standalone point-in-time backup of the live WAL-mode Umbrel data
 	)
 })
 
+test('repairs a split attached-database WAL commit on restart', async () => {
+	const runtime = {
+		availableParallelism: 1,
+		hashFile: async (systemPath: string) =>
+			Buffer.alloc(32, nodePath.basename(systemPath) === 'kept.jpg' ? 0xc1 : 0xc2),
+		generateThumbnail: async (_source: string, destination: string) => fse.outputFile(destination, 'thumbnail'),
+		extractMediaMetadata: async (systemPath: string) => ({
+			kind: 'photo' as const,
+			takenAt: nodePath.basename(systemPath) === 'kept.jpg' ? 1_000 : 2_000,
+			createdAt: 500,
+			width: 100,
+			height: 50,
+		}),
+	}
+	const {index, root, homeDirectory, dataDirectory} = await fixture(undefined, {enrichmentRuntime: runtime})
+	const kept = nodePath.join(homeDirectory, 'kept.jpg')
+	const removed = nodePath.join(homeDirectory, 'removed.jpg')
+	await Promise.all([writeFile(kept, 'kept'), writeFile(removed, 'removed')])
+	await index.reconcileRoot('/Home', 'split-commit-initial')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 2})
+
+	// Restoring only the durable side after a later cross-database commit models
+	// the split outcome SQLite permits if a WAL-mode host crashes during COMMIT.
+	const durableSnapshot = nodePath.join(dataDirectory, 'umbrel-before-delete.db')
+	await index.createUmbrelDatabaseBackup(durableSnapshot)
+	await fse.remove(removed)
+	await index.removePath(removed)
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 1})
+	await index.stop()
+	await Promise.all([fse.remove(`${index.umbrelDatabasePath}-wal`), fse.remove(`${index.umbrelDatabasePath}-shm`)])
+	await fse.copy(durableSnapshot, index.umbrelDatabasePath, {overwrite: true})
+
+	const restarted = new FileIndex({dataDirectory, logger, isHidden: () => false, enrichmentRuntime: runtime})
+	indexes.push(restarted)
+	await restarted.start()
+	await restarted.setRoots([root])
+	await expect(restarted.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({
+		total: 1,
+		items: [expect.objectContaining({id: Buffer.alloc(32, 0xc1).toString('hex')})],
+	})
+	await expect(restarted.photosListItems('owner', {kind: 'photo'}, undefined, 10)).resolves.toMatchObject({total: 1})
+	const disposable = new BetterSqlite3(restarted.databasePath, {readonly: true})
+	const durable = new BetterSqlite3(restarted.umbrelDatabasePath, {readonly: true})
+	expect(disposable.prepare('SELECT generation FROM photos_projection_state WHERE id = 1').get()).toStrictEqual(
+		durable.prepare('SELECT generation FROM photos_projection_state WHERE id = 1').get(),
+	)
+	disposable.close()
+	durable.close()
+})
+
 function noteWatcherChanges(index: FileIndex, paths: string[], type: WatcherChange['type'] = 'create') {
 	index.noteWatcherChanges(
 		'/Home',
@@ -236,6 +295,26 @@ describe('file index migrations', () => {
 				.all()
 				.map((column: any) => column.name),
 		).toStrictEqual(['root_id', 'modified_ms', 'id'])
+		expect(database.prepare('SELECT id, generation FROM photos_projection_state').get()).toStrictEqual({
+			id: 1,
+			generation: 0,
+		})
+		expect(
+			database
+				.prepare('PRAGMA index_info(entries_by_photos_live_fallback)')
+				.all()
+				.map((column: any) => column.name),
+		).toStrictEqual(['root_id', null, null])
+		const fallbackStem = filenameStemSql('name', [...PHOTO_EXTENSIONS, ...VIDEO_EXTENSIONS])
+		const liveFallbackPlan = database
+			.prepare(
+				`EXPLAIN QUERY PLAN SELECT id FROM entries INDEXED BY entries_by_photos_live_fallback
+				WHERE root_id = ? AND type = 'file' AND hidden = 0 AND thumbnail_identity_kind = 'content'
+					AND substr(relative_path, 1, length(relative_path) - length(name)) = ?
+					AND ${fallbackStem} = ?`,
+			)
+			.all(1, 'Trip/', 'img_0001') as Array<{detail: string}>
+		expect(liveFallbackPlan.some(({detail}) => detail.includes('entries_by_photos_live_fallback'))).toBe(true)
 
 		const recentsPlan = database
 			.prepare(
@@ -1622,8 +1701,14 @@ test('deduplicates Photos by hash after account authorization and uses a stable 
 	await expect(
 		index.photosListItems('owner', {sourceIds: [source.id], dates: [{from: 1_900, to: 2_100}]}, undefined, 10),
 	).resolves.toMatchObject({total: 1, items: [{id: hashId, takenAt: 2_000}]})
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({
+		items: expect.arrayContaining([expect.objectContaining({id: hashId, takenAt: 2_000})]),
+	})
 	await expect(index.photosGetItem('owner', hashId)).resolves.toMatchObject({path: '/Home/Z/searchable-sunset.jpg'})
 	await index.photosUpdateSource('owner', source.id, {mode: 'everything', paths: []})
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({
+		items: expect.arrayContaining([expect.objectContaining({id: hashId, takenAt: 1_000})]),
+	})
 	await fse.remove(canonical)
 	await index.removePath(canonical)
 	await expect(index.photosGetItem('owner', hashId)).resolves.toMatchObject({path: '/Home/Z/searchable-sunset.jpg'})
@@ -1654,7 +1739,9 @@ test('treats an in-place edit as a new hash without transferring state and recon
 	const album = await index.photosCreateAlbum('owner', 'Original bytes', [oldId])
 
 	await writeFile(photo, 'new bytes with a different revision')
-	await index.reconcilePath(photo)
+	// Exercise the batched full-scan write path as well as direct watcher writes:
+	// it must invalidate the old cached timeline membership before detaching its hash.
+	await index.reconcileRoot('/Home', 'edited-content')
 	await pRetry(
 		async () =>
 			expect((await index.photosListItems('owner', {}, undefined, 10)).items).toStrictEqual([
@@ -1947,6 +2034,21 @@ test('pairs live photos, hides their motion companions, and resolves both files 
 
 	const page = await index.photosListItems('owner', {}, undefined, 10)
 	expect(page).toMatchObject({total: 1, items: [{kind: 'photo', subKind: 'live', tint: 0x112233}]})
+	const motionId = Buffer.alloc(32, 2).toString('hex')
+	await expect(index.photosResolveItems('owner', [motionId])).resolves.toStrictEqual([])
+	const photosState = new BetterSqlite3(nodePath.join(dataDirectory, 'umbrel.db'), {readonly: true})
+	expect(
+		photosState
+			.prepare(
+				`SELECT lower(hex(content_hash)) AS id, effective_taken_at
+				FROM photos_content_state WHERE account_id = ? ORDER BY id`,
+			)
+			.all('owner'),
+	).toStrictEqual([
+		{id: page.items[0]!.id, effective_taken_at: 1_000},
+		{id: motionId, effective_taken_at: null},
+	])
+	photosState.close()
 	await expect(index.photosResolveLiveCompanion('owner', page.items[0]!.id)).resolves.toStrictEqual({
 		id: expect.any(String),
 		path: '/Home/MOTION.mov',
@@ -2019,16 +2121,24 @@ test('pairs a short same-folder motion clip when Apple identifiers are absent', 
 	})
 
 	const still = (await index.photosListItems('owner', {subKind: 'live'}, undefined, 10)).items[0]!
+	const motionId = Buffer.alloc(32, 4).toString('hex')
+	await expect(index.photosResolveItems('owner', [motionId])).resolves.toStrictEqual([])
 	const originalMotion = nodePath.join(homeDirectory, 'Trip', 'IMG_0002.MOV')
 	const movedMotion = nodePath.join(homeDirectory, 'Trip', 'OTHER.MOV')
 	await fse.move(originalMotion, movedMotion)
 	await index.movePath(originalMotion, movedMotion)
 	await expect(index.photosGetItem('owner', still.id)).resolves.not.toMatchObject({subKind: 'live'})
 	await expect(index.photosResolveLiveCompanion('owner', still.id)).resolves.toBeUndefined()
+	await expect(index.photosResolveItems('owner', [motionId])).resolves.toStrictEqual([
+		{id: motionId, path: '/Home/Trip/OTHER.MOV'},
+	])
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 2})
 
 	await fse.move(movedMotion, originalMotion)
 	await index.movePath(movedMotion, originalMotion)
 	await expect(index.photosGetItem('owner', still.id)).resolves.toMatchObject({subKind: 'live'})
+	await expect(index.photosResolveItems('owner', [motionId])).resolves.toStrictEqual([])
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 1})
 
 	const source = (await index.photosListSources('owner'))[0]!
 	await index.photosUpdateSource('owner', source.id, {mode: 'only', paths: ['/Home/Trip/IMG_0002.jpg']})
@@ -2036,6 +2146,118 @@ test('pairs a short same-folder motion clip when Apple identifiers are absent', 
 	await expect(index.photosResolveLiveCompanion('owner', still.id)).resolves.toBeUndefined()
 	await index.photosUpdateSource('owner', source.id, {mode: 'everything', paths: []})
 	await expect(index.photosGetItem('owner', still.id)).resolves.toMatchObject({subKind: 'live'})
+})
+
+test('refreshes every transitive Live Photo dependency across exact and fallback pairs', async () => {
+	const hashBytes = new Map([
+		['IMG_1.jpg', 0x91],
+		['IMG_1.heic', 0x92],
+		['IMG_1.mov', 0x93],
+		['x.mov', 0x94],
+		['clip.mov', 0x95],
+	])
+	const {index, homeDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, hashBytes.get(nodePath.basename(systemPath))!),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+			extractMediaMetadata: async (systemPath) => {
+				const name = nodePath.basename(systemPath)
+				const video = name.endsWith('.mov')
+				const takenAt =
+					name === 'IMG_1.jpg' ? 4_000 : name === 'IMG_1.heic' ? 3_000 : name === 'IMG_1.mov' ? 2_000 : 1_000
+				const liveIdentifier =
+					name === 'IMG_1.jpg' || name === 'clip.mov'
+						? 'live-one'
+						: name === 'IMG_1.heic' || name === 'x.mov'
+							? 'live-two'
+							: undefined
+				return {
+					kind: video ? ('video' as const) : ('photo' as const),
+					takenAt,
+					createdAt: takenAt,
+					width: 100,
+					height: 50,
+					...(liveIdentifier ? {liveIdentifier} : {}),
+					...(video ? {durationMs: 3_000} : {}),
+				}
+			},
+		},
+	})
+	await Promise.all([
+		fse.outputFile(nodePath.join(homeDirectory, 'B', 'IMG_1.jpg'), 'still one'),
+		fse.outputFile(nodePath.join(homeDirectory, 'B', 'IMG_1.heic'), 'still two'),
+		fse.outputFile(nodePath.join(homeDirectory, 'B', 'IMG_1.mov'), 'fallback motion'),
+		fse.outputFile(nodePath.join(homeDirectory, 'D', 'x.mov'), 'exact motion two'),
+	])
+	await index.reconcileRoot('/Home', 'transitive-live-initial')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 2})
+
+	// Adding the exact motion for the first still releases its old fallback
+	// motion. Reaching that result requires traversing exact -> fallback -> exact
+	// dependencies, rather than stopping after a fixed number of joins.
+	const exactMotion = nodePath.join(homeDirectory, 'A', 'clip.mov')
+	await fse.outputFile(exactMotion, 'exact motion one')
+	await index.reconcilePath(exactMotion)
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	const fallbackMotionId = Buffer.alloc(32, hashBytes.get('IMG_1.mov')!).toString('hex')
+	await expect(index.photosListItems('owner', {kind: 'video'}, undefined, 10)).resolves.toMatchObject({
+		total: 1,
+		items: [{id: fallbackMotionId}],
+	})
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({
+		total: 3,
+		items: expect.arrayContaining([expect.objectContaining({id: fallbackMotionId})]),
+	})
+})
+
+test('clears the indexed Photos timeline when an entire root is detached', async () => {
+	const {index, homeDirectory, dataDirectory} = await fixture(undefined, {
+		enrichmentRuntime: {
+			hashFile: async (systemPath) => Buffer.alloc(32, nodePath.basename(systemPath) === 'one.jpg' ? 0xa1 : 0xa2),
+			generateThumbnail: async (_source, destination) => fse.outputFile(destination, 'thumbnail'),
+		},
+	})
+	await Promise.all([
+		writeFile(nodePath.join(homeDirectory, 'one.jpg'), 'one'),
+		writeFile(nodePath.join(homeDirectory, 'two.jpg'), 'two'),
+	])
+	await index.reconcileRoot('/Home', 'root-detach-initial')
+	await index.initializePhotos('owner')
+	index.startBackgroundReconciliation()
+	await pRetry(async () => expect(await index.photosIndexingState('owner')).toMatchObject({phase: 'ready'}), {
+		retries: 200,
+		minTimeout: 10,
+		maxTimeout: 20,
+	})
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 2})
+
+	await index.removePath(homeDirectory)
+	await expect(index.photosListItems('owner', {}, undefined, 10)).resolves.toMatchObject({total: 0, items: []})
+	await expect(index.photosListItems('owner', {kind: 'photo'}, undefined, 10)).resolves.toMatchObject({
+		total: 0,
+		items: [],
+	})
+	const photos = new BetterSqlite3(nodePath.join(dataDirectory, 'umbrel.db'), {readonly: true})
+	expect(
+		photos
+			.prepare(
+				`SELECT COUNT(*) AS count FROM photos_content_state
+				WHERE account_id = ? AND effective_taken_at IS NOT NULL`,
+			)
+			.get('owner'),
+	).toStrictEqual({count: 0})
+	photos.close()
 })
 
 test('removes a Photos item when a Files rename makes it hidden', async () => {
@@ -2148,6 +2370,12 @@ test('selects one canonical shared Live Photo companion and moves it only with e
 	const stills = (await index.photosListItems('owner', {kind: 'photo'}, undefined, 10)).items
 	expect(stills).toHaveLength(2)
 	expect(stills.every(({subKind}) => subKind === 'live')).toBe(true)
+	const selectedMotionId = Buffer.alloc(32, 0x81).toString('hex')
+	const losingMotionId = Buffer.alloc(32, 0x82).toString('hex')
+	await expect(index.photosResolveItems('owner', [selectedMotionId])).resolves.toStrictEqual([])
+	await expect(index.photosResolveItems('owner', [losingMotionId])).resolves.toStrictEqual([
+		{id: losingMotionId, path: '/Home/z-motion.mov'},
+	])
 	await expect(index.photosResolveItemFiles('owner', [stills[0]!.id], 'home')).resolves.toMatchObject([
 		{id: stills[0]!.id},
 	])
@@ -2160,11 +2388,11 @@ test('selects one canonical shared Live Photo companion and moves it only with e
 		expect.arrayContaining([
 			expect.objectContaining({id: stills[0]!.id}),
 			expect.objectContaining({id: stills[1]!.id}),
-			expect.objectContaining({id: Buffer.alloc(32, 0x81).toString('hex')}),
+			expect.objectContaining({id: selectedMotionId}),
 		]),
 	)
 	expect(resolvedPair).toHaveLength(3)
-	expect(resolvedPair.map(({id}) => id)).not.toContain(Buffer.alloc(32, 0x82).toString('hex'))
+	expect(resolvedPair.map(({id}) => id)).not.toContain(losingMotionId)
 
 	// Splitting the stills between Home and Trash must not make the motion file
 	// disposable: permanently deleting the Trash-side still later must not erase

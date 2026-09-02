@@ -17,7 +17,15 @@ test('creates and idempotently migrates the durable Photos schema', () => {
 			.prepare('PRAGMA table_info(photos_content_state)')
 			.all()
 			.map((column: any) => column.name),
-	).toStrictEqual(['account_id', 'content_hash', 'source_id', 'is_favorite', 'imported_at', 'source_created_at'])
+	).toStrictEqual([
+		'account_id',
+		'content_hash',
+		'source_id',
+		'is_favorite',
+		'imported_at',
+		'source_created_at',
+		'effective_taken_at',
+	])
 	expect(
 		database.prepare("SELECT name FROM sqlite_schema WHERE name = 'photos_deletion_targets'").get(),
 	).toBeUndefined()
@@ -29,6 +37,8 @@ test('creates and idempotently migrates the durable Photos schema', () => {
 		{module: PHOTOS_MIGRATION_MODULE, version: 3},
 		{module: PHOTOS_MIGRATION_MODULE, version: 4},
 		{module: PHOTOS_MIGRATION_MODULE, version: 5},
+		{module: PHOTOS_MIGRATION_MODULE, version: 6},
+		{module: PHOTOS_MIGRATION_MODULE, version: 7},
 	])
 	expect(
 		database
@@ -40,11 +50,23 @@ test('creates and idempotently migrates the durable Photos schema', () => {
 		{name: 'photos_albums_by_account'},
 		{name: 'photos_content_state'},
 		{name: 'photos_content_state_by_account'},
+		{name: 'photos_content_state_by_effective_taken_at'},
+		{name: 'photos_projection_state'},
 		{name: 'photos_source_resources'},
 		{name: 'photos_source_resources_by_content'},
 		{name: 'photos_sources'},
 		{name: 'photos_sources_one_umbrel_per_account'},
 	])
+	const timelinePlan = database
+		.prepare(
+			`EXPLAIN QUERY PLAN SELECT content_hash FROM photos_content_state
+			INDEXED BY photos_content_state_by_effective_taken_at
+			WHERE account_id = ? AND effective_taken_at IS NOT NULL
+			ORDER BY effective_taken_at DESC, content_hash LIMIT ?`,
+		)
+		.all('alice', 201) as Array<{detail: string}>
+	expect(timelinePlan.some(({detail}) => detail.includes('photos_content_state_by_effective_taken_at'))).toBe(true)
+	expect(timelinePlan.some(({detail}) => detail.includes('USE TEMP B-TREE FOR ORDER BY'))).toBe(false)
 	expect(database.prepare("SELECT name FROM sqlite_schema WHERE name = 'items'").get()).toBeUndefined()
 	database.close()
 })
@@ -77,6 +99,20 @@ test('stores durable Photos state and album membership by 32-byte content hash',
 	expect(
 		database.prepare('SELECT album_id, hex(content_hash) AS content_hash FROM photos_album_items').all(),
 	).toStrictEqual([{album_id: 'album', content_hash: hash.toString('hex').toUpperCase()}])
+	database.close()
+})
+
+test('adds crash-recovery projection state to an existing v6 database', () => {
+	const database = new BetterSqlite3(':memory:')
+	migratePhotos(database)
+	database.prepare("DELETE FROM schema_migrations WHERE module = 'photos' AND version = 7").run()
+	database.exec('DROP TABLE photos_projection_state')
+
+	expect(migratePhotos(database)).toBe(PHOTOS_SCHEMA_VERSION)
+	expect(database.prepare('SELECT id, generation FROM photos_projection_state').get()).toStrictEqual({
+		id: 1,
+		generation: 0,
+	})
 	database.close()
 })
 
@@ -201,7 +237,7 @@ test('migrates v3 by discarding derived Live Photo pairs without touching backup
 	).toStrictEqual({source_id: 'source', resource_key: 'a'.repeat(64), content_hash: hash})
 	expect(
 		database.prepare("SELECT version FROM schema_migrations WHERE module = 'photos' ORDER BY version").all(),
-	).toStrictEqual([{version: 1}, {version: 2}, {version: 3}, {version: 4}, {version: 5}])
+	).toStrictEqual([{version: 1}, {version: 2}, {version: 3}, {version: 4}, {version: 5}, {version: 6}, {version: 7}])
 	expect(
 		database
 			.prepare('PRAGMA table_info(photos_source_resources)')
@@ -256,7 +292,15 @@ test('migrates staging v4 by adding managed backup presentation metadata', () =>
 			.prepare('PRAGMA table_info(photos_content_state)')
 			.all()
 			.map((column: any) => column.name),
-	).toStrictEqual(['account_id', 'content_hash', 'source_id', 'is_favorite', 'imported_at', 'source_created_at'])
+	).toStrictEqual([
+		'account_id',
+		'content_hash',
+		'source_id',
+		'is_favorite',
+		'imported_at',
+		'source_created_at',
+		'effective_taken_at',
+	])
 	expect(
 		database
 			.prepare('PRAGMA table_info(photos_source_resources)')
@@ -271,7 +315,7 @@ test('migrates staging v4 by adding managed backup presentation metadata', () =>
 	).toStrictEqual({source_id: 'source', resource_key: 'b'.repeat(64), original_filename: null})
 	expect(
 		database.prepare("SELECT version FROM schema_migrations WHERE module = 'photos' ORDER BY version").all(),
-	).toStrictEqual([{version: 1}, {version: 2}, {version: 3}, {version: 4}, {version: 5}])
+	).toStrictEqual([{version: 1}, {version: 2}, {version: 3}, {version: 4}, {version: 5}, {version: 6}, {version: 7}])
 	database.close()
 })
 
@@ -359,6 +403,8 @@ test('keeps Photos migration versions independent from other umbrel.db modules',
 		{module: PHOTOS_MIGRATION_MODULE, version: 3},
 		{module: PHOTOS_MIGRATION_MODULE, version: 4},
 		{module: PHOTOS_MIGRATION_MODULE, version: 5},
+		{module: PHOTOS_MIGRATION_MODULE, version: 6},
+		{module: PHOTOS_MIGRATION_MODULE, version: 7},
 	])
 	database.close()
 })
