@@ -23,16 +23,9 @@ export async function getCpuTemperature(): Promise<{
 	if (typeof cpuTemperature.main !== 'number') throw new Error('Could not get CPU temperature')
 	const temperature = cpuTemperature.main
 
-	// Generic Intel thresholds
-	let temperatureThreshold = {warm: 90, hot: 95}
-
-	// Raspberry Pi thresholds
-	if (await isRaspberryPi()) temperatureThreshold = {warm: 80, hot: 85}
-
-	// Set warning level based on temperature
-	let warning: 'normal' | 'warm' | 'hot' = 'normal'
-	if (temperature >= temperatureThreshold.hot) warning = 'hot'
-	else if (temperature >= temperatureThreshold.warm) warning = 'warm'
+	// CPU temperature warnings are temporarily disabled for the umbrelOS 2.0 beta.
+	// TODO: Re-enable them before the production 2.0 release with sensible threshold values for generic hardware.
+	const warning = 'normal' as const
 
 	return {
 		warning,

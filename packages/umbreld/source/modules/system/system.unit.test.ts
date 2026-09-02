@@ -23,15 +23,12 @@ afterEach(() => {
 describe('getCpuTemperature', () => {
 	test('should return main cpu temperature when system supports it', async () => {
 		vi.mocked(systemInformation.cpuTemperature).mockResolvedValue({main: 69} as any)
-		vi.mocked(systemInformation.system).mockResolvedValue({
-			manufacturer: '',
-			model: '',
-			serial: '',
-			uuid: '',
-			sku: '',
-			version: '',
-		} as any)
 		expect(await getCpuTemperature()).toMatchObject({warning: 'normal', temperature: 69})
+	})
+
+	test('should keep temperature warnings disabled during the 2.0 beta', async () => {
+		vi.mocked(systemInformation.cpuTemperature).mockResolvedValue({main: 100} as any)
+		expect(await getCpuTemperature()).toMatchObject({warning: 'normal', temperature: 100})
 	})
 
 	test('should throw error when system does not support cpu temperature', async () => {
