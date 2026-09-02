@@ -38,6 +38,17 @@ To achieve our vision, we're building a new kind of a home server OS. Just like 
 
 <br />
 
+<p align="center">
+  <h1 align="center">umbrelOS 2.0</h1>
+  <img width="3840" height="2880" alt="bento 2 0" src="https://github.com/user-attachments/assets/a183106e-7d8a-4b84-bd7b-4cd06c9ff148" />
+</p>
+
+umbrelOS 2.0 is currently in beta, with the stable release planned for **September 22, 2026**. Try it out today:
+
+- **Fresh install:** download the 2.0 beta from [umbrel.com/downloads](https://umbrel.com/downloads).
+- **Already on umbrelOS:** update to umbrelOS 1.7.4 or later, then go to **Settings > Advanced settings** and turn on **umbrelOS beta program** to receive the 2.0 beta.
+
+
 ## Installing umbrelOS
 
 umbrelOS is free and complete on any hardware. The image you install on your own device is the same umbrelOS that ships on [Umbrel Home](https://umbrel.com/umbrel-home) and [Umbrel Pro](https://umbrel.com/umbrel-pro), with the same features and the same updates.
@@ -48,7 +59,7 @@ umbrelOS is free and complete on any hardware. The image you install on your own
 - **Raspberry Pi 5:** boot from an NVMe or USB drive rather than a microSD card.
 - **Virtual machines:** Proxmox, VirtualBox, VMware, or anything else that supports EFI boot.
 
-A few features depend on your hardware. Storage Manager and FailSafe need two or more internal NVMe or SATA drives, and GPU acceleration needs an NVIDIA, AMD, or Intel GPU on an Intel or AMD machine. Everything else works everywhere.
+A few features depend on your hardware. Storage Manager and FailSafe need two or more internal NVMe or SATA drives, and GPU acceleration needs an NVIDIA, AMD, or Intel GPU on an Intel or AMD machine.
 
 ### Download and install
 
@@ -56,15 +67,6 @@ Head to **[umbrel.com/downloads](https://umbrel.com/downloads)** for the latest 
 
 > [!NOTE]
 > umbrelOS is a standalone operating system that installs directly onto your device. It can't be installed on top of an existing Linux distribution.
-
-## umbrelOS 2.0
-
-umbrelOS 2.0 is currently in beta, with the stable release planned for **September 22, 2026**. Try it out today:
-
-- **Fresh install:** download the 2.0 beta from [umbrel.com/downloads](https://umbrel.com/downloads).
-- **Already on umbrelOS:** update to umbrelOS 1.7.4 or later, then go to **Settings > Advanced settings** and turn on **umbrelOS beta program** to receive the 2.0 beta.
-
-<img width="3840" height="2880" alt="bento 2 0" src="https://github.com/user-attachments/assets/a183106e-7d8a-4b84-bd7b-4cd06c9ff148" />
 
 ## Building apps for umbrelOS
 
