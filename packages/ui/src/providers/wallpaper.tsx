@@ -215,8 +215,27 @@ export function WallpaperProvider({
 	)
 }
 
+// Dark enough to sit behind white browser chrome text, light enough to carry the wallpaper's hue
+const THEME_COLOR_LIGHTNESS = 12
+const THEME_COLOR_FALLBACK = '#000000'
+
 export function useWallpaperCssVars(wallpaperId?: WallpaperId) {
 	const {brandColorHsl} = wallpaperId ? wallpapersKeyed[wallpaperId] : nullWallpaper
+	// No wallpaper means no hue to borrow: stay black rather than tint from the null wallpaper's grey
+	const themeColorHsl = wallpaperId ? brandHslWithLightness(brandColorHsl, THEME_COLOR_LIGHTNESS) : undefined
+
+	// Tints the browser's own chrome to match the wallpaper. The meta tag covers
+	// browsers that honor it; Safari 26 ignores it and instead samples the background
+	// of the page's edge-to-edge fixed layers (the full wallpaper) and the body, which
+	// both read `--wallpaper-theme-color`.
+	useLayoutEffect(() => {
+		const el = document.documentElement
+		if (themeColorHsl) el.style.setProperty('--wallpaper-theme-color', themeColorHsl)
+		else el.style.removeProperty('--wallpaper-theme-color')
+		document
+			.querySelector('meta[name="theme-color"]')
+			?.setAttribute('content', themeColorHsl ? `hsl(${themeColorHsl})` : THEME_COLOR_FALLBACK)
+	}, [themeColorHsl])
 
 	useLayoutEffect(() => {
 		const el = document.documentElement
@@ -391,8 +410,9 @@ function FullWallpaperImage({
 				src={wallpaper.url}
 				data-wallpaper-full=''
 				className={cn(
-					// Using black bg by default because sometimes we want to show the wallpaper before it's loaded, and over other elements
-					tw`pointer-events-none fixed inset-0 w-full animate-in bg-black object-cover object-center duration-700 fade-in`,
+					// Opaque bg because sometimes we want to show the wallpaper before it's loaded, and over other elements.
+					// It's the theme color rather than black because Safari 26 tints its chrome from this layer's background.
+					tw`pointer-events-none fixed inset-0 w-full animate-in bg-[hsl(var(--wallpaper-theme-color,0_0%_0%))] object-cover object-center duration-700 fade-in`,
 					isPreview && 'absolute h-full',
 					!isPreview && 'h-lvh',
 					className,
@@ -505,7 +525,8 @@ function FullWallpaperVideo(props: FullWallpaperImageProps & {paused: boolean}) 
 				aria-hidden='true'
 				data-wallpaper-full=''
 				className={cn(
-					tw`pointer-events-none fixed inset-0 w-full animate-in bg-black object-cover object-center opacity-100 transition-opacity duration-700 fade-in`,
+					// Theme color bg for the same Safari 26 chrome tinting as the image above
+					tw`pointer-events-none fixed inset-0 w-full animate-in bg-[hsl(var(--wallpaper-theme-color,0_0%_0%))] object-cover object-center opacity-100 transition-opacity duration-700 fade-in`,
 					isPreview && 'absolute h-full',
 					!isPreview && 'h-lvh',
 					className,
