@@ -129,7 +129,7 @@ describe('CloudAuth', () => {
 			expect(url.searchParams.get('redirect_uri')).toBe('https://proxy.example/callback')
 			expect(url.searchParams.get('code_challenge')).toBe(challenge)
 			expect(url.searchParams.get('code_challenge_method')).toBe('S256')
-			expect(url.searchParams.has('state')).toBe(false)
+			expect(url.searchParams.get('state')).toBe(provider)
 			expect(authorizationUrl).not.toContain(ACCOUNT_ID)
 			expect(authorizationUrl).not.toContain('secret')
 			expect(session.sessionId).toMatch(/^[0-9a-f-]{36}$/)

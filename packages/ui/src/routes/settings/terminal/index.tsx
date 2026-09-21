@@ -1,5 +1,4 @@
 import {DialogPortal} from '@radix-ui/react-dialog'
-import {DropdownMenu} from '@radix-ui/react-dropdown-menu'
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useNavigate} from 'react-router-dom'
@@ -46,13 +45,11 @@ function PickerDialogContent() {
 				description={t('terminal.app-description')}
 				onClick={() => setAppDialogOpen(true)}
 			>
-				<DropdownMenu open={appDialogOpen} onOpenChange={setAppDialogOpen}>
-					<AppDropdown
-						open={appDialogOpen}
-						onOpenChange={setAppDialogOpen}
-						setAppId={(appId) => navigate(linkToTarget({type: 'app', appId}))}
-					/>
-				</DropdownMenu>
+				<AppDropdown
+					open={appDialogOpen}
+					onOpenChange={setAppDialogOpen}
+					setAppId={(appId) => navigate(linkToTarget({type: 'app', appId}))}
+				/>
 			</ImmersivePickerItem>
 		</ImmersivePickerDialogContentInit>
 	)

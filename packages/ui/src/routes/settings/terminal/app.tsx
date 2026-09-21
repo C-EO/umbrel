@@ -1,7 +1,5 @@
-import {useState} from 'react'
 import {useNavigate} from 'react-router-dom'
 
-import {DropdownMenu} from '@/components/ui/dropdown-menu'
 import {useIsTouchDevice} from '@/features/files/hooks/use-is-touch-device'
 import {AppDropdown, ImmersivePickerDialogContent} from '@/modules/immersive-picker'
 import {usePickerTarget} from '@/modules/immersive-picker/target'
@@ -12,16 +10,13 @@ export function App({appId}: {appId: string}) {
 	const {linkToTarget} = usePickerTarget('terminal')
 	const setAppId = (id: string) => navigate(linkToTarget({type: 'app', appId: id}))
 
-	const [open, setOpen] = useState(false)
 	const isTouchDevice = useIsTouchDevice()
 
 	return (
 		<ImmersivePickerDialogContent>
 			<div className='flex w-full items-center justify-between'>
 				<TerminalTitleBackLink />
-				<DropdownMenu open={open} onOpenChange={setOpen}>
-					<AppDropdown appId={appId} setAppId={setAppId} open={open} onOpenChange={setOpen} />
-				</DropdownMenu>
+				<AppDropdown appId={appId} setAppId={setAppId} />
 			</div>
 			{/* On touch devices, add padding to leave room for on-screen keyboard.
 			40vh is a rough approximation. Dynamically detecting keyboard height

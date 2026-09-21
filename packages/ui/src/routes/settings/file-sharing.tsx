@@ -13,8 +13,8 @@ import {HomeIcon} from '@/features/files/assets/home-icon'
 import {ChangeSmbPassword} from '@/features/files/components/dialogs/share-info-dialog/change-smb-password'
 import {PlatformInstructions} from '@/features/files/components/dialogs/share-info-dialog/platform-instructions'
 import {
+	getDefaultPlatform,
 	Platform,
-	platforms,
 	PlatformSelector,
 } from '@/features/files/components/dialogs/share-info-dialog/platform-selector'
 import {MiniBrowser} from '@/features/files/components/mini-browser'
@@ -62,7 +62,7 @@ export default function FileSharingDrawerOrDialog() {
 	const isBusy = isAddingShare || isRemovingShare
 	const isLoading = isLoadingShares || isBusy
 
-	const [selectedPlatform, setSelectedPlatform] = useState<Platform>(platforms[0])
+	const [selectedPlatform, setSelectedPlatform] = useState<Platform | undefined>(getDefaultPlatform)
 	const [isAddFolderOpen, setAddFolderOpen] = useState(false)
 
 	// Stable-ordered list of all folders seen during this dialog session.
@@ -139,7 +139,7 @@ export default function FileSharingDrawerOrDialog() {
 	}
 
 	const smbUrl =
-		selectedPlatform.id === 'windows' ? `\\\\${window.location.hostname}` : `smb://${window.location.hostname}/`
+		selectedPlatform?.id === 'windows' ? `\\\\${window.location.hostname}` : `smb://${window.location.hostname}/`
 	const username = user?.sambaUsername ?? ''
 	const password = isLoadingSharesPassword ? '...' : sharePassword || ''
 
@@ -351,7 +351,7 @@ export default function FileSharingDrawerOrDialog() {
 					<DrawerHeader>
 						<DrawerTitle>{title}</DrawerTitle>
 					</DrawerHeader>
-					<DrawerScroller>{content}</DrawerScroller>
+					<DrawerScroller fade={false}>{content}</DrawerScroller>
 				</DrawerContent>
 			</Drawer>
 		)
@@ -359,7 +359,7 @@ export default function FileSharingDrawerOrDialog() {
 
 	return (
 		<Dialog {...dialogProps}>
-			<DialogScrollableContent showClose>
+			<DialogScrollableContent showClose fade={false}>
 				<div className='space-y-3 px-5 py-6'>
 					<DialogHeader>
 						<DialogTitle>{title}</DialogTitle>

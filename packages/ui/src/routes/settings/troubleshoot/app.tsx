@@ -1,9 +1,7 @@
-import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {useNavigate} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
-import {DropdownMenu} from '@/components/ui/dropdown-menu'
 import {ImmersiveDialogFooter} from '@/components/ui/immersive-dialog'
 import {LOADING_DASH} from '@/constants'
 import {AppDropdown, ImmersivePickerDialogContent} from '@/modules/immersive-picker'
@@ -19,7 +17,6 @@ export function TroubleshootApp({appId}: {appId: string}) {
 	const setAppId = (id: string) => navigate(linkToTarget({type: 'app', appId: id}))
 
 	const {app} = useUserApp(appId)
-	const [open, setOpen] = useState(false)
 
 	const appLogs = useAppLogs(appId)
 
@@ -27,9 +24,7 @@ export function TroubleshootApp({appId}: {appId: string}) {
 		<ImmersivePickerDialogContent>
 			<div className='flex w-full items-center justify-between'>
 				<TroubleshootTitleBackLink />
-				<DropdownMenu open={open} onOpenChange={setOpen}>
-					<AppDropdown appId={appId} setAppId={setAppId} open={open} onOpenChange={setOpen} />
-				</DropdownMenu>
+				<AppDropdown appId={appId} setAppId={setAppId} />
 			</div>
 			{appLogs && <LogResults>{appLogs}</LogResults>}
 			<ImmersiveDialogFooter className='justify-center'>

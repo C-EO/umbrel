@@ -3,6 +3,7 @@ import {createContext, ReactNode, useContext, useEffect, useLayoutEffect, useMem
 import {useTranslation} from 'react-i18next'
 import {IoLogoAndroid, IoLogoApple} from 'react-icons/io5'
 import {RiCloseLine} from 'react-icons/ri'
+import {Link} from 'react-router-dom'
 
 import {AppIcon} from '@/components/app-icon'
 import {Button} from '@/components/ui/button'
@@ -32,6 +33,7 @@ import {systemAppsKeyed} from '@/providers/apps'
 import {useAvailableApps} from '@/providers/available-apps'
 import {trpcReact, type RegistryApp} from '@/trpc/trpc'
 import {focusRingOnWallpaperClass} from '@/utils/element-classes'
+import {isMac} from '@/utils/misc'
 import {tw, useBreakpoint} from '@/utils/tw'
 
 import {AppGrid} from './app-grid/app-grid'
@@ -41,6 +43,7 @@ import {Header} from './header'
 
 const PHOTOS_ICON = '/assets/dock/dock-photos.webp'
 const PHONE_BACKUP_SHOT = '/assets/photos/phone-backup.webp'
+const MAC_APP_DOWNLOAD = 'https://link.umbrel.com/macos-app'
 
 // Desktop for a fresh install with no apps yet: the usual greeting and the
 // account's widgets, with a bento of starting points where the app grid would
@@ -185,6 +188,10 @@ function WelcomeBento({
 	const {appsKeyed} = useAvailableApps()
 	const deckCards = useDeckCards(appsKeyed)
 	const tailscaleIcon = appsKeyed?.['tailscale']?.icon
+	// iPadOS can identify as a Mac. Only offer the desktop app where it can run
+	// and where this account has access to file sharing.
+	const showMacApp =
+		canShareFiles && isMac() && !/iPhone|iPad|iPod/i.test(navigator.userAgent) && navigator.maxTouchPoints < 2
 
 	const tipIds = useMemo<TipId[]>(
 		() => (isMember ? ['files', 'photos', 'app-store'] : ['files', 'photos', 'app-store', 'tailscale']),
@@ -268,24 +275,49 @@ function WelcomeBento({
 						variant='wide'
 						action={
 							<>
+								{showMacApp && (
+									<Button asChild variant='primary' className={cardButtonClass}>
+										<a href={MAC_APP_DOWNLOAD} target='_blank' rel='noopener noreferrer'>
+											<IoLogoApple className='size-3.5' />
+											{t('desktop.welcome.files.mac-download')}
+										</a>
+									</Button>
+								)}
 								<ButtonLink to='/files' className={cardButtonClass}>
 									{t('desktop.welcome.files.button')}
 								</ButtonLink>
-								{canShareFiles && (
-									<ButtonLink to='/settings/file-sharing' className={cardButtonClass}>
-										{t('desktop.welcome.files.sharing-button')}
-									</ButtonLink>
-								)}
+								{canShareFiles &&
+									(showMacApp ? (
+										<div className='basis-full'>
+											<Link
+												to='/settings/file-sharing'
+												className={cn(
+													'inline-block rounded-sm py-1 text-12 text-white/60 underline decoration-white/25 underline-offset-4 hover:text-white',
+													focusRingOnWallpaperClass,
+												)}
+											>
+												{t('desktop.welcome.files.sharing-button')}
+											</Link>
+										</div>
+									) : (
+										<ButtonLink to='/settings/file-sharing' className={cardButtonClass}>
+											{t('desktop.welcome.files.sharing-button')}
+										</ButtonLink>
+									))}
 							</>
 						}
 						icon={systemAppsKeyed['UMBREL_files'].icon}
 						title={t('desktop.welcome.files.title')}
 						description={
-							isMember ? t('desktop.welcome.files.member-description') : t('desktop.welcome.files.description')
+							showMacApp
+								? t('desktop.welcome.files.mac-description')
+								: isMember
+									? t('desktop.welcome.files.member-description')
+									: t('desktop.welcome.files.description')
 						}
 						accent='#4d94ff'
 						glow={false}
-						stage={<FilesMarquee paused={paused || closed.has('files')} />}
+						stage={showMacApp ? <FinderPreview /> : <FilesMarquee paused={paused || closed.has('files')} />}
 						className='md:col-span-2'
 					/>
 					<BentoCard
@@ -647,6 +679,26 @@ function BentoCard({
 const bentoCardClass = tw`umbrel-material group relative block h-full animate-in overflow-hidden rounded-24 duration-700 fade-in fill-mode-both slide-in-from-bottom-4 motion-reduce:animate-none`
 
 const cardButtonClass = tw`h-8 gap-1.5 px-3.5 text-12`
+
+// A Finder window cropped by the card, with Umbrel selected in Locations.
+// The artwork is decorative; the adjacent copy and download link carry its meaning.
+function FinderPreview() {
+	const {t} = useTranslation()
+	return (
+		<div aria-hidden className='pointer-events-none absolute top-8 left-4 w-[420px] select-none'>
+			<div className='mb-4 flex items-center gap-1.5 text-12 font-medium text-white/70'>
+				<IoLogoApple className='size-3.5' />
+				{t('desktop.welcome.files.mac-label')}
+			</div>
+			<img
+				src='/assets/desktop/finder-preview.svg'
+				alt=''
+				draggable={false}
+				className='w-full max-w-none drop-shadow-2xl'
+			/>
+		</div>
+	)
+}
 
 // Real file icons drifting upward in three offset columns, each looping
 // seamlessly — files on their way home. The mask fades them in and out at

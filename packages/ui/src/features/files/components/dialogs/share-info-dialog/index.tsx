@@ -4,9 +4,8 @@ import {useTranslation} from 'react-i18next'
 import {TbAlertTriangle} from 'react-icons/tb'
 import {useSearchParams} from 'react-router-dom'
 
-import {FadeScroller} from '@/components/fade-scroller'
-import {Button} from '@/components/ui/button'
-import {Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from '@/components/ui/dialog'
+import {Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle} from '@/components/ui/dialog'
+import {DialogCloseButton} from '@/components/ui/dialog-close-button'
 import {
 	Drawer,
 	DrawerContent,
@@ -18,8 +17,8 @@ import {
 import {ChangeSmbPassword} from '@/features/files/components/dialogs/share-info-dialog/change-smb-password'
 import {PlatformInstructions} from '@/features/files/components/dialogs/share-info-dialog/platform-instructions'
 import {
+	getDefaultPlatform,
 	Platform,
-	platforms,
 	PlatformSelector,
 } from '@/features/files/components/dialogs/share-info-dialog/platform-selector'
 import {ShareToggle} from '@/features/files/components/dialogs/share-info-dialog/share-toggle'
@@ -55,7 +54,7 @@ export default function ShareInfoDialog() {
 	} = useShares()
 
 	const {disks} = useExternalStorage()
-	const [selectedPlatform, setSelectedPlatform] = useState<Platform>(platforms[0])
+	const [selectedPlatform, setSelectedPlatform] = useState<Platform | undefined>(getDefaultPlatform)
 
 	const share = shares?.find((s) => s.path === path)
 	const isShared = isPathShared(path) ?? false
@@ -80,7 +79,7 @@ export default function ShareInfoDialog() {
 		: t('files-share.regular-description')
 
 	const smbUrl =
-		selectedPlatform.id === 'windows' ? `\\\\${window.location.hostname}` : `smb://${window.location.hostname}/`
+		selectedPlatform?.id === 'windows' ? `\\\\${window.location.hostname}` : `smb://${window.location.hostname}/`
 	const username = user?.sambaUsername ?? ''
 	const password = isLoadingSharesPassword ? '...' : sharePassword || ''
 
@@ -151,7 +150,7 @@ export default function ShareInfoDialog() {
 						<DrawerTitle>{title}</DrawerTitle>
 						<DrawerDescription>{description}</DrawerDescription>
 					</DrawerHeader>
-					<DrawerScroller>{content}</DrawerScroller>
+					<DrawerScroller fade={false}>{content}</DrawerScroller>
 				</DrawerContent>
 			</Drawer>
 		)
@@ -164,14 +163,8 @@ export default function ShareInfoDialog() {
 					<DialogTitle>{title}</DialogTitle>
 					<DialogDescription>{description}</DialogDescription>
 				</DialogHeader>
-				<FadeScroller direction='y' className='umbrel-hide-scrollbar flex-1 overflow-y-auto'>
-					{content}
-				</FadeScroller>
-				<DialogFooter>
-					<Button variant='default' onClick={dialogProps.onOpenChange.bind(null, false)}>
-						<span>{t('done')}</span>
-					</Button>
-				</DialogFooter>
+				<div className='umbrel-stable-gutter min-h-0 flex-1 overflow-y-auto'>{content}</div>
+				<DialogCloseButton className='absolute top-2 right-2 z-50' />
 			</DialogContent>
 		</Dialog>
 	)

@@ -1,7 +1,6 @@
 import {Loader2, PlusCircle} from 'lucide-react'
-import {matchSorter} from 'match-sorter'
 import {AnimatePresence, motion} from 'motion/react'
-import {lazy, Suspense, useEffect, useRef, useState} from 'react'
+import {lazy, Suspense, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {TbCheck, TbCopy, TbInfoCircle, TbTrash} from 'react-icons/tb'
 import {useSearchParams} from 'react-router-dom'
@@ -29,11 +28,10 @@ import {
 	DrawerScroller,
 	DrawerTitle,
 } from '@/components/ui/drawer'
-import {DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger} from '@/components/ui/dropdown-menu'
 import {IconButton} from '@/components/ui/icon-button'
 import {Input, PasswordInput} from '@/components/ui/input'
 import {listClass} from '@/components/ui/list'
-import {ScrollArea} from '@/components/ui/scroll-area'
+import {SearchablePicker} from '@/components/ui/searchable-picker'
 import {Separator} from '@/components/ui/separator'
 import {toast} from '@/components/ui/toast'
 import {FileItemIcon} from '@/features/files/components/shared/file-item-icon'
@@ -198,26 +196,12 @@ export default function UsersDialog() {
 	const [resetPassword, setResetPassword] = useState('')
 	const deleteInFlightRef = useRef(false)
 
-	// App picker dropdown with search, same pattern as the backups exclusions picker
-	const [appPickerOpen, setAppPickerOpen] = useState(false)
-	const [appQuery, setAppQuery] = useState('')
-	const appQueryInputRef = useRef<HTMLInputElement>(null)
-
 	const setOwnerPanel = (panel: OwnerPanel | null) => {
 		const nextSearchParams = new URLSearchParams(searchParams)
 		if (panel) nextSearchParams.set('ownerPanel', panel)
 		else nextSearchParams.delete('ownerPanel')
 		setSearchParams(nextSearchParams, {replace: true})
 	}
-
-	useEffect(() => {
-		if (!appPickerOpen) return
-		const timer = window.setTimeout(() => {
-			appQueryInputRef.current?.focus()
-			appQueryInputRef.current?.select()
-		}, 0)
-		return () => window.clearTimeout(timer)
-	}, [appPickerOpen])
 
 	const accountsQ = trpcReact.user.listAccounts.useQuery()
 	const accounts = accountsQ.data ?? []
@@ -568,64 +552,24 @@ export default function UsersDialog() {
 	}))
 
 	const addAppMenu = (
-		<DropdownMenu
-			open={appPickerOpen}
-			onOpenChange={(open) => {
-				setAppPickerOpen(open)
-				if (!open) setAppQuery('')
-			}}
+		<SearchablePicker
+			placeholder={t('app-picker.search')}
+			items={pickerApps.map((app) => ({
+				value: app.id,
+				label: app.name || app.id,
+				icon: <AppIcon size={24} src={app.icon} className='shrink-0 rounded-6' />,
+			}))}
+			onSelect={handleAddApp}
 		>
-			<DropdownMenuTrigger asChild>
-				<Button
-					size='sm'
-					aria-label={t('users.add-app')}
-					disabled={availableApps.length === 0 || (view.view === 'edit' && shareControlsDisabled)}
-				>
-					{t('users.add')}
-					<PlusCircle className='h-3 w-3' />
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align='end' className='flex max-h-72 min-w-64 flex-col gap-3'>
-				<Input
-					value={appQuery}
-					className='shrink-0'
-					onChange={(e) => setAppQuery(e.target.value)}
-					onKeyDown={(e) => {
-						e.stopPropagation()
-						if (e.key === 'Escape') setAppPickerOpen(false)
-					}}
-					sizeVariant={'short-square'}
-					placeholder={t('app-picker.search')}
-					ref={appQueryInputRef}
-				/>
-				{(() => {
-					const results = matchSorter(pickerApps, appQuery, {
-						keys: ['name', 'id'],
-						threshold: matchSorter.rankings.WORD_STARTS_WITH,
-					})
-					if (results.length === 0) {
-						return <div className='px-2 text-14 text-white/50'>{t('no-results-found')}</div>
-					}
-					return (
-						<ScrollArea className='relative -mx-1 flex h-full flex-col px-1'>
-							{results.map((app) => (
-								<DropdownMenuItem
-									key={app.id}
-									onSelect={() => {
-										handleAddApp(app.id)
-										setAppPickerOpen(false)
-									}}
-									className='flex items-center gap-2'
-								>
-									<AppIcon size={20} src={app.icon} className='rounded-4' />
-									<span className='truncate'>{app.name}</span>
-								</DropdownMenuItem>
-							))}
-						</ScrollArea>
-					)
-				})()}
-			</DropdownMenuContent>
-		</DropdownMenu>
+			<Button
+				size='sm'
+				aria-label={t('users.add-app')}
+				disabled={availableApps.length === 0 || (view.view === 'edit' && shareControlsDisabled)}
+			>
+				{t('users.add')}
+				<PlusCircle className='h-3 w-3' />
+			</Button>
+		</SearchablePicker>
 	)
 
 	const addFolderButton = (

@@ -1109,9 +1109,12 @@ html {
 	background-color: transparent !important;
 }
 
-.xterm .xterm-viewport {
-	-ms-overflow-style: none; /* IE and Edge */
-	scrollbar-width: none; /* Firefox */
+/* Let the terminal use the global slim scrollbar, with a native fallback for Firefox. */
+@supports not selector(::-webkit-scrollbar) {
+	.xterm .xterm-viewport {
+		scrollbar-color: rgb(255 255 255 / 0.15) transparent;
+		scrollbar-width: thin;
+	}
 }
 
 /* Self-hosted display fonts (all SIL OFL). Instrument Serif draws account
