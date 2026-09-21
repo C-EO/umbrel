@@ -127,12 +127,14 @@ export function Listing({
 	topBanner,
 }: ListingProps) {
 	const isTouchDevice = useIsTouchDevice()
+	// The scroll area only mounts with items to show; the listing is always there
+	const listingRef = useRef<HTMLDivElement>(null)
 	const scrollAreaRef = useRef<HTMLDivElement>(null)
 	const {currentPath} = useNavigate()
 	const isReadOnly = useIsFilesReadOnly()
 	const {preferences} = usePreferences()
 
-	useFilesKeyboardShortcuts({items: selectableItems, scrollAreaRef, view: preferences?.view ?? 'list'})
+	useFilesKeyboardShortcuts({items: selectableItems, listingRef, scrollAreaRef, view: preferences?.view ?? 'list'})
 
 	const isEmpty = !isLoading && items.length === 0
 	const isEmbedded = useIsFilesEmbedded()
@@ -143,6 +145,7 @@ export function Listing({
 		// below the dock. The embedded (Rewind) explorer keeps the original height so
 		// snapshots render unchanged.
 		<div
+			ref={listingRef}
 			className={cn(
 				'flex flex-col',
 				isEmbedded

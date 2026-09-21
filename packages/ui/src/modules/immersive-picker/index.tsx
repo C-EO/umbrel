@@ -2,7 +2,7 @@ import {matchSorter} from 'match-sorter'
 import {useEffect, useRef, useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {TbChevronLeft} from 'react-icons/tb'
-import {Link} from 'react-router-dom'
+import {Link, type To} from 'react-router-dom'
 
 import {AppIcon} from '@/components/app-icon'
 import {ChevronDown} from '@/components/chevron-down'
@@ -40,7 +40,7 @@ export function ImmersivePickerItem({
 }: {
 	title: string
 	description: string
-	to?: string
+	to?: To
 	children?: React.ReactNode
 	onClick?: () => void
 }) {
@@ -66,7 +66,7 @@ export function ImmersivePickerItem({
 	)
 }
 
-export function BackLink({to, children}: {to: string; children: React.ReactNode}) {
+export function BackLink({to, children}: {to: To; children: React.ReactNode}) {
 	return (
 		<Link
 			to={to}
@@ -121,12 +121,8 @@ export function AppDropdown({
 		)
 	}
 
-	const selectedApp = appId
-		? apps.userAppsKeyed[appId]
-		: {
-				icon: undefined,
-				name: t('app-picker.select-app'),
-			}
+	// An id with no app behind it (uninstalled since the link was made) reads as no selection
+	const selectedApp = (appId && apps.userAppsKeyed[appId]) || {icon: undefined, name: t('app-picker.select-app')}
 
 	const appResults = matchSorter(apps.userApps, query, {
 		keys: ['name'],

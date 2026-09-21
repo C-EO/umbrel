@@ -7,6 +7,7 @@ import {SearchIcon} from '@/features/files/assets/search-icon'
 import {BASE_ROUTE_PATH, SEARCH_PATH} from '@/features/files/constants'
 import {useIsTouchDevice} from '@/features/files/hooks/use-is-touch-device'
 import {cn} from '@/lib/utils'
+import {isBeneathModal} from '@/utils/is-beneath-modal'
 
 // Search input with keyboard shortcuts:
 // - "/" focuses the search input (keydown + preventDefault to avoid typing "/")
@@ -37,6 +38,7 @@ export function SearchInput() {
 			const target = e.target as HTMLElement
 			if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target.isContentEditable)
 				return
+			if (isBeneathModal(inputRef.current, e)) return
 			e.preventDefault()
 			inputRef.current?.focus()
 		}

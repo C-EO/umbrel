@@ -15,10 +15,8 @@ import {useAuth} from '@/modules/auth/use-auth'
 import {trpcReact} from '@/trpc/trpc'
 import {useDialogOpenProps} from '@/utils/dialog'
 
-export function LogoutDialog() {
+export default function LogoutDialog() {
 	const {t} = useTranslation()
-	// TODO: Enable hook below after this component is only injected as needed rather than all the time
-	// useUmbrelTitle('Log out')
 	const dialogProps = useDialogOpenProps('logout')
 	const {logout} = useAuth()
 	const userQ = trpcReact.user.get.useQuery()

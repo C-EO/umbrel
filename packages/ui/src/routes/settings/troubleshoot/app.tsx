@@ -1,22 +1,22 @@
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {useNavigate, useParams} from 'react-router-dom'
+import {useNavigate} from 'react-router-dom'
 
 import {Button} from '@/components/ui/button'
 import {DropdownMenu} from '@/components/ui/dropdown-menu'
 import {ImmersiveDialogFooter} from '@/components/ui/immersive-dialog'
 import {LOADING_DASH} from '@/constants'
 import {AppDropdown, ImmersivePickerDialogContent} from '@/modules/immersive-picker'
+import {usePickerTarget} from '@/modules/immersive-picker/target'
 import {useUserApp} from '@/providers/apps'
 import {downloadUtf8Logs, LogResults, TroubleshootTitleBackLink} from '@/routes/settings/troubleshoot/_shared'
 import {trpcReact} from '@/trpc/trpc'
 
-export function TroubleshootApp() {
+export function TroubleshootApp({appId}: {appId: string}) {
 	const {t} = useTranslation()
 	const navigate = useNavigate()
-	const {appId} = useParams<{appId: string}>()
-	if (!appId) throw new Error('No app provided')
-	const setAppId = (id: string) => navigate(`/settings/troubleshoot/app/${id}`)
+	const {linkToTarget} = usePickerTarget('troubleshoot')
+	const setAppId = (id: string) => navigate(linkToTarget({type: 'app', appId: id}))
 
 	const {app} = useUserApp(appId)
 	const [open, setOpen] = useState(false)

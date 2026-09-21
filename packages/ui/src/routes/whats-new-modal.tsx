@@ -101,7 +101,7 @@ const FEATURES: Feature[] = [
 	},
 ]
 
-export function WhatsNewModal() {
+export default function WhatsNewModal() {
 	const {t} = useTranslation()
 	const dialogProps = useDialogOpenProps('whats-new')
 

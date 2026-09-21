@@ -16,10 +16,11 @@ import {monkeyPatchConsoleLog} from '@/utils/logs'
 
 monkeyPatchConsoleLog()
 
-// Disable default browser context menu
+// Keep the browser context menu available in explicitly opted-in text surfaces.
 document.addEventListener(
 	'contextmenu',
 	(event) => {
+		if (event.target instanceof Element && event.target.closest('[data-native-context-menu]')) return
 		event.preventDefault()
 		return false
 	},

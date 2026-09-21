@@ -1,29 +1,27 @@
 import {DialogPortal} from '@radix-ui/react-dialog'
 import {DropdownMenu} from '@radix-ui/react-dropdown-menu'
-import {Suspense, useState} from 'react'
+import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
-import {Route, Routes, useNavigate, useParams} from 'react-router-dom'
+import {useNavigate} from 'react-router-dom'
 
 import {ImmersiveDialog, ImmersiveDialogOverlay} from '@/components/ui/immersive-dialog'
 import {AppDropdown, ImmersivePickerDialogContentInit, ImmersivePickerItem} from '@/modules/immersive-picker'
-import {useSettingsDialogProps} from '@/routes/settings/_components/shared'
+import {usePickerTarget} from '@/modules/immersive-picker/target'
 import {TroubleshootApp} from '@/routes/settings/troubleshoot/app'
 import TroubleshootUmbrelOs from '@/routes/settings/troubleshoot/umbrelos'
+import {useDialogOpenProps} from '@/utils/dialog'
 
 export default function TroubleshootDialog() {
-	const dialogProps = useSettingsDialogProps()
+	const dialogProps = useDialogOpenProps('troubleshoot')
+	const {target} = usePickerTarget('troubleshoot')
 
 	return (
 		<ImmersiveDialog {...dialogProps}>
 			<DialogPortal>
 				<ImmersiveDialogOverlay />
-				<Suspense>
-					<Routes>
-						<Route index path='/' Component={PickerDialogContent} />
-						<Route path='/umbrelos/:systemTab?' Component={TroubleshootUmbrelOs} />
-						<Route path='/app/:appId' Component={TroubleshootApp} />
-					</Routes>
-				</Suspense>
+				{target.type === 'picker' && <PickerDialogContent />}
+				{target.type === 'umbrelos' && <TroubleshootUmbrelOs />}
+				{target.type === 'app' && <TroubleshootApp appId={target.appId} />}
 			</DialogPortal>
 		</ImmersiveDialog>
 	)
@@ -32,15 +30,15 @@ export default function TroubleshootDialog() {
 function PickerDialogContent() {
 	const {t} = useTranslation()
 	const navigate = useNavigate()
+	const {linkToTarget} = usePickerTarget('troubleshoot')
 	const [appDialogOpen, setAppDialogOpen] = useState(false)
-	const params = useParams<{appId: string}>()
 
 	return (
 		<ImmersivePickerDialogContentInit title={t('troubleshoot-pick-title')}>
 			<ImmersivePickerItem
 				title={t('umbrelos')}
 				description={t('troubleshoot.umbrelos-description')}
-				to='/settings/troubleshoot/umbrelos/umbrelos'
+				to={linkToTarget({type: 'umbrelos'})}
 			/>
 			<ImmersivePickerItem
 				title={t('troubleshoot.app')}
@@ -51,8 +49,7 @@ function PickerDialogContent() {
 					<AppDropdown
 						open={appDialogOpen}
 						onOpenChange={setAppDialogOpen}
-						appId={params.appId}
-						setAppId={(appId) => navigate(`/settings/troubleshoot/app/${appId}`)}
+						setAppId={(appId) => navigate(linkToTarget({type: 'app', appId}))}
 					/>
 				</DropdownMenu>
 			</ImmersivePickerItem>

@@ -282,11 +282,9 @@ export function AppIconConnected({appId}: {appId: string}) {
 					</ContextMenuItem>
 
 					{/* Troubleshoot */}
-					{/* TODO: Navigating to /settings/troubleshoot forces the Settings sheet to render first,
-					   causing a slow two-step load. Consider making troubleshoot a standalone route/dialog. */}
 					<ContextMenuItem
 						disabled={troubleshootDisabled}
-						onSelect={() => navigate(`/settings/troubleshoot/app/${appId}`)}
+						onSelect={() => navigate(linkToDialog('troubleshoot', {for: appId}))}
 					>
 						{t('troubleshoot')}
 					</ContextMenuItem>

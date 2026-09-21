@@ -7,6 +7,7 @@ import {useBackups} from '@/features/backups/hooks/use-backups'
 import {useIsHomeOrPro} from '@/hooks/use-is-home-or-pro'
 import {systemAppsKeyed} from '@/providers/apps'
 import {trpcReact} from '@/trpc/trpc'
+import {withDialog, type GlobalDialogKey} from '@/utils/dialog'
 
 import {
 	createSettingsCatalog,
@@ -60,9 +61,8 @@ export function useSettingsCmdkEntries(): CmdkEntry[] {
 	}, [t, navigate, location, deviceName, isMember, sambaEnabled, hasUser, hasRepositories])
 }
 
-export function addDialogToLocation(location: Pick<Location, 'pathname' | 'search' | 'hash'>, dialog: 'logout') {
-	const search = new URLSearchParams(location.search)
-	search.set('dialog', dialog)
+export function addDialogToLocation(location: Pick<Location, 'pathname' | 'search' | 'hash'>, dialog: GlobalDialogKey) {
+	const search = withDialog(new URLSearchParams(location.search), dialog)
 	return {pathname: location.pathname, search: search.toString(), hash: location.hash}
 }
 

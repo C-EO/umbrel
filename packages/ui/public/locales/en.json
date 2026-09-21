@@ -1943,6 +1943,7 @@
   "open-live-usage": "Open Live Usage",
   "other": "Other",
   "password": "Password",
+  "paste": "Paste",
   "photos-actions.album-count-none": "No albums yet",
   "photos-actions.album-count_one": "{{formattedCount}} album",
   "photos-actions.album-count_other": "{{formattedCount}} albums",
