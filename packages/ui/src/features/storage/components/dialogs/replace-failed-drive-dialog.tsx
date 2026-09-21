@@ -1,5 +1,5 @@
 import {Trans, useTranslation} from 'react-i18next'
-import {TbAlertTriangle, TbCircleCheckFilled} from 'react-icons/tb'
+import {TbAlertTriangle, TbCircleCheckFilled, TbHelpCircle} from 'react-icons/tb'
 
 import {Button} from '@/components/ui/button'
 import {
@@ -55,7 +55,7 @@ export function ReplaceFailedDriveDialog({
 	replaceDeviceAsync,
 }: ReplaceFailedDriveDialogProps) {
 	const {t} = useTranslation()
-	const {setPendingOperation, clearPendingOperation} = usePendingRaidOperation()
+	const {setPendingOperation, clearPendingOperation, setOperationError} = usePendingRaidOperation()
 
 	// Failed-drive repair takes priority over a scrub. Umbreld cancels the scrub,
 	// starts the replacement, then retries the scrub once the pool is idle.
@@ -92,6 +92,7 @@ export function ReplaceFailedDriveDialog({
 			newDevice: newDevice.id,
 		}).catch((error) => {
 			clearPendingOperation()
+			setOperationError(error instanceof Error ? error.message : t('unknown-error'))
 			toast.error(t('storage-manager.replace-failed.error'), {
 				area: 'settings',
 				description: error instanceof Error ? error.message : t('unknown-error'),
@@ -158,7 +159,13 @@ export function ReplaceFailedDriveDialog({
 								{hasWarning ? (
 									<TbAlertTriangle className='size-5 text-[#F5A623]' />
 								) : (
-									<TbCircleCheckFilled className='size-5 text-brand' />
+									<>
+										{newDevice.smartStatus === 'healthy' ? (
+											<TbCircleCheckFilled className='size-5 text-brand' />
+										) : (
+											<TbHelpCircle className='size-5 text-white/40' aria-label={t('storage-status.unknown')} />
+										)}
+									</>
 								)}
 								<span className='text-[13px] font-medium text-white/60'>
 									{newDevice.slot ? (
@@ -178,6 +185,7 @@ export function ReplaceFailedDriveDialog({
 						</div>
 					</div>
 
+					<p className='text-13 leading-relaxed text-white/50'>{t('storage-manager.replace-failed.size-note')}</p>
 					{/* Size validation warning */}
 					{isDeviceTooSmall ? (
 						<div className='flex items-start gap-3 rounded-12 bg-[#F5A623]/10 p-3'>

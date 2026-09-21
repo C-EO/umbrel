@@ -42,21 +42,13 @@ export function InstallSsdDialog({open, onOpenChange, isUmbrelPro, isHdd = false
 	// dv('storage-manager.install-ssd.foo') resolves to '...foo-drive' for HDD pools
 	const dv = (key: string) => t(isHdd ? `${key}-drive` : key)
 
-	// HDDs sit in drive bays which are hot-swappable on most NAS hardware, so the shutdown
-	// step becomes a conditional "power off if your bays aren't hot-swappable" first step.
-	// Umbrel Pro renders prose under its installation photo instead of a step list.
-	const steps = isHdd
-		? [
-				dv('storage-manager.swap.step-power-off-if-needed'),
-				dv('storage-manager.install-ssd.step-insert'),
-				dv('storage-manager.install-ssd.step-return'),
-			]
-		: [
-				t('storage-manager.install-ssd.step-shut-down', {deviceName: t('storage-manager.device')}),
-				dv('storage-manager.install-ssd.step-insert'),
-				t('storage-manager.install-ssd.step-power-on', {deviceName: t('storage-manager.device')}),
-				dv('storage-manager.install-ssd.step-return'),
-			]
+	// Power off before changing internal drives; hot-swap support is not reported.
+	const steps = [
+		t('storage-manager.install-ssd.step-shut-down', {deviceName: t('storage-manager.device')}),
+		dv('storage-manager.install-ssd.step-insert'),
+		t('storage-manager.install-ssd.step-power-on', {deviceName: t('storage-manager.device')}),
+		dv('storage-manager.install-ssd.step-return'),
+	]
 
 	return (
 		<>

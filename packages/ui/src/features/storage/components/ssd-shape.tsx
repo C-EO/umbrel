@@ -212,7 +212,7 @@ export function SsdShape({
 
 			{/* Content overlay div */}
 			<div
-				className='absolute z-10 flex flex-col items-center justify-between rounded-[4px] border py-3'
+				className='absolute z-10 flex flex-col items-center gap-3 rounded-[4px] border py-3'
 				style={{
 					top: fingerHeight + 20,
 					left: 10,
@@ -234,28 +234,34 @@ export function SsdShape({
 								: 'linear-gradient(177.39deg, hsl(var(--color-brand) / 0.48) 0.11%, hsl(var(--color-brand) / 0.12) 99.89%)',
 				}}
 			>
-				{/* SSD Size - one vertical line reading bottom-to-top: the usable size on top,
-				    with the crossed-out actual size (wasted space) or the new-SSD callout
-				    continuing below it. writing-mode gives the line a real vertical layout box,
-				    so the extra text can't overflow the shape the way a rotate() transform would. */}
-				<div className='mt-1 flex items-center gap-4' style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)'}}>
+				{/* Reserve the footer's height; only the secondary vertical text may shrink. */}
+				<div
+					className='mt-1 flex min-h-0 flex-1 items-center justify-end gap-3'
+					style={{writingMode: 'vertical-rl', transform: 'rotate(180deg)'}}
+				>
 					{hasWastedSpace && (
-						<span className='font-bold text-white/40 line-through' style={{fontSize: '25px'}}>
+						<span className='shrink-0 text-[18px] font-bold whitespace-nowrap text-white/40 line-through'>
 							{formatStorageSize(device.size)}
 						</span>
 					)}
 					{isReadyToAdd && (
-						<span className='text-[12px] font-semibold whitespace-nowrap text-white/50'>
+						<span
+							className='min-h-0 overflow-hidden text-[12px] font-semibold text-ellipsis whitespace-nowrap text-white/50'
+							title={readyToAddLabel ?? t('storage-manager.new-ssd-detected')}
+						>
 							{readyToAddLabel ?? t('storage-manager.new-ssd-detected')}
 						</span>
 					)}
 					{verticalName && !isReadyToAdd && (
-						<span className='max-h-[160px] overflow-hidden text-[12px] font-semibold text-ellipsis whitespace-nowrap text-white/35'>
+						<span
+							className='max-h-[160px] min-h-0 overflow-hidden text-[12px] font-semibold text-ellipsis whitespace-nowrap text-white/35'
+							title={verticalName}
+						>
 							{verticalName}
 						</span>
 					)}
 					<span
-						className='font-bold text-white'
+						className='shrink-0 font-bold whitespace-nowrap text-white'
 						style={{
 							fontSize: '25px',
 							textShadow: '0px 0px 6px rgba(255, 255, 255, 0.25)',
@@ -266,9 +272,9 @@ export function SsdShape({
 				</div>
 
 				{/* Warning indicators + Health pulse pill grouped together at bottom */}
-				<div className='flex flex-col items-center gap-3'>
+				<div className='flex w-full shrink-0 flex-col items-center gap-2 px-1'>
 					{hasWastedSpace && (
-						<span className='text-center text-[13px] leading-tight font-medium text-white/50'>
+						<span className='w-full text-center text-[11px] leading-tight font-medium break-words text-white/50'>
 							{t('storage-manager.wasted-size', {size: formatStorageSize(wastedBytes)})}
 						</span>
 					)}

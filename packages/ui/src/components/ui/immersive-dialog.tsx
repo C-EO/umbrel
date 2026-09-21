@@ -84,7 +84,15 @@ export function ImmersiveDialogContent({
 			}}
 		>
 			{showScroll ? (
-				<ScrollArea dialogInset className='h-full'>
+				<ScrollArea
+					dialogInset
+					className={cn(
+						'h-full',
+						// Short dialogs have no fixed height, so the viewport must inherit the
+						// height cap too; otherwise it grows beyond the dialog and gets clipped.
+						short && 'max-h-[inherit] [&>[data-radix-scroll-area-viewport]]:max-h-[inherit]',
+					)}
+				>
 					<div className={immersiveScrollAreaContentsClass}>{children}</div>
 				</ScrollArea>
 			) : (

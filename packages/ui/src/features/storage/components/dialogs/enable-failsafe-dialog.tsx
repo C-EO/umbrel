@@ -40,7 +40,7 @@ export function EnableFailsafeDialog({
 	transitionToFailsafeMirrorAsync,
 }: EnableFailsafeDialogProps) {
 	const {t} = useTranslation()
-	const {setPendingOperation, clearPendingOperation} = usePendingRaidOperation()
+	const {setPendingOperation, clearPendingOperation, setOperationError} = usePendingRaidOperation()
 
 	const activeOperation = useActiveRaidOperation()
 	const isOperationInProgress = !!activeOperation
@@ -64,6 +64,7 @@ export function EnableFailsafeDialog({
 			acceleratorDeviceId: plan.acceleratorNewDevice?.id,
 		}).catch((error) => {
 			clearPendingOperation()
+			setOperationError(error instanceof Error ? error.message : t('unknown-error'))
 			toast.error(t('storage-manager.enable-failsafe.failed'), {
 				area: 'settings',
 				description: error instanceof Error ? error.message : t('unknown-error'),

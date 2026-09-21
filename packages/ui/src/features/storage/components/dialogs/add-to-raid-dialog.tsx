@@ -223,7 +223,7 @@ export function AddToRaidDialog({
 	const [showRestartConfirmation, setShowRestartConfirmation] = useState(false)
 
 	// Context for showing island immediately for non-blocking operations
-	const {setPendingOperation, clearPendingOperation} = usePendingRaidOperation()
+	const {setPendingOperation, clearPendingOperation, setOperationError} = usePendingRaidOperation()
 
 	// Check if a RAID operation is already in progress
 	const activeOperation = useActiveRaidOperation()
@@ -315,6 +315,7 @@ export function AddToRaidDialog({
 
 			transitionToFailsafeAsync({newDeviceId: device.id}).catch((error) => {
 				clearPendingOperation()
+				setOperationError(error instanceof Error ? error.message : t('unknown-error'))
 				toast.error(t('storage-manager.add-to-raid.failed-enable-failsafe'), {
 					area: 'settings',
 					description: error instanceof Error ? error.message : t('unknown-error'),
@@ -331,6 +332,7 @@ export function AddToRaidDialog({
 
 			addDeviceAsync({deviceId: device.id}).catch((error) => {
 				clearPendingOperation()
+				setOperationError(error instanceof Error ? error.message : t('unknown-error'))
 				toast.error(
 					device.type === 'hdd'
 						? t('storage-manager.add-to-raid.failed-add-drive')
@@ -365,6 +367,7 @@ export function AddToRaidDialog({
 				})
 				.catch((error) => {
 					clearPendingOperation()
+					setOperationError(error instanceof Error ? error.message : t('unknown-error'))
 					toast.error(
 						device.type === 'hdd'
 							? t('storage-manager.add-to-raid.failed-add-drive')

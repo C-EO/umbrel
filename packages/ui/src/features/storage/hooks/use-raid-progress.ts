@@ -4,6 +4,8 @@ import {useTranslation} from 'react-i18next'
 import {toast} from '@/components/ui/toast'
 import {trpcReact} from '@/trpc/trpc'
 
+import {usePendingRaidOperation} from '../providers/pending-operation-context'
+
 // Types matching the backend event types
 type ExpansionStatus = {
 	state: 'expanding' | 'finished' | 'canceled'
@@ -42,6 +44,7 @@ export type RaidProgress = {
 // Returns null when no operation is in progress.
 export function useRaidProgress(): RaidProgress | null {
 	const {t} = useTranslation()
+	const {setOperationError} = usePendingRaidOperation()
 	// Track all RAID operation states
 	const [expansion, setExpansion] = useState<ExpansionStatus | null>(null)
 	const [rebuild, setRebuild] = useState<RebuildStatus | null>(null)
@@ -109,6 +112,7 @@ export function useRaidProgress(): RaidProgress | null {
 				// consumers at once (island + every storage dialog), so a stable id keeps
 				// one event from stacking a toast per instance.
 				if (status.state === 'error') {
+					setOperationError(status.error || t('storage-manager.failsafe-transition-failed'))
 					toast.error(status.error || t('storage-manager.failsafe-transition-failed'), {
 						area: 'settings',
 						id: 'raid-failsafe-transition-error',

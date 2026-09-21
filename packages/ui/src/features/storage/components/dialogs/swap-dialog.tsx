@@ -18,8 +18,9 @@ import {useActiveRaidOperation} from '@/features/storage/hooks/use-active-raid-o
 import {usePendingRaidOperation} from '@/features/storage/providers/pending-operation-context'
 import {cn} from '@/lib/utils'
 
-import {StorageDevice} from '../../hooks/use-storage'
-import {formatStorageSize} from '../../utils'
+import {RaidStatus, StorageDevice} from '../../hooks/use-storage'
+import {canDisconnectPoolMember, formatStorageSize, hasPoolMutationInProgress} from '../../utils'
+import {StorageNotice} from '../storage-page'
 import {OperationInProgressBanner} from './operation-in-progress-banner'
 import {ProInstallInstructions} from './pro-install-instructions'
 import {ShutdownConfirmationDialog} from './shutdown-confirmation-dialog'
@@ -37,7 +38,7 @@ type SwapDialogProps = {
 	/** Wording hint for a swapped member whose physical device is missing (no type to read) */
 	missingDeviceType?: 'ssd' | 'hdd'
 	isUmbrelPro: boolean
-	raidDriveCount: number
+	raidStatus: RaidStatus | undefined
 	availableDevices: StorageDevice[]
 	allDevices: StorageDevice[]
 	replaceDeviceAsync: (params: {oldDevice: string; newDevice: string}) => Promise<boolean>
@@ -52,17 +53,16 @@ export function SwapDialog({
 	oldDeviceFailed = false,
 	missingDeviceType,
 	isUmbrelPro,
-	raidDriveCount,
+	raidStatus,
 	availableDevices,
 	allDevices,
 	replaceDeviceAsync,
 }: SwapDialogProps) {
 	const {t} = useTranslation()
-	const {setPendingOperation, clearPendingOperation} = usePendingRaidOperation()
+	const {setPendingOperation, clearPendingOperation, setOperationError} = usePendingRaidOperation()
 
 	// Check if a RAID operation is already in progress
 	const activeOperation = useActiveRaidOperation()
-	const isOperationInProgress = !!activeOperation
 
 	const [selectedReplacementId, setSelectedReplacementId] = useState<string | null>(null)
 	const [showShutdownConfirmation, setShowShutdownConfirmation] = useState(false)
@@ -70,8 +70,16 @@ export function SwapDialog({
 	const deviceName = isUmbrelPro ? t('storage-manager.umbrel-pro') : t('storage-manager.device')
 	const isStorageMode = raidType === 'storage'
 	const maxSlots = 4
-	// Only Umbrel Pro has a fixed number of physical slots
-	const hasFreeSlot = isUmbrelPro ? raidDriveCount < maxSlots : true
+	// Count occupied physical slots, including drives outside the pool. Generic
+	// hardware (or an unresolved Pro slot) has unknown expansion capability.
+	const slotsKnown =
+		isUmbrelPro &&
+		allDevices
+			.filter((device) => device.type === 'ssd')
+			.every((device) => device.slot && device.slot >= 1 && device.slot <= maxSlots)
+	const hasFreeSlot = slotsKnown
+		? new Set(allDevices.map((device) => device.slot).filter(Boolean)).size < maxSlots
+		: undefined
 
 	// Get the device being replaced (needed for size validation)
 	const oldDevice = slot
@@ -94,10 +102,8 @@ export function SwapDialog({
 			? t('storage-manager.swap.the-old-drive')
 			: t('storage-manager.swap.the-old-ssd')
 
-	// SATA devices sit in drive bays which are hot-swappable on most NAS hardware, so the
-	// shutdown steps become an "only if your bays aren't hot-swappable" note. NVMe devices
-	// (and Umbrel Pro's slots) keep the explicit shutdown steps.
-	const canHotSwap = !isUmbrelPro && oldDevice?.transport === 'sata'
+	// The API does not establish hot-swap capability. Always power off before
+	// physically changing a drive; SATA transport alone is not sufficient.
 
 	// Filter available devices to only show those large enough for replacement.
 	// ZFS requires replacement devices to be at least as large as the device being replaced.
@@ -121,10 +127,54 @@ export function SwapDialog({
 		}
 	}, [open])
 
-	// Storage mode with free slot AND available devices - we show replacement selection.
+	const targetId = oldDevice?.id ?? oldDeviceId ?? undefined
+	// Inserting a replacement for a known missing member removes no remaining data.
+	// Keep the removal checks for connected members, which may still be contributing.
+	const isMissingMember =
+		!oldDevice &&
+		!!targetId &&
+		[...(raidStatus?.devices ?? []), ...(raidStatus?.accelerator?.devices ?? [])].some(
+			(member) => member.id === targetId,
+		)
+	// Repair takes priority over a scrub, just as in ReplaceFailedDriveDialog.
+	const isOperationInProgress =
+		hasPoolMutationInProgress(raidStatus) ||
+		(!!activeOperation && !(isMissingMember && raidType === 'failsafe' && activeOperation.type === 'scrub'))
+	const removalBlocked =
+		raidType === 'failsafe' && !isMissingMember && !canDisconnectPoolMember(raidStatus, targetId, allDevices)
+	const storageUnavailable = !raidStatus?.exists || !['ONLINE', 'DEGRADED'].includes(raidStatus.status ?? '')
+	if (removalBlocked || storageUnavailable || isOperationInProgress) {
+		return (
+			<Dialog open={open} onOpenChange={onOpenChange}>
+				<DialogScrollableContent>
+					<div className='flex flex-col gap-5 p-5'>
+						<DialogHeader>
+							<DialogTitle>
+								{t(
+									isMissingMember
+										? 'storage-manager.swap.replacement-unavailable'
+										: 'storage-manager.swap.leave-connected',
+								)}
+							</DialogTitle>
+							<DialogDescription>
+								{t(isMissingMember ? 'storage-manager.swap.replacement-wait' : 'storage-manager.swap.removal-blocked')}
+							</DialogDescription>
+						</DialogHeader>
+						{!isMissingMember && <StorageNotice>{t('storage-manager.swap.removal-risk')}</StorageNotice>}
+						{isOperationInProgress && <OperationInProgressBanner variant='wait' />}
+						<DialogFooter>
+							<Button onClick={() => onOpenChange(false)}>{t('done')}</Button>
+						</DialogFooter>
+					</div>
+				</DialogScrollableContent>
+			</Dialog>
+		)
+	}
+
+	// An attached replacement establishes a usable connection, without guessing spare slots.
 	// Requires an attached old device: without it there is no size validation and the
 	// confirm could never enable, so missing members fall through to the instructions.
-	if (isStorageMode && hasFreeSlot && hasAvailableDevices && oldDevice) {
+	if (isStorageMode && hasAvailableDevices && oldDevice) {
 		const selectedDevice = validReplacementDevices.find((d) => d.id === selectedReplacementId)
 
 		const handleReplace = () => {
@@ -143,6 +193,7 @@ export function SwapDialog({
 				newDevice: selectedDevice.id,
 			}).catch((error) => {
 				clearPendingOperation()
+				setOperationError(error instanceof Error ? error.message : t('unknown-error'))
 				toast.error(t('storage-manager.swap.failed-to-start'), {
 					area: 'settings',
 					description: error instanceof Error ? error.message : t('unknown-error'),
@@ -234,14 +285,15 @@ export function SwapDialog({
 														{device.name}
 													</span>
 												)}
+												{isTooSmall && (
+													<span className='text-12 leading-snug text-[#F5A623]'>
+														{t('storage-manager.replace-failed.too-small-description-drive', {
+															deviceSize: formatStorageSize(device.size),
+															minSize: formatStorageSize(oldDevice.roundedSize ?? oldDevice.size),
+														})}
+													</span>
+												)}
 											</div>
-											{isTooSmall && (
-												<span className='shrink-0 text-11 font-medium text-[#F5A623]'>
-													{t('storage-manager.swap.too-small', {
-														size: formatStorageSize(oldDevice?.roundedSize ?? oldDevice?.size ?? 0),
-													})}
-												</span>
-											)}
 										</button>
 									)
 								})}
@@ -255,9 +307,7 @@ export function SwapDialog({
 								{[
 									dv('storage-manager.swap.step-data-copied'),
 									t('storage-manager.swap.step-may-take-while'),
-									canHotSwap
-										? t('storage-manager.swap.step-remove-old-hot-swap', {ssd: swappedLabelDefinite})
-										: t('storage-manager.swap.step-remove-old', {ssd: swappedLabelDefinite}),
+									t('storage-manager.swap.step-remove-old', {ssd: swappedLabelDefinite}),
 								].map((step, index) => (
 									<div key={index} className='flex items-center gap-3 p-3 text-12 font-medium -tracking-3'>
 										<span className='flex size-5 shrink-0 items-center justify-center rounded-full bg-white/10 text-[10px] font-semibold'>
@@ -289,27 +339,21 @@ export function SwapDialog({
 		)
 	}
 
-	// Storage mode with free slot but NO available devices - we show "add a drive first" instructions.
+	// No replacement is attached. Explain the connection requirement before physical steps.
 	// Umbrel Pro gets the installation photo with prose instead of a step list.
-	if (isStorageMode && hasFreeSlot) {
+	if (isStorageMode && hasFreeSlot !== false) {
 		// The re-entry step names the button that reopens this dialog, which reads Replace
 		// for a failed member and Swap otherwise (matching the title above)
 		const returnStep = oldDeviceFailed
 			? t('storage-manager.swap.step-return-to-replace')
 			: t('storage-manager.swap.step-return-to-swap')
-		// Hot-swappable bays skip the shutdown/power-on steps in favor of a note
-		const steps = canHotSwap
-			? [
-					dv('storage-manager.swap.step-power-off-if-needed'),
-					dv('storage-manager.swap.step-insert-new-ssd'),
-					returnStep,
-				]
-			: [
-					t('storage-manager.swap.step-shut-down', {deviceName}),
-					dv('storage-manager.swap.step-insert-new-ssd'),
-					t('storage-manager.swap.step-power-on', {deviceName}),
-					returnStep,
-				]
+		// Power down before adding a drive; the hardware capability is unknown.
+		const steps = [
+			t('storage-manager.swap.step-shut-down', {deviceName}),
+			dv('storage-manager.swap.step-insert-new-ssd'),
+			t('storage-manager.swap.step-power-on', {deviceName}),
+			returnStep,
+		]
 
 		return (
 			<>
@@ -346,7 +390,11 @@ export function SwapDialog({
 										<span className='text-13 font-semibold text-brand'>
 											{t('storage-manager.swap.safe-swap-available')}
 										</span>
-										<span className='text-12 text-white/60'>{dv('storage-manager.swap.safe-swap-description')}</span>
+										<span className='text-12 text-white/60'>
+											{hasFreeSlot === undefined
+												? t('storage-manager.swap.connection-needed')
+												: dv('storage-manager.swap.safe-swap-description')}
+										</span>
 									</div>
 								</div>
 							)}
@@ -468,20 +516,15 @@ export function SwapDialog({
 		)
 	}
 
-	// FailSafe mode. Umbrel Pro gets the installation photo with prose instead of a step
-	// list; hot-swappable bays skip the shutdown/power-on steps in favor of a note.
-	const steps = canHotSwap
-		? [
-				dv('storage-manager.swap.step-power-off-if-needed'),
-				t('storage-manager.swap.step-swap-ssd', {ssd: swappedLabelDefinite}),
-				dv('storage-manager.swap.step-return-to-storage-manager'),
-			]
-		: [
-				t('storage-manager.swap.step-shut-down', {deviceName}),
-				t('storage-manager.swap.step-swap-ssd', {ssd: swappedLabelDefinite}),
-				t('storage-manager.swap.step-power-on', {deviceName}),
-				dv('storage-manager.swap.step-return-to-storage-manager'),
-			]
+	// Connected FailSafe members passed the removal checks; missing ones only need insertion.
+	const steps = [
+		t('storage-manager.swap.step-shut-down', {deviceName}),
+		isMissingMember
+			? dv('storage-manager.swap.step-insert-new-ssd')
+			: t('storage-manager.swap.step-swap-ssd', {ssd: swappedLabelDefinite}),
+		t('storage-manager.swap.step-power-on', {deviceName}),
+		dv('storage-manager.swap.step-return-to-storage-manager'),
+	]
 
 	return (
 		<>
@@ -490,12 +533,13 @@ export function SwapDialog({
 					<div className='flex flex-col gap-5 p-5'>
 						<DialogHeader>
 							<DialogTitle>
-								{oldDeviceFailed ? t('storage-manager.replace') : t('storage-manager.swap')} {swappedLabel}
+								{oldDeviceFailed || isMissingMember ? t('storage-manager.replace') : t('storage-manager.swap')}{' '}
+								{swappedLabel}
 							</DialogTitle>
 							<DialogDescription>{t('storage-manager.swap.description-failsafe')}</DialogDescription>
 						</DialogHeader>
 
-						{oldDeviceFailed ? (
+						{oldDeviceFailed || isMissingMember ? (
 							/* The drive has failed - be honest that protection is reduced until it's swapped */
 							<div className='flex items-start gap-3 rounded-12 bg-destructive2/10 p-3'>
 								<TbAlertTriangle className='mt-0.5 size-5 shrink-0 text-destructive2' />
@@ -503,11 +547,15 @@ export function SwapDialog({
 									<span className='text-13 font-semibold text-destructive2'>
 										{t('storage-manager.replace-failed.degraded')}
 									</span>
-									<span className='text-12 text-white/60'>{dv('storage-manager.swap.failed-description')}</span>
+									<span className='text-12 text-white/60'>
+										{isMissingMember
+											? t('storage-manager.swap.missing-description')
+											: dv('storage-manager.swap.failed-description')}
+									</span>
 								</div>
 							</div>
 						) : (
-							/* Proactive swap of a healthy drive - FailSafe keeps the data safe throughout */
+							/* State was checked above; still avoid guarantees about data recovery. */
 							<div className='flex items-start gap-3 rounded-12 bg-brand/10 p-3'>
 								<IoShieldHalf className='mt-0.5 size-5 shrink-0 text-brand' />
 								<div className='flex flex-col gap-1'>
@@ -520,7 +568,9 @@ export function SwapDialog({
 						{isUmbrelPro ? (
 							<ProInstallInstructions
 								paragraphs={[
-									t('storage-manager.swap.pro-instructions-swap-1', {ssd: swappedLabelDefinite}),
+									isMissingMember
+										? t('storage-manager.swap.pro-instructions-insert-1')
+										: t('storage-manager.swap.pro-instructions-swap-1', {ssd: swappedLabelDefinite}),
 									t('storage-manager.swap.pro-instructions-swap-2'),
 								]}
 							/>

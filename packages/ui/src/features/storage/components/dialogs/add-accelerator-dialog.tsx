@@ -1,5 +1,5 @@
 import {useTranslation} from 'react-i18next'
-import {TbAlertTriangle, TbCircleCheckFilled} from 'react-icons/tb'
+import {TbAlertTriangle, TbCircleCheckFilled, TbHelpCircle} from 'react-icons/tb'
 
 import {Button} from '@/components/ui/button'
 import {
@@ -31,7 +31,7 @@ type AddAcceleratorDialogProps = {
 // Confirmation dialog for adding SSD acceleration to an HDD array
 export function AddAcceleratorDialog({open, onOpenChange, devices, addAcceleratorAsync}: AddAcceleratorDialogProps) {
 	const {t} = useTranslation()
-	const {setPendingOperation, clearPendingOperation} = usePendingRaidOperation()
+	const {setPendingOperation, clearPendingOperation, setOperationError} = usePendingRaidOperation()
 
 	const activeOperation = useActiveRaidOperation()
 	const isOperationInProgress = !!activeOperation
@@ -57,6 +57,7 @@ export function AddAcceleratorDialog({open, onOpenChange, devices, addAccelerato
 			})
 			.catch((error) => {
 				clearPendingOperation()
+				setOperationError(error instanceof Error ? error.message : t('unknown-error'))
 				toast.error(t('storage-manager.add-accelerator.failed'), {
 					area: 'settings',
 					description: error instanceof Error ? error.message : t('unknown-error'),
@@ -83,7 +84,13 @@ export function AddAcceleratorDialog({open, onOpenChange, devices, addAccelerato
 										{hasWarning ? (
 											<TbAlertTriangle className='size-5 text-[#F5A623]' />
 										) : (
-											<TbCircleCheckFilled className='size-5 text-brand' />
+											<>
+												{device.smartStatus === 'healthy' ? (
+													<TbCircleCheckFilled className='size-5 text-brand' />
+												) : (
+													<TbHelpCircle className='size-5 text-white/40' aria-label={t('storage-status.unknown')} />
+												)}
+											</>
 										)}
 										<span className='text-[13px] font-medium text-white/60'>
 											<Highlight>{formatStorageSize(device.size)}</Highlight> · {device.model}

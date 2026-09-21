@@ -8,6 +8,58 @@ export function hasRaidErrors(device?: RaidErrorCounters): boolean {
 	return !!device && (device.readErrors > 0 || device.writeErrors > 0 || device.checksumErrors > 0)
 }
 
+// Status reads can report active work before the progress subscription catches up.
+export function hasPoolMutationInProgress(pool: RaidStatus | undefined): boolean {
+	return (
+		!!pool &&
+		(pool.replace?.state === 'rebuilding' ||
+			pool.replace?.state === 'expanding' ||
+			pool.rebuild?.state === 'rebuilding' ||
+			pool.expansion?.state === 'expanding' ||
+			!!(pool.failsafeTransitionStatus && !['error', 'complete'].includes(pool.failsafeTransitionStatus.state)))
+	)
+}
+
+// Physical removal happens before a backend request can protect the user. Only
+// offer it when the current topology and detected inventory establish redundancy.
+export function canDisconnectPoolMember(
+	pool: RaidStatus | undefined,
+	id: string | undefined,
+	devices: StorageDevice[],
+): boolean {
+	if (!id || !pool?.exists || pool.raidType !== 'failsafe' || !['ONLINE', 'DEGRADED'].includes(pool.status ?? ''))
+		return false
+	if (hasPoolMutationInProgress(pool) || pool.scrub?.state === 'scrubbing') return false
+	const dataMembers = pool.devices ?? []
+	const acceleratorMembers = pool.accelerator?.devices ?? []
+	const members = [...dataMembers, ...acceleratorMembers]
+	const target = members.find((member) => member.id === id)
+	if (!target) return false
+	// Repair existing issues before proactively removing a healthy member.
+	if (
+		target.status === 'ONLINE' &&
+		(pool.status !== 'ONLINE' ||
+			(pool.dataErrors ?? 0) > 0 ||
+			members.some((member) => member.status !== 'ONLINE' || !devices.some((device) => device.id === member.id)))
+	)
+		return false
+	const group = acceleratorMembers.some((member) => member.id === id)
+		? acceleratorMembers.map((member) => member.id)
+		: pool.topology === 'raidz'
+			? dataMembers.map((member) => member.id)
+			: pool.topology === 'mirror'
+				? pool.mirrors?.find((pair) => pair.includes(id))
+				: undefined
+	if (!group || new Set(group).size < 2) return false
+	return group
+		.filter((otherId) => otherId !== id)
+		.every(
+			(otherId) =>
+				members.some((member) => member.id === otherId && member.status === 'ONLINE' && !hasRaidErrors(member)) &&
+				devices.some((device) => device.id === otherId && device.smartStatus !== 'unhealthy'),
+		)
+}
+
 export function getPoolDeviceType(
 	raidStatus: RaidStatus | undefined,
 	allDevices: StorageDevice[],
@@ -19,9 +71,10 @@ export function getPoolDeviceType(
 	if (attachedPoolDevice) return attachedPoolDevice.type
 
 	// Mirror data vdevs and accelerators identify HDD pools even when their physical
-	// members are detached. Without either hint, retain the existing SSD fallback.
+	// members are detached. A stripe with no detected members has unknown media.
 	if (raidStatus.topology === 'mirror' || raidStatus.accelerator?.exists) return 'hdd'
-	return 'ssd'
+	if (raidStatus.topology === 'raidz') return 'ssd'
+	return undefined
 }
 
 // Format bytes without space, rounding to integer only for 3+ digit values (>=100) to avoid overflow
