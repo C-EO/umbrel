@@ -43,7 +43,9 @@ vi.mock('@/features/files/hooks/use-preferences', () => ({
 	usePreferences: () => ({preferences: {sortBy: 'name', sortOrder: 'ascending'}}),
 }))
 vi.mock('@/features/files/transfers/use-transfers', () => ({useUploadListingItems: () => mocks.uploads}))
-vi.mock('@/features/files/transfers/transfers', () => ({transfers: {acknowledgeListed: mocks.acknowledgeListed}}))
+vi.mock('@/features/files/transfers/transfers', () => ({
+	transfers: {acknowledgeListed: mocks.acknowledgeListed, onTransition: () => () => {}},
+}))
 vi.mock('@/features/files/store/use-files-store', () => ({
 	useFilesStore: Object.assign((selector: (state: typeof mocks.store) => unknown) => selector(mocks.store), {
 		getState: () => mocks.store,

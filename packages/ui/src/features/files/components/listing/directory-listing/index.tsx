@@ -280,6 +280,7 @@ export function DirectoryListing({marqueeScale = 1}: {marqueeScale?: number} = {
 			<UploadInput ref={uploadInputRef} disabled={isReadOnly || !isWritable} />
 			<Listing
 				items={items}
+				hiddenRenamedPaths={listing?.hiddenRenamedPaths}
 				totalItems={listing?.totalFiles}
 				truncatedAt={listing?.truncatedAt}
 				selectableItems={selectableItems}

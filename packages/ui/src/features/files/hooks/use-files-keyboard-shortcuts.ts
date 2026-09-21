@@ -31,11 +31,13 @@ import {isBeneathModal} from '@/utils/is-beneath-modal'
  */
 export function useFilesKeyboardShortcuts({
 	items,
+	hiddenRenamedPaths,
 	listingRef,
 	scrollAreaRef,
 	view,
 }: {
 	items: FileSystemItem[]
+	hiddenRenamedPaths?: string[]
 	listingRef: React.RefObject<HTMLDivElement | null>
 	scrollAreaRef: React.RefObject<HTMLDivElement | null>
 	view: 'list' | 'icons'
@@ -68,6 +70,8 @@ export function useFilesKeyboardShortcuts({
 	viewerModeRef.current = viewerMode
 	const viewRef = useRef(view)
 	viewRef.current = view
+	const hiddenRenamedPathsRef = useRef(hiddenRenamedPaths)
+	hiddenRenamedPathsRef.current = hiddenRenamedPaths
 
 	// Track the anchor index for Shift+Arrow range selection and the cursor (moving end)
 	const selectionAnchorRef = useRef<number>(-1)
@@ -265,8 +269,11 @@ export function useFilesKeyboardShortcuts({
 					currentIndex = items.findIndex((i) => i.path === lastSelected.path)
 				}
 
-				// If nothing is selected or the selected item was removed, select the first item
+				// If nothing is selected or the selected item was removed, select the first item.
+				// A rename the listing is deliberately holding back is neither: it is still
+				// the user's place in the folder, so arrow keys must not jump to the top.
 				if (currentIndex === -1) {
+					if (selected.length === 1 && hiddenRenamedPathsRef.current?.includes(selected[0].path)) return
 					setSelectedItems([items[0]])
 					selectionAnchorRef.current = 0
 					selectionCursorRef.current = 0

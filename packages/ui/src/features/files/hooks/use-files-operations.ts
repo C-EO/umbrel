@@ -236,10 +236,13 @@ export function useFilesOperations() {
 		}
 
 		const renamedPath = `${item.path.substring(0, item.path.lastIndexOf('/') + 1)}${newName}`
-		const renamedItem = {...item, name: newName, path: renamedPath}
+		const renamedItem = {...item, name: newName, path: renamedPath, renamedFrom: item.path}
 
-		// Show renamed item immediately, hide old one
+		// Show renamed item immediately, hide old one. A source that is itself an
+		// unconfirmed optimistic entry is retired rather than masked: the server
+		// will never list it, so nothing would ever clear the mask.
 		addPendingPaths([item.path], 'removing')
+		removeIncomingItems([item.path])
 		addIncomingItems([renamedItem])
 		setSelectedItems([renamedItem])
 

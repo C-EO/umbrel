@@ -10,7 +10,7 @@ import {useUploadListingItems} from '@/features/files/transfers/use-transfers'
 import type {FileSystemItem, ViewPreferences} from '@/features/files/types'
 import {isDirectoryANetworkDevice} from '@/features/files/utils/is-directory-a-network-device-or-share'
 import {getNetworkDirectoryListing} from '@/features/files/utils/network-directory-listing'
-import {sortFilesystemItems} from '@/features/files/utils/sort-filesystem-items'
+import {compareFilesystemItems, sortFilesystemItems} from '@/features/files/utils/sort-filesystem-items'
 import {trpcReact} from '@/trpc/trpc'
 
 interface UseListDirectoryOptions {
@@ -213,6 +213,26 @@ export function useListDirectory(
 	// Guard against late responses landing in the wrong directory
 	const requestIdRef = useRef(0)
 
+	useEffect(
+		() =>
+			transfers.onTransition((item) => {
+				if (
+					item.kind !== 'move' ||
+					item.state !== 'completed' ||
+					!item.sourcePath ||
+					item.resultPath === item.sourcePath ||
+					(item.sourcePath.slice(0, item.sourcePath.lastIndexOf('/')) || '/') !== path
+				)
+					return
+				// The first-page refresh cannot remove a stale row held in later
+				// pages. Prune it only once the move has actually succeeded.
+				requestIdRef.current++
+				setIsFetchingMore(false)
+				setExtraItems((items) => items.filter((entry) => entry.path !== item.sourcePath))
+			}),
+		[path],
+	)
+
 	const fetchMoreItems = useCallback(async (): Promise<boolean> => {
 		if (isLoading || isFetchingMore || !hasMore) return false
 
@@ -224,13 +244,11 @@ export function useListDirectory(
 		const lastFileName = lastItem?.path.split('/').pop()
 
 		try {
-			const result = await utils.files.list.fetch({
-				path,
-				lastFile: lastFileName,
-				limit: itemsOnScrollEnd,
-				sortBy,
-				sortOrder,
-			})
+			// Reusing a cached page could bring back a file that has since moved.
+			const result = await utils.files.list.fetch(
+				{path, lastFile: lastFileName, limit: itemsOnScrollEnd, sortBy, sortOrder},
+				{staleTime: 0},
+			)
 
 			// Ignore responses that belong to an outdated directory
 			if (thisRequest !== requestIdRef.current) return false
@@ -263,7 +281,7 @@ export function useListDirectory(
 	const removeIncomingItems = useFilesStore((s) => s.removeIncomingItems)
 
 	// Merge optimistic uploading items & *always* sort locally
-	const directoryItems = useMemo(() => {
+	const {directoryItems, hiddenRenamedPaths} = useMemo(() => {
 		// Placeholders (a landed upload, a folder still being created) yield to
 		// the real entry once the server lists it; a file still uploading stays
 		// beside the entry it may be replacing
@@ -280,8 +298,31 @@ export function useListDirectory(
 			(item) => item.path.substring(0, item.path.lastIndexOf('/')) === path && !existingPaths.has(item.path),
 		)
 
-		return sortFilesystemItems([...visible, ...arriving], sortBy, sortOrder)
-	}, [uploadingItems, items, path, sortBy, sortOrder, pendingPaths, incomingItems])
+		// Keep the original source in the boundary calculation, even while hidden.
+		const loadedBoundary = items.reduce<FileSystemItem | undefined>(
+			(last, item) => (!last || compareFilesystemItems(item, last, sortBy, sortOrder) > 0 ? item : last),
+			undefined,
+		)
+		const hiddenRenamedPaths: string[] = []
+		const visibleArrivals = arriving.filter((item) => {
+			// A rename beyond the loaded range stays selected, but must not appear
+			// at a false end of the folder. Normal paging will reveal it later.
+			if (
+				item.renamedFrom &&
+				hasMore &&
+				(!loadedBoundary || compareFilesystemItems(item, loadedBoundary, sortBy, sortOrder) > 0)
+			) {
+				hiddenRenamedPaths.push(item.path)
+				return false
+			}
+			return true
+		})
+
+		return {
+			directoryItems: sortFilesystemItems([...visible, ...visibleArrivals], sortBy, sortOrder),
+			hiddenRenamedPaths,
+		}
+	}, [uploadingItems, items, path, sortBy, sortOrder, pendingPaths, incomingItems, hasMore])
 
 	// Clean up stale optimistic state after server data refreshes.
 	// pendingPaths is read via getState() to avoid the effect running when
@@ -330,7 +371,7 @@ export function useListDirectory(
 	const isLoadingItems = isLoading || isStaleDirectory
 
 	return {
-		listing: data && !isStaleDirectory ? {...data, items: directoryItems, hasMore} : undefined,
+		listing: data && !isStaleDirectory ? {...data, items: directoryItems, hasMore, hiddenRenamedPaths} : undefined,
 		isLoading: isLoadingItems,
 		isError,
 		error,
