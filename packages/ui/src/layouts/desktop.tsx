@@ -4,8 +4,7 @@ import {useCmdkOpen} from '@/components/cmdk'
 import {AppSettingsDialogConnected} from '@/features/app-store/components/app-settings-dialog-connected'
 import {StoreActionsProvider} from '@/features/app-store/providers/store-actions'
 import {ONBOARDING_COMPLETE_NOTIFICATION, useNotificationsQuery} from '@/hooks/use-notifications'
-import {AppRequiresHttpsDialog} from '@/modules/app-store/app-page/app-requires-https-dialog'
-import {DefaultCredentialsDialog} from '@/modules/app-store/app-page/default-credentials-dialog'
+import {AppLaunchDialog} from '@/modules/app-store/app-page/app-launch-dialog'
 import {AppShareUsersDialog} from '@/modules/desktop/app-share-users-dialog'
 import {DesktopContent} from '@/modules/desktop/desktop-content'
 import {prefetchRouteChunks} from '@/modules/desktop/prefetch-route-chunks'
@@ -48,16 +47,13 @@ export function Desktop() {
 	return (
 		<>
 			{showWelcome ? <WelcomeDesktopPage /> : <DesktopPage />}
-			{/* URL-driven dialogs the App Store sheet navigates to (open with
-			    credentials, requires https, app settings, share). The sheet
-			    renders beside this layout, so they must be mounted whichever
-			    desktop is showing underneath. */}
-			<DefaultCredentialsDialog />
+			{/* The App Store sheet renders beside this layout, so mount its URL-driven
+			    dialogs here for both welcome and regular desktops. */}
+			<AppLaunchDialog />
 			<StoreActionsProvider>
 				<AppSettingsDialogConnected />
 			</StoreActionsProvider>
 			<AppShareUsersDialog />
-			<AppRequiresHttpsDialog />
 		</>
 	)
 }

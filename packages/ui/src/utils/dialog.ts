@@ -15,12 +15,7 @@ export type GlobalDialogKey =
 	| 'app-share-users'
 	| 'troubleshoot'
 	| 'terminal'
-export type AppStoreDialogKey =
-	| 'updates'
-	| 'add-community-store'
-	| 'default-credentials'
-	| 'app-settings'
-	| 'app-requires-https'
+export type AppStoreDialogKey = 'updates' | 'add-community-store' | 'app-launch' | 'app-settings'
 export type FilesDialogKey =
 	| 'files-share-info'
 	| 'files-share-users'
