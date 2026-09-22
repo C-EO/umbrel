@@ -173,7 +173,9 @@ function MobileStoreHeader({
 	const {t} = useTranslation()
 	return (
 		<SheetHeader className={cn('gap-4', storeRevealSoftClass)}>
-			<div className='flex flex-wrap items-center gap-x-3 gap-y-3 px-2.5'>
+			{/* The sheet's close button sits in this row's top-right corner on phones;
+			    the right padding keeps the controls clear of it */}
+			<div className='flex flex-wrap items-center gap-x-3 gap-y-3 pr-8 pl-2.5'>
 				<SheetTitle className='leading-none whitespace-nowrap'>{t('app-store.title')}</SheetTitle>
 				<div className='flex min-w-0 flex-1 items-center justify-end gap-2'>
 					<StoreSearchInput inputRef={search.setActiveInput} value={search.query} onValueChange={search.setQuery} />

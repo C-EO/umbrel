@@ -86,6 +86,7 @@ type LocalView =
 type View = LocalView | {view: 'owner'; panel: OwnerPanel}
 
 const ownerPanels = new Set<OwnerPanel>(['overview', 'name', 'password', 'sessions'])
+const MIN_PASSWORD_LENGTH = 6
 
 function isOwnerPanel(value: string | null): value is OwnerPanel {
 	return value !== null && ownerPanels.has(value as OwnerPanel)
@@ -180,6 +181,7 @@ export default function UsersDialog() {
 	const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false)
 	const [name, setName] = useState('')
 	const [password, setPassword] = useState('')
+	const [passwordError, setPasswordError] = useState('')
 	const [avatarFile, setAvatarFile] = useState<File>()
 	const [pickedAppIds, setPickedAppIds] = useState<string[]>([])
 	const [pickedFolders, setPickedFolders] = useState<string[]>([])
@@ -194,6 +196,7 @@ export default function UsersDialog() {
 	const [isDeleteConfirmOpen, setIsDeleteConfirmOpen] = useState(false)
 	const [isDeleting, setIsDeleting] = useState(false)
 	const [resetPassword, setResetPassword] = useState('')
+	const [resetPasswordError, setResetPasswordError] = useState('')
 	const deleteInFlightRef = useRef(false)
 
 	const setOwnerPanel = (panel: OwnerPanel | null) => {
@@ -254,6 +257,7 @@ export default function UsersDialog() {
 		setIsDeleteConfirmOpen(false)
 		setName('')
 		setPassword('')
+		setPasswordError('')
 		setAvatarFile(undefined)
 		setPickedAppIds(defaults.pickedAppIds)
 		setPickedFolders(defaults.pickedFolderPaths)
@@ -274,6 +278,7 @@ export default function UsersDialog() {
 	const openEditView = (userId: string) => {
 		setIsDeleteConfirmOpen(false)
 		setResetPassword('')
+		setResetPasswordError('')
 		setIsResettingPassword(false)
 		setIsManagingSessions(false)
 		setLocalView({view: 'edit', userId})
@@ -288,16 +293,25 @@ export default function UsersDialog() {
 		setIsDeleteConfirmOpen(false)
 		setAvatarFile(undefined)
 		setResetPassword('')
+		setResetPasswordError('')
 		setIsResettingPassword(false)
 		setIsManagingSessions(false)
 		setLocalView({view: 'list'})
 		setOwnerPanel(null)
 	}
 
+	// The message for a password under the minimum, or '' when it is long enough
+	const passwordLengthError = (value: string) =>
+		value.length < MIN_PASSWORD_LENGTH ? t('change-password.failed.min-length', {characters: MIN_PASSWORD_LENGTH}) : ''
+
 	const handleCreate = async (event: React.FormEvent) => {
 		event.preventDefault()
 		// Creation writes the picked shares, so it also waits for sharesReady
-		if (view.view !== 'add' || !name.trim() || password.length < 6 || isCreating || !sharesReady) return
+		if (view.view !== 'add' || !name.trim() || isCreating || !sharesReady) return
+
+		const lengthError = passwordLengthError(password)
+		setPasswordError(lengthError)
+		if (lengthError) return
 
 		setIsCreating(true)
 		const selectedAvatarFile = avatarFile
@@ -405,7 +419,11 @@ export default function UsersDialog() {
 
 	const handleResetPassword = async (event: React.FormEvent) => {
 		event.preventDefault()
-		if (!editingMember || resetPassword.length < 6 || resetUserPassword.isPending) return
+		if (!editingMember || resetUserPassword.isPending) return
+
+		const lengthError = passwordLengthError(resetPassword)
+		setResetPasswordError(lengthError)
+		if (lengthError) return
 
 		try {
 			await resetUserPassword.mutateAsync({userId: editingMember.userId, password: resetPassword})
@@ -841,7 +859,12 @@ export default function UsersDialog() {
 					</div>
 
 					<div className='-mt-2 flex flex-col gap-1.5'>
-						<PasswordInput label={t('users.password-placeholder')} value={password} onValueChange={setPassword} />
+						<PasswordInput
+							label={t('users.password-placeholder')}
+							value={password}
+							onValueChange={setPassword}
+							error={passwordError}
+						/>
 						<InfoNote>{t('users.password-helper')}</InfoNote>
 					</div>
 
@@ -856,7 +879,7 @@ export default function UsersDialog() {
 							type='submit'
 							variant='primary'
 							className='relative'
-							disabled={!name.trim() || password.length < 6 || isCreating || !sharesReady}
+							disabled={!name.trim() || isCreating || !sharesReady}
 						>
 							<span className={cn(isCreating && 'opacity-0')}>{t('users.create-user')}</span>
 							{isCreating && <Loader2 className='absolute size-4 animate-spin' />}
@@ -959,13 +982,14 @@ export default function UsersDialog() {
 											label={t('users.new-password-placeholder')}
 											value={resetPassword}
 											onValueChange={setResetPassword}
+											error={resetPasswordError}
 										/>
 										<InfoNote>{t('users.reset-password-helper')}</InfoNote>
 										<Button
 											type='submit'
 											variant='primary'
 											className='relative self-center'
-											disabled={resetPassword.length < 6 || resetUserPassword.isPending}
+											disabled={resetUserPassword.isPending}
 										>
 											<span className={cn(resetUserPassword.isPending && 'opacity-0')}>
 												{t('users.reset-password-confirm')}

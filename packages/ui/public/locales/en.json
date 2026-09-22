@@ -1016,6 +1016,7 @@
   "files-permanently-delete.title-multiple": "Delete {{count}} items permanently?",
   "files-permanently-delete.title-single": "Delete permanently?",
   "files-search.default": "Search for files and folders",
+  "files-search.exit": "Exit search",
   "files-search.no-results": "No results found for \"{{query}}\"",
   "files-search.placeholder": "Search",
   "files-search.searching-label": "Searching {{name}}'s Umbrel",

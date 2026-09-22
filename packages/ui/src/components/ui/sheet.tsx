@@ -70,7 +70,11 @@ function SheetContent({
 			>
 				{/* Keep before other elements to prevent auto-focus on other elements. Some element must be focused for accessibility */}
 				{closeButton}
-				<div className='absolute inset-0 bg-black contrast-more:hidden'>
+				{/* Clips the wallpaper (a composited, scaled layer) to the rounded corners
+				    itself: Safari does not reliably clip a composited child by an ancestor's
+				    radius while that ancestor animates, and the transform keeps this layer
+				    composited so the clip applies to the child */}
+				<div className='umbrel-window-surface-top absolute inset-0 transform-gpu overflow-hidden bg-black contrast-more:hidden'>
 					{/* Fade in the wallpaper to avoid a flash when the sheet opens. The
 					    tint layer above stays constant so the fade happens under it. */}
 					{/* An empty src resolves to the current document, so fall back to the
