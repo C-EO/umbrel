@@ -1,7 +1,7 @@
 import {keepPreviousData} from '@tanstack/react-query'
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 
-import {USE_LIST_DIRECTORY_LOAD_ITEMS} from '@/features/files/constants'
+import {CLOUD_PATH, RECENTS_PATH, SEARCH_PATH, USE_LIST_DIRECTORY_LOAD_ITEMS} from '@/features/files/constants'
 import {useNetworkSharesQuery} from '@/features/files/hooks/use-network-shares-query'
 import {usePreferences} from '@/features/files/hooks/use-preferences'
 import {useFilesStore} from '@/features/files/store/use-files-store'
@@ -36,6 +36,11 @@ export function useListDirectory(
 	// Uploads heading here, plus a placeholder for each folder still being created
 	const uploadingItems = useUploadListingItems(path)
 	const utils = trpcReact.useUtils()
+	// Shared context menus and rename controls also mount this hook in views
+	// whose items come from other APIs and have no directory of their own.
+	const isUiOnlyPath = [SEARCH_PATH, RECENTS_PATH, CLOUD_PATH].some(
+		(root) => path === root || path.startsWith(`${root}/`),
+	)
 
 	const sortBy = sortByOverride ?? preferences?.sortBy ?? 'name'
 	const sortOrder = sortOrderOverride ?? preferences?.sortOrder ?? 'ascending'
@@ -89,6 +94,7 @@ export function useListDirectory(
 	const isDirectoryQueryEnabled =
 		enabled &&
 		!!path &&
+		!isUiOnlyPath &&
 		!skipBackendRequest &&
 		!isNetworkPending &&
 		!isDisconnectedShare &&
@@ -161,9 +167,9 @@ export function useListDirectory(
 		() => (isDisconnectedShare ? new Error('[network-share-disconnected]') : null),
 		[isDisconnectedShare],
 	)
-	// A disconnected share has nothing to show; the previous folder's placeholder
-	// data must not linger (it would read as loading, hiding the explanation).
-	const data = isDisconnectedShare ? undefined : (configuredListing ?? directoryQuery.data)
+	// UI-only views and disconnected shares must not retain the previous folder's
+	// data or writable capabilities, even when the disabled query still holds it.
+	const data = isUiOnlyPath || isDisconnectedShare ? undefined : (configuredListing ?? directoryQuery.data)
 	// Disabling a query does not cancel its in-flight request, so a request that
 	// stalls during an outage must not keep a listing we no longer need waiting.
 	const isLoading = isNetworkPending || (isDirectoryQueryEnabled && directoryQuery.isLoading)
@@ -171,7 +177,8 @@ export function useListDirectory(
 	// (e.g. listing a missing host directory while the role was still loading).
 	const isError = isDisconnectedShare || (isDirectoryQueryEnabled && directoryQuery.isError)
 	const error = disconnectedShareError ?? (isDirectoryQueryEnabled ? directoryQuery.error : null)
-	const isPlaceholderData = !configuredListing && !isDisconnectedShare && directoryQuery.isPlaceholderData
+	const isPlaceholderData =
+		!isUiOnlyPath && !configuredListing && !isDisconnectedShare && directoryQuery.isPlaceholderData
 
 	// Track the previous path so we can distinguish placeholder data from
 	// a directory change (hide old items) vs a sort change (keep showing items).
@@ -195,7 +202,8 @@ export function useListDirectory(
 		return Array.from(map.values())
 	}, [data?.files, extraItems, isStaleDirectory, configuredListing])
 
-	const hasMore = hasConfiguredListing ? false : isStaleDirectory ? true : (extraHasMore ?? data?.hasMore ?? true)
+	const hasMore =
+		isUiOnlyPath || hasConfiguredListing ? false : isStaleDirectory ? true : (extraHasMore ?? data?.hasMore ?? true)
 
 	// Keep the ref in sync for the skip-refetch-on-sort optimization
 	fullyLoadedRef.current = items.length > 0 && !hasMore
