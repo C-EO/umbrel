@@ -826,9 +826,10 @@ html {
 		calc(100% - var(--umbrel-photos-scrollbar, 0px)) 100%,
 		var(--umbrel-photos-scrollbar, 0px) 100%;
 }
-/* While the time rail shows it owns the right edge alone (see time-rail.tsx);
-   scrollbar-width is set inline, this covers WebKit engines without it */
-.umbrel-photos-scroller[data-umbrel-time-rail]::-webkit-scrollbar {
+/* A scroller whose scrollbar is hidden for the time rail (FadedScroller's
+   hideScrollbar); scrollbar-width is set inline, this covers WebKit engines
+   without it */
+.umbrel-photos-scroller[data-scrollbar-hidden]::-webkit-scrollbar {
 	display: none;
 }
 
