@@ -1116,8 +1116,16 @@ final class AppState {
 		guard isCurrentSession(session, deviceId: deviceId) else { return }
 		let credential = SambaCredential(username: access.username, password: sharePassword)
 		if let previous = sambaCredentials[deviceId], previous != credential {
-			// umbreld terminates the old authenticated SMB session when credentials
-			// rotate. Gracefully release its Finder volumes before creating the new one.
+			// umbreld ends the old SMB session when the share password changes, so the
+			// existing Finder volumes are already dead. Release them gracefully and mount
+			// fresh ones below. If a volume refuses to eject, bail without caching the new
+			// password so the next health check retries the whole rotation.
+			//
+			// This only catches rotations that happen while the app is running: the
+			// previous password lives in memory, so after a relaunch there is nothing to
+			// compare against and any stale volumes still in the mount table are kept as
+			// mounted. macOS covers that case itself: its dead-volume timer force-unmounts
+			// the volume and the next health check remounts it with the current password.
 			do {
 				try await unmountAllShares(deviceId)
 			} catch {
@@ -1325,8 +1333,9 @@ final class AppState {
 	// Runs every 60s and 5s after wake from sleep. First a probe sweep refreshes
 	// liveness (and discovers newly reachable devices), then for each saved online
 	// device: remount dropped shares, refresh native access before expiry, detect
-	// expired sessions. The share password cache is cleared each cycle so rotations
-	// on the Umbrel are picked up.
+	// expired sessions. The share password is refetched every cycle and compared to
+	// the one used for the current mounts, so a rotation on the Umbrel is picked up
+	// within a minute while the app is running.
 
 	private func startNetworkPathMonitor() {
 		networkPathTask = Task { [weak self] in
