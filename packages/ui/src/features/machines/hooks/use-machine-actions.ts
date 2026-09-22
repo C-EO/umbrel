@@ -10,6 +10,8 @@ export function getMachinesErrorMessage(message: string) {
 	if (!code) return message
 
 	switch (code) {
+		case 'machine-image-download-connection-failed':
+			return t('machines-error.machine-image-download-connection-failed')
 		case 'machine-disk-shrink-not-allowed':
 			return t('machines-error.machine-disk-shrink-not-allowed')
 		case 'machine-first-boot-setup-in-progress':

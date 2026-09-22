@@ -1368,6 +1368,7 @@
   "machines-error.machine-disk-shrink-not-allowed": "Disk size can only be increased",
   "machines-error.machine-external-disk-unavailable": "Connect the external drive or network share containing this machine's disk, then try again",
   "machines-error.machine-first-boot-setup-in-progress": "Wait for automatic setup to finish before ejecting its installation media",
+  "machines-error.machine-image-download-connection-failed": "Could not connect to the image download server. Check your internet connection and try again",
   "machines-error.machine-install-interrupted": "The install was interrupted. Retry it to continue.",
   "machines-error.machine-install-media-eject-failed": "Couldn't eject the installation media. Stop the machine and try again",
   "machines-error.machine-install-retry-credentials-required": "Recreate this machine and enter its setup password again",
