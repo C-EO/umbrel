@@ -30,18 +30,12 @@ const compareBySize = (a: FileSystemItem, b: FileSystemItem) => {
 	return aSize - bSize
 }
 
-/**
- * Sort filesystem items based on the provided sort options
- * @param items - Array of filesystem items to sort
- * @param sortBy - Property to sort by
- * @param sortOrder - Sort order (ascending or descending)
- * @returns Sorted array of filesystem items
- */
-export function sortFilesystemItems(
-	items: FileSystemItem[],
+export function compareFilesystemItems(
+	a: FileSystemItem,
+	b: FileSystemItem,
 	sortBy: ViewPreferences['sortBy'] = 'name',
 	sortOrder: ViewPreferences['sortOrder'] = 'ascending',
-): FileSystemItem[] {
+): number {
 	const ascending = sortOrder === 'ascending'
 	const compare =
 		// TODO: Add this back in when we have a file system index in umbreld
@@ -55,9 +49,15 @@ export function sortFilesystemItems(
 					? compareBySize
 					: compareByName
 
-	return [...items].sort((a, b) => {
-		// Apply sort order and fall back to compare by name when comparing equal
-		const comparison = compare(a, b) || compareByName(a, b)
-		return ascending ? comparison : -comparison
-	})
+	// Apply sort order and fall back to compare by name when comparing equal
+	const comparison = compare(a, b) || compareByName(a, b)
+	return ascending ? comparison : -comparison
+}
+
+export function sortFilesystemItems(
+	items: FileSystemItem[],
+	sortBy: ViewPreferences['sortBy'] = 'name',
+	sortOrder: ViewPreferences['sortOrder'] = 'ascending',
+): FileSystemItem[] {
+	return [...items].sort((a, b) => compareFilesystemItems(a, b, sortBy, sortOrder))
 }

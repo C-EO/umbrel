@@ -1,4 +1,4 @@
-import {DialogPortal} from '@radix-ui/react-dialog'
+import {DialogPortal, DialogTitle} from '@radix-ui/react-dialog'
 import {useState} from 'react'
 import {useTranslation} from 'react-i18next'
 import {IoShieldHalf} from 'react-icons/io5'
@@ -12,6 +12,7 @@ import {
 	immersiveDialogTitleClass,
 } from '@/components/ui/immersive-dialog'
 import {Spinner} from '@/components/ui/loading'
+import {StorageOperationError} from '@/features/storage/components/storage-operation-error'
 
 import {RaidDeviceStatus, StorageDevice, useStorage} from '../../hooks/use-storage'
 import {formatStorageSize, planFailsafeTransition, planMirrorAdditions} from '../../utils'
@@ -26,13 +27,14 @@ import {SwapDialog} from '../dialogs/swap-dialog'
 import {PoolDataErrorBanner} from '../pool-data-error-banner'
 import {StorageDonutChart} from '../storage-donut-chart'
 import {StorageModeDisplay} from '../storage-mode-display'
+import {StorageNotice} from '../storage-page'
 import {StorageStats} from '../storage-stats'
+import {UsbDrives} from '../usb-drives'
 import {AcceleratorSection} from './accelerator-section'
 import {
 	AddIcon,
 	DriveActionButton,
 	DriveCard,
-	InactivePill,
 	MissingDriveCard,
 	ReadyToReplacePill,
 	ReplaceIcon,
@@ -97,7 +99,7 @@ export function ListStorageManager() {
 
 	// Health dialog - device looked up from live data so polling keeps it fresh
 	const healthDialog = useSsdHealthDialog()
-	const healthDialogDevice = allDevices?.find((d) => d.id === healthDialog.selectedDevice?.deviceId)
+	const healthDialogDevice = allDevices?.find((d) => !!d.id && d.id === healthDialog.selectedDevice?.deviceId)
 
 	// Dialog state
 	const [deviceToAdd, setDeviceToAdd] = useState<StorageDevice | null>(null)
@@ -305,6 +307,7 @@ export function ListStorageManager() {
 						inPool={false}
 						onClick={() => healthDialog.openDialog(mirrorReplacementCandidate)}
 						pill={<ReadyToReplacePill />}
+						description={t('storage-manager.ready-to-replace-description')}
 					/>
 				)}
 
@@ -340,11 +343,11 @@ export function ListStorageManager() {
 			</div>
 		)
 	} else {
-		// Flat grid: Full Storage HDD pools and all SSD pools. Unpooled drives get their own
-		// labeled group below the pool members.
+		// Full Storage HDDs stay one drive per row at every screen size. Unpooled
+		// drives get their own labeled group below the pool members.
 		drivesContent = (
 			<div className='flex flex-col gap-2.5'>
-				<div className='grid grid-cols-1 gap-3 lg:grid-cols-2'>
+				<div className='grid grid-cols-1 gap-3'>
 					{(raidStatus?.devices ?? []).map((poolDevice) => {
 						const device = allDevices.find((d) => d.id === poolDevice.id)
 						const raidDevice = raidDevices.find((d) => d.id === poolDevice.id)
@@ -376,7 +379,7 @@ export function ListStorageManager() {
 					<span className='mt-1 text-13 font-semibold text-white/50'>{t('storage-manager.new-drives-detected')}</span>
 				)}
 				{unpooledDrives.length > 0 && (
-					<div className='grid grid-cols-1 gap-3 lg:grid-cols-2'>
+					<div className='grid grid-cols-1 gap-3'>
 						{unpooledDrives.map((device) => {
 							// Drives matching the pool type can be added; mismatched types can't be mixed.
 							// The replacement candidate for a failed member gets a status pill instead of a
@@ -394,7 +397,8 @@ export function ListStorageManager() {
 									device={device}
 									inPool={false}
 									onClick={() => healthDialog.openDialog(device)}
-									pill={isReplacementCandidate ? <ReadyToReplacePill /> : <InactivePill />}
+									pill={isReplacementCandidate ? <ReadyToReplacePill /> : undefined}
+									description={isReplacementCandidate ? t('storage-manager.ready-to-replace-description') : undefined}
 									action={
 										!isReplacementCandidate && matchesPool ? (
 											<DriveActionButton icon={AddIcon} variant='primary' onClick={() => setDeviceToAdd(device)}>
@@ -423,6 +427,7 @@ export function ListStorageManager() {
 			<DialogPortal>
 				<ImmersiveDialogOverlay />
 				<ImmersiveDialogContent
+					aria-describedby={undefined}
 					size='md'
 					showScroll
 					style={{
@@ -432,8 +437,12 @@ export function ListStorageManager() {
 					}}
 				>
 					<div className='flex h-full flex-col gap-6'>
-						<h1 className={immersiveDialogTitleClass}>{t('storage-manager')}</h1>
+						<DialogTitle asChild>
+							<h1 className={immersiveDialogTitleClass}>{t('storage-manager')}</h1>
+						</DialogTitle>
+						<StorageOperationError />
 						<PoolDataErrorBanner errorCount={raidStatus?.dataErrors} />
+						{raidStatus?.status === 'DEGRADED' && <StorageNotice>{t('storage-status.degraded-help')}</StorageNotice>}
 
 						{/* Mode display - full width above the drive/stats columns */}
 						<div className='flex flex-col gap-2.5'>
@@ -476,9 +485,11 @@ export function ListStorageManager() {
 													{t('storage-manager.add-to-raid.enable-failsafe')}
 												</button>
 											)}
-											<DriveActionButton icon={AddIcon} onClick={() => setIsInstallDrivesOpen(true)}>
-												{t('storage-manager.install-drives')}
-											</DriveActionButton>
+											<div className='hidden md:block'>
+												<DriveActionButton icon={AddIcon} onClick={() => setIsInstallDrivesOpen(true)}>
+													{t('storage-manager.install-drives')}
+												</DriveActionButton>
+											</div>
 										</div>
 									</div>
 									{isStorageLoading ? (
@@ -488,6 +499,11 @@ export function ListStorageManager() {
 									) : (
 										drivesContent
 									)}
+									<div className='flex justify-center md:hidden'>
+										<DriveActionButton icon={AddIcon} onClick={() => setIsInstallDrivesOpen(true)}>
+											{t('storage-manager.add')}
+										</DriveActionButton>
+									</div>
 								</div>
 
 								{/* SSD acceleration - HDD pools only, hidden while loading for the same
@@ -535,10 +551,11 @@ export function ListStorageManager() {
 										))}
 									</div>
 								)}
+								<UsbDrives />
 							</div>
 
-							{/* Right: donut chart and stats, vertically centered against the left column */}
-							<div className='flex flex-col items-center gap-4 md:w-[240px] md:shrink-0 md:justify-center'>
+							{/* Right: donut chart and stats, aligned to the top of the drive column */}
+							<div className='flex flex-col items-center gap-4 md:w-[240px] md:shrink-0 md:pt-6'>
 								<StorageDonutChart
 									used={chartData.used}
 									available={chartData.available}
@@ -643,7 +660,7 @@ export function ListStorageManager() {
 					acceleratorDevices.some((member) => member.id === swapDeviceId && member.status !== 'ONLINE')
 				}
 				isUmbrelPro={false}
-				raidDriveCount={raidStatus?.devices?.length ?? 0}
+				raidStatus={raidStatus}
 				availableDevices={swapCandidates}
 				missingDeviceType={swapMemberIsAccelerator || !isHddPool ? 'ssd' : 'hdd'}
 				allDevices={allDevices}

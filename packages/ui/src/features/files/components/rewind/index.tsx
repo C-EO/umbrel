@@ -252,11 +252,7 @@ export function RewindOverlay() {
 			<Dialog open={overlayOpen} onOpenChange={handleOpenChange}>
 				<DialogPrimitive.Portal>
 					<DialogPrimitive.Overlay className='fixed inset-0 z-50 bg-black' />
-					{/* Simple but hacky: We add a Rewind-specific marker (data-rewind) so the Files keyboard shortcuts hook can cheaply detect that Rewind is open and ignore shortcut commands without us having to do any global focus plumbing */}
-					<DialogPrimitive.Content
-						data-rewind='open'
-						className='fixed inset-0 z-50 m-0 h-svh w-screen translate-x-0 translate-y-0 rounded-none p-0 outline-hidden'
-					>
+					<DialogPrimitive.Content className='fixed inset-0 z-50 m-0 h-svh w-screen translate-x-0 translate-y-0 rounded-none p-0 outline-hidden'>
 						<div className='flex size-full flex-col'>
 							{/* Mobile close button (standard dialog style) */}
 							<DialogCloseButton className='absolute top-3 right-3 z-[60] md:hidden' />

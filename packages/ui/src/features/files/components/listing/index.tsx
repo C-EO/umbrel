@@ -22,6 +22,7 @@ import {formatNumberI18n} from '@/utils/number'
 
 export interface ListingProps {
 	items: FileSystemItem[] // array of items to display
+	hiddenRenamedPaths?: string[]
 	totalItems?: number // total number of items in the listing
 	truncatedAt?: number // if the listing is truncated at this number
 	selectableItems?: FileSystemItem[] // array of items that are selectable, eg. for keyboard shortcuts we want to ignore uploading items
@@ -38,6 +39,7 @@ export interface ListingProps {
 
 function ListingContent({
 	items,
+	hiddenRenamedPaths,
 	totalItems,
 	truncatedAt,
 	hasMore,
@@ -49,6 +51,7 @@ function ListingContent({
 	CustomEmptyView,
 }: {
 	items: FileSystemItem[]
+	hiddenRenamedPaths?: string[]
 	totalItems?: number
 	truncatedAt?: number
 	hasMore: boolean
@@ -72,6 +75,7 @@ function ListingContent({
 					<ListingBody
 						scrollAreaRef={scrollAreaRef}
 						items={items}
+						hiddenRenamedPaths={hiddenRenamedPaths}
 						hasMore={hasMore}
 						isLoading={isLoading}
 						onLoadMore={onLoadMore}
@@ -113,6 +117,7 @@ function ListingContent({
 
 export function Listing({
 	items,
+	hiddenRenamedPaths,
 	totalItems = 0,
 	truncatedAt,
 	selectableItems = [],
@@ -127,12 +132,20 @@ export function Listing({
 	topBanner,
 }: ListingProps) {
 	const isTouchDevice = useIsTouchDevice()
+	// The scroll area only mounts with items to show; the listing is always there
+	const listingRef = useRef<HTMLDivElement>(null)
 	const scrollAreaRef = useRef<HTMLDivElement>(null)
 	const {currentPath} = useNavigate()
 	const isReadOnly = useIsFilesReadOnly()
 	const {preferences} = usePreferences()
 
-	useFilesKeyboardShortcuts({items: selectableItems, scrollAreaRef, view: preferences?.view ?? 'list'})
+	useFilesKeyboardShortcuts({
+		items: selectableItems,
+		hiddenRenamedPaths,
+		listingRef,
+		scrollAreaRef,
+		view: preferences?.view ?? 'list',
+	})
 
 	const isEmpty = !isLoading && items.length === 0
 	const isEmbedded = useIsFilesEmbedded()
@@ -143,6 +156,7 @@ export function Listing({
 		// below the dock. The embedded (Rewind) explorer keeps the original height so
 		// snapshots render unchanged.
 		<div
+			ref={listingRef}
 			className={cn(
 				'flex flex-col',
 				isEmbedded
@@ -153,6 +167,7 @@ export function Listing({
 			{topBanner}
 			<ListingContent
 				items={items}
+				hiddenRenamedPaths={hiddenRenamedPaths}
 				totalItems={totalItems}
 				truncatedAt={truncatedAt}
 				hasMore={hasMore}

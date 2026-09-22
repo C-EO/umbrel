@@ -173,6 +173,9 @@ export default class AppGateway {
 		})
 
 		this.server = http.createServer(app)
+		// Let upstream apps enforce their own upload deadlines, as LAN ingress does.
+		// Keep the separate timeout for receiving request headers.
+		this.server.requestTimeout = 0
 		this.server.on('upgrade', (request, socket, head) => {
 			this.handleUpgrade(request, socket as net.Socket, head).catch(() => {
 				socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n')

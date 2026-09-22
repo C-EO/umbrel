@@ -1003,6 +1003,9 @@ export default class LanIngress {
 				response.destroy()
 			})
 		})
+		// Let umbreld and upstream apps enforce their own upload deadlines.
+		// Keep the separate timeout for receiving request headers.
+		server.requestTimeout = 0
 		this.attachProxyUpgradeHandler(server, middleware)
 		return server
 	}
@@ -1037,6 +1040,9 @@ export default class LanIngress {
 				})
 			},
 		)
+		// Let umbreld and upstream apps enforce their own upload deadlines.
+		// Keep the separate timeout for receiving request headers.
+		server.requestTimeout = 0
 		this.attachProxyUpgradeHandler(server, middleware)
 		return server
 	}

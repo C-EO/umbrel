@@ -74,12 +74,14 @@ function DialogContent({
 const DialogScrollableContent = ({
 	children,
 	showClose,
+	fade = true,
 	onOpenAutoFocus,
 	onCloseAutoFocus,
 	className,
 }: {
 	children: React.ReactNode
 	showClose?: boolean
+	fade?: boolean
 	onOpenAutoFocus?: (e: Event) => void
 	onCloseAutoFocus?: (e: Event) => void
 	className?: string
@@ -91,7 +93,7 @@ const DialogScrollableContent = ({
 			onCloseAutoFocus={onCloseAutoFocus}
 		>
 			{/* TODO: adjust dialog inset if `showClose` is true so close button isn't too close to scrollbar */}
-			<ScrollArea className='flex flex-col' dialogInset>
+			<ScrollArea className='flex flex-col' dialogInset fade={fade}>
 				{children}
 			</ScrollArea>
 			{showClose && <DialogCloseButton className='absolute top-2 right-2 z-50' />}

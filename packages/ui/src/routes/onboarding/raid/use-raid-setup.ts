@@ -88,6 +88,7 @@ export function useDetectStorageDevices({genericSsd = false}: {genericSsd?: bool
 		devices,
 		// We only use isLoading (not isFetching) so polling doesn't trigger the loading scanner
 		isDetecting: query.isLoading,
+		isFetching: query.isFetching,
 		error: query.error?.message ?? null,
 		refetch: query.refetch,
 	}

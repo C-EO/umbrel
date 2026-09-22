@@ -405,6 +405,7 @@ export default class CloudAuth {
 		authorizationUrl.searchParams.set('code_challenge', challenge)
 		authorizationUrl.searchParams.set('code_challenge_method', 'S256')
 		authorizationUrl.searchParams.set('scope', definition.scopes.join(' '))
+		authorizationUrl.searchParams.set('state', provider)
 
 		if (provider === 'google-drive') {
 			authorizationUrl.searchParams.set('access_type', 'offline')

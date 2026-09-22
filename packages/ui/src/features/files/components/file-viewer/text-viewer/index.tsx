@@ -40,6 +40,7 @@ import {useUserApp} from '@/providers/apps'
 import {useWallpaper, WallpaperAvifSource} from '@/providers/wallpaper'
 import {trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
+import {isBeneathModal} from '@/utils/is-beneath-modal'
 
 const MAX_EDITOR_FILE_SIZE = 1_048_576 * 50 // 50MB
 const MAX_CONTROL_CHARACTER_RATIO = 0.02 // 2% allows sparse odd control chars in text while rejecting valid UTF-8 binary blobs
@@ -160,6 +161,7 @@ export default function TextViewer({item}: TextViewerProps) {
 	const [showComposeDialog, setShowComposeDialog] = useState(wantsEditOnOpen && !!composeFile)
 	const editable = isEditing && !isReadOnly
 
+	const containerRef = useRef<HTMLDivElement>(null)
 	const editorRef = useRef<ReactCodeMirrorRef>(null)
 	const [content, setContent] = useState<string | null>(null)
 	const [originalContent, setOriginalContent] = useState<string | null>(null)
@@ -388,6 +390,8 @@ export default function TextViewer({item}: TextViewerProps) {
 		const handler = (e: KeyboardEvent) => {
 			// The compose dialog owns the keyboard; Escape there keeps the file open
 			if (showComposeDialog) return
+			// As does any other dialog open over the editor
+			if (isBeneathModal(containerRef.current, e)) return
 			if ((e.metaKey || e.ctrlKey) && e.key === 's') {
 				e.preventDefault()
 				handleSave()
@@ -539,6 +543,7 @@ export default function TextViewer({item}: TextViewerProps) {
 				className={animationClass}
 			>
 				<div
+					ref={containerRef}
 					className={`relative flex h-[calc(100vh-250px)] w-[calc(100vw-40px)] max-w-[1280px] flex-col overflow-hidden rounded-20 border-hpx border-white/10 shadow-dock md:w-[calc(100vw-200px)] lg:w-[calc(100vw-300px)] ${containerAnimationClass}`}
 				>
 					{/* Blurred wallpaper background — same technique as Sheet component */}

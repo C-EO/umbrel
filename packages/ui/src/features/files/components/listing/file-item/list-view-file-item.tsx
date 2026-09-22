@@ -78,7 +78,7 @@ export function ListViewFileItem({
 								: isUploading
 									? uploadingProgress === 0
 										? t('files-state.waiting')
-										: `${t('files-state.uploading')} ${uploadingProgress}%`
+										: `${t('files-state.uploading')} ${(uploadingProgress ?? 0).toFixed(2)}%`
 									: item.modified
 										? formatFilesystemDate(item.modified, languageCode)
 										: '—'}

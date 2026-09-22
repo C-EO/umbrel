@@ -1029,16 +1029,16 @@ function useResolveApp() {
 
 	return useMemo(
 		() =>
-			(id: string): {name: string; icon?: string} => {
+			(id: string): {name: string; icon?: string; systemApp?: boolean} => {
 				if (id === 'umbreld-system') {
-					return {name: systemAppsKeyed.UMBREL_system.name, icon: systemAppsKeyed.UMBREL_system.icon}
+					return {name: systemAppsKeyed.UMBREL_system.name, icon: systemAppsKeyed.UMBREL_system.icon, systemApp: true}
 				}
 				if (id === 'umbreld-files') {
-					return {name: systemAppsKeyed.UMBREL_files.name, icon: systemAppsKeyed.UMBREL_files.icon}
+					return {name: systemAppsKeyed.UMBREL_files.name, icon: systemAppsKeyed.UMBREL_files.icon, systemApp: true}
 				}
 				// Apps a member can't see are folded into a single entry server-side
 				if (id === 'other') {
-					return {name: t('other'), icon: systemAppsKeyed.UMBREL_system.icon}
+					return {name: t('other'), icon: systemAppsKeyed.UMBREL_system.icon, systemApp: true}
 				}
 				return {name: userAppsKeyed?.[id]?.name || t('unknown-app'), icon: userAppsKeyed?.[id]?.icon}
 			},
@@ -1052,7 +1052,7 @@ function useResolveUsageItem() {
 
 	return useMemo(
 		() =>
-			(item: UsageListItem): {name: string; icon?: string} =>
+			(item: UsageListItem): {name: string; icon?: string; systemApp?: boolean} =>
 				item.entity === 'machine' ? {name: item.name || t('machines')} : resolveApp(item.id),
 		[resolveApp, t],
 	)
@@ -1092,13 +1092,14 @@ function AppList({
 		<div className={appListClass}>
 			{displayApps.map((item) => {
 				const {id, used, entity, osId} = item
-				const {name, icon} = resolveItem(item)
+				const {name, icon, systemApp} = resolveItem(item)
 				// System entries (System, Files, "other") aren't manageable apps
 				const isUserApp = entity !== 'machine' && Boolean(userAppsKeyed[id])
 				return (
 					<AppListRow
 						key={usageItemKey(item)}
 						icon={icon}
+						systemApp={systemApp}
 						osId={entity === 'machine' ? osId : undefined}
 						machineId={entity === 'machine' ? id : undefined}
 						title={name}
@@ -1328,7 +1329,15 @@ export function AppListSkeleton({systemApps}: {systemApps?: Array<AppT>}) {
 	return (
 		<div className={appListClass}>
 			{[...(systemApps || []), ...(userApps || [])].map((app) => {
-				return <AppListRow key={app.id} title={app.name} icon={app.icon} value='' />
+				return (
+					<AppListRow
+						key={app.id}
+						title={app.name}
+						icon={app.icon}
+						systemApp={'systemApp' in app && app.systemApp}
+						value=''
+					/>
+				)
 			})}
 		</div>
 	)
@@ -1338,6 +1347,7 @@ const appListClass = tw`settings-edge-material overflow-hidden rounded-24`
 
 function AppListRow({
 	icon,
+	systemApp,
 	osId,
 	machineId,
 	title,
@@ -1350,6 +1360,7 @@ function AppListRow({
 	menu,
 }: {
 	icon?: string
+	systemApp?: boolean
 	osId?: string
 	/** Set for machine rows so the icon can reflect the machine's power state */
 	machineId?: string
@@ -1379,7 +1390,11 @@ function AppListRow({
 			{osId ? (
 				<MachineAppIcon osId={osId} state={machine?.state} className={cn('size-7', disabled && 'grayscale')} />
 			) : (
-				<AppIcon src={icon} size={28} className={cn('rounded-8 shadow-md', disabled && 'grayscale')} />
+				<AppIcon
+					src={icon}
+					size={28}
+					className={cn('rounded-8 shadow-md', systemApp && 'border-0', disabled && 'grayscale')}
+				/>
 			)}
 			<div className='flex min-w-0 flex-1 items-center gap-1.5'>
 				<span className='min-w-0 truncate text-15 font-medium -tracking-4 opacity-90'>{title}</span>

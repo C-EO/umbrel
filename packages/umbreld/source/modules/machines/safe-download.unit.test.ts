@@ -173,4 +173,26 @@ describe('machine image download address fallback', () => {
 		expect(requests).toEqual(path === '/redirect' ? ['/redirect'] : [])
 		expect(await fsp.readdir(directory)).toEqual([])
 	})
+
+	test.each(['/image', '/redirect'])('keeps connection failure details when all addresses fail at %s', async (path) => {
+		if (path === '/redirect') lookup.mockResolvedValueOnce([ipv4])
+		lookup.mockResolvedValueOnce([unavailableIpv4, ipv6])
+
+		const error = await safeDownload({
+			url: `http://download.test:${port}${path}`,
+			destination: nodePath.join(directory, 'image.qcow2'),
+			signal: AbortSignal.timeout(3_000),
+		}).catch((error: unknown) => error)
+
+		expect(error).toBeInstanceOf(Error)
+		expect((error as Error).message).toBe('[machine-image-download-connection-failed]')
+		const cause = (error as Error).cause as AggregateError
+		expect(cause).toBeInstanceOf(AggregateError)
+		expect(cause.errors).toHaveLength(2)
+		// macOS times out on 127.0.0.2; Linux refuses the connection immediately.
+		expect(['ETIMEDOUT', 'ECONNREFUSED']).toContain(cause.errors[0].code)
+		expect(cause.errors[1].code).toBe('ECONNREFUSED')
+		expect(requests).toEqual(path === '/redirect' ? ['/redirect'] : [])
+		expect(await fsp.readdir(directory)).toEqual([])
+	})
 })

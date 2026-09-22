@@ -1,8 +1,8 @@
 import {DialogPortal, DialogTitle} from '@radix-ui/react-dialog'
-import {useEffect, useRef, useState} from 'react'
+import {useEffect, useRef, useState, type ComponentType} from 'react'
 import {useTranslation} from 'react-i18next'
 import {IoLogoApple} from 'react-icons/io5'
-import {TbChevronLeft, TbChevronRight} from 'react-icons/tb'
+import {TbChevronLeft, TbChevronRight, TbPlayerPlayFilled} from 'react-icons/tb'
 
 import {Button} from '@/components/ui/button'
 import {
@@ -20,6 +20,9 @@ import {
 	ImmersiveDialogFooter,
 	ImmersiveDialogOverlay,
 } from '@/components/ui/immersive-dialog'
+import {lightboxButtonClass} from '@/features/photos/components/viewer/lightbox-button'
+import {useIsUmbrelPro} from '@/hooks/use-is-umbrel-pro'
+import {cn} from '@/lib/utils'
 import {WHATS_NEW_VERSION_NAME} from '@/routes/whats-new'
 import {useDialogOpenProps} from '@/utils/dialog'
 
@@ -28,43 +31,91 @@ import {useDialogOpenProps} from '@/utils/dialog'
 /** How long a still image stays up before the carousel moves on */
 const IMAGE_SLIDE_MS = 10000
 
+/** Glass control floating over the media: the lightbox's rail button, tinted for bright footage */
+const mediaButtonClass = cn(lightboxButtonClass, 'bg-black/25 backdrop-blur-md hover:bg-black/40')
+
+/** The arrows only surface while the pointer rests on the media (or one has focus) */
+const arrowButtonClass = cn(
+	mediaButtonClass,
+	'absolute top-1/2 z-10 -translate-y-1/2 opacity-0 transition-[background-color,transform,opacity] group-hover:opacity-100 focus-visible:opacity-100 max-sm:hidden',
+)
+
 type Feature = {
 	id: string
 	titleTKey: string
 	descriptionTKey: string
+	/** Optional fine print under the description */
+	noteTKey?: string
+	/** Drop the fine print on Umbrel Pro, where it doesn't apply */
+	noteHiddenOnUmbrelPro?: boolean
 	/** Optional call-to-action shown beside Next, opening in a new tab */
-	link?: {href: string; labelTKey: string}
-} & ({image: string; video?: never} | {video: string; image?: never})
+	link?: {
+		href: string
+		labelTKey: string
+		icon: ComponentType<{className?: string}>
+		/** Also float the link as a glass pill over the media */
+		overlay?: boolean
+		/** Faded at the pill's right edge: the linked video's runtime */
+		overlayDuration?: string
+	}
+} & (
+	| {image: string; video?: never; poster?: never; loop?: never}
+	| {
+			video: string
+			/** First frame of the video, shown until it buffers */
+			poster: string
+			/** Loop the video in place instead of moving on when it ends */
+			loop?: boolean
+			image?: never
+	  }
+)
 
 const FEATURES: Feature[] = [
 	{
 		id: 'redesign',
-		image: '/assets/whats-new/welcome.webp',
+		video: '/assets/whats-new/welcome.mp4',
+		poster: '/assets/whats-new/welcome.webp',
+		loop: true,
+		link: {
+			href: 'https://youtu.be/lBsKk_NNg2A',
+			labelTKey: 'whats-new-umbrelos-2-0.redesign-watch-keynote',
+			icon: TbPlayerPlayFilled,
+			overlay: true,
+			overlayDuration: '10:53',
+		},
 		titleTKey: 'whats-new-umbrelos-2-0.redesign-heading',
 		descriptionTKey: 'whats-new-umbrelos-2-0.redesign-description',
 	},
 	{
 		id: 'photos',
-		image: '/assets/whats-new/photos.webp',
+		video: '/assets/whats-new/photos.mp4',
+		poster: '/assets/whats-new/photos.webp',
 		titleTKey: 'whats-new-umbrelos-2-0.photos-heading',
 		descriptionTKey: 'whats-new-umbrelos-2-0.photos-description',
-		link: {href: 'https://link.umbrel.com/ios-app', labelTKey: 'whats-new-umbrelos-2-0.photos-get-ios-app'},
-	},
-	{
-		id: 'machines',
-		image: '/assets/whats-new/machines.webp',
-		titleTKey: 'whats-new-umbrelos-2-0.machines-heading',
-		descriptionTKey: 'whats-new-umbrelos-2-0.machines-description',
+		link: {
+			href: 'https://link.umbrel.com/ios-app',
+			labelTKey: 'whats-new-umbrelos-2-0.photos-get-ios-app',
+			icon: IoLogoApple,
+		},
 	},
 	{
 		id: 'ai-agents',
-		image: '/assets/whats-new/ai-agents.webp',
+		video: '/assets/whats-new/ai-agents.mp4',
+		poster: '/assets/whats-new/ai-agents.webp',
 		titleTKey: 'whats-new-umbrelos-2-0.ai-agents-heading',
 		descriptionTKey: 'whats-new-umbrelos-2-0.ai-agents-description',
 	},
 	{
+		id: 'machines',
+		video: '/assets/whats-new/machines.mp4',
+		poster: '/assets/whats-new/machines.webp',
+		titleTKey: 'whats-new-umbrelos-2-0.machines-heading',
+		descriptionTKey: 'whats-new-umbrelos-2-0.machines-description',
+	},
+	{
 		id: 'multi-user',
-		image: '/assets/whats-new/multi-user.webp',
+		video: '/assets/whats-new/multi-user.mp4',
+		poster: '/assets/whats-new/multi-user.webp',
 		titleTKey: 'whats-new-umbrelos-2-0.multi-user-heading',
 		descriptionTKey: 'whats-new-umbrelos-2-0.multi-user-description',
 	},
@@ -73,10 +124,13 @@ const FEATURES: Feature[] = [
 		image: '/assets/whats-new/storage-manager.webp',
 		titleTKey: 'whats-new-umbrelos-2-0.storage-manager-heading',
 		descriptionTKey: 'whats-new-umbrelos-2-0.storage-manager-description',
+		noteTKey: 'whats-new-umbrelos-2-0.storage-manager-note',
+		noteHiddenOnUmbrelPro: true,
 	},
 	{
 		id: 'cloud',
-		image: '/assets/whats-new/cloud.webp',
+		video: '/assets/whats-new/cloud.mp4',
+		poster: '/assets/whats-new/cloud.webp',
 		titleTKey: 'whats-new-umbrelos-2-0.cloud-heading',
 		descriptionTKey: 'whats-new-umbrelos-2-0.cloud-description',
 	},
@@ -97,11 +151,15 @@ const FEATURES: Feature[] = [
 		image: '/assets/whats-new/mac-app.webp',
 		titleTKey: 'whats-new-umbrelos-2-0.mac-app-heading',
 		descriptionTKey: 'whats-new-umbrelos-2-0.mac-app-description',
-		link: {href: 'https://link.umbrel.com/macos-app', labelTKey: 'whats-new-umbrelos-2-0.mac-app-download'},
+		link: {
+			href: 'https://link.umbrel.com/macos-app',
+			labelTKey: 'whats-new-umbrelos-2-0.mac-app-download',
+			icon: IoLogoApple,
+		},
 	},
 ]
 
-export function WhatsNewModal() {
+export default function WhatsNewModal() {
 	const {t} = useTranslation()
 	const dialogProps = useDialogOpenProps('whats-new')
 
@@ -113,6 +171,12 @@ export function WhatsNewModal() {
 
 	const feature = FEATURES[currentIndex]
 	const isVideoSlide = !!feature.video
+	// Pro-gated fine print waits for the answer, so a Pro never sees it flash in
+	const umbrelPro = useIsUmbrelPro()
+	const showNote =
+		!!feature.noteTKey && (!feature.noteHiddenOnUmbrelPro || (umbrelPro.hasData && !umbrelPro.isUmbrelPro))
+	// A looping video holds its slide until the user moves on, so nothing counts down
+	const isLoopingSlide = isVideoSlide && !!feature.loop
 
 	// Still images hold for a fixed beat; the dot fill counts it down and the
 	// carousel moves on (looping at the end). Videos drive the fill themselves.
@@ -123,7 +187,8 @@ export function WhatsNewModal() {
 	})
 
 	// Play the active slide's video from the top, track it into the dot fill,
-	// and advance when it ends; every other video sits paused at frame zero
+	// and advance when it ends (a looping one never ends, and shows no fill);
+	// every other video sits paused at frame zero
 	useEffect(() => {
 		videoRefs.current.forEach((v, i) => {
 			if (v && i !== currentIndex) {
@@ -214,7 +279,7 @@ export function WhatsNewModal() {
 						{/* Media Carousel */}
 						<Carousel
 							setApi={setApi}
-							className='w-full overflow-hidden rounded-t-[var(--window-radius)]'
+							className='group w-full overflow-hidden rounded-t-[var(--window-radius)]'
 							onPointerEnter={() => setHovered(true)}
 							onPointerLeave={() => setHovered(false)}
 						>
@@ -228,6 +293,8 @@ export function WhatsNewModal() {
 														videoRefs.current[index] = el
 													}}
 													src={feature.video}
+													poster={feature.poster}
+													loop={feature.loop}
 													muted
 													playsInline
 													preload='auto'
@@ -236,16 +303,34 @@ export function WhatsNewModal() {
 											) : (
 												<img src={feature.image} alt='' draggable={false} className='size-full object-cover' />
 											)}
+											{feature.link?.overlay && (
+												<div className='absolute inset-0 flex items-center justify-center'>
+													<a
+														href={feature.link.href}
+														target='_blank'
+														rel='noopener noreferrer'
+														draggable={false}
+														className={cn(mediaButtonClass, 'h-12 w-auto gap-2 pr-5 pl-4 text-sm font-medium')}
+													>
+														<feature.link.icon className='size-4' />
+														{t(feature.link.labelTKey)}
+														{feature.link.overlayDuration && (
+															<span className='text-white/50 tabular-nums'>{feature.link.overlayDuration}</span>
+														)}
+													</a>
+												</div>
+											)}
 										</div>
 									</CarouselItem>
 								))}
 							</CarouselContent>
 
-							{/* Custom Navigation Arrows */}
+							{/* Navigation arrows */}
 							{canScrollPrev && (
 								<button
+									type='button'
 									onClick={handlePrevious}
-									className='absolute top-1/2 left-4 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white backdrop-blur-xs transition-all hover:scale-110 hover:bg-black/60 max-sm:hidden md:left-6'
+									className={cn(arrowButtonClass, 'left-4 md:left-6')}
 									aria-label='Previous slide'
 								>
 									<TbChevronLeft className='size-6' />
@@ -254,8 +339,9 @@ export function WhatsNewModal() {
 
 							{canScrollNext && (
 								<button
+									type='button'
 									onClick={handleNext}
-									className='absolute top-1/2 right-4 z-10 -translate-y-1/2 rounded-full bg-black/40 p-2 text-white backdrop-blur-xs transition-all hover:scale-110 hover:bg-black/60 max-sm:hidden md:right-6'
+									className={cn(arrowButtonClass, 'right-4 md:right-6')}
 									aria-label='Next slide'
 								>
 									<TbChevronRight className='size-6' />
@@ -270,7 +356,7 @@ export function WhatsNewModal() {
 								count={FEATURES.length}
 								onSelect={handleDotClick}
 								countdown={countdown}
-								progress={isVideoSlide ? videoProgress : undefined}
+								progress={isVideoSlide && !isLoopingSlide ? videoProgress : undefined}
 							/>
 						</div>
 
@@ -279,6 +365,7 @@ export function WhatsNewModal() {
 							<div className='space-y-3'>
 								<h3 className='text-2xl font-semibold -tracking-3 md:text-3xl'>{t(feature.titleTKey)}</h3>
 								<p className='text-base leading-tight text-white/70'>{t(feature.descriptionTKey)}</p>
+								{showNote && <p className='text-13 leading-tight text-white/40'>{t(feature.noteTKey!)}</p>}
 							</div>
 						</div>
 					</div>
@@ -289,7 +376,7 @@ export function WhatsNewModal() {
 							// Stacked on mobile the footer wraps in reverse, so ordering this last puts it above Next
 							<Button variant='default' size='dialog' className='max-md:order-1' asChild>
 								<a href={feature.link.href} target='_blank' rel='noopener noreferrer'>
-									<IoLogoApple className='size-3.5' />
+									<feature.link.icon className='size-3.5' />
 									{t(feature.link.labelTKey)}
 								</a>
 							</Button>

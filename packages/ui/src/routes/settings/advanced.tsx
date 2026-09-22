@@ -135,7 +135,7 @@ export default function AdvancedSettingsDrawerOrDialog() {
 		<div className='flex flex-col gap-y-3'>
 			<label className={cardClass}>
 				<CardText title={t('terminal')} description={t('terminal-description')} />
-				<IconButtonLink className='pointer-events-auto self-center' to={'/settings/terminal'}>
+				<IconButtonLink className='pointer-events-auto self-center' to='/settings?dialog=terminal'>
 					{t('open')}
 				</IconButtonLink>
 			</label>

@@ -1,6 +1,7 @@
 import {useEffect, useRef} from 'react'
 
 import {useFilesStore} from '@/features/files/store/use-files-store'
+import {isBeneathModal} from '@/utils/is-beneath-modal'
 
 interface ViewerWrapperProps {
 	children: React.ReactNode
@@ -39,6 +40,9 @@ export const ViewerWrapper: React.FC<ViewerWrapperProps> = ({
 		}
 
 		const handleEscape = (e: KeyboardEvent) => {
+			// Keys pressed in a dialog open over the viewer are the dialog's: its
+			// Escape closes the dialog, and leaves the viewer up
+			if (isBeneathModal(wrapperRef.current, e)) return
 			if (e.key === 'Escape' && !dontCloseOnEscape) {
 				e.preventDefault()
 				handleClose()

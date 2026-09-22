@@ -12,10 +12,12 @@ import {Loading} from '@/components/ui/loading'
 import {SheetHeader, SheetTitle} from '@/components/ui/sheet'
 import {useIsMobile} from '@/hooks/use-is-mobile'
 import {useQueryParams} from '@/hooks/use-query-params'
+import {pickerTargetParams, type PickerDialogKey, type PickerTarget} from '@/modules/immersive-picker/target'
 import {TwoFactorDialog} from '@/routes/settings/2fa'
 import AdvancedSettingsDrawerOrDialog from '@/routes/settings/advanced'
 import {SoftwareUpdateConfirmDialog} from '@/routes/settings/software-update-confirm'
 import {trpcReact} from '@/trpc/trpc'
+import {withDialog} from '@/utils/dialog'
 import {IS_ANDROID} from '@/utils/misc'
 
 // import {SettingsContent} from './_components/settings-content'
@@ -36,8 +38,6 @@ const UsersDialog = React.lazy(() => import('@/routes/settings/users'))
 const SessionsDialog = React.lazy(() => import('@/routes/settings/sessions'))
 const RestartDialog = React.lazy(() => import('@/routes/settings/restart'))
 const ShutdownDialog = React.lazy(() => import('@/routes/settings/shutdown'))
-const TroubleshootDialog = React.lazy(() => import('@/routes/settings/troubleshoot/index'))
-const TerminalDialog = React.lazy(() => import('@/routes/settings/terminal/index'))
 const DeviceInfoDialog = React.lazy(() => import('@/routes/settings/device-info'))
 const BackupsRestoreDialog = React.lazy(() => import('@/features/backups/index'))
 
@@ -120,6 +120,16 @@ function OwnerSessionsRedirect() {
 	return <Navigate replace to='/settings/users?ownerPanel=sessions' />
 }
 
+// Troubleshoot and Terminal were settings routes before they could open over
+// any page: /settings/troubleshoot, …/umbrelos and …/app/:appId
+function PickerDialogRedirect({dialogKey}: {dialogKey: PickerDialogKey}) {
+	const [view, appId] = (useParams()['*'] ?? '').split('/')
+	const target: PickerTarget =
+		view === 'app' && appId ? {type: 'app', appId} : view === 'umbrelos' ? {type: 'umbrelos'} : {type: 'picker'}
+	const search = withDialog(new URLSearchParams(), dialogKey, pickerTargetParams(target)).toString()
+	return <Navigate replace to={{pathname: '/settings', search}} />
+}
+
 export function Settings() {
 	const {t} = useTranslation()
 	const title = t('settings')
@@ -160,8 +170,8 @@ export function Settings() {
 							{/* Not choosing based on `isMobile` because we don't want the dialog state to get reset if you resize the browser window. But also we want the same `/settings/migration-assistant` path for the first dialog/drawer you see */}
 							<Route path='/migration-assistant' Component={StartMigrationDrawerOrDialog} />
 							{isMobile && <Route path='/language' Component={LanguageDrawer} />}
-							<Route path='/troubleshoot/*' Component={TroubleshootDialog} />
-							<Route path='/terminal/*' Component={TerminalDialog} />
+							<Route path='/troubleshoot/*' element={<PickerDialogRedirect dialogKey='troubleshoot' />} />
+							<Route path='/terminal/*' element={<PickerDialogRedirect dialogKey='terminal' />} />
 							{isMobile && <Route path='/software-update' Component={SoftwareUpdateDrawer} />}
 							<Route path='/software-update/confirm' Component={SoftwareUpdateConfirmDialog} />
 							{(!isMember || userQ.data?.sambaEnabled === true) && (

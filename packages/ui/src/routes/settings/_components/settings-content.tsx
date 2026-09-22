@@ -25,7 +25,7 @@ import {cn} from '@/lib/utils'
 import {DesktopPreviewConnected, DesktopPreviewFrame} from '@/modules/desktop/desktop-preview'
 import {WifiListRowConnectedDescription} from '@/modules/wifi/wifi-list-row-connected-description'
 import {useWallpaper, WallpaperAvifSource} from '@/providers/wallpaper'
-import {LanguageDropdownContent, LanguageDropdownTrigger} from '@/routes/settings/_components/language-dropdown'
+import {LanguageDropdown} from '@/routes/settings/_components/language-dropdown'
 import {SettingsSummary} from '@/routes/settings/_components/settings-summary'
 import {trpcReact} from '@/trpc/trpc'
 import {useLinkToDialog} from '@/utils/dialog'
@@ -206,12 +206,9 @@ export function SettingsContent({isMember = false}: {isMember?: boolean}) {
 						description={item.description}
 						isActive={settingsDialog === 'language'}
 					>
-						<DropdownMenu open={languageOpen} onOpenChange={setLanguageOpen}>
-							<div className="[&>button]:after:absolute [&>button]:after:inset-0 [&>button]:after:cursor-pointer [&>button]:after:content-['']">
-								<LanguageDropdownTrigger />
-							</div>
-							<LanguageDropdownContent open={languageOpen} onOpenChange={setLanguageOpen} />
-						</DropdownMenu>
+						<div className="[&>button]:after:absolute [&>button]:after:inset-0 [&>button]:after:cursor-pointer [&>button]:after:content-['']">
+							<LanguageDropdown open={languageOpen} onOpenChange={setLanguageOpen} />
+						</div>
 					</ListRow>
 				)
 			case 'wifi': {

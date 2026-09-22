@@ -440,7 +440,10 @@ function DiscoverStep({
 }) {
 	const {t} = useTranslation()
 	return (
-		<div className='grid grid-cols-[repeat(auto-fill,minmax(125px,1fr))] gap-4 py-2'>
+		// Fixed columns for fixed-size cards, the same grid as the Backups wizard:
+		// stretching columns need more width for three across than the dialog has
+		// once a scrollbar gutter is reserved
+		<div className='grid grid-cols-[repeat(auto-fill,125px)] gap-3 py-2'>
 			<AddManuallyCard onClick={onManual} label={t('files-add-network-share.add-manually')} />
 
 			{isLoading ? (

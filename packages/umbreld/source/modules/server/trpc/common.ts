@@ -34,4 +34,8 @@ export const httpOnlyPaths = [
 	'system.shutdown',
 	// bootstraps local HTTPS trust and sets a no-store response header
 	'system.localHttpsIdentity',
+	// The full catalog is about 1 MB. Over WebSocket the keepalive pong queues behind it,
+	// so on a slow link the pong timeout closes the socket before the response lands
+	// and the query never completes. HTTP has no such deadline.
+	'appStore.registry',
 ] as const

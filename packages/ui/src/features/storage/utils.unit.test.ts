@@ -2,7 +2,13 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import type {RaidDevice, RaidStatus, StorageDevice} from './hooks/use-storage.ts'
-import {getPoolDeviceType, hasRaidErrors, planFailsafeTransition, planMirrorAdditions} from './utils.ts'
+import {
+	canDisconnectPoolMember,
+	getPoolDeviceType,
+	hasRaidErrors,
+	planFailsafeTransition,
+	planMirrorAdditions,
+} from './utils.ts'
 
 const TB = 1_000_000_000_000
 
@@ -137,4 +143,92 @@ test('planFailsafeTransition requires a fitting SSD when the pool has an acceler
 	const missingSsd = planFailsafeTransition({...base, unpooledSsds: []})
 	assert.equal(missingSsd.acceleratorNewDevice, undefined)
 	assert.equal(missingSsd.satisfied, false)
+})
+
+function removalPool(overrides: Partial<RaidStatus> = {}): RaidStatus {
+	return {
+		name: 'umbrelos-test',
+		exists: true,
+		raidType: 'failsafe',
+		status: 'ONLINE',
+		topology: 'mirror',
+		mirrors: [['A', 'B']],
+		devices: ['A', 'B'].map((id) => ({id, status: 'ONLINE', readErrors: 0, writeErrors: 0, checksumErrors: 0})),
+		...overrides,
+	}
+}
+
+test('physical swap never removes the surviving member of a degraded mirror', () => {
+	const pool = removalPool({status: 'DEGRADED'})
+	pool.devices![0].status = 'UNAVAIL'
+	assert.equal(canDisconnectPoolMember(pool, 'B', [device({id: 'B'})]), false)
+	assert.equal(canDisconnectPoolMember(pool, 'A', [device({id: 'B'})]), true)
+})
+
+test('physical swap requires known topology, member identity, and surviving physical inventory', () => {
+	const pool = removalPool()
+	const devices = ['A', 'B'].map((id) => device({id}))
+	assert.equal(canDisconnectPoolMember(pool, 'A', devices), true)
+	assert.equal(canDisconnectPoolMember(pool, 'A', []), false)
+	assert.equal(canDisconnectPoolMember(pool, 'C', devices), false)
+	assert.equal(canDisconnectPoolMember({...pool, mirrors: undefined}, 'A', devices), false)
+	assert.equal(canDisconnectPoolMember({...pool, raidType: 'storage'}, 'A', devices), false)
+	assert.equal(canDisconnectPoolMember({...pool, status: 'FAULTED'}, 'A', devices), false)
+	assert.equal(canDisconnectPoolMember(undefined, 'A', devices), false)
+	assert.equal(canDisconnectPoolMember({...pool, dataErrors: 1}, 'A', devices), false)
+})
+
+test('RAIDZ and acceleration removal require their own surviving members', () => {
+	const devices = ['A', 'B', 'SSD1', 'SSD2'].map((id) => device({id}))
+	const pool = removalPool({topology: 'raidz', mirrors: undefined})
+	assert.equal(canDisconnectPoolMember(pool, 'A', devices), true)
+	pool.devices![1].status = 'OFFLINE'
+	assert.equal(canDisconnectPoolMember(pool, 'A', devices), false)
+	const accelerator = {
+		exists: true,
+		devices: ['SSD1', 'SSD2'].map((id) => ({
+			id,
+			status: 'ONLINE' as const,
+			readErrors: 0,
+			writeErrors: 0,
+			checksumErrors: 0,
+		})),
+	}
+	assert.equal(canDisconnectPoolMember(removalPool({accelerator}), 'SSD1', devices), true)
+	assert.equal(
+		canDisconnectPoolMember(
+			removalPool({accelerator: {...accelerator, devices: [accelerator.devices[0]]}}),
+			'SSD1',
+			devices,
+		),
+		false,
+	)
+})
+
+test('unknown all-missing stripe media is not guessed to be SSD', () => {
+	assert.equal(getPoolDeviceType(removalPool({topology: 'stripe'}), []), undefined)
+})
+
+test('swap guidance rejects an unhealthy survivor and malformed duplicate-member topology', () => {
+	const pool = removalPool()
+	const devices = ['A', 'B'].map((id) => device({id}))
+	pool.devices![1].readErrors = 1
+	assert.equal(canDisconnectPoolMember(pool, 'A', devices), false)
+	pool.devices![1].readErrors = 0
+	devices[1].smartStatus = 'unhealthy'
+	assert.equal(canDisconnectPoolMember(pool, 'A', devices), false)
+	pool.mirrors = [['A', 'A']]
+	assert.equal(canDisconnectPoolMember(pool, 'A', devices), false)
+})
+
+test('known server-side work blocks removal before progress subscriptions catch up', () => {
+	const devices = ['A', 'B'].map((id) => device({id}))
+	for (const operation of [
+		{rebuild: {state: 'rebuilding', progress: 12}},
+		{expansion: {state: 'expanding', progress: 12}},
+		{replace: {state: 'rebuilding', progress: 12}},
+		{scrub: {state: 'scrubbing', progress: 12, errors: 0}},
+		{failsafeTransitionStatus: {state: 'syncing', progress: 12}},
+	] as Partial<RaidStatus>[])
+		assert.equal(canDisconnectPoolMember(removalPool(operation), 'A', devices), false)
 })

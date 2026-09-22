@@ -1003,15 +1003,15 @@ export function TimelineGrid({
 		// (a classic scrollbar excluded — FadedScroller reserves its gutter where one takes space, so it
 		// can't come and go with the content and resize the grid). The time rail
 		// sits over it as a sibling, so its pointer never starts a marquee, and
-		// while it shows it owns the right edge alone: the scrollbar is hidden
-		// (scrollbar-width inline; the WebKit rule rides the data attribute).
+		// while it shows it owns the right edge alone: the scrollbar is hidden,
+		// its strip still reserved (see FadedScroller), so the rail's coming
+		// and going can't resize the grid either.
 		<div className='relative h-full w-full'>
 			<FadedScroller
 				ref={scrollerRef}
 				className='touch-pan-y'
 				frame={frame}
-				style={showRail ? {scrollbarWidth: 'none'} : undefined}
-				data-umbrel-time-rail={showRail ? '' : undefined}
+				hideScrollbar={showRail}
 				onScroll={onScroll}
 				{...marquee.handlers}
 				// While a cover is being chosen a drag has nothing to select — the

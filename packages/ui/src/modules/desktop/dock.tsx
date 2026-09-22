@@ -1,26 +1,21 @@
 import {motion, useMotionValue} from 'motion/react'
-import React, {Suspense} from 'react'
-import {ErrorBoundary} from 'react-error-boundary'
+import React from 'react'
 import {useLocation, useNavigate} from 'react-router-dom'
 
 import {Glass} from '@/components/ui/glass'
 import {getLastFilesPath} from '@/features/files/utils/last-files-path'
 import {useAppsWithUpdates} from '@/hooks/use-apps-with-updates'
 import {useIsMobile} from '@/hooks/use-is-mobile'
-import {useQueryParams} from '@/hooks/use-query-params'
 import {useSettingsNotificationCount} from '@/hooks/use-settings-notification-count'
 import {cn} from '@/lib/utils'
 import {systemAppsKeyed} from '@/providers/apps'
 import {useWallpaper} from '@/providers/wallpaper'
 import {trpcReact} from '@/trpc/trpc'
+import {useLinkToDialog} from '@/utils/dialog'
 import {tw} from '@/utils/tw'
 
 import {DockItem} from './dock-item'
-import {LogoutDialog} from './logout-dialog'
 import {prefetchRouteChunks} from './prefetch-route-chunks'
-
-const LiveUsageDialog = React.lazy(() => import('@/routes/live-usage'))
-const WhatsNewModal = React.lazy(() => import('@/routes/whats-new-modal').then((m) => ({default: m.WhatsNewModal})))
 
 const DOCK_BOTTOM_PADDING_PX = 10
 
@@ -65,7 +60,7 @@ function useDockDimensions(options?: {isPreview?: boolean}): DockDimensionsPx {
 export function Dock() {
 	const {pathname} = useLocation()
 	const navigate = useNavigate()
-	const {addLinkSearchParams} = useQueryParams()
+	const linkToDialog = useLinkToDialog()
 	const mouseX = useMotionValue(Infinity)
 	const settingsNotificationCount = useSettingsNotificationCount()
 	const {appsWithUpdates} = useAppsWithUpdates()
@@ -89,107 +84,93 @@ export function Dock() {
 	}
 
 	return (
-		<>
-			<motion.div
-				initial={{translateY: 80, opacity: 0}}
-				animate={{translateY: 0, opacity: 1}}
-				transition={{type: 'spring', stiffness: 200, damping: 20, delay: 0.2, duration: 0.2}}
-				// The pointer reaching the dock precedes a click by a few hundred ms —
-				// enough to finish warming a route chunk the idle prefetch didn't get to
-				onPointerEnter={prefetchRouteChunks}
-				onPointerMove={(e) => e.pointerType === 'mouse' && mouseX.set(e.pageX)}
-				onPointerLeave={() => mouseX.set(Infinity)}
-				className='shrink-0 transform-gpu will-change-transform'
+		<motion.div
+			initial={{translateY: 80, opacity: 0}}
+			animate={{translateY: 0, opacity: 1}}
+			transition={{type: 'spring', stiffness: 200, damping: 20, delay: 0.2, duration: 0.2}}
+			// The pointer reaching the dock precedes a click by a few hundred ms —
+			// enough to finish warming a route chunk the idle prefetch didn't get to
+			onPointerEnter={prefetchRouteChunks}
+			onPointerMove={(e) => e.pointerType === 'mouse' && mouseX.set(e.pageX)}
+			onPointerLeave={() => mouseX.set(Infinity)}
+			className='shrink-0 transform-gpu will-change-transform'
+		>
+			<Glass
+				{...dockGlassProps}
+				// Only on the bare desktop: the WebGL fallback lens sees just the
+				// wallpaper, and on other routes page content scrolls under the dock
+				refractionTarget={pathname === '/' ? wallpaperImgRef : undefined}
+				className={cn(dockClass, isMobile && 'gap-2')}
+				style={{
+					height: dockHeight,
+					paddingBottom: padding,
+				}}
 			>
-				<Glass
-					{...dockGlassProps}
-					// Only on the bare desktop: the WebGL fallback lens sees just the
-					// wallpaper, and on other routes page content scrolls under the dock
-					refractionTarget={pathname === '/' ? wallpaperImgRef : undefined}
-					className={cn(dockClass, isMobile && 'gap-2')}
-					style={{
-						height: dockHeight,
-						paddingBottom: padding,
-					}}
-				>
+				<DockItem
+					iconSize={iconSize}
+					iconSizeZoomed={iconSizeZoomed}
+					to={systemAppsKeyed['UMBREL_files'].systemAppTo}
+					onClick={navigateToLastFilesPath}
+					open={pathname.startsWith('/files')}
+					bg={systemAppsKeyed['UMBREL_files'].icon}
+					label={systemAppsKeyed['UMBREL_files'].name}
+					mouseX={mouseX}
+				/>
+				<DockItem
+					iconSize={iconSize}
+					iconSizeZoomed={iconSizeZoomed}
+					to={systemAppsKeyed['UMBREL_photos'].systemAppTo}
+					open={pathname.startsWith(systemAppsKeyed['UMBREL_photos'].systemAppTo)}
+					bg={systemAppsKeyed['UMBREL_photos'].icon}
+					label={systemAppsKeyed['UMBREL_photos'].name}
+					mouseX={mouseX}
+				/>
+				<DockItem
+					iconSize={iconSize}
+					iconSizeZoomed={iconSizeZoomed}
+					to={systemAppsKeyed['UMBREL_app-store'].systemAppTo}
+					open={
+						pathname.startsWith(systemAppsKeyed['UMBREL_app-store'].systemAppTo) ||
+						// Community stores live outside /app-store but are still the App Store
+						pathname.startsWith('/community-app-store')
+					}
+					bg={systemAppsKeyed['UMBREL_app-store'].icon}
+					label={systemAppsKeyed['UMBREL_app-store'].name}
+					notificationCount={isMember ? undefined : appUpdateCount}
+					mouseX={mouseX}
+				/>
+				{isOwner && (
 					<DockItem
 						iconSize={iconSize}
 						iconSizeZoomed={iconSizeZoomed}
-						to={systemAppsKeyed['UMBREL_files'].systemAppTo}
-						onClick={navigateToLastFilesPath}
-						open={pathname.startsWith('/files')}
-						bg={systemAppsKeyed['UMBREL_files'].icon}
-						label={systemAppsKeyed['UMBREL_files'].name}
+						to={systemAppsKeyed['UMBREL_machines'].systemAppTo}
+						open={pathname.startsWith(systemAppsKeyed['UMBREL_machines'].systemAppTo)}
+						bg={systemAppsKeyed['UMBREL_machines'].icon}
+						label={systemAppsKeyed['UMBREL_machines'].name}
 						mouseX={mouseX}
 					/>
-					<DockItem
-						iconSize={iconSize}
-						iconSizeZoomed={iconSizeZoomed}
-						to={systemAppsKeyed['UMBREL_photos'].systemAppTo}
-						open={pathname.startsWith(systemAppsKeyed['UMBREL_photos'].systemAppTo)}
-						bg={systemAppsKeyed['UMBREL_photos'].icon}
-						label={systemAppsKeyed['UMBREL_photos'].name}
-						mouseX={mouseX}
-					/>
-					<DockItem
-						iconSize={iconSize}
-						iconSizeZoomed={iconSizeZoomed}
-						to={systemAppsKeyed['UMBREL_app-store'].systemAppTo}
-						open={
-							pathname.startsWith(systemAppsKeyed['UMBREL_app-store'].systemAppTo) ||
-							// Community stores live outside /app-store but are still the App Store
-							pathname.startsWith('/community-app-store')
-						}
-						bg={systemAppsKeyed['UMBREL_app-store'].icon}
-						label={systemAppsKeyed['UMBREL_app-store'].name}
-						notificationCount={isMember ? undefined : appUpdateCount}
-						mouseX={mouseX}
-					/>
-					{isOwner && (
-						<DockItem
-							iconSize={iconSize}
-							iconSizeZoomed={iconSizeZoomed}
-							to={systemAppsKeyed['UMBREL_machines'].systemAppTo}
-							open={pathname.startsWith(systemAppsKeyed['UMBREL_machines'].systemAppTo)}
-							bg={systemAppsKeyed['UMBREL_machines'].icon}
-							label={systemAppsKeyed['UMBREL_machines'].name}
-							mouseX={mouseX}
-						/>
-					)}
-					<DockItem
-						iconSize={iconSize}
-						iconSizeZoomed={iconSizeZoomed}
-						to={systemAppsKeyed['UMBREL_settings'].systemAppTo}
-						open={pathname.startsWith(systemAppsKeyed['UMBREL_settings'].systemAppTo)}
-						bg={systemAppsKeyed['UMBREL_settings'].icon}
-						label={systemAppsKeyed['UMBREL_settings'].name}
-						notificationCount={settingsNotificationCount}
-						mouseX={mouseX}
-					/>
-					<DockItem
-						iconSize={iconSize}
-						iconSizeZoomed={iconSizeZoomed}
-						to={{search: addLinkSearchParams({dialog: 'live-usage'})}}
-						open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
-						bg={systemAppsKeyed['UMBREL_live-usage'].icon}
-						label={systemAppsKeyed['UMBREL_live-usage'].name}
-						mouseX={mouseX}
-					/>
-				</Glass>
-			</motion.div>
-			<LogoutDialog />
-
-			<ErrorBoundary fallbackRender={() => null}>
-				<Suspense>
-					<LiveUsageDialog />
-				</Suspense>
-			</ErrorBoundary>
-			<ErrorBoundary fallbackRender={() => null}>
-				<Suspense>
-					<WhatsNewModal />
-				</Suspense>
-			</ErrorBoundary>
-		</>
+				)}
+				<DockItem
+					iconSize={iconSize}
+					iconSizeZoomed={iconSizeZoomed}
+					to={systemAppsKeyed['UMBREL_settings'].systemAppTo}
+					open={pathname.startsWith(systemAppsKeyed['UMBREL_settings'].systemAppTo)}
+					bg={systemAppsKeyed['UMBREL_settings'].icon}
+					label={systemAppsKeyed['UMBREL_settings'].name}
+					notificationCount={settingsNotificationCount}
+					mouseX={mouseX}
+				/>
+				<DockItem
+					iconSize={iconSize}
+					iconSizeZoomed={iconSizeZoomed}
+					to={linkToDialog('live-usage')}
+					open={pathname.startsWith(systemAppsKeyed['UMBREL_live-usage'].systemAppTo)}
+					bg={systemAppsKeyed['UMBREL_live-usage'].icon}
+					label={systemAppsKeyed['UMBREL_live-usage'].name}
+					mouseX={mouseX}
+				/>
+			</Glass>
+		</motion.div>
 	)
 }
 

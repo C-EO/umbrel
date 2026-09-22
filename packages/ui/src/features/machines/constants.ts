@@ -33,14 +33,16 @@ export const coreOptions = (threads: number | undefined) =>
 // of what was being installed. That is wrong in both directions: 100 GB is ~100x
 // what Alpine needs (and the backend's free-space check counts the *full*
 // requested size, so it fails creation on hosts that could run the VM easily),
-// while 4 GB is below Ubuntu 26.04 Desktop's official 6 GB minimum.
+// while desktop guests benefit from more generous defaults.
 //
 // `defaults` below are what we prefill; `min` is the floor we won't let the form
 // go under. We use requirements for the exact catalog media where vendors
 // publish them. Broad recommendations inform defaults rather than being
 // mislabeled as hard installation floors.
 // Sources, per family:
-//   Ubuntu 26.04    desktop 6 GB / 25 GB, server floor 1.5 GB / 4 GB
+//   Ubuntu 26.04    desktop guidance is 6 GB / 25 GB for comfortable use, but
+//                   lower-spec installs are possible. Allow 4 GB RAM with an
+//                   8 GB default; server guidance starts at 1.5 GB / 4 GB.
 //                   documentation.ubuntu.com/release-notes/26.04
 //   Fedora 44       Fedora recommends 4 GB / 40 GB for "most variants" and says
 //                   doubling that may improve the experience. The Desktop
@@ -103,7 +105,7 @@ export const fallbackSpecProfile = specProfile(DEFAULT_CORES, DEFAULT_MEMORY_GB,
 // both architectures of an image share one profile.
 //                                                    cores  mem  disk   min: cores  mem  disk
 const machineSpecProfiles: Record<string, MachineSpecProfile> = {
-	'ubuntu:Desktop': specProfile(4, 8, 40, 2, 6, 25),
+	'ubuntu:Desktop': specProfile(4, 8, 40, 2, 4, 25),
 	'ubuntu:Server': specProfile(2, 2, 20, 1, 1, 5),
 	'fedora:Desktop': specProfile(4, 8, 40, 2, 4, 25),
 	'fedora:Server': specProfile(2, 2, 20, 1, 1, 5),

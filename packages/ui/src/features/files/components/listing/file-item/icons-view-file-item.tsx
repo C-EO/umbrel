@@ -85,7 +85,7 @@ export const IconsViewFileItem = ({
 						: isUploading
 							? uploadingProgress === 0
 								? t('files-state.waiting')
-								: `${uploadingProgress}%`
+								: `${(uploadingProgress ?? 0).toFixed(2)}%`
 							: item.type === 'directory'
 								? isDirectoryAnExternalDrivePartition(item.path)
 									? t('files-type.external-drive')
